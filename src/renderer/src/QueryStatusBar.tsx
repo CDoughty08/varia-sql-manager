@@ -2,6 +2,9 @@ import type { CSSProperties } from 'react'
 import { documentKind, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useTicker } from './core/useTicker'
+import { environmentTag } from '../../shared/environments'
+import EnvironmentTag from './EnvironmentTag'
+import Icon from './Icon'
 import { queryStatusModel } from './results/query-status'
 import type { LiveConnection } from './services/connections'
 
@@ -15,7 +18,8 @@ interface Props {
 /**
  * SSMS's query window status bar, below the query (or above it: Tools › Options › Text Editor › Editor Tab and Status
  * Bar). The connection's colour is a 3px edge on the side facing the query. A value opened from the results names its
- * kind only. Elapsed time and rows change while a query runs, so only the state sentence is announced.
+ * kind only. Elapsed time and rows change while a query runs, so only the state sentence is announced. The
+ * connection's environment tag (PROD) leads the server segment, beside the colour edge.
  */
 export default function QueryStatusBar({ tab, connection, versions }: Props) {
   const { settings, queries, results } = useWorkbench()
@@ -28,12 +32,12 @@ export default function QueryStatusBar({ tab, connection, versions }: Props) {
   const top = values['textEditor.statusBar.location'] === 'top'
   const edge: CSSProperties | undefined = accent ? top ? { borderBottom: `3px solid ${accent}` } : { borderTop: `3px solid ${accent}` } : undefined
   const kind = documentKind(tab)
-  if (kind !== 'sql') return <div className="query-context query-status-bar" data-tone="value" data-location={top ? 'top' : 'bottom'}><span>{kindInfo[kind].label}</span></div>
+  if (kind !== 'sql') return <div className="query-context query-status-bar" role="status" aria-label="Query status" data-tone="value" data-location={top ? 'top' : 'bottom'}><span>{kindInfo[kind].label}</span></div>
   const session = query?.session && connection && !connection.lost && query.session.connectionId === connection.id && query.session.spid !== undefined ? { login: query.session.login, spid: query.session.spid } : undefined
   const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values })
-  return <div className="query-context query-status-bar" role="status" data-tone={model.tone} data-location={top ? 'top' : 'bottom'} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
-    <span className="query-status-state"><span className={`codicon codicon-${model.icon}${model.icon === 'loading' ? ' codicon-modifier-spin' : ''}`} aria-hidden="true" /><span className="query-status-text">{model.text}</span></span>
-    <span className="query-status-segments">{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
+  return <div className="query-context query-status-bar" role="status" aria-label="Query status" data-tone={model.tone} data-location={top ? 'top' : 'bottom'} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
+    <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
+    <span className="query-status-segments">{environmentTag(connection?.options.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={connection?.options.environment} place="query" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
       <span className="visually-hidden">{segment.label}: </span>{segment.key === 'login' ? <span className="status-session">{segment.text}</span> : segment.text}
     </span>)}</span>
   </div>

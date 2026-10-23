@@ -1,4 +1,8 @@
-:root { --varia-font-ui: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
+:root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
+/* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+@media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
+@keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
    shadow of the find and hover widgets. */
 :root { --vscode-strokeThickness: 1px; --vscode-shadow-lg: 0 0 12px var(--varia-widget-shadow); }
@@ -7,15 +11,21 @@ body { margin: 0; user-select: none; }
 input, textarea, [contenteditable="true"], .monaco-editor, .messages, [role="alert"] { user-select: text; }
 button, select { user-select: none; }
 button, input, select { font: inherit; }
-button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; padding: 6px 9px; font-size: 12px; line-height: 16px; white-space: nowrap; }
-button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); }
+button { color: var(--varia-button-secondaryForeground); background: transparent; border: 1px solid transparent; border-radius: var(--varia-radius-sm); cursor: pointer; padding: 6px 9px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; }
+/* Only hover and pressed fills fade in (80 ms; leaving hover is instant): selection, the current page or tab and a menu moved to with the keys
+   change at once, as in SSMS, so a state rule that colours a button or row sets transition: none. */
+button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackground); color: var(--varia-button-secondaryHoverForeground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease), color var(--varia-motion-fast) var(--varia-motion-ease), border-color var(--varia-motion-fast) var(--varia-motion-ease); }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 button:disabled { opacity: .4; cursor: default; }
 button.primary { color: var(--varia-button-foreground); background: var(--varia-button-background); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackground); }
-.icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
-.icon.expanded { transform: rotate(90deg); }
-.icon-button { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 4px; }
+/* Varia's SVG icons are 1em square, so font-size sizes them as it sizes codicons (src/shared/icons.ts). */
+.icon { display: block; width: 1em; height: 1em; flex: 0 0 1em; font-size: var(--varia-glyph-md); }
+/* Chromium gives svg preserve-parent-color, which keeps a colour set on the svg itself (a tab's kind icon) under forced
+   colours, and its stroke's currentColor ignores forced-color-adjust: auto. An inherited colour is the parent's forced
+   one, so the stroke follows the system colour of the text around it. :root outranks every rule that colours an icon. */
+@media (forced-colors: active) { :root svg.icon { color: inherit; } }
+.icon-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 4px; }
 .app { display: flex; flex-direction: column; height: 100vh; min-width: 900px; }
 .title-bar { height: 34px; flex-shrink: 0; background: var(--varia-titleBar-activeBackground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; }
 .title-bar-content { display: flex; align-items: center; height: 100%; min-width: 0; padding: 0 6px; -webkit-app-region: drag; }
@@ -24,13 +34,13 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar[data-platform="darwin"] .title-bar-content { padding-left: 80px; }
 .title-bar-left { display: flex; align-items: center; flex-shrink: 0; }
 .title-bar-brand { display: grid; place-items: center; width: 26px; color: var(--varia-titleBar-iconForeground); }
-.title-bar-brand .icon { width: 15px; height: 15px; }
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
-.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: 3px; font-size: 12px; outline: 1px solid transparent; outline-offset: -1px; }
+.title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); outline: 1px solid transparent; outline-offset: -1px; }
 .title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
+.title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { transition: none; }
 /* A resting pointer highlights its button only while no other one is open or keyboard-focused. */
 .title-bar-menus:has(button[aria-expanded="true"], button:focus-visible) button:hover:not(.active, [aria-expanded="true"], :focus-visible) { background: transparent; color: var(--varia-button-secondaryForeground); outline: none; }
-.title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: 11px; color: var(--varia-titleBar-activeForeground); pointer-events: none; }
+.title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: var(--varia-size-xs); color: var(--varia-titleBar-activeForeground); pointer-events: none; }
 .title-bar-spacer { width: 24px; flex-shrink: 0; }
 :root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
 :root[data-window-focus="inactive"] .title-bar-caption, :root[data-window-focus="inactive"] .title-bar-menus button:not(:hover, :focus-visible, .active) { color: var(--varia-titleBar-inactiveForeground); }
@@ -40,7 +50,7 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 /* Above the docking guides (15000), the quick input (19000), and dialogs (20000): text fields in dialogs get menus too. */
 .menu-layer { position: fixed; inset: 0; pointer-events: none; z-index: 30000; }
 /* Items share the menu's columns (subgrid), so shortcuts start at one x, as in SSMS. */
-.menu { position: fixed; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-content: start; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 16px var(--varia-widget-shadow); font: 12px var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; }
+.menu { position: fixed; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto 20px; align-content: start; pointer-events: auto; min-width: 200px; max-width: min(480px, 100vw - 8px); padding: 4px 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); font: var(--varia-size-sm) var(--varia-font-ui); -webkit-app-region: no-drag; user-select: none; outline: none; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .menu-item { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center; height: 24px; white-space: nowrap; cursor: default; outline: 1px solid transparent; outline-offset: -1px; }
 .menu-item[data-active] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); outline-color: var(--varia-menu-selectionBorder); }
 .menu-item[aria-disabled="true"] { color: var(--varia-disabledForeground); }
@@ -72,10 +82,10 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .toolbar-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 8px; }
 .toolbar-divider { height: 20px; width: 1px; background: var(--varia-toolbar-separatorBackground); margin: 0 5px; }
 .execute { color: var(--varia-successForeground); }
-kbd { padding: 0 4px; color: var(--varia-keybindingLabel-foreground); font: 10px/14px var(--varia-font-ui); border: 1px solid var(--varia-keybindingLabel-border); border-radius: 3px; }
+kbd { padding: 0 4px; color: var(--varia-keybindingLabel-foreground); font: var(--varia-size-xs)/14px var(--varia-font-ui); border: 1px solid var(--varia-keybindingLabel-border); border-radius: var(--varia-radius-sm); }
 .toolbar-context { display: grid; grid-template-columns: auto minmax(120px, 170px) auto minmax(100px, 150px); align-items: center; gap: 8px; margin-left: auto; }
-.context-field { color: var(--varia-toolbar-labelForeground); font-size: 11px; line-height: 16px; white-space: nowrap; }
-select, input { background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: 4px; color: var(--varia-input-foreground); padding: 7px 9px; font-size: 12px; line-height: 16px; }
+.context-field { color: var(--varia-toolbar-labelForeground); font-size: var(--varia-size-xs); line-height: 16px; white-space: nowrap; }
+select, input { background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); color: var(--varia-input-foreground); padding: 7px 9px; font-size: var(--varia-size-sm); line-height: 16px; }
 input::placeholder, textarea::placeholder { color: var(--varia-input-placeholderForeground); }
 .toolbar-context select { width: 100%; height: 28px; padding: 0 8px; }
 .workbench { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
@@ -104,57 +114,49 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   --dv-tabs-container-scrollbar-color: var(--varia-scrollbarSlider-background);
   --dv-scrollbar-background-color: var(--varia-scrollbarSlider-background);
   --dv-floating-border: 1px solid var(--varia-widget-border);
-  --dv-floating-box-shadow: 0 8px 32px var(--varia-widget-shadow);
+  --dv-floating-box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow);
 }
 /* Dockview draws the dock tab focus ring in the tab divider color, which is invisible on the tab. */
 .varia-dock .dv-tab:focus-visible::after, .varia-dock .dv-tab:has(:focus-visible)::after { outline-color: var(--varia-focusBorder) !important; }
 /* The 4 px sashes between groups paint over a tab's outer 2 px, so a tab's menu outline is drawn inside them. */
 .varia-dock .dv-tab[data-menu-target] { outline-offset: -3px; }
-.dock-workbench { --dv-paneview-header-height: 28px; --dv-tabs-and-actions-container-height: 28px; --dv-tab-font-size: 11px; --dv-floating-titlebar-height: 16px; }
+.dock-workbench { --dv-paneview-header-height: 28px; --dv-tabs-and-actions-container-height: 28px; --dv-tab-font-size: var(--varia-size-xs); --dv-floating-titlebar-height: 16px; }
 .dock-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .dock-slot { width: 100%; height: 100%; overflow: hidden; }
-.dock-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 12px; }
-.dock-empty p { margin: 5px 0; }
-.dock-empty button { margin-top: 14px; border-color: var(--varia-button-border); }
+.dock-empty { height: 100%; }
 .pane-tab { height: 100%; display: flex; flex: 1; min-width: 0; }
 .pane-tab .dv-default-tab { flex: 1; }
 .docking-guides { position: fixed; inset: 0; z-index: 15000; pointer-events: none; user-select: none; }
 .docking-guides[hidden], .docking-preview[hidden] { display: none; }
-.docking-guide-cell { position: fixed; display: grid; place-items: center; background: var(--varia-dock-guideBackground); color: var(--varia-dock-guideForeground); border: 1px solid var(--varia-dock-guideBorder); box-shadow: 0 1px 5px var(--varia-dock-guideShadow); }
+.docking-guide-cell { position: fixed; display: grid; place-items: center; background: var(--varia-dock-guideBackground); color: var(--varia-dock-guideForeground); border: 1px solid var(--varia-dock-guideBorder); box-shadow: var(--varia-shadow-menu) var(--varia-dock-guideShadow); }
 .docking-guide-cell.active { background: var(--varia-dock-guideActiveBackground); border-color: var(--varia-dock-guideActiveBorder); box-shadow: 0 0 0 2px var(--varia-dock-guideActiveRing); }
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
-.dock-move { height: 24px; padding: 0 3px; margin-right: 4px; font-size: 10px; width: 68px; border-color: transparent; background: transparent; }
+.dock-move { height: 24px; padding: 0 3px; margin-right: 4px; font-size: var(--varia-size-xs); width: 68px; border-color: transparent; background: transparent; }
 .dock-move:focus-visible { outline-offset: -2px; }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; }
 .explorer-toolbar { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 1px; padding: 0 6px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-empty { padding: 25px 18px; }
-.explorer-empty > .icon { width: 24px; height: 24px; color: var(--varia-icon-foreground); margin-bottom: 14px; }
-.explorer-empty p { color: var(--varia-descriptionForeground); line-height: 1.6; font-size: 12px; }
-.explorer-empty button { border: 1px solid var(--varia-button-border); margin-top: 8px; }
-.explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: 10px; padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
-.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: 22px; display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: 12px; line-height: 16px; white-space: nowrap; cursor: default; }
-.explorer-row:hover { background: var(--varia-list-hoverBackground); }
-.explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); }
-.explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; cursor: default; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
+.explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
 .oe-indent { flex: none; }
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
 .oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
 .oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
-.oe-icon .icon { width: 15px; height: 15px; flex-basis: 15px; }
-.oe-icon .codicon { font-size: 15px; }
-.oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: 9px; line-height: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--varia-sideBar-background); }
+.oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: var(--varia-glyph-badge); line-height: var(--varia-glyph-badge); width: var(--varia-glyph-badge); height: var(--varia-glyph-badge); border-radius: 50%; background: var(--varia-sideBar-background); }
 .oe-badge[data-badge="disabled"], .oe-badge[data-badge="error"] { color: var(--varia-errorForeground); }
 .oe-badge[data-badge="unavailable"], .oe-badge[data-badge="lost"] { color: var(--varia-disabledForeground); }
-.oe-badge[data-badge="loading"] { animation: oe-spin 1.5s steps(30) infinite; }
+.oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @keyframes oe-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .oe-badge[data-badge="loading"] { animation: none; } }
 .oe-label { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
@@ -170,18 +172,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
 .oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
-.oe-actions .codicon { font-size: 14px; }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
 .monaco-editor .varia-bookmark { color: var(--varia-editorBookmark-foreground); }
 .filter-dialog { width: min(640px, calc(100vw - 40px)); }
 .go-to-line-dialog { width: min(360px, calc(100vw - 40px)); }
-.go-to-line-dialog label { display: block; font-size: 11px; color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
+.go-to-line-dialog label { display: block; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); margin-bottom: 6px; }
 .go-to-line-dialog input { width: 100%; height: 28px; }
 .go-to-line-dialog .field-note { margin-top: 8px; }
 .filter-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.filter-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
+.filter-grid th { text-align: left; font-weight: 400; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); padding: 7px 8px 3px 0; vertical-align: top; line-height: 20px; }
 .filter-grid thead th { width: 112px; padding: 0 8px 6px 0; }
 .filter-grid thead th:nth-child(2) { width: 176px; }
 .filter-grid thead th:last-child { width: auto; }
@@ -190,21 +191,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .filter-grid input, .filter-grid select { width: 100%; min-width: 0; height: 28px; }
 .filter-dates { display: flex; gap: 6px; }
 .filter-dates input { flex: 1; }
-.filter-problem { margin-top: 4px; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
+.filter-problem { margin-top: 4px; font-size: var(--varia-size-xs); color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .filter-dialog .field-note { margin-top: 12px; }
 .filter-dialog .connect-error { margin: 12px 0 0; }
 /* Recover Unsaved Queries: a row a query, long names and paths cut with an ellipsis (whole in their tooltips). */
 .recovery-dialog { width: min(820px, calc(100vw - 40px)); }
-.recovery-dialog .field-note { margin-bottom: 10px; font-size: 12px; color: var(--varia-editorWidget-foreground); }
+.recovery-dialog .field-note { margin-bottom: 10px; font-size: var(--varia-size-sm); color: var(--varia-editorWidget-foreground); }
 .recovery-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.recovery-grid th { text-align: left; font-weight: 400; font-size: 11px; color: var(--varia-dialog-labelForeground); padding: 0 8px 6px 0; }
+.recovery-grid th { text-align: left; font-weight: 400; font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); padding: 0 8px 6px 0; }
 .recovery-grid td { padding: 5px 8px 5px 0; border-top: 1px solid var(--varia-dialog-separatorBackground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
 .recovery-grid th:first-child { width: 28px; }
 .recovery-grid th:nth-child(2) { width: 22%; }
 .recovery-grid th:nth-child(4) { width: 22%; }
 .recovery-grid th:last-child { width: 96px; }
 .recovery-grid input { width: 16px; height: 16px; margin: 0; vertical-align: middle; accent-color: var(--varia-button-background); }
-.recovery-confirm { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border-radius: 5px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
+.recovery-confirm { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 8px 10px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .recovery-confirm > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .recovery-confirm > button { border: 1px solid var(--varia-button-border); }
 .recovery-dialog .connect-error { margin: 12px 0 0; }
@@ -221,11 +222,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-pages [role="treeitem"]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .options-pages [aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
 .options-twisty { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
-.options-pages [aria-expanded="true"] .options-twisty .icon { transform: rotate(90deg); }
+.options-pages [aria-expanded="true"] .options-twisty .codicon { transform: rotate(90deg); }
 .options-empty { margin: 4px 10px; color: var(--varia-descriptionForeground); }
 .options-dialog mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
 .options-page { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
-.options-heading { margin: 0; padding: 8px 10px 4px; font-size: 13px; font-weight: 600; color: var(--varia-settings-headerForeground); overflow-wrap: anywhere; }
+.options-heading { margin: 0; padding: 8px 10px 4px; font-size: var(--varia-size-md); font-weight: 600; color: var(--varia-settings-headerForeground); overflow-wrap: anywhere; }
 .options-note { margin: 4px 10px; line-height: 1.5; color: var(--varia-descriptionForeground); }
 .options-form { padding: 0 0 6px; }
 .options-group { margin-bottom: 6px; }
@@ -238,7 +239,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-radios { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .options-radios legend { float: left; margin-right: 10px; padding: 0; }
 .options-radios label { display: inline-flex; align-items: center; gap: 4px; }
-.options-field-error { flex-basis: 100%; grid-column: 1 / -1; font-size: 11px; color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
+.options-field-error { flex-basis: 100%; grid-column: 1 / -1; font-size: var(--varia-size-xs); color: var(--varia-inputValidation-errorForeground); overflow-wrap: anywhere; }
 .options-list { flex: 1; min-width: 0; padding: 2px 0 6px; }
 .options-category { height: 22px; line-height: 22px; padding: 0 10px; font-weight: 600; color: var(--varia-settings-headerForeground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .options-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 46%); align-items: center; gap: 2px 8px; min-height: 22px; padding: 0 10px 0 22px; }
@@ -255,19 +256,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
 }
-.explorer-fault { padding: 18px; font-size: 12px; color: var(--varia-errorForeground); }
-.explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
 /* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
-.shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: 13px; }
+.shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: var(--varia-size-md); }
 .shell-failure::before { content: ''; position: fixed; inset: 0 0 auto 0; height: env(titlebar-area-height, 34px); -webkit-app-region: drag; }
-.shell-failure h1 { margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--varia-errorForeground); }
+.shell-failure h1 { margin: 0 0 8px; font-size: var(--varia-size-xl); font-weight: 600; color: var(--varia-errorForeground); }
 .shell-failure p { margin: 0 0 16px; max-width: 70ch; line-height: 1.5; color: var(--varia-descriptionForeground); }
 .shell-failure-actions { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
 .shell-failure-actions button:not(.primary) { border-color: var(--varia-button-border); }
-.shell-failure-actions [role="status"] { color: var(--varia-descriptionForeground); font-size: 12px; }
-.shell-failure-details { margin: 0; padding: 12px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: 12px/1.5 var(--varia-font-mono); background: var(--varia-panel-background); color: var(--varia-foreground); border: 1px solid var(--varia-input-border); border-radius: 4px; }
+.shell-failure-actions [role="status"] { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); }
+.shell-failure-details { margin: 0; padding: 12px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font: var(--varia-size-sm)/1.5 var(--varia-font-mono); background: var(--varia-panel-background); color: var(--varia-foreground); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
 .shell-failure-details:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
-.explorer-error { flex-shrink: 0; font-size: 11px; color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
+.explorer-error { flex-shrink: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); line-height: 1.6; padding: 0 12px; margin: 5px 0 8px; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
@@ -278,25 +277,25 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.query-tabs { display: flex; flex-shrink: 0; height: 38px; background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.query-tabs { display: flex; flex-shrink: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
 .query-tab { display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
-.tab-select { display: flex; align-items: center; gap: 8px; height: 35px; border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
+.tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.tab-readonly { font-size: 12px; margin-left: -4px; }
+.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
-.tab-close .icon { width: 12px; height: 12px; flex-basis: 12px; }
+.tab-close .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close:focus-visible { outline-offset: -2px; }
-.sql-icon { font-size: 8px; line-height: 16px; color: var(--varia-documentTabs-iconForeground); font-weight: 700; }
+.tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* SSMS's query window status bar: the run's state, then server (version), login (SPID), database, time and rows. The
    server gives way first when the bar is narrow; the tooltip holds the whole text. A value's document names its kind. */
-.query-status-bar { display: flex; align-items: center; gap: 16px; height: 24px; padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: 10px; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
+.query-status-bar { display: flex; align-items: center; gap: 16px; height: var(--varia-status); padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
 .query-status-bar[data-tone="value"] { background: none; color: var(--varia-breadcrumb-foreground); padding: 0 20px; }
 .query-status-bar[data-tone="executing"] { background: var(--varia-queryStatusBar-executingBackground); color: var(--varia-queryStatusBar-executingForeground); }
 .query-status-bar[data-tone="error"] { background: var(--varia-queryStatusBar-errorBackground); color: var(--varia-queryStatusBar-errorForeground); }
 .query-status-state { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.query-status-state .codicon { font-size: 12px; }
+.query-status-state .codicon { font-size: var(--varia-glyph-sm); }
 .query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
 .query-status-segment { flex-shrink: 0; }
 .query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
@@ -308,50 +307,44 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-database { flex-shrink: 1; }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
-.workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 13px; }
-.workspace-empty button { border-color: var(--varia-button-border); margin: 0 5px; }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
 .output-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; height: 42px; border-bottom: 1px solid var(--varia-panel-border); padding-right: 18px; background: var(--varia-panelTitle-background); }
-.output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: 11px; }
-.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); }
-.output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: 3px; background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: 9px; }
-.output-toolbar small { font-size: 10px; color: var(--varia-descriptionForeground); }
+.output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
+.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); transition: none; }
+.output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
+.output-toolbar small { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
-.output-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: 12px; }
-.output-empty strong { font-weight: 500; color: var(--varia-emptyState-titleForeground); }
-.output-empty p { font-size: 11px; margin-top: 8px; }
-.output-empty-icon { color: var(--varia-emptyState-iconForeground); font-size: 25px; margin-bottom: 8px; }
 .output-toolbar { gap: 8px; padding-right: 10px; }
 .output-toolbar > div { display: flex; flex-shrink: 0; }
 .output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .output-toolbar button { padding: 12px; }
 .output-toolbar .output-status { flex: 1; min-width: 96px; text-align: right; }
-.job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: 10px; color: var(--varia-descriptionForeground); white-space: nowrap; }
+.job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
 .job-strip span, .job-notice { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .job-strip.job-notice { display: block; }
 .job-strip button { flex-shrink: 0; }
-.output-toolbar .job-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: 3px; color: var(--varia-foreground); font-size: 10px; }
+.output-toolbar .job-strip button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Stacked result sets: absolutely placed grids and splitters in a scrolling stack (ResultsStack). */
 .rs-stack { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .rs-content { position: relative; width: 100%; }
 .rs-item { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; min-height: 0; }
-.rs-placeholder { height: 22px; padding: 0 8px; font: 12px/22px var(--varia-font-ui); color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
+.rs-placeholder { height: 22px; padding: 0 8px; font: var(--varia-size-sm)/22px var(--varia-font-ui); color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
 .rg-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); }
 /* The results grid (GridView): pooled rows and cells, positioned absolutely; one class string per cell. */
-.rg { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); font: 12px/19px var(--varia-font-mono); user-select: none; outline: none; }
+.rg { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); font: var(--varia-size-sm)/19px var(--varia-font-mono); font-variant-numeric: tabular-nums; user-select: none; outline: none; }
 /* The focus ring is drawn above the grid's sticky headers and row numbers, which would cover an outline of the grid itself. */
 .rg::after { content: ''; position: absolute; inset: 0; z-index: 5; pointer-events: none; }
 .rg:focus-visible::after { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .rg-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; }
 .rg-spacer { position: relative; }
 .rg-head { position: sticky; top: 0; z-index: 2; height: 22px; }
-.rg-ch, .rg-corner { position: absolute; top: 0; height: 22px; box-sizing: border-box; padding: 0 6px; overflow: hidden; white-space: pre; unicode-bidi: isolate; font: 12px/21px var(--varia-font-ui); background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
+.rg-ch, .rg-corner { position: absolute; top: 0; height: 22px; box-sizing: border-box; padding: 0 6px; overflow: hidden; white-space: pre; unicode-bidi: isolate; font: var(--varia-size-sm)/21px var(--varia-font-ui); background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
 .rg-corner { position: sticky; left: 0; z-index: 3; width: var(--rg-rhw); }
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
@@ -368,9 +361,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-rn:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-rn.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg-c { position: absolute; top: 0; height: 20px; box-sizing: border-box; padding: 0 6px; white-space: pre; overflow: hidden; text-overflow: clip; unicode-bidi: isolate; contain: strict; border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
-.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); }
+.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); font-style: italic; }
 .rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-truncationForeground); }
-.rg-c.is-err { color: var(--varia-errorForeground); font-style: italic; }
+/* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
+.rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
 .rg:focus-within .rg-c.is-sel, .rg:focus-within .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
 .rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-inactiveSelectionBackground); }
@@ -379,10 +373,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
-.rg-strip { flex-shrink: 0; padding: 4px 8px; font: 11px/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
+.rg-strip { flex-shrink: 0; padding: 4px 8px; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
 .rg-strip.error { color: var(--varia-errorForeground); }
-.rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: 3px; color: var(--varia-foreground); font-size: 11px; }
-.rg-overlay { position: absolute; inset: 22px 0 0; z-index: 4; display: grid; place-items: center; padding: 16px; text-align: center; font: 12px var(--varia-font-ui); color: var(--varia-emptyState-foreground); background: var(--varia-resultsGrid-background); }
+.rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+.rg-overlay { position: absolute; inset: 22px 0 0; z-index: 4; display: grid; place-items: center; padding: 16px; text-align: center; font: var(--varia-size-sm) var(--varia-font-ui); color: var(--varia-emptyState-foreground); background: var(--varia-resultsGrid-background); }
 @media (forced-colors: active) {
   /* Forced colors drop the selection's backgrounds; the system's selection colors show which cells Copy takes. */
   .rg-c.is-sel, .rg:focus-within .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-null { background: Highlight; color: HighlightText; forced-color-adjust: none; }
@@ -399,22 +393,23 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 .messages { flex: 1; min-height: 0; overflow: auto; padding: 10px 20px; color: var(--varia-resultsMessages-foreground); }
 .messages:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
-.messages .msg { margin: 0; font: 12px/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
+.messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
-.memory-indicator .codicon { font-size: 12px; }
+.memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 
-.layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: 8px; box-shadow: 0 20px 80px var(--varia-widget-shadow); }
+.layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .layout-dialog .dialog-heading { display: flex; align-items: start; justify-content: space-between; }
 .layout-dialog .dialog-heading h2 { margin-bottom: 10px; }
-.layout-dialog > label { display: block; font-size: 12px; color: var(--varia-dialog-labelForeground); margin: 18px 0 7px; }
+.layout-dialog > label { display: block; font-size: var(--varia-size-sm); color: var(--varia-dialog-labelForeground); margin: 18px 0 7px; }
 .layout-row { display: flex; gap: 8px; }
 .layout-row input, .layout-row select { flex: 1; min-width: 0; }
 .layout-dialog button:not(.primary) { border-color: var(--varia-button-border); }
 .layout-file-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 22px; }
-.layout-notice { color: var(--varia-successForeground); font-size: 12px; }
+.layout-notice { color: var(--varia-successForeground); font-size: var(--varia-size-sm); }
 
-.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: 26px; overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); font-size: 10px; line-height: 16px; padding: 0 13px; }
+/* The bar shares the chrome fill with Object Explorer, so its own top line keeps it apart; a connection color replaces it. */
+.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
 .status-bar[data-state="executing"] { background: var(--varia-statusBar-executingBackground); color: var(--varia-statusBar-executingForeground); }
 .status-bar[data-state="disconnected"] { background: var(--varia-statusBar-disconnectedBackground); color: var(--varia-statusBar-disconnectedForeground); }
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
@@ -428,17 +423,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-status-position { display: flex; gap: 10px; }
 .editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
-.editor-status .codicon { font-size: 12px; }
+.editor-status .codicon { font-size: var(--varia-glyph-sm); }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
 /* Its own left gap: the status bar's second child otherwise loses it to the auto margin above. */
 .status-bar > .status-scripting:not(:empty) { margin-left: 8px; }
 .status-scripting-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-scripting-more { flex-shrink: 0; white-space: nowrap; }
-.status-scripting button { flex-shrink: 0; color: inherit; border-color: currentColor; padding: 0 6px; font-size: 10px; line-height: 14px; }
+.status-scripting button { flex-shrink: 0; color: inherit; border-color: currentColor; padding: 0 6px; font-size: var(--varia-size-xs); line-height: 14px; }
 .status-scripting button.status-scripting-notice { flex-shrink: 1; min-width: 0; border-color: transparent; padding: 0; text-align: start; cursor: pointer; }
 .status-scripting button.status-scripting-notice:hover { text-decoration: underline; }
-.global-error { display: flex; align-items: center; justify-content: space-between; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); padding: 6px 12px; font-size: 12px; }
+.global-error { display: flex; align-items: center; justify-content: space-between; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); padding: 6px 12px; font-size: var(--varia-size-sm); }
 .global-error.warning { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .theme-notice { gap: 12px; }
 .backend-banner { gap: 12px; flex-wrap: wrap; }
@@ -449,29 +444,29 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .theme-notice-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .theme-notice-actions button { color: inherit; }
 .modal-backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: var(--varia-dialog-backdropBackground); backdrop-filter: blur(3px); z-index: 20000; }
-.connection-modal { display: flex; flex-direction: column; width: min(600px, calc(100vw - 40px)); max-height: calc(100vh - 40px); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: 7px; box-shadow: 0 20px 80px var(--varia-widget-shadow); font-size: 12px; }
+.connection-modal { display: flex; flex-direction: column; width: min(600px, calc(100vw - 40px)); max-height: calc(100vh - 40px); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); font-size: var(--varia-size-sm); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .connection-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 10px; flex-shrink: 0; }
-.connection-heading h2 { font-size: 21px; font-weight: 500; margin: 0; }
+.connection-heading h2 { font-size: var(--varia-size-lg); font-weight: 600; margin: 0; }
 .connection-scroll { padding: 4px 20px 12px; overflow-y: auto; min-height: 0; }
 .connection-footer { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--varia-dialog-separatorBackground); flex-shrink: 0; }
 .connection-footer > span { flex: 1; }
 .connection-footer > button { min-width: 78px; border-color: var(--varia-button-border); }
 .connection-tabs { display: flex; gap: 12px; margin: 2px 0 10px; }
 .connection-tabs > button { border-radius: 0; border-bottom: 2px solid transparent; padding: 6px 0; }
-.connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); }
+.connection-tabs > button[aria-selected="true"] { color: var(--varia-panelTitle-activeForeground); border-bottom-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .connection-filter { width: 100%; margin-bottom: 7px; }
 .connection-sources { height: 176px; overflow-y: auto; border-bottom: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
 .connection-sources details { margin: 2px 0 8px; }
 .connection-sources summary { padding: 4px; cursor: pointer; color: var(--varia-settings-headerForeground); }
-.connection-empty { font-size: 11px; padding: 2px 16px; color: var(--varia-dialog-descriptionForeground); }
-.connection-list-row { display: flex; align-items: center; border-radius: 3px; }
+.connection-empty { font-size: var(--varia-size-xs); padding: 2px 16px; color: var(--varia-dialog-descriptionForeground); }
+.connection-list-row { display: flex; align-items: center; border-radius: var(--varia-radius-sm); }
 .connection-list-row.selected { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); }
 .connection-choice { display: flex; align-items: center; flex: 1; gap: 8px; min-width: 0; text-align: left; padding: 6px 5px; }
 .connection-choice > span:last-child { min-width: 0; flex: 1; }
 .connection-choice strong, .connection-choice small { display: block; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.connection-choice small { color: var(--varia-dialog-descriptionForeground); font-size: 10px; margin-top: 2px; }
+.connection-choice small { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); margin-top: 2px; }
 .connection-swatch { width: 3px; height: 26px; border-radius: 1px; flex-shrink: 0; }
-.favorite-button { font-size: 18px; color: var(--varia-connection-favoriteForeground); }
+.favorite-button { color: var(--varia-connection-favoriteForeground); }
 .browse-toolbar { display: flex; align-items: center; gap: 9px; margin: 4px 0 8px; }
 .browse-toolbar select { flex: 1; }
 .discovered-server { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
@@ -480,32 +475,33 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-grid { display: flex; flex-direction: column; gap: 6px; }
 .property-grid[hidden] { display: none; }
 .property-row { display: grid; grid-template-columns: 176px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 26px; }
-.property-row > label { font-size: 11px; color: var(--varia-dialog-labelForeground); }
+.property-row > label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
 .property-row > input, .property-row > select, .property-input-action > input:not([type="color"]), .property-input-action > select { width: 100%; min-width: 0; height: 28px; }
 .connection-modal input:not([type="checkbox"]):not([type="color"]) { padding: 4px 8px; line-height: 16px; }
 .connection-modal select { padding: 0 8px; height: 28px; line-height: 16px; }
 .property-row input:disabled, .property-row select:disabled { opacity: .5; }
 .property-input-action { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .property-input-action > input:not([type="color"]), .property-input-action > select { flex: 1; }
-.property-input-action > button { padding: 4px 8px; border: 1px solid var(--varia-button-border); }
+.property-input-action > button { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--varia-button-border); }
 .property-input-action input[type="color"] { width: 36px; height: 28px; padding: 2px; flex-shrink: 0; cursor: pointer; }
 .property-row .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .advanced-action { display: flex; justify-content: flex-end; }
 .advanced-action button, .connection-save-actions button { border: 1px solid var(--varia-button-border); }
 .property-section { border: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); padding: 9px 0 0; margin: 12px 0 0; min-width: 0; }
-.property-section legend { padding: 0 7px 0 0; color: var(--varia-settings-headerForeground); font-size: 11px; }
+.property-section legend { padding: 0 7px 0 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
 .connection-save-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
-.connection-save-actions button { font-size: 11px; padding: 4px 7px; }
-.connection-preview textarea { width: 100%; height: 285px; resize: vertical; background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); padding: 10px; font: 12px/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
+.connection-save-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: var(--varia-size-xs); padding: 4px 7px; }
+.connection-save-actions .codicon { font-size: var(--varia-glyph-sm); }
+.connection-preview textarea { width: 100%; height: 285px; resize: vertical; background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); padding: 10px; font: var(--varia-size-sm)/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
 .advanced-backdrop { z-index: 20010; }
 .advanced-dialog { width: min(640px, calc(100vw - 40px)); }
 .advanced-dialog .property-row { grid-template-columns: 230px minmax(0, 1fr); }
 .advanced-dialog .field-note { margin-top: 16px; }
-.dialog-heading h2 { font-weight: 500; font-size: 20px; margin: 0 0 22px; }
+.dialog-heading h2 { font-weight: 600; font-size: var(--varia-size-lg); margin: 0 0 22px; }
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }
-.field-note { font-size: 11px; line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
-.connect-error { font-size: 12px; line-height: 1.6; color: var(--varia-inputValidation-errorForeground); background: var(--varia-inputValidation-errorBackground); padding: 10px; border-radius: 5px; overflow-wrap: anywhere; }
-.connect-error-details { font-size: 11px; line-height: 1.6; color: var(--varia-descriptionForeground); margin-top: 6px; }
+.field-note { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
+.connect-error { font-size: var(--varia-size-sm); line-height: 1.6; color: var(--varia-inputValidation-errorForeground); background: var(--varia-inputValidation-errorBackground); padding: 10px; border-radius: var(--varia-radius-sm); overflow-wrap: anywhere; }
+.connect-error-details { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin-top: 6px; }
 .connect-error-details summary { cursor: pointer; width: max-content; }
 .connect-error-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0 0; }
 .connect-error-details dl > div { display: contents; }
@@ -516,14 +512,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .keybinding { display: inline-flex; gap: 3px; flex-shrink: 0; }
 
 /* Above the docking guides (15000), below modal dialogs (20000). */
-.quick-input { position: fixed; top: 40px; left: 0; right: 0; margin: 0 auto; z-index: 19000; width: min(600px, calc(100vw - 40px)); display: flex; flex-direction: column; background: var(--varia-quickInput-background); color: var(--varia-quickInput-foreground); border: 1px solid var(--varia-widget-border); border-radius: 6px; box-shadow: 0 8px 24px var(--varia-widget-shadow); font-size: 12px; overflow: hidden; -webkit-app-region: no-drag; }
-.quick-input-title { padding: 5px 10px; background: var(--varia-quickInputTitle-background); font-size: 11px; line-height: 16px; }
+.quick-input { position: fixed; top: 40px; left: 0; right: 0; margin: 0 auto; z-index: 19000; width: min(600px, calc(100vw - 40px)); display: flex; flex-direction: column; background: var(--varia-quickInput-background); color: var(--varia-quickInput-foreground); border: 1px solid var(--varia-widget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); overflow: hidden; -webkit-app-region: no-drag; animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.quick-input-title { padding: 5px 10px; background: var(--varia-quickInputTitle-background); font-size: var(--varia-size-xs); line-height: 16px; }
 .quick-input-header { padding: 6px 6px 4px; }
 .quick-input-header input { display: block; width: 100%; height: 28px; padding: 4px 8px; }
 .quick-input-header input:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .quick-input-progress { height: 2px; flex-shrink: 0; }
 .quick-input-progress.busy { background: var(--varia-focusBorder); }
-.quick-input-message { margin: 2px 6px 4px; padding: 5px 8px; border-radius: 3px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
+.quick-input-message { margin: 2px 6px 4px; padding: 5px 8px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
 .quick-input-message.error { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
 /* An empty message keeps no box but stays in the accessibility tree, so its live region is announced when text arrives. */
 .quick-input-message:empty { margin: 0; padding: 0; }
@@ -548,50 +544,53 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .quick-input-icon { width: 16px; height: 16px; flex: 0 0 16px; }
 .quick-input-label { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .quick-input-hl { color: var(--varia-list-highlightForeground); font-weight: 600; }
-.quick-input-description { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: 11px; }
+.quick-input-description { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 .quick-input-end { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-shrink: 0; }
-.quick-input-group { color: var(--varia-pickerGroup-foreground); font-size: 11px; }
+.quick-input-group { color: var(--varia-pickerGroup-foreground); font-size: var(--varia-size-xs); }
 .quick-input-empty { height: 24px; padding: 4px 10px; margin-bottom: 4px; line-height: 16px; color: var(--varia-descriptionForeground); }
 .quick-input-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (max-width: 1150px) { .toolbar { gap: 8px; padding: 7px 8px; } .toolbar-actions { gap: 2px; } .toolbar-actions button { padding: 0 6px; } .toolbar-context { grid-template-columns: auto 140px auto 130px; gap: 6px; } }
 
 /* Object dialogs (Delete Object) and Object Explorer's inline Rename box. */
-.explorer-rename { min-width: 120px; flex: 1 1 auto; height: 20px; padding: 0 4px; font-size: 12px; line-height: 16px; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-focusBorder); border-radius: 2px; }
+.explorer-rename { min-width: 120px; flex: 1 1 auto; height: 20px; padding: 0 4px; font-size: var(--varia-size-sm); line-height: 16px; color: var(--varia-input-foreground); background: var(--varia-input-background); border: 1px solid var(--varia-focusBorder); border-radius: var(--varia-radius-sm); }
 .explorer-rename:focus-visible { outline: none; }
 .connection-modal.object-dialog { width: min(820px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); max-height: none; }
 .connection-modal.object-dialog:focus { outline: none; }
 .object-dialog-body { display: flex; flex: 1; min-height: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-side { flex: 0 0 clamp(170px, 26%, 220px); display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--varia-dialog-separatorBackground); }
-.object-dialog-caption { padding: 6px 10px; font-size: 11px; font-weight: 600; color: var(--varia-settings-headerForeground); }
+.object-dialog-caption { padding: 6px 10px; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-settings-headerForeground); }
 .object-dialog-pages { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
 .object-dialog-pages > button { display: flex; align-items: center; gap: 6px; border-radius: 0; padding: 3px 10px; text-align: left; }
-.object-dialog-pages > button[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.object-dialog-pages > button[aria-current="page"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .object-dialog-pages > button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .object-dialog-box { border-top: 1px solid var(--varia-dialog-separatorBackground); padding-bottom: 8px; }
-.object-dialog-box dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; margin: 0; padding: 0 10px; font-size: 11px; }
+.object-dialog-box dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 6px; margin: 0; padding: 0 10px; font-size: var(--varia-size-xs); }
 .object-dialog-box dt { color: var(--varia-dialog-labelForeground); }
 .object-dialog-box dd { margin: 0; overflow-wrap: anywhere; }
-.object-dialog-progress { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: 11px; }
-.object-dialog-spinner { animation: oe-spin 1.5s steps(30) infinite; }
+.object-dialog-progress { display: flex; align-items: center; gap: 6px; padding: 0 10px; font-size: var(--varia-size-xs); }
+.object-dialog-spinner { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @media (prefers-reduced-motion: reduce) { .object-dialog-spinner { animation: none; } }
+/* Monaco's codicon-modifiers.css spins .codicon-loading and .codicon-modifier-spin (the query status bar, the tree's
+   Loading rows) with selectors up to two classes long; these outrank them (tests/theme-metrics.test.ts compares them). */
+@media (prefers-reduced-motion: reduce) { :root .codicon.codicon-loading, :root .codicon.codicon-modifier-spin, :root .codicon-tree-item-loading::before { animation: none; } }
 .object-dialog-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .object-dialog-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-script { position: relative; display: inline-flex; }
 .object-dialog-script > button { display: inline-flex; align-items: center; gap: 5px; border-color: var(--varia-button-border); }
 .object-dialog-script-main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .object-dialog-script-arrow { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-width: 0; padding: 6px 4px; }
-.object-dialog-script-list { position: absolute; top: calc(100% + 2px); left: 0; z-index: 1; min-width: 240px; margin: 0; padding: 4px 0; list-style: none; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: 4px; box-shadow: 0 4px 12px var(--varia-widget-shadow); }
+.object-dialog-script-list { position: absolute; top: calc(100% + 2px); left: 0; z-index: 1; min-width: 240px; margin: 0; padding: 4px 0; list-style: none; background: var(--varia-menu-background); color: var(--varia-menu-foreground); border: 1px solid var(--varia-menu-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .object-dialog-script-list > li { padding: 4px 12px; white-space: nowrap; cursor: default; }
 .object-dialog-script-list > li[aria-selected="true"] { background: var(--varia-menu-selectionBackground); color: var(--varia-menu-selectionForeground); }
-.object-dialog-message { display: flex; align-items: flex-start; gap: 6px; margin: 8px 10px 0; padding: 6px 8px; border-radius: 3px; background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); overflow-wrap: anywhere; user-select: text; }
+.object-dialog-message { display: flex; align-items: flex-start; gap: 6px; margin: 8px 10px 0; padding: 6px 8px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); overflow-wrap: anywhere; user-select: text; }
 .object-dialog-message.info { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .object-dialog-page { flex: 1; min-height: 0; overflow: auto; padding: 4px 10px 10px; }
-.object-dialog-grid { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+.object-dialog-grid { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--varia-size-xs); }
 .object-dialog-grid th { text-align: left; font-weight: 400; color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
 .object-dialog-grid th, .object-dialog-grid td { padding: 3px 6px; border: 1px solid var(--varia-resultsGrid-gridlines); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .object-dialog-grid td.object-dialog-cell-message { white-space: normal; overflow-wrap: anywhere; }
 .object-dialog-warnings { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-.object-dialog-warnings > li { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: 3px; background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
+.object-dialog-warnings > li { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
@@ -629,8 +628,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-container[hidden] { display: none; }
 .table-designer { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--varia-editor-background); color: var(--varia-foreground); }
 .table-designer-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 6px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); }
-.table-designer-toolbar .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.table-designer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: 12px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-bottom: 1px solid var(--varia-editorWidget-border); overflow-wrap: anywhere; }
+.table-designer-toolbar .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.table-designer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; font-size: var(--varia-size-sm); background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-bottom: 1px solid var(--varia-editorWidget-border); overflow-wrap: anywhere; }
 .table-designer-bar.error { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
 .table-designer-bar > span:not(.codicon) { flex: 1; min-width: 0; }
 .table-designer-main { flex: 1; min-height: 0; display: flex; }
@@ -641,18 +640,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The property grids sit on the Options dialog's surface, so its rows keep the colours that pass the contrast checks there. */
 .table-designer-column-properties { flex: 1; min-height: 60px; display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); }
 .table-designer-properties { flex: 0 0 clamp(220px, 28%, 340px); display: flex; flex-direction: column; overflow: auto; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border-left: 1px solid var(--varia-panel-border); }
-.table-designer-section-head { display: flex; align-items: center; gap: 2px; padding: 2px 6px 2px 10px; font-size: 11px; font-weight: 600; color: var(--varia-panelTitle-activeForeground); background: var(--varia-panelTitle-background); }
+.table-designer-section-head { display: flex; align-items: center; gap: 2px; padding: 2px 6px 2px 10px; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-panelTitle-activeForeground); background: var(--varia-panelTitle-background); }
 .table-designer-section-head > span { flex: 1; }
 .table-designer-section-head .icon-button { width: 22px; height: 22px; }
-.table-designer-section-head .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
-.table-designer .options-list { font-size: 12px; }
+.table-designer-section-head .icon-button[aria-pressed="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.table-designer .options-list { font-size: var(--varia-size-sm); }
 .table-designer .options-row input, .table-designer .options-row select { width: 100%; min-width: 0; height: 20px; padding: 0 4px; line-height: 16px; }
-.table-designer-empty, .table-designer-description { margin: 0; padding: 6px 10px; font-size: 11px; color: var(--varia-descriptionForeground); }
+.table-designer-empty, .table-designer-description { margin: 0; padding: 6px 10px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .table-designer-description { border-top: 1px solid var(--varia-panel-border); color: var(--varia-editorWidget-foreground); }
-.table-designer-script { width: 100%; min-height: 180px; resize: vertical; font: 12px/16px var(--varia-font-mono); background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); white-space: pre; overflow: auto; }
-.table-designer-warning { margin: 0; font-size: 12px; color: var(--varia-editorWidget-foreground); }
+.table-designer-script { width: 100%; min-height: 180px; resize: vertical; font: var(--varia-size-sm)/16px var(--varia-font-mono); background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); white-space: pre; overflow: auto; }
+.table-designer-warning { margin: 0; font-size: var(--varia-size-sm); color: var(--varia-editorWidget-foreground); }
 .connection-modal.sub-dialog:has(.table-designer-script) { width: min(720px, calc(100vw - 48px)); }
-.designer-grid { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); outline: none; }
+.designer-grid { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: var(--varia-size-sm); background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); outline: none; }
 .designer-grid:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .designer-grid-head { display: grid; grid-template-columns: 22px minmax(120px, 2fr) minmax(110px, 1.4fr) 84px; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
 .designer-grid-head > span { padding: 3px 6px; border-right: 1px solid var(--varia-resultsGrid-gridlines); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -670,4 +669,103 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   .designer-cell[data-active], .table-designer-splitter:focus-visible { outline: 1px solid CanvasText; }
   .designer-row[data-selected] .designer-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}
+/* The states kit (src/renderer/src/kit): one empty state, inline errors, loading placeholders, status pills and tags,
+   filter chips, live labels and metric tiles. Colour is never the only sign: pills and badges carry a word, an on chip
+   a check mark, and a tile over its threshold a glyph. */
+.empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-1); min-height: 0; padding: var(--varia-space-5) var(--varia-space-4); text-align: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.empty-state-icon { margin-bottom: var(--varia-space-1); color: var(--varia-emptyState-iconForeground); }
+.empty-state-title { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; color: var(--varia-emptyState-titleForeground); }
+.empty-state-detail { margin: 0; max-width: 48ch; }
+.empty-state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+.empty-state-actions button:not(.primary) { border-color: var(--varia-button-border); }
+.inline-error { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
+.inline-error > .codicon { flex: none; color: var(--varia-errorForeground); }
+.inline-error-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.inline-error-message { margin: 0; user-select: text; }
+.inline-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.inline-error-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
+.inline-error-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+/* Held back for --varia-motion-delay (transparent until then), so a quick load never flashes a placeholder. */
+.skeleton { display: flex; flex-direction: column; padding: var(--varia-space-1) var(--varia-space-3); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) var(--varia-motion-delay) both; }
+.skeleton-row { display: flex; align-items: center; height: var(--varia-row); }
+.skeleton-row::before { content: ''; width: 64%; height: 8px; border-radius: var(--varia-radius-sm); background: var(--varia-skeleton-background); }
+.skeleton-row:nth-child(3n + 2)::before { width: 82%; }
+.skeleton-row:nth-child(3n)::before { width: 46%; }
+.status-pill { display: inline-flex; align-items: center; flex: none; gap: var(--varia-space-1); max-width: 100%; height: 20px; padding: 0 var(--varia-space-2); overflow: hidden; border-radius: var(--varia-radius-pill); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: middle; }
+.status-pill.small { height: 18px; padding: 0 6px; }
+/* An environment tag (PROD): squarer than a state pill, so the two read apart side by side. */
+.status-pill.tag { border-radius: var(--varia-radius-sm); letter-spacing: 0.04em; }
+/* Pills and chips take any registry icon: a codicon, or one of Varia's svg icons, sized as the glyph it replaces. */
+.status-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill > .icon { font-size: var(--varia-glyph-sm); }
+.chip > .codicon { font-size: var(--varia-glyph-sm); }
+.chip > .icon { font-size: var(--varia-glyph-sm); }
+.live-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
+.tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
+.status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
+.status-pill[data-tone="warning"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
+.status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
+.status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
+.status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+/* A connection's environment tag where it labels the connection. A preset's word always fits; a custom label (up to 32
+   characters) is bounded and ends in an ellipsis, with the full label in the tooltip and accessible name, so it never
+   takes the server's name, the tab or the bar it sits in. */
+.environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
+.environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
+.environment-tag[data-place="explorer"] { max-width: min(40%, 12em); margin-left: var(--varia-space-1); }
+.environment-tag[data-place="tab"] { max-width: 10em; }
+.environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
+.environment-tag[data-place="list"] { vertical-align: middle; }
+.query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
+/* Apart from the backend's state, which it does not describe. */
+.status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
+.environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
+.environment-preview .environment-tag { flex: 0 1 auto; }
+.connection-choice-title { display: flex; align-items: center; min-width: 0; }
+.connection-choice .connection-choice-title strong { flex: 0 1 auto; min-width: 0; }
+.environment-field input { flex: 1; min-width: 0; }
+.chip-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 10px; border: 1px solid var(--varia-chip-border); border-radius: var(--varia-radius-pill); background: var(--varia-chip-background); color: var(--varia-chip-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.chip[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
+/* An on chip stays filled under the pointer, so the click that turned it on shows at once, as a key press does. */
+.chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
+.chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+.live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
+/* A ring grows from the dot and fades; the dot keeps its color, so it reads at rest and mid-beat alike. */
+.live-pill[data-state="live"] .live-dot { animation: varia-pulse var(--varia-motion-pulse) var(--varia-motion-ease) infinite; }
+@keyframes varia-pulse { from { box-shadow: 0 0 0 0 var(--varia-live-indicator); } 70%, to { box-shadow: 0 0 0 5px transparent; } }
+@media (prefers-reduced-motion: reduce) { .live-pill[data-state="live"] .live-dot { animation: none; } }
+/* Starting, paused, stopped or ended: muted, with a glyph in place of the dot. */
+.live-pill:not([data-state="live"], [data-state="slowed"]) { color: var(--varia-live-pausedForeground); }
+.stale-badge[data-stale] { height: 20px; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-live-staleBackground); color: var(--varia-live-staleForeground); }
+.tile { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
+/* Over a threshold the outline takes the tone at twice the width, inside the tile so nothing moves. */
+.tile[data-tone="warning"] { border-color: var(--varia-tile-warningBorder); box-shadow: inset 0 0 0 1px var(--varia-tile-warningBorder); }
+.tile[data-tone="critical"] { border-color: var(--varia-tile-criticalBorder); box-shadow: inset 0 0 0 1px var(--varia-tile-criticalBorder); }
+.tile-caption { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.tile-caption-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile[data-tone="warning"] .tile-caption > .codicon { color: var(--varia-tile-warningBorder); }
+.tile[data-tone="critical"] .tile-caption > .codicon { color: var(--varia-tile-criticalBorder); }
+.tile-value { margin: 0; font-size: var(--varia-size-xl); line-height: var(--varia-line-xl); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile-unit { margin-left: 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); font-weight: 400; }
+.tile-context { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.tile-chart { min-width: 0; min-height: 0; }
+@media (forced-colors: active) {
+  /* Forced colors drop fills: pills, badges and tiles keep an outline, and an on chip takes the selection colors. */
+  .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }
+  .tile[data-tone] { border-width: 2px; box-shadow: none; }
+  .chip { border-color: ButtonText; }
+  /* Kept out of forcing, an on chip and the live dot must set every colour they show, hovered and focused too. */
+  .chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .chip[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
+  .live-dot, .skeleton-row::before { forced-color-adjust: none; background: CanvasText; }
+  /* The pulse ring is the theme colour, so the dot holds still: its word still says it is live. */
+  .live-pill[data-state="live"] .live-dot { animation: none; }
+  /* On a selected row a pill follows the row's text. */
+  [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
 }
