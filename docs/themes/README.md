@@ -1,8 +1,10 @@
 # Color themes
 
-Varia ships two themes, **Varia Dark** (the default) and **Varia Light**, and can follow the operating system. Custom themes
-are small JSON files that override a named palette, individual color keys, and SQL syntax colors on top of the built-in
-theme of their type. Key names follow VS Code wherever the concept matches, and palette references work like opencode's.
+Varia ships two themes, **Varia Dark** (the default) and **Varia Light**, and can follow the operating system. Both use
+graphite neutrals and one iris accent; in the workbench chrome, red, amber, and green are kept for state. SQL syntax
+colors, chart series, and the connection colors you choose are separate sets. Custom themes are small JSON files that
+override a named palette, individual color keys, and SQL syntax colors on top of the built-in theme of their type. Key
+names follow VS Code wherever the concept matches, and palette references work like opencode's.
 
 - [`tokens.md`](tokens.md) lists every palette slot, color key, and SQL scope with its default in both themes.
 - [`metrics.md`](metrics.md) lists the type scale, spacing, radii, shadows, motion and bar heights, which themes do not set.
@@ -99,6 +101,9 @@ A theme is applied on top of the built-in theme of its type: Varia Dark for `dar
 
 Because every key defaults to a slot, overriding one slot recolors everything that uses it. Overriding `accent` changes
 `button.background`, `tab.activeBorderTop`, `panelTitle.activeBorder`, and every other key that defaults to `$accent`.
+The accent's companions are slots of their own: `textAccent` (selected labels and the status bar text while a query
+runs), `accentSurface` (that status bar tint and the active connection row) and the `selection` slots stay iris until a
+theme sets them, as `harbor.json` does for its teal.
 
 ### Values
 
@@ -114,10 +119,11 @@ characters.
 
 ### Palette
 
-The 61 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-61). Slots group
+The 66 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-66). Slots group
 the colors that belong together: surfaces (`canvas`, `panel`, `sideBar`, `chrome`, `raised`, `overlay`, `input`),
 interaction (`hover`, `active`, `selection`, `selectionStrong`), text tiers (`text` down to `textMuted`), borders,
-accents, status colors, glyphs, the six connection colors, and the SQL syntax colors (`syntaxKeyword` and so on).
+accents, status colors, glyphs, the six connection colors, five chart series colors (`chart1` to `chart5`, a categorical
+set checked for color-vision deficiencies, used only inside charts), and the SQL syntax colors (`syntaxKeyword` and so on).
 
 You can add your own slots, named like `nord0` (a lowercase letter, then up to 31 letters and digits), and refer to them
 from other slots, `colors`, and `tokenColors`. A slot may refer to another slot. A chain of more than four references, or a
@@ -125,7 +131,7 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 196 keys are listed in [`tokens.md`](tokens.md#color-keys-196) by area: title bar and menus, buttons and inputs,
+The 206 keys are listed in [`tokens.md`](tokens.md#color-keys-206) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
 are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
@@ -152,7 +158,8 @@ block of VS Code keys gets one summary warning.
 - A sub-scope such as `keyword.block` inherits from `keyword` unless a rule names it.
 - `settings.foreground` takes any value above. `settings.fontStyle` is empty or up to four of `italic`, `bold`,
   `underline`, and `strikethrough`, separated by single spaces. Other settings, including `background`, are ignored.
-- When several rules name the same scope, later rules win; `foreground` and `fontStyle` override independently.
+- When several rules name the same scope, later rules win; `foreground` and `fontStyle` override independently. Comments
+  are italic by default, so a rule that sets only their `foreground` keeps the italics; `"fontStyle": ""` removes them.
 - Brackets are colored by nesting depth, like VS Code's bracket pair colorization, so their color comes from the
   `editorBracketHighlight.*` keys in `colors` rather than from the `delimiter` scopes.
 
@@ -203,8 +210,12 @@ bidirectional-text characters are removed from names, and the window chrome only
   a pair in `contrast-pairs.ts`, then regenerate the docs with `npx vitest run tests/theme-schema.test.ts -u`.
 - `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for indicators) on every
   surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
-  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` keeps
-  Varia Dark within a small distance of the colors it replaced.
+  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` holds the
+  built-ins to the design language: graphite neutrals, one accent hue with status colors far from it, chart colors that
+  stay apart for protanopia, deuteranopia and tritanopia and reach 3:1 on the editor, widget and panel backgrounds, NULL
+  as muted italics, and a status bar tinted only while a query runs or the backend is down.
+- Every key default names a slot or another key; no key has a literal default, so a theme recolors everything,
+  the docking compass included.
 - Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion and bar heights live in
   `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`, `--varia-space-*`,
   `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,

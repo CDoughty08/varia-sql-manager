@@ -374,8 +374,8 @@ try {
   await expect.poll(windowBackground).toBe('#ffffff')
   expect(await appearance()).toBe(saved)
   await page.keyboard.press('Escape')
-  await expect.poll(variable).toBe('#11151c')
-  await expect.poll(windowBackground).toBe('#11151c')
+  await expect.poll(variable).toBe('#16181d')
+  await expect.poll(windowBackground).toBe('#16181d')
   expect(await appearance()).toBe(saved)
   await themePicker()
   await page.keyboard.type('varia light')
@@ -393,8 +393,8 @@ try {
   await page.keyboard.type('dark')
   await page.keyboard.press('Enter')
   await expect.poll(async () => JSON.parse(await appearance() ?? '{}').mode).toBe('dark')
-  await expect.poll(variable).toBe('#11151c')
-  await expect.poll(windowBackground).toBe('#11151c')
+  await expect.poll(variable).toBe('#16181d')
+  await expect.poll(windowBackground).toBe('#16181d')
   console.log('Palette checks: modal dialogs block workbench keys; the Color Theme picker previews, cancels, and chooses.')
 
   // 15. An Enter that ends an IME composition never accepts a row.

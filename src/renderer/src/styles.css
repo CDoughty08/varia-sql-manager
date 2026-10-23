@@ -375,9 +375,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-rn:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-rn.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg-c { position: absolute; top: 0; height: 20px; box-sizing: border-box; padding: 0 6px; white-space: pre; overflow: hidden; text-overflow: clip; unicode-bidi: isolate; contain: strict; border-right: 1px solid var(--varia-resultsGrid-gridlines); border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
-.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); }
+.rg-c.is-null { color: var(--varia-resultsGrid-nullForeground); background: var(--varia-resultsGrid-nullBackground); font-style: italic; }
 .rg-c.is-trunc::after { content: '…'; position: absolute; top: 0; right: 0; padding: 0 3px; background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-truncationForeground); }
-.rg-c.is-err { color: var(--varia-errorForeground); font-style: italic; }
+/* A value that could not be read also reads "NULL": upright and underlined, it differs from a NULL in more than hue. */
+.rg-c.is-err { color: var(--varia-errorForeground); text-decoration: underline wavy 1px; text-underline-offset: 1px; }
 .rg-c.is-link { color: var(--varia-resultsGrid-linkForeground); text-decoration: underline; cursor: pointer; }
 .rg:focus-within .rg-c.is-sel, .rg:focus-within .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-selectionBackground); color: var(--varia-resultsGrid-selectionForeground); }
 .rg:not(:focus-within) .rg-c.is-sel, .rg:not(:focus-within) .rg-c.is-sel.is-trunc::after { background: var(--varia-resultsGrid-inactiveSelectionBackground); }
@@ -421,7 +422,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .layout-file-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 22px; }
 .layout-notice { color: var(--varia-successForeground); font-size: var(--varia-size-sm); }
 
-.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
+/* The bar shares the chrome fill with Object Explorer, so its own top line keeps it apart; a connection color replaces it. */
+.status-bar { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; height: var(--varia-status); overflow: hidden; background: var(--varia-statusBar-background); color: var(--varia-statusBar-foreground); border-top: 1px solid var(--varia-statusBar-border); font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; padding: 0 13px; }
 .status-bar[data-state="executing"] { background: var(--varia-statusBar-executingBackground); color: var(--varia-statusBar-executingForeground); }
 .status-bar[data-state="disconnected"] { background: var(--varia-statusBar-disconnectedBackground); color: var(--varia-statusBar-disconnectedForeground); }
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
