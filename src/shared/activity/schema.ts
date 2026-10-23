@@ -59,3 +59,20 @@ export const activityFilterSchema = z.object({
     if (!columnFilter.values?.length && !columnFilter.blanks && !columnFilter.nonBlanks) context.addIssue({ code: 'custom', path: ['columnFilters', index], message: 'A column filter needs a value, (Blanks) or (Non-blanks).' })
   })
 }) satisfies z.ZodType<ActivityFilter>
+
+export interface ActivityLiveArgs {
+  /** One per table; an update replaces only the tables it names. */
+  readonly filters?: readonly ActivityFilter[]
+  /** The session the sessions probe's focus series follow (the Details flyout); 0 follows none. */
+  readonly focusSession?: number
+}
+
+/** The live layer's `args.activity` (src/shared/live/schema.ts): bounded, strict, one filter per table. */
+export const activityLiveArgsSchema = z.object({
+  filters: z.array(activityFilterSchema).min(1).max(activityTables.length).optional(),
+  focusSession: z.number().int().min(0).max(activityLimits.sessionId).optional()
+}).strict().superRefine((args, context) => {
+  const tables = args.filters?.map(filter => filter.table) ?? []
+  if (new Set(tables).size !== tables.length) context.addIssue({ code: 'custom', path: ['filters'], message: 'One filter per table.' })
+  if (args.filters === undefined && args.focusSession === undefined) context.addIssue({ code: 'custom', message: 'The args change nothing.' })
+}) satisfies z.ZodType<ActivityLiveArgs>
