@@ -815,6 +815,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-section-head { display: flex; align-items: center; gap: var(--varia-space-2); min-height: var(--varia-control); }
 .document-section-title { flex: 1; min-width: 0; margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
 .document-section-title > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; padding: 0 var(--varia-space-1) 0 0; color: inherit; font: inherit; }
+.document-section-count { margin-left: var(--varia-space-2); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); font-weight: 400; font-variant-numeric: tabular-nums; }
 .document-section-body { padding-top: var(--varia-space-2); }
 /* The Script drawer: its bar stays when it is closed; open, it takes its share of the height (an inline flex-basis). */
 .document-script { display: flex; flex-direction: column; flex: none; min-height: 0; background: var(--varia-panel-background); border-top: 1px solid var(--varia-panel-border); }
@@ -830,6 +831,18 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-script-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .document-script-empty, .document-script-note { margin: 0; padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-script-note { flex: none; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+/* What a document says above its content: a failure, or a note that it cannot read again or that lists stop short. */
+.document-notice { display: flex; flex-direction: column; gap: var(--varia-space-2); flex: none; padding: 0 var(--varia-space-4) var(--varia-space-2); }
+/* SSIS properties documents (src/renderer/src/ssis): General as label and value pairs, and read-only lists. */
+.ssis-properties { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: var(--varia-space-1) var(--varia-space-4); margin: 0; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-properties > div { display: contents; }
+.ssis-properties dt { color: var(--varia-descriptionForeground); }
+.ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.ssis-properties-table { overflow-x: auto; }
+.ssis-properties-table .object-dialog-grid { table-layout: auto; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
+.ssis-properties-table .object-dialog-grid .wide { min-width: 16ch; white-space: normal; overflow-wrap: anywhere; }
+.ssis-properties-empty, .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-properties-none { color: var(--varia-descriptionForeground); }
 /* A narrow document puts its section list across the top, and its verbs under the title. */
 @container (max-width: 640px) {
   .document-header, .document-heading, .document-crumbs ol { flex-wrap: wrap; }

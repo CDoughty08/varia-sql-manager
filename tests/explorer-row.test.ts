@@ -54,7 +54,7 @@ describe('Object Explorer rows', () => {
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
   })
   it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
     const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {
       rowId: 7, kind: RowKind.Node, index: 0, level: 5, posinset: 1, setsize: 1, node: node(), rev: 0, text: '', selected: true, draggable: true, active: false, color: undefined, actions, menuTarget: () => {}, renaming
     }))
@@ -69,7 +69,7 @@ describe('Object Explorer rows', () => {
     expect(plain).not.toContain('explorer-rename')
   })
   it('end a server row with its environment tag, and say it in the row name and tooltip', () => {
-    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => false), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
+    const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => false), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
     const render = (fields: Partial<TreeNode>, environment?: string) => renderToStaticMarkup(
       createElement(ExplorerRow, { rowId: 1, kind: RowKind.Node, index: 0, level: 1, posinset: 1, setsize: 1, node: node(fields), rev: 0, text: '', selected: false, draggable: false, active: false, color: undefined, environment, actions, menuTarget: () => {} }))
     const server = { id: 1, parent: 0, kind: 'server' as const, ref: { type: 'object' as const, object: { kind: 'server' as const } }, label: 'sql-prod-01', sublabel: '(SQL Server 17.0 - dba)', level: 1 }

@@ -14,6 +14,8 @@ import { RowKind, type TreeNode } from './tree-model'
 export interface RowActions {
   select(rowId: number): void
   toggle(rowId: number): void
+  /** A double-click on a node that does not expand: its kind's default action, if it has one. */
+  activate(rowId: number): void
   reconnect(rowId: number): void
   remove(rowId: number): void
   /** Fills a drag's data with the row's insert text; false cancels the drag. */
@@ -160,7 +162,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || undefined} aria-label={tag ? `${rowName(node)}, ${tag.description}` : rowName(node)} aria-description={rowDescription(node)} title={tag ? clip(`${rowTooltip(node)}\n${tag.description}`) : rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
-    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
+    onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
     {indent}

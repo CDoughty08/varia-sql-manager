@@ -4,6 +4,7 @@
 // sync). The tree's SSIS kinds and folders are Object Explorer's (src/shared/explorer/catalog.ts). Erasable TypeScript (no
 // enums), so Node's type stripping can load it too.
 import type { NodeKind } from '../explorer/catalog.ts'
+import type { IconId } from '../icons.ts'
 
 /** SSMS fixes the catalog's name; only the backend's internal test option points it at a fake catalog. */
 export const catalogDatabase = 'SSISDB'
@@ -143,6 +144,135 @@ export const describeViews = [
 export type SsisDescribeView = typeof describeViews[number]
 export const describeTargets: { readonly [V in SsisDescribeView]: NodeKind } = {
   catalog: 'ssisCatalog', folder: 'ssisFolder', project: 'ssisProject', package: 'ssisPackage', environment: 'ssisEnvironment'
+}
+
+/** `validation_status` of a project, package or reference: the catalog writes 'N' when it deploys one (the fake catalog's
+ *  procedures do as the real ones). Other codes are shown as the catalog stores them until a real catalog records them. */
+export const validationStatuses: readonly { readonly code: string; readonly label: string }[] = [
+  { code: 'N', label: 'Not validated' }
+]
+
+/**
+ * The documents SSIS verbs open: one per tree kind they describe, a non-modal tab named as SSMS names the dialog
+ * ("Folder Properties - Finance"), read with `view`. Each document kind is the node kind it shows.
+ */
+export const ssisDocumentKinds = ['ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment'] as const
+export type SsisDocumentKind = typeof ssisDocumentKinds[number]
+export type SsisPropertiesView = Exclude<SsisDescribeView, 'catalog'>
+export interface SsisDocumentSpec {
+  readonly title: string
+  readonly view: SsisPropertiesView
+  /** The tab's icon: the tree kind's own. */
+  readonly icon: IconId
+  /** What the object is, as a sentence names it ("the folder"). */
+  readonly noun: string
+  /** Its sections, in order; the list beside them names them. */
+  readonly sections: readonly { readonly id: string; readonly title: string }[]
+}
+const general = { id: 'general', title: 'General' }, parameterSection = { id: 'parameters', title: 'Parameters' }
+export const ssisDocumentSpecs: { readonly [K in SsisDocumentKind]: SsisDocumentSpec } = {
+  ssisFolder: { title: 'Folder Properties', view: 'folder', icon: 'folder-library', noun: 'folder', sections: [general] },
+  ssisProject: {
+    title: 'Project Properties', view: 'project', icon: 'project', noun: 'project',
+    sections: [general, { id: 'packages', title: 'Packages' }, parameterSection, { id: 'references', title: 'References' }]
+  },
+  ssisPackage: { title: 'Package Properties', view: 'package', icon: 'package', noun: 'package', sections: [general, parameterSection] },
+  ssisEnvironment: { title: 'Environment Properties', view: 'environment', icon: 'symbol-variable', noun: 'environment', sections: [general, { id: 'variables', title: 'Variables' }] }
+}
+export const isSsisDocumentKind = (kind: unknown): kind is SsisDocumentKind => typeof kind === 'string' && (ssisDocumentKinds as readonly string[]).includes(kind)
+/** The tab's name, as SSMS titles the dialog: "Package Properties - Daily.dtsx". */
+export const ssisDocumentName = (kind: SsisDocumentKind, name: string): string => `${ssisDocumentSpecs[kind].title} - ${name}`
+
+/**
+ * SSIS verbs (D-ssis 3.1): what Object Explorer's SSIS nodes offer, one command each. `document` verbs open a document,
+ * `confirm` ones ask first and `inline` ones edit the tree row; `writes` marks those that change the catalog (none yet).
+ * `defaultAction` is what Enter and a double-click on the node do, as in SSMS. Later verbs (Active Operations, Execute,
+ * Configure, …) append, with their gates.
+ */
+export const ssisVerbs = [
+  'folderProperties',
+  'projectProperties',
+  'packageProperties',
+  'environmentProperties'
+] as const
+export type SsisVerb = typeof ssisVerbs[number]
+export type SsisVerbClass = 'document' | 'confirm' | 'inline'
+export type SsisCommandId = 'ssis.folderProperties' | 'ssis.projectProperties' | 'ssis.packageProperties' | 'ssis.environmentProperties' | 'ssis.refreshProperties'
+export interface SsisVerbSpec {
+  /** The palette's title; menus show `menuTitle`. */
+  readonly title: string
+  readonly menuTitle: string
+  readonly mnemonic: string
+  readonly group: string
+  readonly order: number
+  /** The tree kinds that offer it. */
+  readonly kinds: readonly NodeKind[]
+  readonly class: SsisVerbClass
+  readonly document?: SsisDocumentKind
+  readonly writes: boolean
+  readonly defaultAction?: true
+  readonly command: SsisCommandId
+}
+// The access key is Object Explorer's Properties (P), which these nodes do not offer.
+const properties = (kind: SsisDocumentKind, extra: Partial<SsisVerbSpec> = {}): Omit<SsisVerbSpec, 'command'> => ({
+  title: ssisDocumentSpecs[kind].title, menuTitle: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, kinds: [kind], class: 'document', document: kind, writes: false, ...extra
+})
+export const ssisVerbSpecs: { readonly [V in SsisVerb]: SsisVerbSpec } = {
+  folderProperties: { ...properties('ssisFolder'), command: 'ssis.folderProperties' },
+  projectProperties: { ...properties('ssisProject'), command: 'ssis.projectProperties' },
+  // SSMS opens a package's and an environment's properties on a double-click (U3 section 1).
+  packageProperties: { ...properties('ssisPackage', { defaultAction: true }), command: 'ssis.packageProperties' },
+  environmentProperties: { ...properties('ssisEnvironment', { defaultAction: true }), command: 'ssis.environmentProperties' }
+}
+/** '' = not offered; 'disabled' = shown greyed (for a later gate, such as Windows authentication); 'enabled'. */
+export type SsisVerbState = '' | 'disabled' | 'enabled'
+/** Each verb's state for a node kind. */
+export function ssisVerbMenuState(kind: NodeKind | 'folder' | undefined): Readonly<Record<SsisVerb, SsisVerbState>> {
+  return Object.fromEntries(ssisVerbs.map(verb => [verb, kind !== undefined && kind !== 'folder' && ssisVerbSpecs[verb].kinds.includes(kind) ? 'enabled' : ''])) as Record<SsisVerb, SsisVerbState>
+}
+/** The verb Enter and a double-click run on a node of this kind, if any. */
+export function ssisDefaultVerb(kind: NodeKind | 'folder' | undefined): SsisVerb | undefined {
+  return kind === undefined || kind === 'folder' ? undefined : ssisVerbs.find(verb => ssisVerbSpecs[verb].defaultAction && ssisVerbSpecs[verb].kinds.includes(kind))
+}
+const pascal = <S extends string>(text: S) => (text.charAt(0).toUpperCase() + text.slice(1)) as Capitalize<S>
+export type SsisVerbContextKey = `ssisVerb${Capitalize<SsisVerb>}`
+export const ssisVerbContextKey = (verb: SsisVerb): SsisVerbContextKey => `ssisVerb${pascal(verb)}`
+export type SsisVerbContextValues = { readonly [K in SsisVerbContextKey]: SsisVerbState }
+/** The state context keys a selection publishes: `ssisVerb<Verb>`. */
+export const ssisVerbContextValues = (state: Readonly<Record<SsisVerb, SsisVerbState>>): SsisVerbContextValues =>
+  Object.fromEntries(ssisVerbs.map(verb => [ssisVerbContextKey(verb), state[verb]])) as SsisVerbContextValues
+
+/** A command catalogue entry, in the shape of `CommandDescriptor`. */
+export interface SsisCommandEntry {
+  readonly title: string
+  readonly category: 'Integration Services'
+  readonly icon: 'settings-gear' | 'refresh'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+  readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly title: string; readonly mnemonic: string; readonly when: string }[]
+}
+const nodeIs = (kinds: readonly NodeKind[]) => kinds.length === 1 ? `explorerNode == '${kinds[0]}'` : `(${kinds.map(kind => `explorerNode == '${kind}'`).join(' || ')})`
+/** The SSIS commands: one per verb, and Refresh for the properties documents (F5 there, as in Object Explorer). */
+export function ssisCommandEntries(): { readonly [K in SsisCommandId]: SsisCommandEntry } {
+  const verbs = Object.fromEntries(ssisVerbs.map(verb => {
+    const spec = ssisVerbSpecs[verb], key = ssisVerbContextKey(verb), noun = spec.document ? ssisDocumentSpecs[spec.document].noun : 'object'
+    const entry: SsisCommandEntry = {
+      title: spec.title, category: 'Integration Services', icon: 'settings-gear', keywords: ['ssis', 'properties', 'catalog', noun], precondition: `backendReady && ${key} == 'enabled'`,
+      unavailableHint: `Select an SSIS Catalog ${noun} in Object Explorer.`,
+      // The keys describe the selection, which a node's menu has just selected; naming the node's kind too keeps the item off
+      // the empty area's menu, and says it never shows beside Object Explorer's own Properties (same access key).
+      menus: [{ menu: 'explorer.context', group: spec.group, order: spec.order, title: spec.menuTitle, mnemonic: spec.mnemonic, when: `${nodeIs(spec.kinds)} && ${key} != ''` }]
+    }
+    return [spec.command, entry]
+  }))
+  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus) still executes.
+  const refresh: SsisCommandEntry = {
+    title: 'Refresh Properties', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'catalog'], precondition: 'backendReady && activeDocumentIsSsis',
+    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus" }]
+  }
+  return { ...verbs, 'ssis.refreshProperties': refresh } as { readonly [K in SsisCommandId]: SsisCommandEntry }
 }
 
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */

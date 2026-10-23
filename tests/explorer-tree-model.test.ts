@@ -197,7 +197,8 @@ describe('keyboard', () => {
   it('toggles with Enter and Numpad plus and minus, and expands siblings with *', () => {
     const t = sample(1), rows = t.rows(), at = (label: string) => index(rows, t.nodes, label)
     expect(treeKey(rows, at('Tables'), 'enter', 10)).toEqual({ type: 'toggle', id: t.tables.id })
-    expect(treeKey(rows, at('dbo.Table0'), 'enter', 10)).toEqual({ type: 'none' })
+    // A node that does not expand runs its default action, if its kind has one (the tree looks it up).
+    expect(treeKey(rows, at('dbo.Table0'), 'enter', 10)).toEqual({ type: 'activate', id: rows.ids[at('dbo.Table0')] })
     expect(treeKey(rows, at('System Databases'), 'expand', 10)).toEqual({ type: 'expand', id: t.system.id })
     expect(treeKey(rows, at('Tables'), 'expand', 10)).toEqual({ type: 'none' })
     expect(treeKey(rows, at('Tables'), 'collapse', 10)).toEqual({ type: 'collapse', id: t.tables.id })

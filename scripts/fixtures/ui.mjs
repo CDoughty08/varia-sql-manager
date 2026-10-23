@@ -100,6 +100,8 @@ export const part = {
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
   statusPillLabel: '.status-pill-label',
+  /** The states kit's age label ("Updated 3 s ago"), which a stale one marks with data-stale. */
+  staleBadge: '.stale-badge',
   /** The status bars' spans that hold the tag with its visually hidden prefix. */
   queryEnvironment: '.query-status-environment',
   statusEnvironment: '.status-environment',
@@ -119,6 +121,10 @@ export const part = {
   tableDesigner: '.table-designer',
   // The document frame
   documentHeader: '.document-header',
+  /** The header's kind of document ("Folder Properties"), the fact line, and the notice above the content. */
+  documentSubtitle: '.document-subtitle',
+  documentFacts: '.document-facts',
+  documentNotice: '.document-notice',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -314,6 +320,14 @@ export const documentFrame = (page, title) => page.getByRole('region', named(tit
 /** The header row, for its height (it has no role of its own inside the frame's region). */
 export const documentHeader = frame => frame.locator(part.documentHeader)
 export const documentCrumbs = frame => frame.getByRole('navigation', { name: 'Location', exact: true }).getByRole('listitem')
+/** The header's kind of document, and its state: a status pill (Loading, Not found) or the age of what it shows. */
+export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
+export const documentStatePill = frame => documentHeader(frame).locator(part.statusPill)
+export const documentStaleBadge = frame => documentHeader(frame).locator(part.staleBadge)
+/** The fact line's values, in order. */
+export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
+/** What the document says above its content: a failure (an inline error whose message is an alert, with its actions) or a note. */
+export const documentNotice = frame => frame.locator(part.documentNotice)
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)

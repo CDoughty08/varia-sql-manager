@@ -5,8 +5,8 @@ import type { Platform } from '../src/shared/commands/keybindings'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
-import DocumentFrame, { DocumentFrameView, DocumentHeader, FactLine, headerVerbs, useHeaderVerbs, type FrameSection, type HeaderVerb, type Verb } from '../src/renderer/src/kit/DocumentFrame'
-import { frameLimits, initialFrameState, resizeScript, revealBy, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
+import DocumentFrame, { DocumentFrameView, DocumentHeader, FactLine, FrameSectionView, headerVerbs, useHeaderVerbs, type FrameSection, type HeaderVerb, type Verb } from '../src/renderer/src/kit/DocumentFrame'
+import { frameLimits, initialFrameState, resizeScript, restoredSection, revealBy, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
 import ScriptDrawer, { scriptDrawerActions, type ScriptContent } from '../src/renderer/src/kit/ScriptDrawer'
 import { scriptDestinations, scriptDestinationSpecs } from '../src/shared/scripting/catalog'
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
@@ -41,6 +41,14 @@ describe('document frame state', () => {
     expect(scrolledTo(state, '')).toBe(state)
     expect(toggleSection(toggleSection(state, 'files'), 'files')).toEqual(state)
     expect(toggleSection(state, 'options').collapsed).toEqual([])
+  })
+  it('scrolls a remounted frame to the section its list marks, unless that is the first, which shows unscrolled', () => {
+    const state = initialFrameState(sections)
+    expect(restoredSection({ ...state, section: 'options' }, sections)).toBe('options')
+    expect(restoredSection({ ...state, section: 'files', collapsed: ['files'] }, sections)).toBe('files')
+    expect(restoredSection(state, sections)).toBeUndefined()
+    expect(restoredSection({ ...state, section: 'gone' }, sections)).toBeUndefined()
+    expect(restoredSection({ ...state, section: '' }, [])).toBeUndefined()
   })
   it('keeps the drawer within its bounds, by pointer and by key', () => {
     const state = initialFrameState(sections)
@@ -175,7 +183,7 @@ describe('document frame markup', () => {
     const frameSections: FrameSection[] = [
       { id: 'general', title: 'General', content: createElement('p', null, 'facts') },
       { id: 'files', title: 'Files', problem: true, content: createElement('p', null, 'files grid'), aside: createElement('span', { className: 'aside' }, '2 files') },
-      { id: 'messages', title: 'Messages', collapsible: true, content: createElement('p', null, 'log') },
+      { id: 'messages', title: 'Messages', collapsible: true, count: { text: '3', label: '3 messages' }, content: createElement('p', null, 'log') },
       { id: 'parameters', title: 'Parameters', collapsible: true, content: createElement('p', null, 'parameters') }
     ]
     const frame: FrameState = { ...initialFrameState(frameSections), section: 'files', collapsed: ['parameters'] }
@@ -198,9 +206,12 @@ describe('document frame markup', () => {
     expect(markup).toContain('<h2 class="document-section-title" id="doc-2-section-files-heading">Files</h2><span class="aside">2 files</span>')
     // A collapsible section's heading is a disclosure button; a collapsed one renders no body (a live one stops drawing).
     expect(markup).toContain('<h2 class="document-section-title" id="doc-2-section-messages-heading"><button type="button" aria-expanded="true" aria-controls="doc-2-section-messages-body">'
-      + '<span class="codicon codicon-chevron-down" data-icon="chevron-down" aria-hidden="true"></span>Messages</button></h2></div><div class="document-section-body" id="doc-2-section-messages-body"><p>log</p></div>')
+      + '<span class="codicon codicon-chevron-down" data-icon="chevron-down" aria-hidden="true"></span>Messages<span class="document-section-count"><span aria-hidden="true">3</span><span class="visually-hidden"> (3 messages)</span></span></button></h2></div><div class="document-section-body" id="doc-2-section-messages-body"><p>log</p></div>')
     expect(markup).toContain('<button type="button" aria-expanded="false" aria-controls="doc-2-section-parameters-body"><span class="codicon codicon-chevron-right" data-icon="chevron-right" aria-hidden="true"></span>Parameters</button></h2></div></section>')
     expect(markup).not.toContain('<p>parameters</p>')
+    // A count sits right after the title, inside the heading, and reads as words there; an aside stays at the row's far end.
+    expect(html(createElement(FrameSectionView, { id: 'p', section: { id: 'packages', title: 'Packages', count: { text: '2', label: '2 packages' }, aside: createElement('i'), content: null }, collapsed: false, onToggle: () => {} })))
+      .toContain('<h2 class="document-section-title" id="p-section-packages-heading">Packages<span class="document-section-count"><span aria-hidden="true">2</span><span class="visually-hidden"> (2 packages)</span></span></h2><i></i></div>')
     expect(markup).not.toContain('document-script')
     // One section needs no list.
     expect(html(createElement(DocumentFrameView, { id: 'one', title: 'Folder', sections: frameSections.slice(0, 1), frame: initialFrameState(frameSections.slice(0, 1)) }))).not.toContain('document-nav')
@@ -208,6 +219,10 @@ describe('document frame markup', () => {
     expect(html(createElement(DocumentFrameView, { id: 'am', title: 'Activity Monitor', facts: [{ label: 'Server', value: 'localhost' }], children: createElement('div', { className: 'tiles' }) })))
       .toBe('<div class="document-frame" role="region" aria-labelledby="am-title" data-document-frame="am"><header class="document-header"><div class="document-heading"><h1 class="document-title" id="am-title" title="Activity Monitor">Activity Monitor</h1></div></header>'
         + '<dl class="document-facts"><div title="Server localhost"><dt>Server</dt><dd>localhost</dd></div></dl><div class="document-content"><div class="tiles"></div></div></div>')
+    // A notice sits between the facts and the content, above the section list too.
+    const noticed = html(createElement(DocumentFrameView, { id: 'n', title: 'Loads', facts: [{ label: 'Folder', value: 'Finance' }], notice: createElement('p', null, 'Refresh failed.'), sections: frameSections, frame }))
+    expect(noticed).toContain('</dl><div class="document-notice"><p>Refresh failed.</p></div><div class="document-body">')
+    expect(html(createElement(DocumentFrameView, { id: 'n', title: 'Loads', sections: frameSections, frame }))).not.toContain('document-notice')
   })
   it('keeps the Script drawer\'s bar when it is closed, and shows each state of the script when it is open', () => {
     const drawer = (open: boolean, content: ScriptContent, notice?: string) => html(createElement(ScriptDrawer, { id: 'doc-3', open, size: 0.4, content, notice, onToggle: () => {}, onResize: () => {}, onDeliver: () => {} }))

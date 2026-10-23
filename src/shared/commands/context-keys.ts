@@ -3,6 +3,7 @@ import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './wh
 import { actionContextKey, objectActions, objectActionSpecs, type ActionContextKey } from '../actions/catalog.ts'
 import { folderIds, nodeKinds } from '../explorer/catalog.ts'
 import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
+import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey } from '../ssis/catalog.ts'
 
 /**
  * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
@@ -30,6 +31,11 @@ const actionKeys = Object.fromEntries(objectActions.map(action => [actionContext
   type: 'enum', scope: 'state', values: verbStates,
   description: `How the selected Object Explorer node offers ${objectActionSpecs[action].title}: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
 }])) as { readonly [K in ActionContextKey]: VerbKeyDeclaration }
+/** One key per SSIS verb (Folder Properties, …), from `ssisVerbMenuState` of the selection. */
+const ssisVerbKeys = Object.fromEntries(ssisVerbs.map(verb => [ssisVerbContextKey(verb), {
+  type: 'enum', scope: 'state', values: verbStates,
+  description: `How the selected Object Explorer node offers ${ssisVerbSpecs[verb].title}: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
+}])) as { readonly [K in SsisVerbContextKey]: VerbKeyDeclaration }
 
 export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
@@ -46,8 +52,9 @@ export const contextKeys = {
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
-  activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer.' },
+  activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer or SSIS properties.' },
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
+  activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
   designerEditable: { type: 'boolean', scope: 'state', description: "The active table designer has loaded, is not saving or saved, and its server is connected." },
   designerSaving: { type: 'boolean', scope: 'state', description: 'A table designer is saving its table (Stop cancels it).' },
   designerRowSelected: { type: 'boolean', scope: 'state', description: 'The active table designer has a column selected.' },
@@ -91,6 +98,7 @@ export const contextKeys = {
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
   ...actionKeys,
+  ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
   scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
   explorerNode: {
