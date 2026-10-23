@@ -448,8 +448,8 @@ range), because SQL Server reuses session ids.
 
 **Details** (`activity.details`) reads the session on the monitor's pool (" - Activity Monitor", READ UNCOMMITTED,
 LOCK_TIMEOUT 1000) under the live gates, within 10 s in all: a lock wait answers BLOCKED and the budget TIMEOUT, as
-values; when the live views hold every gate for the whole budget it answers BUSY. It reads the session first. When no session has the id it answers `ended` (also when the login cannot see other
-sessions), and when another session has it (its login time differs) `changed`, reading nothing more. Every other section
+values; when the live views hold every gate for the whole budget it answers BUSY. It checks visibility and identity in `sys.dm_exec_sessions` alone before joining other DMVs. When no session has the id it answers `ended` (also when the login cannot see other
+sessions), and when another session has it (its login time differs) `changed`, reading nothing more. The richer session read checks the identity again. Every other section
 is a statement of its own, so a permission or a lock that stops one leaves the rest. The flyout shows each text's first
 65,536 characters; asked for one text by name (`statement`, `batch`, `inputBuffer`), Details returns only that
 text, whole up to 1,000,000 characters, for Open in Query Editor. Closing the flyout cancels the read (an attention
