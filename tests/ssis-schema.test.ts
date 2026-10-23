@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { validateRequest, requestSchemas } from '../src/main/validation'
-import { ssisCancelSchema, ssisDescribeSchema } from '../src/shared/ssis/schema'
+import { ssisCancelSchema, ssisDescribeSchema, ssisExecuteSchema } from '../src/shared/ssis/schema'
 import { describeTargets, describeViews } from '../src/shared/ssis/catalog'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 
@@ -53,5 +53,28 @@ describe('ssis.describe requests', () => {
     expect(ssisCancelSchema.safeParse({ requestIds: Array.from({ length: 65 }, () => randomUUID()) }).success).toBe(false)
     const id = randomUUID()
     for (const value of [{ requestIds: [] }, { requestIds: [id, id] }, { requestIds: ['x'] }, { requestIds: [randomUUID()], extra: 1 }]) expect(ssisCancelSchema.safeParse(value).success).toBe(false)
+  })
+})
+
+describe('ssis.execute requests', () => {
+  const stop = (operationId: unknown, extra: Record<string, unknown> = {}) => ({ ...ids(), action: { verb: 'stopOperation', operationId }, ...extra })
+  const valid = (value: unknown) => ssisExecuteSchema.safeParse(value).success
+  it('accepts Stop Operation with an operation id from 1 to 2^53 - 1', () => {
+    for (const id of [1, 42, Number.MAX_SAFE_INTEGER]) {
+      expect(valid(stop(id)), String(id)).toBe(true)
+      const request = stop(id)
+      expect(validateRequest('ssis.execute', request)).toEqual(request)
+    }
+  })
+  it('refuses other ids, unknown verbs and members, SYNCHRONIZED, and a revision Stop Operation does not take', () => {
+    for (const id of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '42', null, undefined]) expect(valid(stop(id)), String(id)).toBe(false)
+    expect(valid({ ...ids(), action: { verb: 'startExecution', operationId: 1 } })).toBe(false)
+    expect(valid({ ...ids(), action: { operationId: 1 } })).toBe(false)
+    expect(valid({ ...ids() })).toBe(false)
+    expect(valid({ ...ids(), action: { verb: 'stopOperation', operationId: 1, synchronized: true } })).toBe(false)
+    expect(valid(stop(1, { extra: 1 }))).toBe(false)
+    expect(valid(stop(1, { revision: 'a'.repeat(64) }))).toBe(false)
+    expect(valid({ ...stop(1), connectionId: 'server-a' })).toBe(false)
+    expect(() => validateRequest('ssis.execute', stop(0))).toThrow('Invalid request')
   })
 })

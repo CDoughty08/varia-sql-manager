@@ -48,6 +48,7 @@ const api: VariaApi = {
   executeObjectAction: params => request('actions.execute', params),
   cancelObjectActions: requestIds => ipcRenderer.invoke('varia:actions-cancel', { requestIds }),
   describeSsis: params => request('ssis.describe', params),
+  executeSsis: params => request('ssis.execute', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   getSettings: () => ipcRenderer.invoke('varia:settings-get'),
   updateSettings: patch => ipcRenderer.invoke('varia:settings-update', patch),
