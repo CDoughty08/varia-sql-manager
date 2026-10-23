@@ -933,13 +933,13 @@
         },
         "breadcrumb.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) The bar that names an XML, JSON or execution plan document opened from the results. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(VS Code) The bar that names an XML, JSON or execution plan document opened from the results. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(VS Code) The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(VS Code) The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "breadcrumb.separatorForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Unused since the query status bar replaced the query context line; themes that set it stay valid. Default @breadcrumb.foreground (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(Varia) Unused since the query status bar replaced the query context line; themes that set it stay valid. Default `@breadcrumb.foreground` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(Varia) The chevrons between the steps of the location in a document header. Default @breadcrumb.foreground (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) The chevrons between the steps of the location in a document header. Default `@breadcrumb.foreground` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "editor.background": {
           "$ref": "#/definitions/value",
