@@ -52,9 +52,26 @@ const running = new Set()
 const killTree = pid => { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* Already gone. */ } }
 if (process.platform === 'win32') process.on('exit', () => { for (const pid of running) killTree(pid) })
 
-/** Playwright's Electron launcher, with main's file operations traced and reported when the app is closed. */
+/** Emulates reduced motion in every window, and has firstWindow() return a window only once it applies there. */
+function reduceMotion(application) {
+  const applied = new WeakMap()
+  const reduce = page => {
+    if (!applied.has(page)) applied.set(page, page.emulateMedia({ reducedMotion: 'reduce' }).catch(() => {}))
+    return applied.get(page)
+  }
+  application.on('window', reduce)
+  for (const page of application.windows()) reduce(page)
+  const firstWindow = application.firstWindow.bind(application)
+  application.firstWindow = async (...args) => { const page = await firstWindow(...args); await reduce(page); return page }
+}
+
+/**
+ * Playwright's Electron launcher, with main's file operations traced and reported when the app is closed. Its windows match
+ * `prefers-reduced-motion: reduce` (emulated) unless `motion: true` is passed: checks read colors and boxes as soon as a state
+ * changes, and a hover fill or a menu fading in would otherwise be caught partway (the motion tokens are 0 ms then).
+ */
 export const electron = {
-  async launch(options) {
+  async launch({ motion = false, ...options } = {}) {
     const application = await _electron.launch(options)
     const child = application.process()
     if (process.platform === 'win32' && child?.pid) {
@@ -64,6 +81,7 @@ export const electron = {
       child.kill = () => { killTree(pid); return true }
     }
     await traceFileOperations(application).catch(error => console.log('File operation trace unavailable: ' + error.message))
+    if (!motion) reduceMotion(application)
     const close = application.close.bind(application)
     application.close = async () => { await reportFileOperations(application); return close() }
     return application
