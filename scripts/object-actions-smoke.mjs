@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
@@ -161,7 +161,6 @@ try {
   await expect(dialog().getByRole('navigation', { name: 'Select a page' }).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
   await expect(dialog().locator('.object-dialog-box dd')).toHaveText(['server-a', 'sa'])
   await expect(dialog().locator('.object-dialog-progress')).toHaveText('Ready')
-  const compactFrame = await dialog().boundingBox()
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['dbo.Lines', 'Table', 'dbo', '', ''])
   await expect(dialog().locator('.object-dialog-warnings li')).toHaveText(['Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.'])
   // Script › Script Action to Clipboard puts the action's script there; the dialog stays open, as in SSMS.
@@ -190,8 +189,10 @@ try {
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: Delete opens one Delete Object dialog, Script Action to Clipboard leaves it open, DEPENDENTS keeps it with the error, and OK deletes and reloads Tables.')
 
-  // 5. Database Properties: SSMS's pages, only the changed options scripted, Select Database Owner over the dialog, and
-  // the Open Connections prompt before an option that closes other connections.
+  // 5. Database Properties as a document: a tab rather than a modal, SSMS's pages as sections with their list, facts as
+  // text, switches and segments, a description on focus, a Script drawer whose preview and Copy carry only the changes,
+  // a frame and draft kept across tab switches, Select Database Owner over the document, Enter that never applies, the
+  // Open Connections prompt before Apply, and the close prompt.
   await application.evaluate(({ dialog }) => {
     globalThis.variaStub.prompts = []
     globalThis.variaStub.answers = []
@@ -200,49 +201,102 @@ try {
       return { response: globalThis.variaStub.answers.shift() ?? options.cancelId, checkboxChecked: false }
     }
   })
-  const properties = () => page.getByRole('dialog', { name: 'Database Properties - AppData', exact: true })
+  const tabCount = await tabs().count()
+  const properties = () => page.getByRole('region', { name: 'AppData', exact: true })
+  const propertiesTab = () => page.locator('.query-tabs').getByRole('tab', { name: 'Database Properties - AppData', exact: true })
+  const verb = name => properties().getByRole('group', { name: 'AppData actions', exact: true }).getByRole('button', { name, exact: true })
+  const sectionList = () => properties().getByRole('navigation', { name: 'Sections', exact: true })
+  const fact = label => properties().locator('.property-fact').filter({ has: page.getByRole('term').filter({ hasText: new RegExp(`^${label}$`) }) }).getByRole('definition')
   await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   await expect(properties()).toBeVisible()
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
-  // Database Properties uses the large frame, as SSMS's property dialogs are larger than Delete Object.
-  const largeFrame = await properties().boundingBox()
-  expect(largeFrame.width).toBeGreaterThan(compactFrame.width)
-  expect(largeFrame.height).toBeGreaterThan(compactFrame.height)
-  const pages = properties().getByRole('navigation', { name: 'Select a page' })
-  await expect(pages.getByRole('button')).toHaveText(['General', 'Files', 'Filegroups', 'Options'])
-  await expect(pages.getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
-  await expect(properties().getByLabel('Name', { exact: true })).toHaveValue('AppData')
-  await expect(properties().getByLabel('Status', { exact: true })).toHaveValue('Normal')
-  await expect(properties().getByLabel('Last Database Backup', { exact: true })).toHaveValue('None')
-  await expect(properties().getByLabel('Number of Users', { exact: true })).toHaveValue('4')
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(tabs()).toHaveCount(tabCount + 1)
+  await expect(propertiesTab()).toHaveAttribute('aria-selected', 'true')
+  await expect(properties().locator('.document-crumbs li')).toHaveText(['server-a', 'Databases'])
+  await expect(properties().locator('.document-subtitle')).toHaveText('Database Properties')
+  await expect(properties().locator('.status-pill')).toHaveText('Normal')
+  await expect(verb('Refresh')).toBeEnabled()
+  await expect(verb('Discard Changes')).toBeDisabled()
+  await expect(verb('Apply')).toBeDisabled()
+  await expect(sectionList().getByRole('button')).toHaveText(['General', 'Files', 'Filegroups', 'Options'])
+  await expect(sectionList().getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'location')
+  // Facts are text, not greyed inputs.
+  await expect(fact('Name')).toHaveText('AppData')
+  await expect(fact('Status')).toHaveText('Normal')
+  await expect(fact('Last Database Backup')).toHaveText('None')
+  await expect(fact('Number of Users')).toHaveText('4')
+  await expect(properties().locator('.properties-general input')).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'database-properties-general-dark.png') })
-  // The page list moves with the arrow keys, as SSMS's does.
-  await pages.getByRole('button', { name: 'General' }).focus()
+  // The section list answers SSMS's page keys from the focused section.
+  await expect(sectionList().getByRole('button', { name: 'General' })).toBeFocused()
   for (const name of ['Files', 'Filegroups', 'Options']) {
     await page.keyboard.press('ArrowDown')
-    await expect(pages.getByRole('button', { name })).toHaveAttribute('aria-current', 'page')
+    await expect(sectionList().getByRole('button', { name })).toHaveAttribute('aria-current', 'location')
   }
-  await expect(properties().getByLabel('Recovery model:', { exact: true })).toHaveValue('FULL')
-  await properties().getByLabel('Recovery model:', { exact: true }).selectOption('SIMPLE')
-  await properties().getByLabel('Auto Close', { exact: true }).selectOption('true')
-  // Changed values are bold.
-  await expect(properties().getByLabel('Recovery model:', { exact: true })).toHaveAttribute('data-changed', 'true')
-  await expect(properties().getByLabel('Auto Close', { exact: true })).toHaveAttribute('data-changed', 'true')
-  await expect(properties().getByLabel('Auto Shrink', { exact: true })).not.toHaveAttribute('data-changed', 'true')
+  // A short enum is a segmented control: one tab stop, and the arrows choose as they move.
+  const recovery = properties().getByRole('radiogroup', { name: 'Recovery model', exact: true })
+  await expect(recovery.getByRole('radio', { name: 'Full', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await expect(recovery.locator('[tabindex="0"]')).toHaveCount(1)
+  await recovery.getByRole('radio', { name: 'Simple', exact: true }).click()
+  await expect(recovery.getByRole('radio', { name: 'Simple', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await page.keyboard.press('ArrowLeft')
+  await expect(recovery.getByRole('radio', { name: 'Bulk-logged', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await expect(recovery.getByRole('radio', { name: 'Bulk-logged', exact: true })).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(recovery.getByRole('radio', { name: 'Simple', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await expect(recovery).toHaveAttribute('data-changed', 'true')
+  // A boolean is a switch, and its description shows while it has focus.
+  const autoClose = properties().getByRole('switch', { name: 'Auto Close', exact: true })
+  const autoCloseDescription = properties().getByText('Specify whether the database shuts down cleanly and frees resources after the last user exits.', { exact: true })
+  await expect(autoClose).not.toBeChecked()
+  await expect(autoCloseDescription).toBeHidden()
+  await autoClose.focus()
+  await expect(autoCloseDescription).toBeVisible()
+  await page.keyboard.press('Space')
+  await expect(autoClose).toBeChecked()
+  await expect(autoClose).toHaveAttribute('data-changed', 'true')
+  await expect(properties().getByRole('switch', { name: 'Auto Shrink', exact: true })).not.toHaveAttribute('data-changed', 'true')
+  await expect(propertiesTab().locator('.dirty-dot')).toHaveCount(1)
+  await expect(verb('Apply')).toBeEnabled()
+  await expect(verb('Refresh')).toBeDisabled()
   await page.screenshot({ path: resolve('artifacts', 'database-properties-options-dark.png') })
-  // Script Action to Clipboard: the backend's script, only the two changes asked for, and the dialog stays open.
-  await properties().getByRole('button', { name: 'Script options', exact: true }).click()
-  await properties().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
-  await expect.poll(clipboard).toBe(propertiesScript)
-  await expect(properties()).toBeVisible()
+  // The Script drawer previews only the changes, and Copy takes what it shows; the document stays as it was.
+  const drawer = properties().getByRole('region', { name: 'Script', exact: true })
+  // A text box keeps its value with LF line ends; Copy takes the script as the backend wrote it.
+  const shownScript = propertiesScript.replaceAll('\r\n', '\n')
+  await drawer.getByRole('button', { name: 'Script', exact: true }).click()
+  await expect(drawer.getByRole('textbox', { name: 'Script text', exact: true })).toHaveValue(shownScript)
   expect((await stubCalls('actions.script')).at(-1)).toEqual({ action: 'properties', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'database', name: 'AppData' },
     closeConnections: false, changes: { options: { recoveryModel: 'SIMPLE', autoClose: 'true' } } })
-  // Files: the owner's browse button opens Select Database Owner over the dialog; Escape closes only it, Enter chooses.
-  await pages.getByRole('button', { name: 'Files' }).click()
-  await expect(properties().getByRole('table', { name: 'Database files:' }).locator('tbody tr')).toHaveCount(2)
-  await expect(properties().getByRole('table', { name: 'Database files:' }).locator('tbody tr').first().locator('td')).toHaveText(['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'])
-  await page.screenshot({ path: resolve('artifacts', 'database-properties-files-dark.png') })
+  const scriptRequests = (await stubCalls('actions.script')).length
+  await drawer.locator('[data-destination="clipboard"]').click()
+  await expect(drawer.getByRole('status').filter({ hasText: 'Script copied to the clipboard.' })).toHaveCount(1)
+  await expect.poll(clipboard).toBe(propertiesScript)
+  expect((await stubCalls('actions.script')).length).toBe(scriptRequests)
+  await page.screenshot({ path: resolve('artifacts', 'database-properties-script-dark.png') })
+  // Save Script As… writes the script to the file main's save dialog picks.
+  const savedScript = resolve(profile, 'database-properties.sql')
+  await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, savedScript)
+  await drawer.locator('[data-destination="file"]').click()
+  await expect(drawer.getByRole('status').filter({ hasText: 'Saved database-properties.sql.' })).toHaveCount(1)
+  expect(await readFile(savedScript, 'utf8')).toContain('ALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT')
+  // Open in Query Window opens the script in a new query, which takes the tab away; coming back, the section, the drawer
+  // and the draft are as they were.
+  await drawer.locator('[data-destination="newQuery"]').click()
+  await expect(tabs()).toHaveCount(tabCount + 2)
+  await expect(properties()).toHaveCount(0)
+  await expect(page.locator('.monaco-editor .view-lines')).toContainText('ALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT')
+  expect((await stubCalls('actions.script')).length).toBe(scriptRequests)
+  await propertiesTab().click()
+  await expect(sectionList().getByRole('button', { name: 'Options' })).toHaveAttribute('aria-current', 'location')
+  await expect(drawer.getByRole('textbox', { name: 'Script text', exact: true })).toHaveValue(shownScript)
+  await expect(recovery.getByRole('radio', { name: 'Simple', exact: true })).toHaveAttribute('aria-checked', 'true')
+  await expect(autoClose).toBeChecked()
+  // Files: the owner's browse button opens Select Database Owner over the document; Escape closes only it, Enter chooses.
+  await sectionList().getByRole('button', { name: 'Files' }).click()
+  await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr')).toHaveCount(2)
+  await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr').first().locator('td')).toHaveText(['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'])
   const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
   await properties().getByRole('button', { name: 'Browse for the owner', exact: true }).click()
   await expect(owner.getByLabel('Logins:', { exact: true })).toBeFocused()
@@ -254,50 +308,62 @@ try {
   await page.keyboard.press('ArrowUp')
   await page.keyboard.press('Enter')
   await expect(owner).toHaveCount(0)
-  await expect(properties().getByLabel('Owner:', { exact: true })).toHaveValue('AppUser')
-  await expect(properties().getByLabel('Owner:', { exact: true })).toHaveAttribute('data-changed', 'true')
-  // Restrict Access closes other connections: No runs nothing; Yes writes WITH ROLLBACK IMMEDIATE, then the dialog closes
-  // and Databases reloads.
-  await pages.getByRole('button', { name: 'Options' }).click()
+  await expect(properties().getByLabel('Owner', { exact: true })).toHaveValue('AppUser')
+  await expect(properties().getByLabel('Owner', { exact: true })).toHaveAttribute('data-changed', 'true')
+  // Enter in a field never applies, as Enter in SSMS's grid never presses OK.
   const executes = (await stubCalls('actions.execute')).length
-  // Enter in the property grid commits the cell, as in SSMS: it never presses OK.
   const recoveryTime = properties().getByLabel('Target Recovery Time (Seconds)', { exact: true })
   await recoveryTime.fill('120')
   await recoveryTime.press('Enter')
   await expect(recoveryTime).toHaveAttribute('data-changed', 'true')
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
   expect((await stubCalls('actions.execute')).length).toBe(executes)
   await recoveryTime.fill('60')
   await expect(recoveryTime).not.toHaveAttribute('data-changed', 'true')
-  await properties().getByLabel('Restrict Access', { exact: true }).selectOption('SINGLE_USER')
+  // Restrict Access closes other connections: No runs nothing; Yes writes WITH ROLLBACK IMMEDIATE, then the document
+  // stays open, reads the database again and is clean, and Databases reloads.
+  await properties().getByRole('radiogroup', { name: 'Restrict Access', exact: true }).getByRole('radio', { name: 'SINGLE_USER', exact: true }).click()
   await application.evaluate(() => { globalThis.variaStub.answers.push(1) })
-  await properties().getByRole('button', { name: 'OK', exact: true }).click()
+  await verb('Apply').click()
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.prompts.length)).toBe(1)
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(verb('Apply')).toBeEnabled()
   expect((await stubCalls('actions.execute')).length).toBe(executes)
   expect((await application.evaluate(() => globalThis.variaStub.prompts))[0]).toEqual({ title: 'Open Connections', buttons: ['Yes', 'No'], defaultId: 1, cancelId: 1,
     message: 'To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?' })
   const listings = (await stubCalls('explorer.children')).filter(call => call.node.folder === 'databases').length
+  const describes = (await stubCalls('actions.describe')).length
   await application.evaluate(() => { globalThis.variaStub.answers.push(0) })
-  await properties().getByRole('button', { name: 'OK', exact: true }).click()
-  await expect(properties()).toHaveCount(0)
+  await verb('Apply').click()
+  await expect(properties().locator('.document-banner').getByRole('status')).toHaveText('The changes were applied.')
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'properties', closeConnections: true,
     changes: { owner: 'AppUser', options: { recoveryModel: 'SIMPLE', autoClose: 'true', restrictAccess: 'SINGLE_USER' } } })
   await expect.poll(async () => (await stubCalls('explorer.children')).filter(call => call.node.folder === 'databases').length).toBeGreaterThan(listings)
+  expect((await stubCalls('actions.describe')).length).toBe(describes + 1)
+  await expect(propertiesTab().locator('.dirty-dot')).toHaveCount(0)
+  await expect(verb('Apply')).toBeDisabled()
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
-  await expect(explorerTree(page)).toBeFocused()
+  // Closing with a change asks to save it; Don't Save closes without applying.
+  await sectionList().getByRole('button', { name: 'Options' }).click()
+  await properties().getByRole('switch', { name: 'Auto Shrink', exact: true }).click()
+  await expect(propertiesTab().locator('.dirty-dot')).toHaveCount(1)
+  const applied = (await stubCalls('actions.execute')).length
+  await application.evaluate(() => { globalThis.variaStub.answers.push(1) })
+  await page.locator('.query-tabs').getByRole('button', { name: 'Close Database Properties - AppData', exact: true }).click()
+  await expect(properties()).toHaveCount(0)
+  await expect(tabs()).toHaveCount(tabCount + 1)
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).at(-1)).toMatchObject({ message: 'Save changes to Database Properties - AppData?' })
+  expect((await stubCalls('actions.execute')).length).toBe(applied)
   // ⌘I opens it on macOS (no key on Windows and Linux, where Alt+Enter stays reserved).
   if (mac) {
     await select(...appData)
     await page.keyboard.press('Meta+i')
     await expect(properties()).toBeVisible()
-    await page.keyboard.press('Escape')
+    await page.keyboard.press('Meta+w')
     await expect(properties()).toHaveCount(0)
   }
-  console.log('Object action checks: Database Properties opens on General, pages move with the arrow keys, Script sends only the changed options, Select Database Owner closes alone, and Open Connections No runs nothing while Yes closes the connections.')
+  console.log('Object action checks: Database Properties opens as a document with facts as text, switches and segments, a description on focus, a Script preview that carries only the changes to the clipboard, a file and a query window, its frame and draft kept across tabs, Select Database Owner over it, Enter that never applies, Open Connections before Apply, and the close prompt.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
-  // leaves only Close. Databases has just reloaded after Database Properties' OK, so the press repeats until its row's menu opens.
+  // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
   await expect(async () => {
     await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
     await expect(explorerMenu()).toBeVisible({ timeout: 1000 })

@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
-  actionsCatalogJson, dialogIds, dialogSpecs, dialogTitle, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
+  actionsCatalogJson, dialogIds, dialogSpecs, dialogTitle, isModalDialog, objectActions, objectActionSpecs, propertiesCommandEntries, scriptActionTitles, unknownOutcomeMessage
 } from '../src/shared/actions/catalog'
 import { maxScriptCharacters } from '../src/main/validation'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
@@ -75,6 +75,21 @@ describe('object action catalogue', () => {
     expect(entries['explorer.properties']).toMatchObject({ title: 'Properties', icon: 'settings-gear', unavailableHint: 'Select a database in Object Explorer.',
       precondition: "backendReady && explorerActionProperties == 'enabled'", menus: [{ menu: 'explorer.context', group: '9_properties', order: 1, mnemonic: 'p' }] })
   })
+  it('declares the Database Properties document\'s verbs as catalogue commands over its own state keys, with no keys or menus of their own', () => {
+    const entries = propertiesCommandEntries()
+    expect(Object.keys(entries)).toEqual(['databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop'])
+    for (const [id, entry] of Object.entries(entries)) {
+      expect(isCommandId(id), id).toBe(true)
+      expect(commandDescriptor(id as never)).toEqual(entry)
+      expect(codicons, id).toContain(entry.icon)
+      expect(entry.precondition, id).toMatch(/^activeDocumentIsProperties && /)
+      expect(whenProblems(entry.precondition, ['static', 'state']), id).toEqual([])
+      expect(commandDescriptor(id as never).keybindings, id).toBeUndefined()
+    }
+    // Stop must work while the close prompt's Save (an Apply) holds the document task.
+    expect(entries['databaseProperties.stop'].precondition).not.toContain('documentBusy')
+    expect(entries['databaseProperties.apply']).toMatchObject({ title: 'Apply Changes', icon: 'check', precondition: 'activeDocumentIsProperties && propertiesApplicable' })
+  })
   it('binds Properties to ⌘I on macOS only: Alt+Enter stays reserved on Windows and Linux, where it has no key', () => {
     for (const platform of platforms) {
       const rules = defaultRules(platform).filter(rule => rule.command === 'explorer.properties')
@@ -108,12 +123,14 @@ describe('object action catalogue', () => {
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
     expect(dialogIds).toEqual(['deleteObject', 'databaseProperties'])
-    expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
-    expect(dialogSpecs.databaseProperties).toMatchObject({ title: 'Database Properties', titleFormat: 'withName', size: 'large', action: 'properties' })
+    expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
+    expect(dialogSpecs.databaseProperties).toMatchObject({ title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties' })
     expect(dialogSpecs.databaseProperties.pages.map(page => [page.id, page.title, page.icon])).toEqual([['general', 'General', 'settings-gear'], ['files', 'Files', 'settings-gear'],
       ['filegroups', 'Filegroups', 'settings-gear'], ['options', 'Options', 'settings-gear']])
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
     for (const dialog of dialogIds) expect(objectActionSpecs[dialogSpecs[dialog].action].dialog).toBe(dialog)
+    // Delete Object is a confirmation, so it stays modal; Database Properties opens as a document (U1 D2).
+    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })

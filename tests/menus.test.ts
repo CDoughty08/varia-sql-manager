@@ -329,7 +329,9 @@ describe('menu state', () => {
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
-      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop']
+      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
+      // The Database Properties document's header verbs.
+      'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

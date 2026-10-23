@@ -148,7 +148,7 @@ internal static partial class DatabaseAlter
     }
 
     /// <summary>src/shared/actions/database.ts' afterReadOnlyProblem, word for word.</summary>
-    public static string AfterReadOnlyProblem(string label) => label + " cannot change in the same OK as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.";
+    public static string AfterReadOnlyProblem(string label) => label + " cannot change in the same Apply as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.";
 
     /// <summary>The fragments AUTO_CREATE_STATISTICS can take (SMO's ScriptAutoCreateStatistics).</summary>
     public static readonly string[] AutoCreateFragments = ["ON", "OFF", "ON(INCREMENTAL = ON)", "ON(INCREMENTAL = OFF)"];

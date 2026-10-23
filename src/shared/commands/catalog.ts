@@ -1,11 +1,11 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Preferences' | 'Developer' | 'Help'
 /** Codicon names (bundled with Monaco) that commands and pickers may show; `tests/command-catalog.test.ts` checks each exists. */
 export const codicons = [
   'new-file',
@@ -363,6 +363,8 @@ export const commandCatalog = {
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
+  // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
+  ...propertiesCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the

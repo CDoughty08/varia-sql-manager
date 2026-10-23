@@ -115,6 +115,13 @@ export function draftErrors(model: DatabasePropertiesModel, draft: DatabaseDraft
   return errors
 }
 
+/** Whether the draft differs from what the describe read: Database Properties as a document is dirty while it does. */
+export function databaseChanged(model: DatabasePropertiesModel, draft: DatabaseDraft): boolean {
+  if (draft.owner !== (model.general.owner ?? '')) return true
+  const differs = (values: Readonly<Record<string, string>>, read: Readonly<Record<string, string>>) => Object.keys(values).some(key => values[key] !== read[key])
+  return differs(draft.options, model.options) || differs(draft.scoped, model.scoped)
+}
+
 /** OK's and Script's request: only what changed, or undefined when nothing did, or the first problem. */
 export function databaseRequest(target: ObjectRef, model: DatabasePropertiesModel, draft: DatabaseDraft): DatabaseRequest | undefined | { readonly problem: string } {
   if (model.readOnlyReason) return undefined

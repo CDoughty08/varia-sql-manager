@@ -49,6 +49,7 @@ import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialog
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
+import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
@@ -286,6 +287,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
+  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
@@ -304,6 +306,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    properties: properties.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -356,7 +359,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
-    designers
+    designers,
+    properties
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -405,6 +409,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     designers.dispose()
+    properties.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
@@ -431,6 +436,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
+    properties,
     focusEditor,
     queries,
     files,

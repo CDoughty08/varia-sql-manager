@@ -2,7 +2,7 @@ import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, VariaApi } from '../../../shared/contracts'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
-import { afterClose, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
+import { afterClose, isCustomKind, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -276,7 +276,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!document || !model) return false
     model.pushStackElement()
     const content = model.getValue(), savedVersionId = model.getAlternativeVersionId()
-    const kind = document.kind === 'tableDesigner' ? undefined : document.kind
+    const kind = isCustomKind(document.kind) ? undefined : document.kind
     const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...kind ? { kind } : {} })
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false

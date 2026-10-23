@@ -224,7 +224,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     // A table designer that is saving cannot close until its save ends or is stopped.
     if (refusal) throw new Error(refusal)
     if (!document?.dirty) return true
-    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : 'query'
+    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : 'query'
     const decision = unwrap(await this.api.confirmClose(document.name))
     if (this.disposed || decision === 'cancel') return false
     if (!this.documents.get(id)) return true
