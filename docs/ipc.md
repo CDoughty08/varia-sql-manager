@@ -1025,7 +1025,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
   server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
   view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
-  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  readable until the view closes, which releases every result it kept (an append table's older segments too, which the
+  view does not show yet); if the source finished while the view's cancel was on its way,
   `ResultClient` closes what it kept at once.
 - **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
