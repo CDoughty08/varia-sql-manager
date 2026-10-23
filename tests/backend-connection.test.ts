@@ -302,3 +302,78 @@ describe('Connect dialog Stop', () => {
     expect(() => requests.begin(early)).toThrow(expect.objectContaining({ code: 'CANCELLED' }))
   })
 })
+
+describe('BackendConnection live subscriptions', () => {
+  /** A connection to an in-process backend that leaves requests pending, so a test sends each frame itself. */
+  function simulated() {
+    const { spawn, last } = fakeSpawn(backend => { backend.answer = false })
+    const connection = new BackendConnection({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, 1, { spawn })
+    connections.push(connection)
+    return { connection, backend: () => last() }
+  }
+  const subscribe = (connection: BackendConnection, onEvent: (event: unknown, bytes: number) => void) => {
+    const sent = connection.send('live.subscribe', {} as never, { deadlineMs: 0, onEvent })
+    sent.done.catch(() => {})
+    return sent
+  }
+  it('charges each live EVENT to its 64 KiB credit and accepts the next only once the previous is acknowledged', async () => {
+    const { connection, backend } = simulated()
+    await connection.ready
+    const events: { event: unknown; bytes: number }[] = []
+    const { id, done } = subscribe(connection, (event, bytes) => { events.push({ event, bytes }) })
+    await settle()
+    backend().send(FrameKind.EVENT, id, 0, { n: 1 })
+    await expect.poll(() => events.length).toBe(1)
+    expect(events[0]).toEqual({ event: { n: 1 }, bytes: encodeControl({ n: 1 }).length })
+    // An acknowledgement returns what the event took, never more, however much is asked: two frames can never be out.
+    connection.credit(id, 10 * 1024 * 1024)
+    connection.credit(id, 1)
+    await settle()
+    expect(backend().credits).toEqual([{ id, bytes: events[0].bytes }])
+    backend().send(FrameKind.EVENT, id, 0, { n: 2 })
+    await expect.poll(() => events.length).toBe(2)
+    // The third arrives before the second was acknowledged: the stream fails and is cancelled; the generation stays.
+    backend().send(FrameKind.EVENT, id, 0, { n: 3 })
+    expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(events).toHaveLength(2)
+    await expect.poll(() => backend().cancels).toEqual([{ id, reason: cancelReasons.consumerGone }])
+    expect(connection.lost).toBeUndefined()
+  })
+  it('leaves the events of other methods uncredited', async () => {
+    const { connection, backend } = simulated()
+    await connection.ready
+    const events: unknown[] = []
+    const { id, done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => { events.push(event) } })
+    done.catch(() => {})
+    await settle()
+    for (let index = 0; index < 5; index++) backend().send(FrameKind.EVENT, id, 0, { index })
+    await expect.poll(() => events.length).toBe(5)
+    expect(connection.pendingCount).toBe(1)
+  })
+  it('fails a live stream whose backend sends a second EVENT before the first was acknowledged', async () => {
+    const connection = fake('live-overrun')
+    const events: unknown[] = []
+    expect(await failure(subscribe(connection, event => { events.push(event) }).done)).toMatchObject({ code: 'STREAM_PROTOCOL', message: sentences.invalid })
+    expect(events).toHaveLength(1)
+    expect((await health(connection)).cancels).toEqual([{ id: 1, reason: cancelReasons.consumerGone }])
+  })
+  it('fails a live stream that sends DATA, or an EVENT over 256 KiB', async () => {
+    for (const mode of ['live-data', 'live-big']) {
+      const connection = fake(mode)
+      expect(await failure(subscribe(connection, () => {}).done), mode).toMatchObject({ code: 'STREAM_PROTOCOL' })
+      expect(connection.lost, mode).toBeUndefined()
+    }
+  })
+  it('runs a live stream to its end over the fake backend, one acknowledged frame at a time', async () => {
+    const connection = fake('echo')
+    const seqs: number[] = []
+    let id = 0
+    const sent = connection.send('live.subscribe', { ticks: 2 } as never, { deadlineMs: 0, onEvent: (event, bytes) => {
+      seqs.push((event as { seq: number }).seq)
+      setTimeout(() => connection.credit(id, bytes), 20)
+    } })
+    id = sent.id
+    expect(await sent.done).toEqual({ ended: 'sourceEnded', kept: [], ticks: 2, elapsedMs: 1 })
+    expect(seqs).toEqual([0, 1, 2])
+  })
+})

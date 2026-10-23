@@ -1,0 +1,12 @@
+{
+  "limits": {"appendPerProbe":4,"backendSubscriptions":32,"columns":64,"errors":8,"eventBody":262144,"filterCharacters":400,"filterColumns":8,"frameBudget":196608,"initialCredit":65536,"intervalMs":{"max":3600000,"min":1000},"kept":64,"keyCharacters":512,"messageCharacters":2000,"noteCharacters":400,"perServer":8,"portStreams":16,"probes":8,"resumeCharacters":256,"series":64,"sortColumns":4,"statusCharacters":128,"statuses":16,"tablesPerProbe":4,"tablesPerTick":8,"trackedKeys":64},
+  "probes": [
+    {"description":"Three series: the sample number, a wave between 0 and 100, and a rate that follows it.","filterMode":"none","id":"debug.synthetic.metrics","intervalMs":{"default":1000,"max":3600000,"min":1000},"label":"Synthetic metrics","series":[{"id":"counter","label":"Samples","unit":"count"},{"id":"wave","label":"Wave","unit":"percent"},{"id":"rate","label":"Rate","unit":"perSecond"}],"source":"debug.synthetic","status":[],"tables":[],"views":[]},
+    {"description":"A snapshot table whose rows move on by one id per sample, so rows leave at the top and arrive at the bottom.","filterMode":"none","id":"debug.synthetic.table","intervalMs":{"default":1000,"max":3600000,"min":1000},"label":"Synthetic rows","series":[],"source":"debug.synthetic","status":[],"tables":[{"columns":[{"dataType":"int","id":"id","name":"id"},{"dataType":"nvarchar","id":"label","name":"label"},{"dataType":"int","id":"value","name":"value"}],"id":"rows","key":["id"],"mode":"snapshot"}],"views":[]},
+    {"description":"The phase (even or odd) and the sample count.","filterMode":"none","id":"debug.synthetic.status","intervalMs":{"default":1000,"max":3600000,"min":1000},"label":"Synthetic status","series":[],"source":"debug.synthetic","status":["phase","samples"],"tables":[],"views":[]}
+  ],
+  "sources": [
+    {"description":"Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.","id":"debug.synthetic","label":"Synthetic","probes":["debug.synthetic.metrics","debug.synthetic.table","debug.synthetic.status"],"scope":"none","testOnly":true}
+  ],
+  "version": 1
+}

@@ -105,6 +105,7 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
+await LiveChecks.RunAsync(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
 await EntraChecks.RunAsync(Check);
@@ -380,6 +381,7 @@ try
     await Call<object>("query.session.close", new SessionArgs(sessionId));
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
+    await LiveChecks.LiveAsync(Check, service, info, Live("tempdb"), json);
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
     await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);

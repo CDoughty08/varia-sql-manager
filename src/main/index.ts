@@ -579,7 +579,8 @@ app.whenReady().then(async () => {
     },
     ...liveness
   })
-  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
+  // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
+  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
