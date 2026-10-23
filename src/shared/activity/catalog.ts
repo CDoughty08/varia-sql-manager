@@ -68,8 +68,10 @@ export interface ProbeSpec {
   /** While no pane shows it, the probe is paused (no SQL); the monitor has no status-only probes. */
   readonly hidden: 'pause'
 }
-// activity.overview supersedes D-live §15's reference probe of the same id: the live layer runs ActivitySql's statements
-// for it and sends these series ids (D-live's runnableTasks is runnablePerScheduler here), so there is one text and one lint.
+// activity.overview supersedes D-live §15's reference probe of the same id. Until AM1 moves it onto these specs, the live
+// layer still runs L2a's six-series reference probe (src/shared/live/catalog.ts, Live/LiveSql.cs). AM1 makes the live layer
+// run ActivitySql's statements for it and send these series ids (D-live's runnableTasks is runnablePerScheduler here), so
+// that one text and one lint remain.
 export const probeSpecs: { readonly [P in ActivityProbe]: ProbeSpec } = {
   'activity.overview': {
     title: 'Overview', kind: 'metrics', tables: [], series: [

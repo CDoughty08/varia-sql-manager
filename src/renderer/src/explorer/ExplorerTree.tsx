@@ -170,6 +170,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   }
 
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
+  const environments = useMemo(() => new Map(servers.map(server => [server.id, server.options.environment])), [servers])
   const indices = renderedIndices(computeWindow(view.top, view.height, rows.count), selectedIndex)
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
   return <><div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
@@ -179,7 +180,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
         return <ExplorerRow key={rowId} rowId={rowId} kind={kind} index={index} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
           node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
-          active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined}
+          active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
           actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} />
       })}
     </div>

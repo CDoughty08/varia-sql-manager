@@ -36,6 +36,7 @@ const api: VariaApi = {
   integratedIdentity: () => request('connections.identity', {}),
   saveConnectionProfile: profile => ipcRenderer.invoke('varia:connections-save', profile),
   removeConnectionProfile: id => ipcRenderer.invoke('varia:connections-remove', id),
+  setConnectionEnvironment: input => ipcRenderer.invoke('varia:connections-environment', input),
   disconnect: connectionId => request('connections.disconnect', { connectionId }),
   databases: connectionId => request('databases.list', { connectionId }),
   tableColumns: (connectionId, database, schema, name) => request('tables.columns', { connectionId, database, schema, name }),

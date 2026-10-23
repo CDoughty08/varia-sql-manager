@@ -7,12 +7,45 @@ namespace Varia.Backend.Live;
 /// ratio or cpuPercent series the column holding its base (the base counter, or the scheduler count).</summary>
 internal sealed record LiveSeriesColumn(string Series, string Column, string? Base = null);
 
-/// <summary>One probe's constant text for one band: the statement after the prologue, the columns its one row has (in
-/// order), the server clock columns (ms_ticks and the start time in ticks, null where the probe cannot read them) and where
-/// each catalogue series comes from.</summary>
+/// <summary>One result set of a probe's batch that fills a table: the table's index in the catalogue entry, whose columns it
+/// returns by name and type in catalogue order. An append table's read takes @after{i} (the settled id), @top{i} (how many
+/// rows) and @before{i} (where the table ends, or NULL), i its index, and orders by its keyset id. Tail, for an append
+/// table that can start at its last rows, is a statement returning one row (after_id, earlier) for @tail{i} rows before
+/// @before{i}: the id to read after, and how many matching rows that leaves out. View gives the predicate of a view id the
+/// probe declares (rows filtered in memory), or null for all rows.</summary>
+internal sealed record LiveTableRead(int Table, string? Tail = null, Func<string, LiveRow, bool>? View = null);
+
+/// <summary>One probe's constant text for one band: the statement after the prologue, the columns its one metrics row has (in
+/// order; none when the probe has no series), the server clock columns (ms_ticks and the start time in ticks, null where the
+/// probe cannot read them), where each catalogue series comes from, and the result sets that follow it, one per table, in
+/// order. Filtered: the text takes @filter, a LIKE pattern of a restart-mode filter's text (NULL without one), so the
+/// statement's own columns are the ones it filters.</summary>
 internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series)
 {
+    public LiveTableRead[] Tables { get; init; } = [];
+    public bool Filtered { get; init; }
+
     public string Text(string prologue) => prologue + Body;
+
+    /// <summary>Every command the probe runs: its batch, and each append table's tail statement.</summary>
+    public IEnumerable<string> Texts(string prologue) => [Text(prologue), .. Tables.Where(table => table.Tail is not null).Select(table => prologue + table.Tail)];
+
+    /// <summary>Why this query does not fit its catalogue entry: its tables, in order, by index and mode, a tail only for an
+    /// append table, and only column types live tables store.</summary>
+    public List<string> Problems(LiveProbeJson spec)
+    {
+        var problems = new List<string>();
+        if (Columns.Length == 0 != (spec.Series.Count == 0)) problems.Add("has a metrics row without series, or series without one");
+        var indexes = Tables.Select(table => table.Table).ToList();
+        if (!indexes.SequenceEqual(Enumerable.Range(0, spec.Tables.Count))) problems.Add("does not read every table once, in order");
+        foreach (var table in Tables.Where(table => table.Table >= 0 && table.Table < spec.Tables.Count))
+        {
+            var catalogTable = spec.Tables[table.Table];
+            if (table.Tail is not null && catalogTable.Mode != "append") problems.Add("has a tail for a snapshot table");
+            if (catalogTable.Columns.FirstOrDefault(column => !LiveCells.Supports(column.DataType)) is { } column) problems.Add("stores a type live tables do not: " + column.DataType);
+        }
+        return problems;
+    }
 
     private static readonly Type[] Numeric = [typeof(byte), typeof(short), typeof(int), typeof(long), typeof(decimal), typeof(float), typeof(double)];
 

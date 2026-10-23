@@ -63,9 +63,10 @@ internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
 }
 
 /// <summary>A due probe as the sampler sees it: its gap marker, the slots it missed, the time since its last sample, the
-/// settings an update may change (as they were when it came due), its statement budget, and the interval in force.</summary>
+/// settings an update may change (as they were when it came due: sort, track lists, view and filter), its statement budget,
+/// and the interval in force.</summary>
 internal sealed record LiveDue(LiveProbeState Probe, string? Gap, int? Skipped, long? ElapsedMs, LiveSortArgs[]? Sort, IReadOnlyDictionary<int, LiveTrackArgs> Tracks,
-    int BudgetMs = 0, int EffectiveIntervalMs = 0, long TakenAt = 0);
+    int BudgetMs = 0, int EffectiveIntervalMs = 0, long TakenAt = 0, string? View = null, LiveFilterArgs? Filter = null);
 /// <summary>One tick's samples and errors; Spid when the source opened a new session for it, and Cursors where its append
 /// tables settled (the resume token follows them).</summary>
 internal sealed record LiveSampleBatch(List<LiveSample> Samples, List<LiveProbeError> Errors, int? Spid = null, IReadOnlyList<LiveCursor>? Cursors = null);
@@ -292,7 +293,7 @@ internal sealed class LiveSubscription : IDisposable
                 // The settings an update may change, as they are now: the sampler reads them outside the lock.
                 // A first sample has no slots before it to miss, however long the opened frame waited for its acknowledgement.
                 due.Add(new LiveDue(probe, gap, missed > 0 && probe.LastSampleAt >= 0 ? missed : null, probe.LastSampleAt < 0 ? null : now - probe.LastSampleAt, probe.Sort,
-                    new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, now));
+                    new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, now, probe.View, probe.Filter));
                 probe.DueAt += (long)(missed + 1) * period;
                 probe.LastSampleAt = now;
                 probe.Resumed = false;
@@ -312,11 +313,16 @@ internal sealed class LiveSubscription : IDisposable
         {
             var samples = new List<LiveSample>(batch.Samples.Count);
             var errors = new List<LiveProbeError>(batch.Errors.Count);
+            // A probe may fail in more than one way at once (a table cut by the budget and a statement that failed): one error
+            // schedules it (a terminal one when nothing was sampled), and the others go with it while the tick has room
+            // (limits.live.errors), every probe's first error first.
+            var extra = new List<LiveProbeError>();
             foreach (var item in due)
             {
                 var probe = item.Probe;
                 var sample = batch.Samples.Find(entry => entry.Probe == probe.Spec.Id);
-                var error = batch.Errors.Find(entry => entry.Probe == probe.Spec.Id);
+                var all = batch.Errors.FindAll(entry => entry.Probe == probe.Spec.Id);
+                var error = (sample is null ? all.Find(entry => entry.Terminal) : null) ?? (all.Count > 0 ? all[0] : null);
                 if (sample is not null)
                 {
                     probe.Failures = 0;
@@ -341,8 +347,13 @@ internal sealed class LiveSubscription : IDisposable
                     retry = Retry(probe);
                     probe.DueAt = item.TakenAt + retry;
                 }
-                errors.Add(error with { RetryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max) });
+                // Terminal says the probe stopped: an error beside a sample (one table a statement could not read) never does.
+                var retryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max);
+                var stopped = probe.Stopped is not null;
+                errors.Add(error with { RetryInMs = retryInMs, Terminal = error.Terminal && stopped });
+                extra.AddRange(all.Where(other => !ReferenceEquals(other, error)).Select(other => other with { RetryInMs = retryInMs, Terminal = other.Terminal && stopped }));
             }
+            errors.AddRange(extra.Take(Math.Max(0, limits.Errors - errors.Count)));
             // A sampler reports only probes it was given; anything else it sent is dropped rather than sent.
             return new(samples, errors, batch.Spid, batch.Cursors);
         }
@@ -402,7 +413,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private static readonly string[] Clearable = ["sort", "view", "filter"];
     private readonly ConcurrentDictionary<string, LiveSubscription> running = new(StringComparer.Ordinal);
     private readonly Lock registration = new();
-    private readonly LiveCatalog catalog = catalog ?? LiveCatalog.Current;
+    private readonly LiveCatalog catalog = Shared(host, catalog ?? LiveCatalog.Current);
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
     private static long Now => Clock.ElapsedMilliseconds;
 
@@ -415,6 +426,11 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     /// <summary>Rewrites a SQL probe's command text (probe id, text → text), so the live checks can make a probe wait on a lock
     /// they hold. Only the checks set it; it is never reachable from a request.</summary>
     internal Func<string, string, string>? TestText { get; set; }
+    /// <summary>Probes the live checks register (their queries, database, isolation and start); only the checks set it, with
+    /// their own catalogue, and it is never reachable from a request.</summary>
+    internal LiveTestSql? TestSql { get; set; }
+    /// <summary>The store the live tables write to (the checks read revisions from it).</summary>
+    internal ResultStore Store => host.Store;
 
     // \A and \z: .NET's $ also matches before a final newline, which main's pattern refuses.
     [GeneratedRegex(@"\A[A-Za-z0-9_-]+\z")]
@@ -424,6 +440,13 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     internal static bool IsResumeToken(string value) => ResumePattern().IsMatch(value);
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
+
+    /// <summary>Gives live tables their share of the host's result budget (limits.live.budgetShare).</summary>
+    private static LiveCatalog Shared(ILiveHost host, LiveCatalog catalog)
+    {
+        host.Store.ShareWithLive(catalog.Limits.BudgetShare);
+        return catalog;
+    }
 
     public async Task<LiveEnd> SubscribeAsync(LiveSubscribeArgs args, RequestContext? context, JsonSerializerOptions json)
     {
@@ -654,8 +677,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
 
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
-        SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs()),
-        _ when source.Scope == "server" => new SqlSampler(host, Gates, connectionId, source, TestText),
+        SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
+        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql),
         _ => throw Invalid("Unknown live source.")
     };
 
@@ -708,15 +731,16 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     }
 
     /// <summary>The source's own args, read strictly (unknown members refused) and bounded.</summary>
-    private static object? ArgsOf(LiveSourceJson source, JsonElement? args, JsonSerializerOptions json)
+    private object? ArgsOf(LiveSourceJson source, JsonElement? args, JsonSerializerOptions json)
     {
+        var maxTail = Limits.SegmentRows;
         if (args is not { } element) return null;
         if (element.ValueKind != JsonValueKind.Object) throw Invalid("Invalid arguments for this source.");
         try
         {
             return source.Id switch
             {
-                SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source.")),
+                SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
                 _ => throw Invalid("This source takes no arguments.")
             };
         }

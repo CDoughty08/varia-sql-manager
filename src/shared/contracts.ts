@@ -1,5 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
-import type { ConnectContext, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
+import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -58,6 +58,8 @@ export interface ConnectionOptions {
   hostNameInCertificate?: string
   displayName?: string
   color?: string
+  /** None when absent; a preset (Production, Staging, Test, Development) or a custom label of 1–32 characters (src/shared/environments.ts). */
+  environment?: string
   advanced?: Partial<AdvancedConnectionOptions>
 }
 
@@ -68,6 +70,8 @@ export interface ConnectionOptions {
  */
 export interface ConnectionInfo {
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
+  /** Set by main: the saved entry's environment label, which a connect without one kept. */
+  environment?: string
   productVersion?: string; login?: string; engineEdition?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
@@ -371,6 +375,9 @@ export interface VariaApi {
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
   saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibraryView>>
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
+  /** Set Connection Environment: main changes only the label of the entry the options name (saving it again when it left
+   *  history) and returns the library it wrote. */
+  setConnectionEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
