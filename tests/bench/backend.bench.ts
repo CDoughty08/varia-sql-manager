@@ -41,7 +41,8 @@ function portMain(port: MessagePort): PortMainLike {
 beforeAll(async () => {
   if (!existsSync(dll)) throw new Error('Build the Release backend first: npm run check (or npm run backend:test).')
   supervisor = new BackendSupervisor({ command: 'dotnet', args: [dll], cwd: process.cwd(), packaged: false, env: { ...process.env, VARIA_BACKEND_TEST_HOOKS: '1', VARIA_RESULT_BUDGET_BYTES: String(1024 * MiB) } })
-  host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => { const { port1, port2 } = new MessageChannel(); return { port1: portMain(port1), port2 } } })
+  // Test sources: the live round trip runs on the backend's debug.synthetic source, as the smoke tests do.
+  host = new ResultsPortHost({ backend: supervisorResults(supervisor), createChannel: () => { const { port1, port2 } = new MessageChannel(); return { port1: portMain(port1), port2 } }, testSources: true })
   supervisor.onState(state => host.backendState(state))
   const ready = new Promise<void>((done, fail) => supervisor.onState(state => { if (state.status === 'ready') done(); else if (state.status === 'failed') fail(new Error(state.message)) }))
   supervisor.start()
@@ -178,3 +179,32 @@ it('swaps 5,000-row × 23-column live snapshots through main', async () => {
     { id: 'node.liveData.snapshotGen2PerMinute', value: collections * 60 / Math.max(1, swaps), unit: 'collections/min', detail: `${collections} gen2 collections in ${swaps} revisions (${Math.round(collections * 60_000 / elapsedMs)} a minute at this rate)` }
   )
 }, 60_000)
+it('round-trips a live tick: the page\'s acknowledgement → worker → main → backend → the next tick at the page', async () => {
+  let workerPort: MessagePort | undefined
+  host.open({ postMessage: (_channel, _message, transfer) => { workerPort = transfer[0] as unknown as MessagePort } })
+  // A 10 ms source and acknowledgements held 20 ms: each next sample is overdue when its credit arrives, so the time from
+  // the acknowledgement to the next event is the whole loop, not the source's schedule.
+  const params = { subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 10 } }
+  const worker = new Worker(new URL('./live-thread.mjs', import.meta.url), { execArgv: ['--disable-warning=ExperimentalWarning'], transferList: [workerPort!], workerData: { port: workerPort, params } })
+  const samples: number[] = []
+  let ackedAt = 0, events = 0
+  try {
+    await new Promise<void>((done, fail) => {
+      worker.on('error', fail)
+      worker.on('message', (message: { type: string; bytes?: number; message?: string }) => {
+        if (message.type === 'error' || message.type === 'liveEnd') return fail(new Error(`The live stream ended: ${JSON.stringify(message)}`))
+        if (message.type !== 'live') return
+        // The first events (opened, the baseline) warm the path up.
+        if (++events > 5 && ackedAt > 0) samples.push(performance.now() - ackedAt)
+        if (samples.length >= 300) return done()
+        setTimeout(() => { ackedAt = performance.now(); worker.postMessage({ type: 'ack', bytes: message.bytes }) }, 20)
+      })
+    })
+  } finally {
+    worker.postMessage({ type: 'cancel' })
+    await new Promise(done => setTimeout(done, 50))
+    await worker.terminate()
+  }
+  expect(host.liveCount).toBe(0)
+  record({ id: 'node.liveData.tickRoundTripP50Ms', value: median(samples), unit: 'ms', detail: `${samples.length} ticks; p99 ${percentile(samples, 99).toFixed(2)} ms` })
+})

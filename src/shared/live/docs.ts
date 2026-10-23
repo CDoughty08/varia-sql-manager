@@ -1,6 +1,6 @@
 // docs/live.md, generated from the live catalogue (npx vitest run tests/live-catalog.test.ts -u).
 import { limits } from '../ipc/wire/protocol'
-import { defaultBatchRows, defaultBudgetMs, defaultDutyCycle, defaultSettle, defaultSnapshotRows, liveProbeIds, liveProbes, liveSourceIds, liveSources, type LiveProbeSpec, type LiveTableSpec } from './catalog'
+import { defaultBatchRows, defaultBudgetMs, defaultDutyCycle, defaultSettle, defaultSnapshotRows, liveProbeIds, liveTones, liveProbes, liveSourceIds, liveSources, type LiveProbeSpec, type LiveTableSpec } from './catalog'
 
 const seconds = (ms: number) => ms % 1000 === 0 ? `${(ms / 1000).toLocaleString('en-US')} s` : `${ms.toLocaleString('en-US')} ms`
 const code = (text: string) => '`' + text + '`'
@@ -60,6 +60,8 @@ export function renderLiveDocs(): string {
     `${count(L.segmentRows)} rows or ${L.segmentBytes / 1024 / 1024} MiB (${L.segments} segments' worth kept, in at most ${L.segmentResults} results).`,
     'A probe whose filter mode is memory filters the stored cell text;',
     'restart starts its append tables again under the new predicate.',
+    `A table's tone column (its last) names each row's tone (${liveTones.map(code).join(', ')} or NULL for none): the grid`,
+    'colours the row and hides the column, and Copy and Save leave it out.',
     '',
     '| Probe | Interval (default, min, max) | Schedule | Runs on | Emits | Description |',
     '| --- | --- | --- | --- | --- | --- |',
@@ -67,7 +69,7 @@ export function renderLiveDocs(): string {
       const probe = liveProbes[id]
       const emits = [
         ...(probe.series ?? []).length ? ['series ' + (probe.series ?? []).map(series => `${code(series.id)} (${series.unit}, ${series.counter})`).join(', ')] : [],
-        ...(probe.tables ?? []).map((table, index) => `${table.mode} table ${index} ${code(table.id)}: ${table.columns.map(column => `${code(column.id)} ${column.dataType}`).join(', ')}; key ${table.key.map(code).join(', ') || 'none'}; ${tableRules(table)}`),
+        ...(probe.tables ?? []).map((table, index) => `${table.mode} table ${index} ${code(table.id)}: ${table.columns.map(column => `${code(column.id)} ${column.dataType}${column.role === 'tone' ? ' (row tone)' : ''}`).join(', ')}; key ${table.key.map(code).join(', ') || 'none'}; ${tableRules(table)}`),
         ...(probe.status ?? []).length ? ['status ' + (probe.status ?? []).map(code).join(', ')] : []
       ]
       const settings = [...probe.views?.length ? ['views ' + probe.views.map(code).join(', ')] : [], ...probe.filterMode ? [`filter ${probe.filterMode}`] : []]

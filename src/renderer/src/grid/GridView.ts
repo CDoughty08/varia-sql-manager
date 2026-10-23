@@ -1,5 +1,6 @@
 import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultDescriptor } from '../../../shared/contracts'
+import { liveTones, type LiveTone } from '../../../shared/live/catalog'
 import { nextFrame } from '../core/frame'
 import { monoFontFamily, uiFontFamily } from '../fonts'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
@@ -16,6 +17,7 @@ import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
 import type { GridStats } from './stats'
+import { remapSelection, remapTop, sameSelection, type RowMap } from './swap'
 import { tileKey } from './tiles'
 
 // A cell's look is one of 128 class strings, picked by these bits.
@@ -23,6 +25,10 @@ const NULL = 1, TRUNC = 2, ERR = 4, LINK = 8, SEL = 16, ACT = 32, LOAD = 64
 const classes = Array.from({ length: 128 }, (_, bits) => 'rg-c' + (bits & NULL ? ' is-null' : '') + (bits & TRUNC ? ' is-trunc' : '') + (bits & ERR ? ' is-err' : '')
   + (bits & LINK ? ' is-link' : '') + (bits & SEL ? ' is-sel' : '') + (bits & ACT ? ' is-act' : '') + (bits & LOAD ? ' is-load' : ''))
 const truncatedAt: Record<string, string> = { binary: '32,766 bytes', document: '2,097,152 characters', text: '65,535 characters' }
+// A row's look is one class string too: odd or even, and its tone (none, or one of liveTones); the row number's likewise.
+const toneIndex = new Map<string, number>(liveTones.map((tone, index) => [tone, index + 1]))
+const rowClasses = [false, true].map(odd => ['', ...liveTones].map(tone => 'rg-row' + (odd ? ' odd' : '') + (tone ? ' tone-' + tone : '')))
+const markClasses = [false, true].map(sel => ['', ...liveTones].map(tone => 'rg-rn' + (sel ? ' sel' : '') + (tone ? ' tone-' + tone : '')))
 let nextGridId = 1
 
 interface CellSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; bits: number; value: string; label: string; shown: boolean; left: number; width: number }
@@ -35,6 +41,8 @@ interface RowSlot {
   readonly el: HTMLDivElement; readonly header: HTMLDivElement; readonly number: Text; readonly mark?: { readonly el: HTMLDivElement; readonly text: Text }
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
+  /** 0 for none, else 1 + the tone's index in liveTones. */
+  tone: number
 }
 interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
 interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: number; x: number; y: number; dragging: boolean; readonly hit: GridHit; readonly modifiers: boolean }
@@ -42,6 +50,8 @@ interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: n
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
 /** What the React shell shows under the grid: a failed tile read, or a grid that stopped after repeated failures. */
 export interface GridStatus { readonly tileError?: string; readonly renderError?: boolean }
+/** What a frame showed: the first and last rows in the body, the rows available, and whether the view is at the end. */
+export interface GridViewport { readonly firstRow: number; readonly lastRow: number; readonly rows: number; readonly atEnd: boolean }
 
 export interface GridViewOptions {
   /** The grid's root (`role="grid"`) and its scroller, both rendered by the React shell; the view owns the scroller's children. */
@@ -64,6 +74,12 @@ export interface GridViewOptions {
   onError(error: unknown): void
   /** Opens an XML, JSON or plan value; without it no cell is a link. */
   onOpenValue?(row: number, column: number): void
+  /** A live table's log (LiveGrid): when the view is at the last row as rows arrive, it stays at the last row. */
+  readonly followTail?: boolean
+  /** After a frame that changed what it showed (LiveGrid: follow tail, tracked rows). */
+  onViewport?(viewport: GridViewport): void
+  /** What a screen reader hears for a toned row's active cell ("blocked"); nothing when it returns undefined. */
+  toneLabel?(tone: LiveTone): string | undefined
 }
 
 /**
@@ -86,10 +102,17 @@ export class GridView {
   /** The sticky row-number column (hidden from screen readers, which read each row's own header) and its rows. */
   private readonly marks: HTMLDivElement
   private readonly marksRows: HTMLDivElement
-  private readonly data: GridData
+  private data: GridData
+  private handle: ResultHandle
+  private descriptor: ResultDescriptor
+  private stopHandle: () => void = () => {}
   private readonly layout: ColumnLayout
+  /** The columns shown: all but a live table's hidden tone column (its last, at `tone`; -1 when it has none). */
   private readonly columns: number
-  private readonly links: Uint8Array
+  private readonly tone: number
+  /** Rows a live revision lists as departed: muted, whatever their tone column says. */
+  private muted: ReadonlySet<number> = new Set()
+  private links: Uint8Array
   private readonly gid = nextGridId++
   private readonly slots = new WeakMap<Element, { row?: RowSlot; cell?: CellSlot; header?: HeaderSlot }>()
   private readonly cleanup: (() => void)[] = []
@@ -147,14 +170,20 @@ export class GridView {
   /** The click count of the last press (a double-click's second press opens no second value tab). */
   private clicks = 0
   private status: GridStatus = {}
+  /** Whether the last frame showed the last row (a view with no rows counts as at the end): follow tail starts from it. */
+  private atEnd = true
+  private viewport: GridViewport | undefined
 
   constructor(o: GridViewOptions) {
     this.o = o
     this.root = o.root
     this.scroller = o.scroller
-    this.columns = o.descriptor.columns.length
+    this.handle = o.handle
+    this.descriptor = o.descriptor
+    this.tone = toneColumnOf(o.descriptor)
+    this.columns = o.descriptor.columns.length - (this.tone >= 0 ? 1 : 0)
     this.resultCount = o.resultCount
-    this.links = Uint8Array.from(o.descriptor.columns, column => o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
+    this.links = this.linksOf(o.descriptor)
     const measure = fontMeasure()
     this.charWidth = measure.charWidth
     this.headerWidth = measure.header
@@ -162,7 +191,7 @@ export class GridView {
     this.cap = this.capOverride ?? scrollCap(devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
     if (!o.state.widths || o.state.widths.length !== this.columns) {
-      o.state.widths = Float64Array.from(o.descriptor.columns, column => initialWidth(this.headerWidth(columnTitle(column.name)), typeHintChars(column), this.charWidth))
+      o.state.widths = Float64Array.from(o.descriptor.columns.slice(0, this.columns), column => initialWidth(this.headerWidth(columnTitle(column.name)), typeHintChars(column), this.charWidth))
       o.state.sized = false
     }
     this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
@@ -186,9 +215,10 @@ export class GridView {
     this.pinSlot = this.createRow(false)
     this.scroller.replaceChildren(this.spacer)
     this.root.setAttribute('aria-colcount', String(this.columns + 1))
-    this.data = new GridData({ handle: o.handle, columns: this.columns, clientInflight: () => o.client.windowsInFlight, changed: () => this.schedule() })
+    this.data = this.dataFor(o.handle)
     this.listen()
-    this.cleanup.push(o.handle.subscribe(() => this.schedule()), registerGridAnchor(this.root, () => this.menuAnchor()))
+    this.stopHandle = o.handle.subscribe(() => this.schedule())
+    this.cleanup.push(() => this.stopHandle(), registerGridAnchor(this.root, () => this.menuAnchor()))
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
     this.viewportHeight = this.scroller.clientHeight
@@ -250,6 +280,57 @@ export class GridView {
     this.schedule()
   }
   invalidate(): void { this.schedule() }
+
+  /**
+   * Shows another result with the same columns in place of this one (a live table's next revision or segment): widths and
+   * scroll stay, the first row shown, the active cell and each block move through `mapRow` (swap.ts), and `muted` rows
+   * (departed) are muted until the next swap; `top` puts the view at that offset instead (a restarted live log). Reads of
+   * the old result stop; the old result is not closed (its owner does).
+   */
+  swap(handle: ResultHandle, descriptor: ResultDescriptor, mapRow: RowMap, o: { readonly muted?: readonly number[]; readonly top?: number } = {}): void {
+    if (this.disposed) return
+    if (toneColumnOf(descriptor) !== this.tone || descriptor.columns.length !== this.descriptor.columns.length) throw new Error('A swapped result must have the grid\'s columns.')
+    const state = this.o.state
+    this.fitting?.abort()
+    this.fitting = undefined
+    this.stopHandle()
+    this.data.dispose()
+    this.handle = handle
+    this.descriptor = descriptor
+    this.links = this.linksOf(descriptor)
+    this.data = this.dataFor(handle)
+    this.stopHandle = handle.subscribe(() => this.schedule())
+    this.muted = new Set(o.muted ?? [])
+    const selection = this.selection()
+    if (selection) {
+      state.selection = remapSelection(selection, mapRow, handle.getSnapshot().rowsAvailable, this.columns)
+      // The owner hears of a moved selection as of any other (a details pane, Kill, the active row's key).
+      if (state.selection && !sameSelection(selection, state.selection)) this.o.onSelection(state.selection)
+    }
+    this.pendingTop = o.top ?? remapTop(this.pendingTop ?? state.virtualTop, mapRow)
+    if (this.hovered) { this.hovered.removeAttribute('title'); this.hovered = undefined }
+    this.schedule()
+  }
+  /**
+   * Reads the tiles a swap to `handle` shows first (from `firstRow`, over the rows and columns in view now) into the window
+   * cache, so the swap paints whole rows at once rather than a frame of empty cells. Failures are left to the swap's reads.
+   */
+  prepare(handle: ResultHandle, firstRow: number, signal?: AbortSignal): Promise<void> {
+    const range = this.lastRange, rows = handle.getSnapshot().rowsAvailable
+    if (!range || rows <= 0 || this.disposed) return Promise.resolve()
+    const first = Math.max(0, Math.min(firstRow, rows - 1)), last = Math.min(rows - 1, first + Math.max(0, range.lastRow - range.firstRow))
+    const data = this.dataFor(handle)
+    return Promise.allSettled(data.plan({ ...range, firstRow: first, lastRow: last }, rows).map(key => data.fetch(key, signal))).then(() => undefined)
+  }
+  /** Scrolls to the last row (a live log's "n new rows" button): follow tail goes on from there. */
+  revealEnd(): void {
+    this.pendingTop = Number.MAX_SAFE_INTEGER
+    this.schedule()
+  }
+  /** The grid's selection, when it is in this grid. */
+  currentSelection(): GridSelection | undefined { return this.selection() }
+  /** What the last frame showed. */
+  lastViewport(): GridViewport | undefined { return this.viewport }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -263,7 +344,13 @@ export class GridView {
     this.scroller.replaceChildren()
   }
 
-  private rows(): number { return this.o.handle.getSnapshot().rowsAvailable }
+  private rows(): number { return this.handle.getSnapshot().rowsAvailable }
+  private dataFor(handle: ResultHandle): GridData {
+    return new GridData({ handle, columns: this.columns, tone: this.tone, clientInflight: () => this.o.client.windowsInFlight, changed: () => this.schedule() })
+  }
+  private linksOf(descriptor: ResultDescriptor): Uint8Array {
+    return Uint8Array.from(descriptor.columns, column => this.o.onOpenValue && (column.role === 'xml' || column.role === 'json' || column.role === 'plan') ? 1 : 0)
+  }
   private selection(): GridSelection | undefined {
     const selection = this.o.state.selection
     return selection?.resultIndex === this.o.resultIndex && selection.blocks.length > 0 ? selection : undefined
@@ -537,10 +624,10 @@ export class GridView {
     this.fitting?.abort()
     const abort = this.fitting = new AbortController()
     const rows = this.rows(), top = Math.min(g.measureFitRows, rows), range = this.lastRange
-    const measures = top > 0 ? [this.o.handle.measure(0, top, column, column + 1, abort.signal)] : []
+    const measures = top > 0 ? [this.handle.measure(0, top, column, column + 1, abort.signal)] : []
     if (range && range.lastRow >= top) {
       const first = Math.max(top, range.firstRow)
-      measures.push(this.o.handle.measure(first, range.lastRow - first + 1, column, column + 1, abort.signal))
+      measures.push(this.handle.measure(first, range.lastRow - first + 1, column, column + 1, abort.signal))
     }
     const done = () => { if (this.fitting === abort) this.fitting = undefined }
     Promise.all(measures).then(results => {
@@ -550,7 +637,7 @@ export class GridView {
       for (const result of results) chars = Math.max(chars, result.widths[0] ?? 0)
       const userSized = this.o.state.userSized ??= new Set()
       userSized.add(column)
-      this.layout.setWidth(column, fitWidth(this.headerWidth(columnTitle(this.o.descriptor.columns[column].name)), chars, this.charWidth))
+      this.layout.setWidth(column, fitWidth(this.headerWidth(columnTitle(this.descriptor.columns[column].name)), chars, this.charWidth))
       this.schedule()
     }, error => {
       if (abort.signal.aborted || this.disposed) return
@@ -595,7 +682,7 @@ export class GridView {
     const slot = this.slots.get(element)
     let title = ''
     if (slot?.header && slot.header.column >= 0) {
-      const column = this.o.descriptor.columns[slot.header.column]
+      const column = this.descriptor.columns[slot.header.column]
       title = `${columnTitle(column.name)} (${column.dataType}, ${column.nullable ? 'null' : 'not null'})`
     } else if (slot?.cell) {
       const bits = slot.cell.bits
@@ -606,7 +693,7 @@ export class GridView {
     if (title) element.title = title
   }
   private truncationLimit(column: number): string {
-    const info = this.o.descriptor.columns[column]
+    const info = this.descriptor.columns[column]
     return truncatedAt[info.wire === 'binary' ? 'binary' : info.role === 'xml' || info.role === 'json' || info.role === 'plan' ? 'document' : 'text']
   }
 
@@ -629,7 +716,7 @@ export class GridView {
       mark.el.append(mark.text)
       this.marksRows.append(mark.el)
     }
-    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false }
+    const slot: RowSlot = { el, header, number, ...mark ? { mark } : {}, cells: [], pin: this.createCell(el), row: -1, top: Number.NaN, width: -1, odd: false, headerSel: false, shown: false, tone: 0 }
     this.slots.set(el, { row: slot })
     this.rowsEl.append(el)
     if (withCells) for (let index = 0; index < this.cellsPerRow; index++) slot.cells.push(this.createCell(el, slot))
@@ -696,12 +783,12 @@ export class GridView {
     const state = this.o.state
     if (state.sized || this.measuring || rows <= 0 || this.columns === 0 || performance.now() < this.measureAfter) return
     this.measuring = true
-    this.o.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
+    this.handle.measure(0, Math.min(g.measureInitialRows, rows), 0, this.columns).then(({ widths }) => {
       this.measuring = false
       if (this.disposed || state.sized) return
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
-        this.layout.setWidth(column, initialWidth(this.headerWidth(columnTitle(this.o.descriptor.columns[column].name)), widths[column] ?? 0, this.charWidth))
+        this.layout.setWidth(column, initialWidth(this.headerWidth(columnTitle(this.descriptor.columns[column].name)), widths[column] ?? 0, this.charWidth))
       }
       state.sized = true
       this.schedule()
@@ -720,7 +807,7 @@ export class GridView {
     const width = this.viewportWidth, height = this.viewportHeight
     // A hidden pane (Ctrl+R) or a background tab has no size: nothing to paint until it is shown.
     if (width <= 0 || height <= 0) return
-    const state = this.o.state, snapshot = this.o.handle.getSnapshot()
+    const state = this.o.state, snapshot = this.handle.getSnapshot()
     const rows = snapshot.rowsAvailable
     // Reads first: the scroller's offsets.
     const scrollTop = this.scroller.scrollTop, scrollLeft = this.scroller.scrollLeft
@@ -731,6 +818,8 @@ export class GridView {
     const model = scrollModel(rows, height, this.cap)
     let virtualTop: number
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
+    // Follow tail: a log opens at its newest rows, and a view at the end as rows arrive stays at the end.
+    else if (this.o.followTail && this.atEnd && (!previous || rows !== previous.rows)) virtualTop = Number.MAX_SAFE_INTEGER
     else if (restore) virtualTop = state.virtualTop
     else virtualTop = onNativeScroll(previous, scrollTop, state.virtualTop, this.written)
     const mapped = remap(model, virtualTop)
@@ -814,6 +903,18 @@ export class GridView {
     if (this.pools(bodyRows + 1 + 2 * overscan.rows, Math.max(1, visibleColumns))) columnsMoved = true
     this.paint(range, headerRange, rows, rebased, columnsMoved)
     this.aria(snapshot.state, rows)
+    this.report(model, virtualTop, rows, height)
+  }
+
+  /** Tells the shell what the frame showed, when that changed. */
+  private report(model: ScrollModel, virtualTop: number, rows: number, height: number): void {
+    this.atEnd = virtualTop >= model.maxVirtual - 0.5
+    const firstRow = rows > 0 ? Math.min(topRowOf(virtualTop), rows - 1) : 0
+    const lastRow = Math.max(0, Math.min(rows - 1, Math.ceil((virtualTop + Math.max(0, height - g.headerHeight)) / g.rowHeight) - 1))
+    const last = this.viewport
+    if (last && last.firstRow === firstRow && last.lastRow === lastRow && last.rows === rows && last.atEnd === this.atEnd) return
+    this.viewport = { firstRow, lastRow, rows, atEnd: this.atEnd }
+    this.o.onViewport?.(this.viewport)
   }
 
   private paint(range: VisibleRange, headerRange: VisibleRange, rows: number, rebased: boolean, columnsMoved: boolean): void {
@@ -873,9 +974,16 @@ export class GridView {
       const bits = activeCell.bits
       // A cell whose rows are still being read says so: an empty name reads as "blank", and the value that follows is a
       // name change some screen readers do not read for the active cell.
-      const label = bits & LOAD ? 'Loading' : activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '')
+      const toned = this.o.toneLabel && active ? this.activeTone(active.row) : undefined
+      const label = bits & LOAD ? 'Loading' : activeCell.value + (bits & ERR ? ', could not be read' : bits & NULL ? ', null value' : '') + (bits & TRUNC ? ', truncated' : '') + (bits & LINK ? ', link, press Enter to open' : '') + (toned ? ', ' + toned : '')
       if (label !== activeCell.label) { activeCell.label = label; activeCell.el.setAttribute('aria-label', label) }
     }
+  }
+
+  /** The tone label of the active row (the toneLabel option), from the slot that painted it. */
+  private activeTone(row: number): string | undefined {
+    const slot = this.pinSlot.shown && this.pinSlot.row === row ? this.pinSlot : this.rowSlots.find(item => item.shown && item.row === row)
+    return slot && slot.tone > 0 ? this.o.toneLabel?.(liveTones[slot.tone - 1]) : undefined
   }
 
   /**
@@ -916,12 +1024,13 @@ export class GridView {
       if (top !== slot.top) { slot.top = top; slot.el.style.top = top + 'px'; if (slot.mark) slot.mark.el.style.top = top + 'px' }
       if (!slot.shown) { slot.shown = true; slot.el.style.display = ''; if (slot.mark) slot.mark.el.style.display = '' }
     }
-    const odd = row % 2 === 1
-    if (odd !== slot.odd) { slot.odd = odd; slot.el.className = odd ? 'rg-row odd' : 'rg-row' }
+    const odd = row % 2 === 1, tone = this.toneOf(row, tile)
+    if (odd !== slot.odd || tone !== slot.tone) { slot.odd = odd; slot.el.className = rowClasses[odd ? 1 : 0][tone] }
     if (slot.width !== this.width) { slot.width = this.width; slot.el.style.width = this.width + 'px' }
     let headerSel = false
     for (const item of ranges) if (row >= item.top && row <= item.bottom) { headerSel = true; break }
-    if (headerSel !== slot.headerSel) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = headerSel ? 'rg-rn sel' : 'rg-rn' }
+    if (headerSel !== slot.headerSel || tone !== slot.tone) { slot.headerSel = headerSel; if (slot.mark) slot.mark.el.className = markClasses[headerSel ? 1 : 0][tone] }
+    slot.tone = tone
     let activeCell: CellSlot | undefined
     const perRow = slot.cells.length
     for (let column = range.firstColumn; column <= range.lastColumn; column++) {
@@ -935,6 +1044,16 @@ export class GridView {
       activeCell = slot.pin
     } else this.hideCell(slot.pin)
     return activeCell
+  }
+
+  /** A row's tone: muted when the revision lists it departed, else its tone column's (0 for none or an unknown name). */
+  private toneOf(row: number, tile: (row: number, column: number) => RowWindow | null): number {
+    if (this.muted.has(row)) return toneIndex.get('muted')!
+    if (this.tone < 0) return 0
+    const window = tile(row, this.tone)
+    if (!window || row - window.first >= window.count || this.tone >= window.colEnd) return 0
+    const index = (row - window.first) * (window.colEnd - window.colStart) + this.tone - window.colStart
+    return window.flags[index] & (FLAG_NULL | FLAG_ERROR) ? 0 : toneIndex.get(window.text[index]) ?? 0
   }
 
   private paintCell(cell: CellSlot, row: number, column: number, ranges: readonly CellRange[], active: { row: number; column: number } | undefined,
@@ -993,7 +1112,7 @@ export class GridView {
       if (header.column !== column || columnsMoved) {
         if (header.column !== column) {
           header.column = column
-          const name = this.o.descriptor.columns[column].name
+          const name = this.descriptor.columns[column].name
           header.text.nodeValue = columnTitle(name)
           header.el.setAttribute('aria-colindex', String(column + 2))
           header.el.classList.toggle('unnamed', !name)
@@ -1028,6 +1147,12 @@ export class GridView {
     this.root.setAttribute('aria-busy', String(open))
     this.root.setAttribute('aria-label', label)
   }
+}
+
+/** A live table's hidden tone column: its last column, when that column's role is tone; else -1. */
+export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): number {
+  const last = descriptor.columns.length - 1
+  return last >= 1 && descriptor.columns[last].role === 'tone' ? last : -1
 }
 
 /** The first cell, as the current cell of a grid nothing has been selected in. */

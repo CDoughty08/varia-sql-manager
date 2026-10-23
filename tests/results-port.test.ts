@@ -325,6 +325,31 @@ describe('ResultsPortHost live subscriptions', () => {
     expect(host.liveCount).toBe(0)
   })
 
+  it('names a live snapshot table\'s newest revision for a save of an earlier one, and nothing once the stream ended', async () => {
+    const { host, live, lives } = fixture()
+    host.own([descriptor(50)])
+    live(1)
+    lives[0].onLive(tick(1, table(10, 1)), 400)
+    const newest = host.liveNewest(1, 10)!
+    expect(newest()).toBe(10)
+    // Two samples on, 10 is retired; the save that started with it saves 12.
+    lives[0].onLive(tick(2, table(11, 2)), 400)
+    lives[0].onLive(tick(3, table(12, 3, [10])), 400)
+    expect(host.owns(1, 10)).toBe(false)
+    expect(newest()).toBe(12)
+    // Another probe's table is another table.
+    lives[0].onLive({ type: 'live.tick', seq: 4, sampledAt: 4, samples: [{ probe: 'debug.synthetic.grid', costMs: 0, effectiveIntervalMs: 1000, tables: [table(13, 1)] }] }, 400)
+    expect(newest()).toBe(12)
+    expect(host.liveNewest(1, 13)!()).toBe(13)
+    // Only a live snapshot revision the renderer owns has a newest: not a query's result, a retired one, or another generation's.
+    expect(host.liveNewest(1, 50)).toBeUndefined()
+    expect(host.liveNewest(1, 10)).toBeUndefined()
+    expect(host.liveNewest(2, 12)).toBeUndefined()
+    lives[0].resolve(ended())
+    await settle()
+    expect(newest()).toBeUndefined()
+  })
+
   it('takes back every result of a stream that fails, and none of a later generation\'s', async () => {
     const { host, live, lives, port } = fixture()
     live(1)

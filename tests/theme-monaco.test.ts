@@ -80,7 +80,7 @@ describe('Monaco theme', () => {
       const data: Monaco.editor.IStandaloneThemeData = toMonacoTheme(theme)
       expect(data.base).toBe(type === 'dark' ? 'vs-dark' : 'vs')
       expect(data.inherit).toBe(true)
-      expect(Object.keys(data.colors)).toHaveLength(205)
+      expect(Object.keys(data.colors)).toHaveLength(213)
       expect(Object.keys(data.colors)).toEqual([...colorKeys])
       for (const value of Object.values(data.colors)) expect(value).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       expect(data.rules[0]).toEqual({ token: '', foreground: theme.colors['editor.foreground'].slice(1), background: theme.colors['editor.background'].slice(1) })

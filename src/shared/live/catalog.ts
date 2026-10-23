@@ -21,8 +21,14 @@ export type LiveCounter = typeof liveCounters[number]
 /** The SQL types a live table stores (Live/LiveTables.cs, LiveCells): each cell is the display text a query of it shows. */
 export const liveDataTypes = ['tinyint', 'smallint', 'int', 'bigint', 'nvarchar', 'varchar', 'nchar', 'char', 'sysname', 'bit', 'float', 'real', 'decimal', 'numeric', 'datetime', 'datetime2', 'datetimeoffset', 'uniqueidentifier'] as const
 export interface LiveSeriesSpec { readonly id: string; readonly unit: LiveUnit; readonly label: string; readonly counter: LiveCounter }
-/** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry. */
-export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string }
+/** A row's tone (LiveGrid): one class per pooled row, coloured by the resultsGrid.row* theme keys. A table's tone column
+ *  holds one of these names, or NULL for none; the grid also mutes a departed row. */
+export const liveTones = ['error', 'warning', 'running', 'muted'] as const
+export type LiveTone = typeof liveTones[number]
+/** `id` names the column in requests (sort, filter); `name` and `dataType` are what the stored result's columns carry.
+ *  `role: 'tone'` marks the row's tone (one of liveTones, or NULL): the table's last column, an nvarchar, never a key. The
+ *  grid hides it, and Copy and Save leave it out (ResultTextWriter), so it colours rows and is never data. */
+export interface LiveColumnSpec { readonly id: string; readonly name: string; readonly dataType: string; readonly role?: 'tone' }
 export interface LiveTableSpec {
   readonly id: string
   readonly mode: LiveTableMode
@@ -87,13 +93,15 @@ export interface LiveSourceSpec {
   /** Only main's test schemas (unpackaged smoke runs) and a backend with VARIA_BACKEND_TEST_HOOKS=1 accept it. */
   readonly testOnly: boolean
   readonly probes: readonly string[]
-  /** While its view is hidden: pause every probe (the default), or keep only its probes without tables, sampled at most
-   *  every limits.live.hiddenIntervalMs (an execution this window started, for its completion notice). The renderer
-   *  applies it through live.update. */
+  /** While its view is hidden (the renderer's LiveService applies it through live.update): pause every probe (the
+   *  default), or, for a view that asks for it, keep only its probes without tables, sampled at most every
+   *  limits.live.hiddenIntervalMs, so a completion is still seen (an execution this window started; at most 4 such views a
+   *  window). */
   readonly hidden?: 'pause' | 'statusOnly'
 }
 
 const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id, dataType })
+const toneColumn: LiveColumnSpec = { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }
 /** The types debug.synthetic.wide's columns cycle through. */
 const wideTypes = ['nvarchar', 'bigint', 'datetime2', 'float', 'bit', 'int']
 const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
@@ -140,16 +148,16 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'debug.synthetic.grid': {
     id: 'debug.synthetic.grid', source: 'debug.synthetic', label: 'Synthetic grid', intervalMs: anyInterval, views: ['even'], filterMode: 'memory',
-    description: 'Two snapshot tables from one sample. Items move on by one id per sample, as the table probe\'s rows do, in five groups, with group facets and departed rows; the even view keeps the items with an even id. Groups count the items of each group, built from the source\'s own state rather than read from SQL Server.',
+    description: 'Two snapshot tables from one sample. Items move on by one id per sample, as the table probe\'s rows do, in five groups, with group facets, departed rows and a row tone (G0 error, G1 warning, G2 running); the even view keeps the items with an even id. Groups count the items of each group, built from the source\'s own state rather than read from SQL Server.',
     tables: [
-      { id: 'items', mode: 'snapshot', key: ['itemId'], rowCap: 10_000, departed: true, facets: ['group'], columns: [column('itemId', 'int'), column('group', 'nvarchar'), column('name', 'nvarchar'), column('amount', 'int')] },
+      { id: 'items', mode: 'snapshot', key: ['itemId'], rowCap: 10_000, departed: true, facets: ['group'], columns: [column('itemId', 'int'), column('group', 'nvarchar'), column('name', 'nvarchar'), column('amount', 'int'), toneColumn] },
       { id: 'groups', mode: 'snapshot', key: ['groupName'], rowCap: 10, columns: [column('groupName', 'nvarchar'), column('items', 'int')] }
     ]
   },
   'debug.synthetic.log': {
     id: 'debug.synthetic.log', source: 'debug.synthetic', label: 'Synthetic log', intervalMs: anyInterval, filterMode: 'restart',
-    description: 'An append table that grows by logRows messages a sample (levels 0 to 3). With lateEvery, one message of every n-th sample becomes visible a sample late, after higher ids, as a slow writer\'s commit would. A filter or a new logLevel (the lowest level shown) starts the table again under the new predicate, and start picks its first row.',
-    tables: [{ id: 'messages', mode: 'append', key: ['messageId'], settle: { ticks: 2, ms: 0 }, batchRows: 5000, columns: [column('messageId', 'bigint'), column('level', 'int'), column('text', 'nvarchar')] }]
+    description: 'An append table that grows by logRows messages a sample (levels 0 to 3; level 3 is toned error and level 2 warning). With lateEvery, one message of every n-th sample becomes visible a sample late, after higher ids, as a slow writer\'s commit would. A filter or a new logLevel (the lowest level shown) starts the table again under the new predicate, and start picks its first row.',
+    tables: [{ id: 'messages', mode: 'append', key: ['messageId'], settle: { ticks: 2, ms: 0 }, batchRows: 5000, columns: [column('messageId', 'bigint'), column('level', 'int'), column('text', 'nvarchar'), toneColumn] }]
   },
   'debug.synthetic.wide': {
     id: 'debug.synthetic.wide', source: 'debug.synthetic', label: 'Synthetic wide rows', intervalMs: anyInterval,
