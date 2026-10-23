@@ -979,7 +979,7 @@ describe('LiveService', () => {
   })
 
   it('sizes history by the setting and the interval, within 4 MiB a view and 32 MiB in all', () => {
-    const series = Array.from({ length: 64 }, (_, index) => ({ id: 's' + index, unit: 'count' as const, label: 'S' + index }))
+    const series = Array.from({ length: 64 }, (_, index) => ({ id: 's' + index, unit: 'count' as const, label: 'S' + index, counter: 'gauge' as const }))
     const wide: LiveProbeSpec = { id: 'debug.synthetic.metrics', source: 'debug.synthetic', label: 'Wide', description: 'Wide.', intervalMs: { default: 1000, min: 1000, max: 3_600_000 }, series }
     const catalog: LiveCatalog = { sources: liveSources, probes: { ...liveProbes, 'debug.synthetic.metrics': wide } }
     makeService({ catalog, settings: { 'liveData.historyMinutes': 5 } })

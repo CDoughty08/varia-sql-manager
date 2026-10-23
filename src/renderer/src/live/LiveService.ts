@@ -91,7 +91,7 @@ export interface LiveSnapshot {
   /** How the last subscription ended (status ended). */
   readonly ended?: LiveEnd
   /** Why the view cannot run (status ended or lost), or why its last settings change failed. */
-  readonly error?: { readonly code: ErrorCode; readonly message: string }
+  readonly error?: { readonly code: ErrorCode | LiveErrorCode; readonly message: string }
 }
 /** A table of a probe's latest sample: an ordinary stored result. */
 export interface LiveTable {
@@ -381,7 +381,7 @@ class Handle implements LiveHandle {
   private kept: ResultKey[] = []
   private resume: string | undefined
   private ended: LiveEnd | undefined
-  private error: { code: ErrorCode; message: string } | undefined
+  private error: { code: ErrorCode | LiveErrorCode; message: string } | undefined
   /** The error is a refused update's (a later accepted one clears it), not the stream's end. */
   private updateError = false
   private spid: number | undefined
