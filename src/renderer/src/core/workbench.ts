@@ -47,6 +47,7 @@ import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -118,6 +119,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** Database Properties documents: their drafts, Apply, Script previews and frames. */
+  readonly properties: DatabasePropertiesService
   readonly theme: ThemeService
 }
 /**
@@ -175,6 +178,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
+  const properties = new DatabasePropertiesService({
+    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // The current section's item in the list: one tab stop, from which the keys move through the sections.
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -192,6 +200,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recentFiles,
     recovery,
     designer: designers.context,
+    properties: properties.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -250,6 +259,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    properties,
     theme,
     dispose: () => {
       if (disposed) return
@@ -271,6 +281,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()
+      properties.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()

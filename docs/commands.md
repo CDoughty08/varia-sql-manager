@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (143)
+## Commands (147)
 
 ### File
 
@@ -175,6 +175,15 @@ keys it uses are listed below.
 | Generate Change Script… | `tableDesigner.generateChangeScript` | — | — | — | `activeDocumentIsDesigner && designerEditable && backendReady` | Table designer context menu › Generate Change Script… |
 | Properties | `tableDesigner.properties` | F4 (`designerFocus`) | F4 (`designerFocus`) | F4 (`designerFocus`) | `activeDocumentIsDesigner` | Table designer context menu › Properties |
 | Stop | `tableDesigner.stop` | — | — | — | `designerSaving` | — |
+
+### Database Properties
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Apply Changes | `databaseProperties.apply` | — | — | — | `activeDocumentIsProperties && propertiesApplicable` | — |
+| Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
+| Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
+| Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
 
 ### Preferences
 
@@ -584,7 +593,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (72)
+## Context keys (77)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -607,12 +616,17 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
-| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer. |
+| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer or Database Properties. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |
 | `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
+| `activeDocumentIsProperties` | boolean | state | The active document is Database Properties. |
+| `propertiesChanged` | boolean | state | The active Database Properties document has changes that are not applied yet. |
+| `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
+| `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
+| `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |

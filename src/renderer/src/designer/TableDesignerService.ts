@@ -87,6 +87,7 @@ const error = (result: ApiResult<unknown>) => result.ok ? undefined : result.err
  */
 export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'tableDesigner' as const
+  readonly inSaveAll = true
   private readonly newId: () => string
   private readonly registration: Disposable
   private readonly unsubscribe: () => void
