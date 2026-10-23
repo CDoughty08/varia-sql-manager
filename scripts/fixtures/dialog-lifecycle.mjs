@@ -57,7 +57,15 @@ const answer = (application, title, response) => application.evaluate((_electron
   reply?.(value)
   return !!reply
 }, [title, response])
-const crash = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+const crash = application => application.evaluate(({ BrowserWindow }) => {
+  const contents = BrowserWindow.getAllWindows()[0].webContents
+  if (process.platform !== 'linux') { contents.forcefullyCrashRenderer(); return }
+  // Electron's Linux API sends crash IPC to the renderer's IO thread; CI observed that process still alive afterward.
+  // These checks need an exited renderer before testing dialog invalidation, so terminate its known OS process.
+  const pid = contents.getOSProcessId()
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error('The renderer has no OS process to terminate.')
+  process.kill(pid, 'SIGKILL')
+})
 /** Native crash state for CI diagnostics, including Linux zombies which still answer signal 0. */
 const rendererSnapshot = (application, previousPid = 0) => application.evaluate(({ BrowserWindow }, previous) => {
   const contents = BrowserWindow.getAllWindows()[0]?.webContents
