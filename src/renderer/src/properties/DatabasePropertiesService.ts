@@ -1,4 +1,4 @@
-import { actionLimits, dialogSpecs, dialogTitle, unknownOutcomeMessage } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -74,9 +74,15 @@ export interface DatabasePropertiesServiceOptions {
 export const propertiesMessages = {
   applied: 'The changes were applied.',
   disconnected: 'The server was disconnected. Connect to it again, then Refresh.',
+  // Whether an Apply ran is unknown: the fields lock and Refresh waits for a clean draft, so the way out is Discard Changes, then Refresh.
   /** Stop, when the backend could not confirm in time that SQL Server ended the statement. */
-  stopped: 'The changes were stopped, but SQL Server did not confirm it in time, so whether they were applied is unknown. Refresh to read the database again.',
-  stale: 'Whether the last changes were applied is unknown. Refresh to read the database again before applying more.',
+  stopped: 'The changes were stopped, but SQL Server did not confirm it in time, so whether they were applied is unknown. Discard Changes, then Refresh to read the database again.',
+  stale: 'Whether the last changes were applied is unknown. Discard Changes, then Refresh to read the database again before applying more.',
+  /** The server's connection went while the changes were being applied. */
+  connectionLost: 'The server was disconnected while the changes were being applied, so whether they were applied is unknown. Connect to it again, then Discard Changes and Refresh.',
+  backendLost: 'The SQL backend stopped while the changes were being applied, so whether they were applied is unknown. Discard Changes, then Refresh to read the database again.',
+  /** Apply ran, but reading the database again failed: said before the read's error, so the Apply is never taken for a failure. */
+  appliedUnread: 'The changes were applied, but the database could not be read again:',
   applying: 'The changes are being applied. Stop them, or wait for them to finish.',
   readFailed: 'The database could not be read.'
 } as const
@@ -96,6 +102,8 @@ const definition = databasePropertiesDefinition
  */
 export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'databaseProperties' as const
+  /** Save All leaves it out: Apply is DDL on the server, run only from its own document, where its Stop is. */
+  readonly inSaveAll = false
   private readonly newId: () => string
   private readonly timers: Timers
   private readonly registration: Disposable
@@ -106,6 +114,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /** Each document's Script preview request, apart from the others: a preview never holds Apply back. */
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
+  /** Each preview in flight by its request id, so one that a newer preview replaces can resolve to the newer one's script. */
+  private readonly previewRuns = new Map<string, Promise<string | undefined>>()
   private readonly applies = new Map<string, Promise<boolean>>()
   private disposed = false
 
@@ -159,11 +169,15 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     this.options.documents.setDirty(id, changed)
     this.schedulePreview(id)
   }
-  /** Discard Changes: the draft goes back to what the database has. */
+  canDiscard(id: string): boolean {
+    const state = this.get(id)
+    return !!state?.model && !!state.draft && state.changed && state.phase !== 'applying' && state.phase !== 'confirming'
+  }
+  /** Discard Changes: the draft goes back to what was read. While the last outcome is unknown its message stays, since Refresh is still to come. */
   discard(id: string): void {
     const state = this.get(id)
     if (!state?.model || !state.draft || state.phase === 'applying' || state.phase === 'confirming') return
-    this.patch(id, { draft: definition.initialDraft(state.model, state.target), changed: false, revision: state.revision + 1, error: undefined, notice: undefined, steps: undefined })
+    this.patch(id, { draft: definition.initialDraft(state.model, state.target), changed: false, revision: state.revision + 1, ...state.stale ? {} : { error: undefined }, notice: undefined, steps: undefined })
     this.options.documents.setDirty(id, false)
     this.schedulePreview(id)
   }
@@ -196,8 +210,10 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) {
-      // A document that had loaded keeps what it showed, read-only until a Refresh succeeds.
-      this.patch(id, { phase: this.get(id)?.model ? 'ready' : 'loadFailed', error: failure ?? error('NOT_FOUND', propertiesMessages.readFailed), ...this.get(id)?.model ? { stale: true } : {} })
+      // A document that had loaded keeps what it showed, read-only until a Refresh succeeds. After an Apply (`notice`), the
+      // message says first that the changes ran, so a read that fails is not taken for an Apply that failed.
+      const shown = failure ?? error('NOT_FOUND', propertiesMessages.readFailed)
+      this.patch(id, { phase: this.get(id)?.model ? 'ready' : 'loadFailed', error: notice ? { ...shown, message: `${propertiesMessages.appliedUnread} ${shown.message}` } : shown, ...this.get(id)?.model ? { stale: true } : {} })
       return
     }
     const current = this.get(id)!
@@ -269,7 +285,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     if (value?.error?.code === 'CANCELLED') { this.patch(id, { phase: 'ready', error: value.error, steps: value.steps, ...partial ? { stale: true } : {} }); return false }
     if (!result.ok && result.code === 'CANCELLED') { this.patch(id, { phase: 'ready', stale: true, error: error('CANCELLED', propertiesMessages.stopped) }); return false }
     const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
-    const failure = value?.error ?? (lost ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The changes could not be applied.' : result.error))
+    const lostMessage = !result.ok && result.code === 'BACKEND_LOST' ? propertiesMessages.backendLost : propertiesMessages.connectionLost
+    const failure = value?.error ?? (lost ? error('CONNECTION_LOST', lostMessage) : error('SQL_ERROR', result.ok ? 'The changes could not be applied.' : result.error))
     const model = definition.afterFailure?.(state.model!, failure) ?? state.model!
     this.patch(id, { phase: 'ready', error: failure, model, ...value ? { steps: value.steps } : {}, ...partial || lost ? { stale: true } : {} })
     this.show(id)
@@ -289,13 +306,26 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
 
   // --- Script ----------------------------------------------------------------------------------------------------------
 
-  /** One of the drawer's ways out: the whole script of the current changes, made again if the preview is behind. */
+  /**
+   * One of the drawer's ways out: the whole script of the current changes, made again if the preview is behind. Its own
+   * script stands for the latest edit, so the preview that edit scheduled is not sent too; a preview a later edit starts
+   * meanwhile replaces it, and the delivery takes that one's script. When none comes, the drawer says why.
+   */
   async deliver(id: string, destination: ScriptDestination): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state || !connectionId) return
-    const text = state.script.state === 'ready' && state.scriptRevision === state.revision ? state.script.text : await this.preview(id)
+    let text = this.currentScript(id)
+    if (text === undefined) {
+      this.clearPreviewTimer(id)
+      text = await this.preview(id)
+    }
     const current = this.get(id)
-    if (text === undefined || !current) return
+    if (!current || this.disposed) return
+    if (text === undefined) {
+      const script = current.script
+      this.patch(id, { scriptNotice: script.state === 'failed' ? script.error.message : script.state === 'idle' ? script.message : 'No script was produced.' })
+      return
+    }
     try {
       const notice = await deliverScript({ destination, text, database: this.get(id)?.scriptDatabase ?? 'master', connectionId, fileName: scriptFileName(current.target) }, this.options)
       this.patch(id, { scriptNotice: notice })
@@ -308,8 +338,32 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     if (pending !== undefined) this.timers.clearTimeout(pending)
     this.previewTimers.set(id, this.timers.setTimeout(() => { this.previewTimers.delete(id); void this.preview(id) }, delay))
   }
-  /** Scripts the current draft into the drawer; resolves to its text, or undefined when there is none. */
-  private async preview(id: string): Promise<string | undefined> {
+  private clearPreviewTimer(id: string): void {
+    const pending = this.previewTimers.get(id)
+    if (pending !== undefined) this.timers.clearTimeout(pending)
+    this.previewTimers.delete(id)
+  }
+  /** The drawer's script when it is the current draft's. */
+  private currentScript(id: string): string | undefined {
+    const state = this.get(id)
+    return state?.script.state === 'ready' && state.scriptRevision === state.revision ? state.script.text : undefined
+  }
+  /**
+   * Scripts the current draft into the drawer; resolves to its text, or undefined when there is none. A preview that a
+   * newer one replaces resolves to the newer one's text, so a delivery waiting on it gets the latest script.
+   */
+  private preview(id: string): Promise<string | undefined> {
+    const started: { requestId?: string } = {}
+    const run = this.runPreview(id, started)
+    const requestId = started.requestId
+    if (requestId) {
+      this.previewRuns.set(requestId, run)
+      const forget = () => { this.previewRuns.delete(requestId) }
+      void run.then(forget, forget)
+    }
+    return run
+  }
+  private async runPreview(id: string, started: { requestId?: string }): Promise<string | undefined> {
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.model || !state.draft || !connectionId) return undefined
     const revision = state.revision
@@ -319,11 +373,14 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     if (!this.live(id)) { this.patch(id, { script: { state: 'failed', error: { message: propertiesMessages.disconnected, code: 'CONNECTION_LOST' } }, scriptRevision: revision }); return undefined }
     const previous = this.previews.get(id)
     if (previous) this.cancel([previous])
-    const requestId = this.newId()
+    const requestId = started.requestId = this.newId()
     this.previews.set(id, requestId)
     this.patch(id, { script: { state: 'loading' } })
     const result = await this.call(() => this.options.api.scriptObjectAction({ ...built, connectionId, requestId } as ActionRequest))
-    if (this.previews.get(id) !== requestId) return undefined
+    const newer = this.previews.get(id)
+    // Replaced by a newer preview: its script, once it comes. None in flight: the drawer's script if a newer one has come
+    // and is current, otherwise nothing (a close or a disconnect dropped it).
+    if (newer !== requestId) return newer ? this.previewRuns.get(newer) ?? undefined : this.currentScript(id)
     this.previews.delete(id)
     if (this.disposed || !this.get(id)) return undefined
     const failure = !result.ok ? { message: result.error, ...result.code ? { code: result.code } : {} } : result.value.error ? { message: result.value.error.message, code: result.value.error.code } : undefined
@@ -337,7 +394,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
 
   // --- CustomDocumentProvider ----------------------------------------------------------------------------------------
 
-  save(id: string): Promise<boolean> { return this.apply(id) }
+  /** File › Save and the close prompt's Save: the document comes forward first, so its progress and Stop show while it applies. */
+  save(id: string): Promise<boolean> { this.show(id); return this.apply(id) }
   canClose(id: string): string | undefined { const phase = this.get(id)?.phase; return phase === 'applying' || phase === 'confirming' ? propertiesMessages.applying : undefined }
   revision(id: string): number { return this.get(id)?.revision ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
@@ -434,7 +492,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
       request.dropped = true
       this.requests.delete(state.id)
       this.cancel([request.id])
-      if (request.kind === 'apply') this.patch(state.id, { phase: 'ready', stale: true, error: error('CONNECTION_LOST', unknownOutcomeMessage) })
+      if (request.kind === 'apply') this.patch(state.id, { phase: 'ready', stale: true, error: error('CONNECTION_LOST', propertiesMessages.connectionLost) })
       else this.patch(state.id, { phase: state.model ? 'ready' : 'loadFailed', error: error('CONNECTION_LOST', propertiesMessages.disconnected), ...state.model ? { stale: true } : {} })
     }
     this.publishContext()

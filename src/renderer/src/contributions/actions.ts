@@ -40,7 +40,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       }
     }),
     commands.register('databaseProperties.apply', on(id => properties.canApply(id), id => properties.apply(id))),
-    commands.register('databaseProperties.discard', on(id => !!properties.get(id)?.changed && properties.get(id)?.phase !== 'applying', id => properties.discard(id))),
+    commands.register('databaseProperties.discard', on(id => properties.canDiscard(id), id => properties.discard(id))),
     commands.register('databaseProperties.refresh', on(id => properties.canRefresh(id), id => properties.refresh(id))),
     commands.register('databaseProperties.stop', on(id => properties.get(id)?.phase === 'applying', id => properties.stop(id)))
   ]

@@ -106,6 +106,16 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
   }, [current])
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    if (event.key === 'Tab') {
+      // Tab goes into the section the list shows, as SSMS's page list tabs into its page: every section is in one column,
+      // so the browser's next stop would be the first section's first control, scrolling away from the one chosen.
+      const target = firstTabbable(nav.current?.ownerDocument.getElementById(sectionDomId(id, current)))
+      if (!target) return
+      event.preventDefault()
+      event.stopPropagation()
+      target.focus()
+      return
+    }
     const from = (event.target as HTMLElement).closest<HTMLElement>('[data-section]')?.dataset.section ?? current
     const next = sectionKey(event.key, sections.map(section => section.id), from)
     if (next === undefined) return
@@ -126,6 +136,16 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
 }
 
 const sectionDomId = (id: string, section: string) => `${id}-section-${section}`
+const tabbableSelector = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]'
+/** The first element Tab would stop at inside `root`: enabled, in the tab order, and rendered. */
+function firstTabbable(root: HTMLElement | null | undefined): HTMLElement | undefined {
+  for (const element of root?.querySelectorAll<HTMLElement>(tabbableSelector) ?? []) {
+    if (element.tabIndex < 0 || (element as HTMLButtonElement).disabled || (element instanceof HTMLInputElement && element.type === 'hidden')) continue
+    if (element.closest('[inert]') || element.getClientRects().length === 0) continue
+    return element
+  }
+  return undefined
+}
 
 /** A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. */
 export function FrameSectionView({ id, section, collapsed, onToggle }: { readonly id: string; readonly section: FrameSection; readonly collapsed: boolean; readonly onToggle: () => void }) {
@@ -152,6 +172,8 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   /** Sections with a list beside them; without them the frame shows `children` under the header. */
   readonly sections?: readonly FrameSection[]
   readonly children?: ReactNode
+  /** A strip under the content and over the Script drawer: a property sheet's FieldHintStrip. */
+  readonly hint?: ReactNode
   /** The document's frame state (its service keeps it); needed with sections or a Script drawer. */
   readonly frame?: FrameState
   readonly onFrame?: (next: FrameState) => void
@@ -167,13 +189,14 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
  * service, and every change goes back through `onFrame`.
  */
 export function DocumentFrameView(props: DocumentFrameViewProps) {
-  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, frame, onFrame, script, attributes } = props
+  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, hint, frame, onFrame, script, attributes } = props
   const change = onFrame ?? (() => {})
   return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
     {banner && <div className="document-banner">{banner}</div>}
     {sections && frame ? <SectionedBody id={id} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
+    {hint}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}
   </div>

@@ -8,7 +8,7 @@ import { draftValue, greyNotes, modelValue, optionChoices, optionGroups, optionS
 import SubDialog from '../dialogs/SubDialog'
 import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
 import InlineError from '../kit/InlineError'
-import PropertyField, { FactList, fieldAria } from '../kit/PropertyField'
+import PropertyField, { FactList, FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
@@ -21,7 +21,7 @@ const fieldId = (documentId: string, key: string) => `properties-${documentId}-$
 /** The header fields above the other options, in SSMS's order: Collation, Recovery model, Compatibility level, Containment type. */
 const headerKeys = ['collation', 'recoveryModel', 'compatibilityLevel', 'containmentType']
 
-interface SectionProps {
+export interface SectionProps {
   readonly state: PropertiesState
   readonly model: DatabasePropertiesModel
   readonly draft: DatabaseDraft
@@ -61,18 +61,23 @@ function SelectOwner({ logins, current, onOk, onCancel }: { logins: readonly str
   </SubDialog>
 }
 
-/** Files: the name, the Owner (typed, suggested, or chosen in Select Database Owner), full-text indexing, and the files. */
-function FilesSection({ state, model, draft, editable, errors, service }: SectionProps) {
+/**
+ * Files: the name and full-text indexing as facts, the Owner (typed, suggested, or chosen in Select Database Owner), and
+ * the files. The facts and the field are separate groups, so their two label styles read as two kinds of row.
+ */
+export function FilesSection({ state, model, draft, editable, errors, service }: SectionProps) {
   const [choosing, setChoosing] = useState(false)
   const owner = ownerState(model, state.target), id = fieldId(state.id, 'owner'), disabled = !editable || owner.disabled
   const note = owner.note && owner.note !== model.readOnlyReason && owner.note !== greyNotes.readOnlyDatabase ? owner.note : undefined
-  const text = { note, error: errors.get('owner') }
+  const changed = draft.owner !== (model.general.owner ?? ''), text = { note, error: errors.get('owner') }
   return <div className="properties-files">
+    <h3 className="properties-group-title">Database</h3>
     <FactList facts={[{ label: 'Database name', value: displayText(model.general.name) }, { label: 'Use full-text indexing', value: 'Always on (since SQL Server 2008)' }]} />
-    <PropertyField id={id} label="Owner" changed={draft.owner !== (model.general.owner ?? '')} {...text}>
+    <h3 className="properties-group-title">Ownership</h3>
+    <PropertyField id={id} label="Owner" changed={changed} {...text}>
       <span className="properties-owner">
         <input id={id} className="property-input" type="text" list={`${id}-logins`} maxLength={128} spellCheck={false} value={draft.owner} disabled={disabled}
-          data-changed={draft.owner !== (model.general.owner ?? '') || undefined} {...fieldAria(id, text)} onChange={event => service.updateDraft(state.id, { owner: event.target.value })} />
+          data-changed={changed || undefined} {...fieldAria(id, { ...text, changed })} onChange={event => service.updateDraft(state.id, { owner: event.target.value })} />
         <datalist id={`${id}-logins`}>{model.logins.map(login => <option key={login} value={login} />)}</datalist>
         <button type="button" className="property-browse" aria-label="Browse for the owner" title="Browse for the owner" disabled={disabled || model.logins.length === 0} onClick={() => setChoosing(true)}>…</button>
       </span>
@@ -118,20 +123,20 @@ function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model
   </div>
 }
 
-/** One option as its field: a fact, a switch, a segmented control, a list, or a number field. */
-function OptionField({ def, state, model, draft, editable, errors, service }: SectionProps & { readonly def: DatabaseOptionDef }) {
+/** One option as its field: a fact (plain text, never a live region), a switch, a segmented control, a list, or a number field. */
+export function OptionField({ def, state, model, draft, editable, errors, service }: SectionProps & { readonly def: DatabaseOptionDef }) {
   const id = fieldId(state.id, def.key), control = fieldControl(def)
   const value = draftValue(draft, def) ?? '', changed = value !== (modelValue(model, def) ?? '')
   const greyed = optionState(def, model, draft, state.target)
   // The notes every row would share (a read-only database) show once, at the top of the section.
   const note = greyed.note && greyed.note !== model.readOnlyReason && greyed.note !== greyNotes.readOnlyDatabase ? greyed.note : undefined
   const text = { description: def.description, note, error: errors.get(def.key) }
-  const disabled = !editable || greyed.disabled, aria = fieldAria(id, text)
+  const disabled = !editable || greyed.disabled, aria = fieldAria(id, { ...text, changed })
   const change = (next: string) => service.updateDraft(state.id, setOption(draft, def.key, next))
   const choices = optionChoices(def, model)
   if (control === 'fact') {
     const shown = choices.find(choice => choice.value === value)?.label ?? value
-    return <PropertyField id={id} label={def.label} labelFor={false} description={def.description}><output id={id} className="property-value" aria-labelledby={`${id}-label`} {...aria}>{shown || '—'}</output></PropertyField>
+    return <PropertyField id={id} label={def.label} labelFor={false} description={def.description}><span id={id} className="property-value">{shown || '—'}</span></PropertyField>
   }
   return <PropertyField id={id} label={def.label} changed={changed} labelFor={control !== 'segmented'} {...text}>
     {control === 'switch' && <Switch id={id} checked={value === 'true'} disabled={disabled} changed={changed} states={switchStates(def)} {...aria} onChange={checked => change(checked ? 'true' : 'false')} />}
@@ -195,16 +200,19 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   }
   const sections: FrameSection[] = dialogSpecs.databaseProperties.pages.map(page => ({ id: page.id, title: page.title, problem: problems.has(page.id), content: content(page.id) }))
   const stopped = state.error?.code === 'CANCELLED'
+  // The way out the message names: Refresh, or, while the draft whose outcome is unknown still holds changes, Discard Changes first.
+  const recovery = (state.stale || state.phase === 'loadFailed') && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
+    : state.stale && properties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => properties.discard(state.id) }] : []
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><span className="codicon codicon-loading" aria-hidden="true" />{phaseLabel}</p>}
     {state.error && <InlineError message={state.error.message} code={state.error.code} role={stopped ? 'status' : 'alert'} context={`Database Properties - ${state.label} on ${state.server}`}
-      actions={(state.stale || state.phase === 'loadFailed') && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }] : []} />}
+      actions={recovery} />}
     {!state.error && state.notice && <p className="document-status" role="status"><span className="codicon codicon-pass" aria-hidden="true" />{state.notice}</p>}
     {model?.readOnlyReason && <p className="document-status"><span className="codicon codicon-lock" aria-hidden="true" />{model.readOnlyReason}</p>}
     {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><span className="codicon codicon-lock" aria-hidden="true" />{greyNotes.readOnlyDatabase}</p>}
   </>
-  return <DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
+  return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
     state={pill && <StatusPill tone={pill.tone} label={pill.label} size="small" />} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
     onFrame={frame => properties.setFrame(state.id, frame)} attributes={{ 'data-properties': state.id }}
-    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void properties.deliver(state.id, destination) }} />
+    script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void properties.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>
 }

@@ -804,32 +804,36 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-banner:empty { display: none; }
 .document-status { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
 .document-banner > .inline-error { padding: 0; }
-/* Property sheets (Database Properties as a document): label, control and description side by side, the note and error
-   under the control. The description shows only while its row is hovered or holds focus, in space every row keeps, so
-   showing it never moves a row (a click that moves focus would otherwise land on a row that just moved). */
+/* Property sheets (Database Properties as a document): label and control side by side, the note and error under the
+   control. A field's description shows whole in the hint strip under the sections while its row is hovered or holds
+   focus; the strip keeps its height, so showing it never moves a row (a click that moves focus would otherwise land on
+   a row that just moved). The sections column is the container the sheet's layout follows. */
+.document-sections { container: document-sections / inline-size; }
 .properties-fields { display: flex; flex-direction: column; gap: var(--varia-space-1); }
-.property-field { display: grid; grid-template-columns: minmax(160px, 30%) minmax(0, 360px) minmax(0, 1fr); align-items: center; column-gap: var(--varia-space-3); padding: var(--varia-space-0) 0; }
+.property-field { display: grid; grid-template-columns: minmax(160px, 30%) minmax(0, 360px); align-items: center; column-gap: var(--varia-space-3); padding: var(--varia-space-0) 0; }
 .property-field-label { display: flex; align-items: baseline; gap: var(--varia-space-1); min-width: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); overflow-wrap: anywhere; }
 .property-field[data-changed] .property-field-label { font-weight: 600; }
 .property-field-changed { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 400; }
 .property-field-control { display: flex; align-items: center; min-width: 0; }
 .property-field-note, .property-field-error { grid-column: 2 / -1; margin: var(--varia-space-0) 0 0; font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
-.property-field-description { grid-column: 3; grid-row: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; text-overflow: ellipsis; visibility: hidden; }
-.property-field:hover .property-field-description, .property-field:focus-within .property-field-description { visibility: visible; }
-/* Where there is no room beside the control, the label's tooltip and the control's description carry it. */
-@container (max-width: 820px) { .property-field-description { display: none; } }
-/* A narrow document stacks each label over its control, as it puts the section list across the top. */
-@container (max-width: 640px) {
+/* A sections column too narrow for a label beside its control stacks each label over its control. */
+@container document-sections (max-width: 540px) {
   .property-field, .property-facts { grid-template-columns: minmax(0, 1fr); }
   .property-field-note, .property-field-error { grid-column: 1; }
 }
+/* The hint strip: two lines kept whether or not it shows a description, so the sections above do not resize under the
+   pointer; they hold the longest description in a document about 700 px wide, and a narrower one grows to fit it. */
+.field-hint { flex: none; box-sizing: border-box; min-height: calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px); padding: var(--varia-space-1) var(--varia-space-4); border-top: 1px solid transparent; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
+.field-hint:not(:empty) { border-top-color: var(--varia-panel-border); }
+.field-hint-label { color: var(--varia-foreground); font-weight: 600; }
 .property-field-note, .property-field-error { display: flex; align-items: flex-start; gap: var(--varia-space-1); }
 .property-field-note { color: var(--varia-descriptionForeground); }
 .property-field-error { color: var(--varia-errorForeground); }
 .property-field-note > .codicon, .property-field-error > .codicon { font-size: var(--varia-size-sm); }
 .property-input { width: min(100%, 360px); min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); }
 .property-input[data-changed] { font-weight: 600; }
-.property-input:disabled { opacity: .5; }
+/* Every property control greys the same way, the words beside a switch with it. */
+.property-input:disabled, .property-browse:disabled, .segmented-option:disabled, .switch:disabled, .switch:disabled + .switch-state { opacity: .5; }
 .property-value { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; unicode-bidi: isolate; user-select: text; }
 .properties-owner { display: flex; gap: var(--varia-space-1); width: min(100%, 360px); min-width: 0; }
 .properties-owner > .property-input { flex: 1; width: auto; }
@@ -840,6 +844,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-fact > dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; unicode-bidi: isolate; user-select: text; }
 .properties-group-title { margin: var(--varia-space-3) 0 var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; }
 .properties-table { max-width: 100%; overflow: auto; }
+/* The document has room the modal had not: its grids size columns to their text and wrap a long path, never cutting it. */
+.properties-table > .object-dialog-grid { table-layout: auto; }
+.properties-table > .object-dialog-grid th, .properties-table > .object-dialog-grid td { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
 /* A switch: a checkbox drawn as a track and thumb. On, the thumb moves right and the track fills; the words beside it
    say the state too. State changes are instant, as selection is. */
@@ -848,7 +855,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .switch::before { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--varia-descriptionForeground); }
 .switch:checked { border-color: var(--varia-button-background); background: var(--varia-button-background); }
 .switch:checked::before { left: 14px; background: var(--varia-button-foreground); }
-.switch:disabled { opacity: .5; cursor: default; }
+.switch:disabled { cursor: default; }
 .switch-state { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .switch[data-changed] + .switch-state { font-weight: 600; }
 /* A segmented control: one outlined row; the chosen segment is filled, outlined in the accent and bold. */
@@ -862,10 +869,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .segmented-option { border-style: none; }
   .segmented-option[aria-checked="true"], .segmented-option[aria-checked="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
   .segmented-option[aria-checked="true"]:focus-visible { outline: 2px solid CanvasText; }
+  .segmented-option[aria-checked="true"]:disabled { background: Canvas; color: GrayText; outline: 1px solid GrayText; outline-offset: -1px; }
   .switch { forced-color-adjust: none; border-color: ButtonText; background: Canvas; }
   .switch::before { background: ButtonText; }
   .switch:checked { border-color: Highlight; background: Highlight; }
   .switch:checked::before { background: HighlightText; }
   .switch:disabled { border-color: GrayText; }
   .switch:disabled::before { background: GrayText; }
+  /* The switch keeps its own colours here, so its focus ring would keep the theme's; it takes the system's. */
+  .switch:focus-visible { outline-color: CanvasText; }
 }

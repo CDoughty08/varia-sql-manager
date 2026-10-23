@@ -202,6 +202,12 @@ try {
     }
   })
   const tabCount = await tabs().count()
+  // A 1280 × 800 window, where the sections column is about 770 px wide: descriptions and file paths must still read whole.
+  const windowSize = size => application.evaluate(({ BrowserWindow }, [width, height]) => { BrowserWindow.getAllWindows()[0].setSize(width, height) }, size)
+  const restoreSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await windowSize([1280, 800])
+  /** Whether any of the elements cuts its text: wider or taller content than its box. */
+  const cut = locator => locator.evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1).map(element => element.textContent))
   const properties = () => page.getByRole('region', { name: 'AppData', exact: true })
   const propertiesTab = () => page.locator('.query-tabs').getByRole('tab', { name: 'Database Properties - AppData', exact: true })
   const verb = name => properties().getByRole('group', { name: 'AppData actions', exact: true }).getByRole('button', { name, exact: true })
@@ -234,6 +240,10 @@ try {
     await page.keyboard.press('ArrowDown')
     await expect(sectionList().getByRole('button', { name })).toHaveAttribute('aria-current', 'location')
   }
+  // Tab goes into the section chosen, not to the first control in the column (Files' Owner).
+  await page.keyboard.press('Tab')
+  await expect(properties().getByLabel('Collation', { exact: true })).toBeFocused()
+  await expect(sectionList().getByRole('button', { name: 'Options' })).toHaveAttribute('aria-current', 'location')
   // A short enum is a segmented control: one tab stop, and the arrows choose as they move.
   const recovery = properties().getByRole('radiogroup', { name: 'Recovery model', exact: true })
   await expect(recovery.getByRole('radio', { name: 'Full', exact: true })).toHaveAttribute('aria-checked', 'true')
@@ -246,16 +256,30 @@ try {
   await page.keyboard.press('ArrowRight')
   await expect(recovery.getByRole('radio', { name: 'Simple', exact: true })).toHaveAttribute('aria-checked', 'true')
   await expect(recovery).toHaveAttribute('data-changed', 'true')
-  // A boolean is a switch, and its description shows while it has focus.
+  // A boolean is a switch, and its whole description shows in the hint strip while it has focus or the pointer.
   const autoClose = properties().getByRole('switch', { name: 'Auto Close', exact: true })
-  const autoCloseDescription = properties().getByText('Specify whether the database shuts down cleanly and frees resources after the last user exits.', { exact: true })
+  const autoCloseDescription = 'Specify whether the database shuts down cleanly and frees resources after the last user exits.'
+  const hint = properties().locator('.field-hint')
   await expect(autoClose).not.toBeChecked()
-  await expect(autoCloseDescription).toBeHidden()
+  await expect(autoClose).toHaveAccessibleDescription(autoCloseDescription)
+  await expect(hint).not.toHaveText(autoCloseDescription)
+  const hintHeight = await hint.evaluate(element => element.getBoundingClientRect().height)
   await autoClose.focus()
-  await expect(autoCloseDescription).toBeVisible()
+  await expect(hint).toHaveText(`Auto Close ${autoCloseDescription}`)
+  expect(await cut(hint)).toEqual([])
+  // The pointer's row wins while it is there, and the longest description wraps whole within the strip's two lines.
+  const pointed = properties().locator('.property-field').filter({ has: page.getByLabel('Date Correlation Optimization Enabled', { exact: true }) })
+  await pointed.hover()
+  await expect(hint).toHaveAttribute('data-field', /dateCorrelationOptimization$/)
+  expect(await cut(hint)).toEqual([])
+  expect(await hint.evaluate(element => element.getBoundingClientRect().height)).toBe(hintHeight)
+  await page.mouse.move(0, 0)
+  await expect(hint).toHaveAttribute('data-field', /autoClose$/)
   await page.keyboard.press('Space')
   await expect(autoClose).toBeChecked()
   await expect(autoClose).toHaveAttribute('data-changed', 'true')
+  // The Changed mark is part of the switch's description, so a screen reader hears it too.
+  await expect(autoClose).toHaveAccessibleDescription(`Changed ${autoCloseDescription}`)
   await expect(properties().getByRole('switch', { name: 'Auto Shrink', exact: true })).not.toHaveAttribute('data-changed', 'true')
   await expect(propertiesTab().locator('.dirty-dot')).toHaveCount(1)
   await expect(verb('Apply')).toBeEnabled()
@@ -297,6 +321,8 @@ try {
   await sectionList().getByRole('button', { name: 'Files' }).click()
   await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr')).toHaveCount(2)
   await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr').first().locator('td')).toHaveText(['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'])
+  // No cell is cut: the grid sizes its columns to their text and wraps what does not fit.
+  expect(await cut(properties().locator('.properties-table th, .properties-table td'))).toEqual([])
   const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
   await properties().getByRole('button', { name: 'Browse for the owner', exact: true }).click()
   await expect(owner.getByLabel('Logins:', { exact: true })).toBeFocused()
@@ -360,7 +386,8 @@ try {
     await page.keyboard.press('Meta+w')
     await expect(properties()).toHaveCount(0)
   }
-  console.log('Object action checks: Database Properties opens as a document with facts as text, switches and segments, a description on focus, a Script preview that carries only the changes to the clipboard, a file and a query window, its frame and draft kept across tabs, Select Database Owner over it, Enter that never applies, Open Connections before Apply, and the close prompt.')
+  await windowSize(restoreSize)
+  console.log('Object action checks: Database Properties opens as a document with facts as text, switches and segments, Tab into the section chosen, a whole description on focus and hover, a Script preview that carries only the changes to the clipboard, a file and a query window, its frame and draft kept across tabs, Select Database Owner over it, Enter that never applies, Open Connections before Apply, and the close prompt.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

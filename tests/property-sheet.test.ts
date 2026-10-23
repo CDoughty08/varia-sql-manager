@@ -5,12 +5,15 @@ import { databaseOptionDefs, optionDef, scopedConfigurationDefs } from '../src/s
 import { contrastPairs } from '../src/shared/theme/contrast-pairs'
 import { densityUse } from '../src/shared/theme/metrics'
 import { databaseChanged, initialDatabaseDraft, setOption } from '../src/renderer/src/dialogs/database-properties'
-import PropertyField, { FactList, fieldAria } from '../src/renderer/src/kit/PropertyField'
+import { initialFrameState } from '../src/renderer/src/kit/document-frame'
+import PropertyField, { FactList, FieldHintStrip, fieldAria, nextHints, shownHint } from '../src/renderer/src/kit/PropertyField'
+import { FilesSection, OptionField, type SectionProps } from '../src/renderer/src/properties/DatabaseProperties'
+import type { DatabasePropertiesService, PropertiesState } from '../src/renderer/src/properties/DatabasePropertiesService'
 import Segmented, { segmentedMaximum, segmentKey } from '../src/renderer/src/kit/Segmented'
 import Switch from '../src/renderer/src/kit/Switch'
 import { databaseStatusPill, fieldControl, problemSections, switchStates } from '../src/renderer/src/properties/fields'
 import { databaseModel } from './fixtures/database-properties'
-import { computed } from './fixtures/css-cascade'
+import { computed, selectorParts } from './fixtures/css-cascade'
 import { stylesheetRules } from './fixtures/css-rules'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
@@ -19,6 +22,15 @@ const valueOf = (selector: string, property: string, at: readonly string[] = [])
   rules.filter(rule => rule.selector === selector && rule.at.join(' ') === at.join(' ')).flatMap(rule => rule.declarations).find(declaration => declaration.property === property)?.value
 const forced = ['@media (forced-colors: active)']
 const allDefs = [...databaseOptionDefs, ...scopedConfigurationDefs]
+/** A declaration of a rule one of whose selectors is `selector`, in the at-rules `at`. */
+const declared = (selector: string, property: string, at: readonly string[] = []) =>
+  rules.filter(rule => selectorParts(rule.selector).includes(selector) && rule.at.join(' ') === at.join(' ')).flatMap(rule => rule.declarations).findLast(declaration => declaration.property === property)?.value
+/** Database Properties' sections as a loaded document renders them, without the workbench. */
+function sectionProps(): SectionProps {
+  const model = databaseModel(), target = { kind: 'database', name: 'AppData' } as const
+  const state: PropertiesState = { id: 'doc', target, label: 'AppData', server: 'srv', phase: 'ready', model, draft: initialDatabaseDraft(model), revision: 1, changed: false, stale: false, frame: initialFrameState([]), script: { state: 'idle', message: '' } }
+  return { state, model, draft: state.draft!, editable: true, errors: new Map(), service: { updateDraft: () => {} } as unknown as DatabasePropertiesService }
+}
 
 describe('property sheet controls', () => {
   it('shows booleans as switches, short enums as segments, long or server-supplied ones as lists, and what Varia does not change as text', () => {
@@ -59,19 +71,61 @@ describe('property sheet controls', () => {
     expect(unknown).not.toContain('aria-checked="true"')
     expect(unknown).toMatch(/aria-checked="false" tabindex="0"[^>]*>A</)
   })
-  it('labels a field, describes its control with its description and note, and points an error at its message', () => {
+  it('labels a field, describes its control with whether it changed, its description and note, and points an error at its message', () => {
     expect(fieldAria('f', { description: 'd', note: 'n', error: 'e' })).toEqual({ 'aria-describedby': 'f-description f-note', 'aria-invalid': true, 'aria-errormessage': 'f-error' })
+    expect(fieldAria('f', { description: 'd', changed: true })).toEqual({ 'aria-describedby': 'f-changed f-description' })
     expect(fieldAria('f', {})).toEqual({})
     const field = html(createElement(PropertyField, { id: 'f', label: 'Auto Close', description: 'Shuts down cleanly.', note: 'Not on master.', error: 'Bad.', changed: true, children: createElement('input', { id: 'f' }) }))
     expect(field).toContain('<div class="property-field-label"><label id="f-label" for="f" title="Shuts down cleanly.">Auto Close</label>')
-    expect(field).toContain('<p class="property-field-description" id="f-description" title="Shuts down cleanly.">Shuts down cleanly.</p>')
+    // The description is the control's description, and shows whole in the hint strip rather than in the row.
+    expect(field).toContain('<p class="property-field-description" id="f-description" hidden="">Shuts down cleanly.</p>')
     expect(field).toContain('id="f-note"')
     expect(field).toContain('id="f-error"')
-    // The Changed mark sits beside the label, outside it, so it is never part of the control's name.
-    expect(field).toContain('<span class="property-field-changed" aria-hidden="true">Changed</span>')
+    // The Changed mark sits beside the label, outside it, so it is never part of the control's name; it is part of its description.
+    expect(field).toContain('<span class="property-field-changed" id="f-changed" aria-hidden="true">Changed</span>')
     const radios = html(createElement(PropertyField, { id: 'r', label: 'Recovery model', labelFor: false, children: createElement('div') }))
     expect(radios).not.toContain('for="r"')
     expect(html(createElement(FactList, { facts: [{ label: 'Size', value: '16.00 MB' }, { label: 'Owner', value: '' }] }))).toBe('<dl class="property-facts"><div class="property-fact"><dt>Size</dt><dd>16.00 MB</dd></div><div class="property-fact"><dt>Owner</dt><dd>—</dd></div></dl>')
+  })
+})
+
+describe('property sheet hints and sections', () => {
+  const autoClose = { id: 'a', label: 'Auto Close', description: 'Shuts down cleanly.' }, autoShrink = { id: 'b', label: 'Auto Shrink', description: 'Shrinks.' }
+  const recovery = { id: 'c', label: 'Recovery model', description: 'Recovers.' }
+  it('shows the description of the row the pointer entered or the control that took focus, whichever came last', () => {
+    let hints = nextHints({}, 'focused', 'a', autoClose)
+    expect(shownHint(hints)).toBe(autoClose)
+    hints = nextHints(hints, 'hovered', 'b', autoShrink)
+    expect(shownHint(hints)).toBe(autoShrink)
+    // Tabbing on while the pointer rests on a row: the focused control's description shows, not the resting row's.
+    hints = nextHints(hints, 'focused', 'c', recovery)
+    expect(shownHint(hints)).toBe(recovery)
+    // Leaving falls back to the other; entering the next row before leaving the last one, the late leave clears nothing.
+    expect(shownHint(nextHints(hints, 'focused', 'c', undefined))).toBe(autoShrink)
+    hints = nextHints(nextHints(hints, 'hovered', 'a', autoClose), 'hovered', 'b', undefined)
+    expect(shownHint(hints)).toBe(autoClose)
+    expect(shownHint(nextHints(nextHints(hints, 'hovered', 'a', undefined), 'focused', 'c', undefined))).toBeUndefined()
+    expect(nextHints(hints, 'hovered', 'a', autoClose)).toBe(hints)
+  })
+  it('shows the whole description in the strip, hidden from screen readers, which have it as the control\'s description', () => {
+    expect(html(createElement(FieldHintStrip, { hint: autoClose }))).toBe('<div class="field-hint" aria-hidden="true" data-field="a"><span class="field-hint-label">Auto Close</span> Shuts down cleanly.</div>')
+    expect(html(createElement(FieldHintStrip))).toBe('<div class="field-hint" aria-hidden="true"></div>')
+  })
+  it('shows what Varia does not change as plain text, never as a live region', () => {
+    const props = sectionProps()
+    const facts = allDefs.filter(def => fieldControl(def) === 'fact' && props.model.options[def.key] !== undefined)
+    expect(facts.length).toBeGreaterThan(3)
+    for (const def of facts) {
+      const field = html(createElement(OptionField, { ...props, def }))
+      expect(field, def.key).not.toMatch(/<output|role="status"|aria-live/)
+      expect(field, def.key).toContain(`<span id="properties-doc-${def.key}" class="property-value">`)
+    }
+  })
+  it('puts Files\' facts and its Owner field in groups of their own', () => {
+    const files = html(createElement(FilesSection, sectionProps()))
+    expect([...files.matchAll(/<h3 class="properties-group-title"[^>]*>([^<]+)<\/h3>/g)].map(match => match[1])).toEqual(['Database', 'Ownership', 'Database files'])
+    expect(files.indexOf('Ownership')).toBeLessThan(files.indexOf('for="properties-doc-owner"'))
+    expect(files.indexOf('Use full-text indexing')).toBeLessThan(files.indexOf('Ownership'))
   })
 })
 
@@ -100,13 +154,14 @@ describe('Database Properties document rules', () => {
 })
 
 describe('property sheet styles', () => {
-  it('shows a description only while its row is hovered or holds focus, without moving any row, and always shows notes and errors', () => {
-    expect(valueOf('.property-field-description', 'visibility')).toBe('hidden')
-    expect(valueOf('.property-field:hover .property-field-description, .property-field:focus-within .property-field-description', 'visibility')).toBe('visible')
-    // Beside the control on one line, in space every row keeps: a click that moves focus away from a row whose description
-    // collapsed would otherwise land on a row that had just moved up (a missed click in Database Properties).
-    expect([valueOf('.property-field-description', 'grid-row'), valueOf('.property-field-description', 'white-space')]).toEqual(['1', 'nowrap'])
-    expect(rules.filter(rule => !rule.at.length && /:(?:hover|focus-within)/.test(rule.selector) && rule.selector.includes('.property-field-description')).flatMap(rule => rule.declarations).map(declaration => declaration.property)).toEqual(['visibility'])
+  it('shows a description whole in a strip that keeps its height, never cut in the row, and always shows notes and errors', () => {
+    // The row has no description of its own to cut or to show: the strip under the sections shows it, wrapping.
+    expect(rules.filter(rule => rule.selector.includes('.property-field-description'))).toEqual([])
+    expect(valueOf('.property-field', 'grid-template-columns')).toBe('minmax(160px, 30%) minmax(0, 360px)')
+    expect([valueOf('.field-hint', 'flex'), valueOf('.field-hint', 'overflow-wrap'), valueOf('.field-hint', 'min-height')]).toEqual(['none', 'anywhere', 'calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px)'])
+    expect(rules.filter(rule => rule.selector.startsWith('.field-hint')).flatMap(rule => rule.declarations).map(declaration => declaration.property)).not.toContain('white-space')
+    // Showing text changes only a colour: the border is there, transparent, while the strip is empty.
+    expect(valueOf('.field-hint:not(:empty)', 'border-top-color')).toBe('var(--varia-panel-border)')
     expect(computed(['.property-field-note']).get('display')).toBe('flex')
     expect(computed(['.property-field-error']).get('color')).toBe('var(--varia-errorForeground)')
   })
@@ -126,10 +181,26 @@ describe('property sheet styles', () => {
     expect([valueOf('.switch:checked', 'background', forced), valueOf('.switch:checked::before', 'background', forced), valueOf('.switch', 'forced-color-adjust', forced)]).toEqual(['Highlight', 'HighlightText', 'none'])
     // State changes are instant, as selection is.
     expect(rules.filter(rule => /\.switch/.test(rule.selector)).flatMap(rule => rule.declarations).filter(declaration => declaration.property.startsWith('transition'))).toEqual([])
+    // Its own colours keep the theme's focus ring, which can miss 3:1 on a forced-colors canvas: the ring takes the system's text colour.
+    expect(declared('.switch:focus-visible', 'outline-color', forced)).toBe('CanvasText')
   })
-  it('stacks each label over its control in a narrow document, and leaves the description to the tooltip where there is no room for it', () => {
-    expect(valueOf('.property-field, .property-facts', 'grid-template-columns', ['@container (max-width: 640px)'])).toBe('minmax(0, 1fr)')
-    expect(valueOf('.property-field-description', 'display', ['@container (max-width: 820px)'])).toBe('none')
+  it('greys every disabled property control the same way, under forced colors in GrayText', () => {
+    for (const selector of ['.property-input:disabled', '.property-browse:disabled', '.segmented-option:disabled', '.switch:disabled', '.switch:disabled + .switch-state']) expect(declared(selector, 'opacity'), selector).toBe('.5')
+    const chosen = computed(['button', '.segmented-option', '[aria-checked="true"]', ':disabled'], true)
+    expect([chosen.get('background-color'), chosen.get('color'), chosen.get('outline-color')]).toEqual(['Canvas', 'GrayText', '1px solid GrayText'])
+    expect(computed(['.switch', ':disabled'], true).get('border-color')).toBe('GrayText')
+  })
+  it('stacks each label over its control when the sections column is narrow, measured on that column', () => {
+    expect(valueOf('.document-sections', 'container')).toBe('document-sections / inline-size')
+    expect(valueOf('.property-field, .property-facts', 'grid-template-columns', ['@container document-sections (max-width: 540px)'])).toBe('minmax(0, 1fr)')
+    // No property rule follows the frame's width, which counts the section list too.
+    expect(rules.filter(rule => rule.at.some(at => /^@container \(/.test(at)) && /\.propert/.test(rule.selector))).toEqual([])
+  })
+  it('sizes the files and filegroups grids to their text and wraps a long value rather than cutting it', () => {
+    expect(declared('.properties-table > .object-dialog-grid', 'table-layout')).toBe('auto')
+    for (const cell of ['.properties-table > .object-dialog-grid td', '.properties-table > .object-dialog-grid th']) {
+      expect([declared(cell, 'white-space'), declared(cell, 'overflow-wrap'), declared(cell, 'text-overflow')], cell).toEqual(['normal', 'anywhere', 'clip'])
+    }
   })
   it('sizes its fields from the control token and checks the controls\' contrast on the document', () => {
     expect(densityUse.control).toContain('.property-input')
