@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 758 offline
-  checks; how many depends on the server version and authentication (1188 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 777 offline
+  checks; how many depends on the server version and authentication (1219 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -175,7 +175,11 @@ pages, limits, error codes, display formats, benchmarks).
   statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
   names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
   `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant. Filters run
-  in backend memory over a sample (`ActivityFilter`), never in SQL.
+  in backend memory over a sample (`ActivityFilter`), never in SQL. The session actions (`Activity/SessionActions.cs`)
+  have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
+  gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
+  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
+  only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

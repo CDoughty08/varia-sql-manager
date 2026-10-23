@@ -7,7 +7,8 @@ export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
  *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
- *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
+ *  2 in all), so a DROP waiting on a lock never holds a metadata slot; Kill Process runs there under gates of its own, so
+ *  it never queues behind such a DROP. Main reserves 32 extra pending requests for the
  *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
  *  browser, for up to 3 minutes; those sign-ins run one at a time. A live subscription (lane live) takes no slot: its own
  *  task samples on its own schedule, one tick at a time. Its statements, and those of a unary method on lane live, run
@@ -71,6 +72,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
+  // Activity Monitor's session actions. Details answers its own 10 s budget as an error: TIMEOUT value, inside this deadline;
+  // main cancels it from the renderer (varia:activity-cancel). Kill answers its own 25 s budget the same way, with the
+  // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.
+  'activity.details': { kind: 'unary', lane: 'live', deadlineMs: 15_000 },
+  'activity.kill': { kind: 'unary', lane: 'actions', deadlineMs: 30_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.

@@ -209,6 +209,36 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 internal sealed record ActionStepDto(string Status, string? Message = null);
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
 
+/// <summary>activity.details (src/shared/activity/schema.ts): one session by its id and login time (server local time,
+/// yyyy-MM-ddTHH:mm:ss.fffffff); Text asks for one text whole, Locks also reads its locks. SessionActions re-checks every bound.</summary>
+internal sealed record ActivityDetailsArgs(string ConnectionId, string RequestId, int SessionId, string LoginTime, string? Text = null, bool? Locks = null);
+/// <summary>activity.kill: 1 to 64 distinct sessions, each with the login time and host process id its row showed.</summary>
+internal sealed record ActivityKillArgs(string ConnectionId, List<ActivityKillSessionDto?> Sessions);
+internal sealed record ActivityKillSessionDto(int SessionId, string LoginTime, int? HostProcessId);
+/// <summary>A failure as a value (a live error code), as Object Explorer's are.</summary>
+internal sealed record ActivityError(string Code, string Message, bool Retryable);
+internal sealed record ActivitySectionError(string Section, string Code, string Message);
+internal sealed record ActivityText(string Text, long Chars, bool Truncated);
+internal sealed record ActivitySessionDto(int SessionId, string LoginTime, bool IsUserProcess, string Login, string IsolationLevel, string Status, int RequestCount, long CpuMs,
+    long LogicalReads, long Reads, long Writes, long MemoryKb, int OpenTransactions, string? OriginalLogin = null, string? HostName = null, int? HostProcessId = null,
+    string? Application = null, string? Interface = null, string? NetAddress = null, string? Transport = null, bool? Encrypted = null, string? AuthScheme = null,
+    string? Database = null, string? Command = null, int? RequestId = null, string? WaitType = null, long? WaitTimeMs = null, string? WaitResource = null, int? BlockedBy = null,
+    long? ElapsedMs = null, double? PercentComplete = null, int? Dop = null, long? GrantedMemoryKb = null, string? LastRequestStart = null, string? LastRequestEnd = null);
+internal sealed record ActivityInputBufferDto(ActivityText Text, string? EventType = null, int? Parameters = null);
+internal sealed record ActivitySessionWaitDto(string WaitType, long WaitingTasks, long WaitTimeMs, long MaxWaitTimeMs, long SignalWaitTimeMs);
+internal sealed record ActivityTransactionDto(long TransactionId, string Type, string State, bool UserTransaction, string? Name = null, string? BeginTime = null, string? Database = null,
+    long? LogBytesUsed = null, long? LogBytesReserved = null);
+internal sealed record ActivityTempdbDto(long UserObjectsKb, long InternalObjectsKb);
+internal sealed record ActivityLockDto(string ResourceType, string Mode, string Status, long Count, string? Database = null, int? DatabaseId = null);
+/// <summary>State: present, ended, changed (nothing else read), or unknown with Error. Sections are null when not read.</summary>
+internal sealed record ActivityDetailsResult(int SessionId, string State, long ElapsedMs, ActivitySessionDto? Session = null, ActivityText? Statement = null, ActivityText? Batch = null,
+    ActivityInputBufferDto? InputBuffer = null, List<ActivitySessionWaitDto>? Waits = null, List<ActivityTransactionDto>? Transactions = null, bool? TransactionsTruncated = null,
+    ActivityTempdbDto? Tempdb = null, List<ActivityLockDto>? Locks = null, bool? LocksTruncated = null, List<ActivitySectionError>? SectionErrors = null, string? ReadAt = null,
+    ActivityError? Error = null);
+internal sealed record ActivityKillOutcomeDto(int SessionId, string Outcome, string? Message = null);
+/// <summary>Results: the sessions tried, in order; Error says why the rest were not.</summary>
+internal sealed record ActivityKillResult(List<ActivityKillOutcomeDto> Results, long ElapsedMs, ActivityError? Error = null);
+
 /// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
 /// the server that answered. Never the connection string or the password.</summary>
 internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
