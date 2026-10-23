@@ -4,6 +4,7 @@ import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
 import type { ApiResult, QueryResult, ResultDescriptor } from '../src/shared/contracts'
 import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
+import type { LiveEvent, LiveSubscribeParams } from '../src/shared/live/schema'
 import { encodePage } from '../src/shared/ipc/wire/pages'
 import { manualTimers } from './fixtures/workbench'
 
@@ -418,5 +419,218 @@ describe('ResultClient', () => {
     const stats = client.stats()
     await settle()
     expect(await stats).toEqual({ workerBytes: worker().core.cachedBytes, workerPages: 3, uiWindows: 1, uiUnits: 4, inflight: 0 })
+  })
+})
+
+describe('ResultClient live streams', () => {
+  const subscription = (): LiveSubscribeParams => ({ subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] })
+  const opened: LiveEvent = { type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' }] }
+  // One column, as the fixture serves pages; the client never checks a table against the catalogue (main does).
+  const table = (resultId: number, patch: Partial<ResultDescriptor> = {}) => descriptor({ resultId, rowsAvailable: 4, rowsRead: 4, rowsStored: 4, ...patch })
+  const tick = (seq: number, resultId: number, retired?: number[], patch: Partial<ResultDescriptor> = {}): LiveEvent => ({
+    type: 'live.tick', seq, sampledAt: 1000 + seq, samples: [{ probe: 'debug.synthetic.table', costMs: 0, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: table(resultId, patch), revision: seq, ...(retired ? { retired } : {}) }] }]
+  })
+  async function started() {
+    const f = fixture()
+    f.handOver()
+    await f.client.ready()
+    f.worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    await settle()
+    const events: [LiveEvent, number][] = []
+    const params = subscription()
+    const stream = f.client.live(params, (event, bytes) => events.push([event, bytes]))
+    await settle()
+    const sent = f.worker().fromWorker.splice(0)
+    expect(sent).toEqual([{ t: 'live', rid: 1, generation: 1, params }])
+    /** Main's side of the port: an event, with its body's length, as main forwards it. */
+    const event = async (value: LiveEvent, bytes = 100) => { f.worker().toWorker({ t: 'live', rid: 1, bytes, event: value }); await settle() }
+    const credits = () => f.worker().fromWorker.filter(request => request.t === 'credit')
+    return { ...f, stream, events, params, event, credits }
+  }
+
+  it('hands each event to the page with its bytes, and acknowledges it to main only when the page says so', async () => {
+    const { stream, events, event, credits, client } = await started()
+    await event(opened, 120)
+    expect(events).toEqual([[opened, 120]])
+    expect(credits()).toEqual([])
+    stream.ack(120)
+    await settle()
+    expect(credits()).toEqual([{ t: 'credit', rid: 1, bytes: 120 }])
+    // A second acknowledgement of the same event reaches the worker, which grants nothing more.
+    stream.ack(120)
+    await settle()
+    expect(credits()).toHaveLength(1)
+    expect(client.liveStreams).toBe(1)
+  })
+
+  it('applies the tables an event carries before the page sees it, and forgets what the stream retires', async () => {
+    const { client, stream, events, event, worker, flush, serve } = await started()
+    await event(tick(1, 10))
+    const first = client.open(table(10))
+    expect(first.getSnapshot()).toMatchObject({ rowsAvailable: 4, state: 'complete' })
+    const window = first.getWindow(0, 4)
+    await settle()
+    serve(4)
+    expect((await window).text).toEqual(['0', '1', '2', '3'])
+    expect(first.peekWindow(0, 4)).toBeDefined()
+    // A query's result the stream never delivered: a retired list naming it changes nothing.
+    const query = client.open(descriptor({ resultId: 30 }))
+    await event(tick(2, 11))
+    await event(tick(3, 12, [10, 30]))
+    expect(events.map(([value]) => value.seq)).toEqual([1, 2, 3])
+    flush()
+    expect(first.getSnapshot().state).toBe('released')
+    expect(first.peekWindow(0, 4)).toBeUndefined()
+    await expect(first.getWindow(0, 4)).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+    expect(query.getSnapshot().state).toBe('complete')
+    // The worker drops the retired result's pages; nothing asks main to close it, since the backend already has.
+    expect(worker().received.filter(message => message.type === 'forget')).toEqual([{ type: 'forget', generation: 1, resultIds: [10] }])
+    expect(worker().fromWorker.filter(request => request.t === 'close')).toEqual([])
+    expect(await client.stats()).toMatchObject({ workerPages: 0 })
+    stream.cancel()
+  })
+
+  it('grows an append table\'s handle as later descriptors arrive', async () => {
+    const { client, flush } = await started()
+    const handle = client.open(table(20, { rowsAvailable: 4, state: 'open' }))
+    const changes = vi.fn()
+    handle.subscribe(changes)
+    client.applyLive(table(20, { rowsRead: 9, rowsStored: 9, rowsAvailable: 8, state: 'open' }))
+    client.applyLive(table(20, { rowsRead: 12, rowsStored: 12, rowsAvailable: 12, state: 'open' }))
+    flush()
+    expect(changes).toHaveBeenCalledTimes(1)
+    expect(handle.getSnapshot()).toMatchObject({ rowsRead: 12, rowsAvailable: 12, state: 'open' })
+    client.applyLive(table(20, { rowsAvailable: 12, state: 'complete' }))
+    expect(handle.getSnapshot().state).toBe('complete')
+  })
+
+  it('releases a stream\'s results when it ends, except those a finished source kept', async () => {
+    const { client, stream, event, worker, flush } = await started()
+    await event(tick(1, 10))
+    await event(tick(2, 11))
+    const [older, newer] = [client.open(table(10)), client.open(table(11))]
+    worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'sourceEnded', kept: [11], ticks: 2, elapsedMs: 40 } })
+    expect(await stream.done).toEqual({ ok: true, value: { ended: 'sourceEnded', kept: [11], ticks: 2, elapsedMs: 40 } })
+    flush()
+    expect(older.getSnapshot().state).toBe('released')
+    expect(newer.getSnapshot().state).toBe('complete')
+    expect(worker().received.filter(message => message.type === 'forget')).toEqual([{ type: 'forget', generation: 1, resultIds: [10] }])
+    expect(client.liveStreams).toBe(0)
+
+    // Any other end, or a failure, releases them all.
+    const second = await started()
+    await second.event(tick(1, 10))
+    const failed = second.client.open(table(10))
+    second.worker().toWorker({ t: 'end', rid: 1, ok: false, code: 'STREAM_PROTOCOL', message: 'The SQL backend sent an invalid response. The request was cancelled.' })
+    expect(await second.stream.done).toEqual({ ok: false, code: 'STREAM_PROTOCOL', error: 'The SQL backend sent an invalid response. The request was cancelled.' })
+    expect(failed.getSnapshot().state).toBe('released')
+  })
+
+  it('updates a running stream, and answers updates of an ended one as values', async () => {
+    const { stream, worker, params } = await started()
+    const pending = stream.update({ paused: true })
+    await settle()
+    const [update] = worker().fromWorker.splice(0)
+    expect(update).toEqual({ t: 'liveUpdate', rid: 2, generation: 1, params: { paused: true, subscriptionId: params.subscriptionId, source: 'debug.synthetic' } })
+    const result = { applied: true as const, probes: [{ probe: 'debug.synthetic.table' as const, intervalMs: 1000, effectiveIntervalMs: 1000, paused: true }] }
+    worker().toWorker({ t: 'end', rid: 2, ok: true, result })
+    expect(await pending).toEqual({ ok: true, value: result })
+    const refused = stream.update({ refresh: true })
+    await settle()
+    worker().toWorker({ t: 'end', rid: 3, ok: false, code: 'TOO_MANY_REQUESTS', message: 'Too many pending backend requests.' })
+    expect(await refused).toEqual({ ok: false, code: 'TOO_MANY_REQUESTS', error: 'Too many pending backend requests.' })
+    stream.cancel()
+    await settle()
+    expect(worker().fromWorker.filter(request => request.t === 'cancel')).toEqual([{ t: 'cancel', rid: 1 }])
+    expect(await stream.update({ refresh: true })).toEqual({ ok: false, code: 'NOT_FOUND', error: 'This live view has ended.' })
+    worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'cancelled', ticks: 0, elapsedMs: 9 } })
+    expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
+  })
+
+  it('ends a stream cancelled before the port arrived without sending it, and fails streams with the worker, the backend or the client', async () => {
+    const early = fixture()
+    const stream = early.client.live(subscription(), () => {})
+    stream.cancel()
+    early.handOver()
+    expect(await stream.done).toEqual({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    expect(early.worker().received.map(message => message.type)).toEqual(['attach'])
+    // A port that is slow to come, or never does: the cancellation still settles at once, as cancelled.
+    const waiting = fixture()
+    const pending = waiting.client.live(subscription(), () => {})
+    pending.cancel()
+    expect(await Promise.race([pending.done, settle().then(() => 'still waiting')])).toEqual({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    expect(waiting.client.liveStreams).toBe(0)
+    waiting.handOver()
+    await waiting.client.ready()
+    await settle()
+    expect(waiting.worker().received.map(message => message.type)).toEqual(['attach'])
+
+    const crashed = await started()
+    await crashed.event(tick(1, 10))
+    const orphan = crashed.client.open(table(10))
+    crashed.worker().crash()
+    expect(await crashed.stream.done).toEqual({ ok: false, code: 'RESULT_DECODER_FAILED', error: 'The results worker stopped. Try again.' })
+    expect(orphan.getSnapshot().state).toBe('released')
+
+    // A new backend: the worker ends the stream if main's own end never came, and its tables are lost, not released.
+    const restarted = await started()
+    await restarted.event(tick(1, 10))
+    const gone = restarted.client.open(table(10))
+    restarted.worker().toWorker({ t: 'backend', generation: 2, status: 'starting' })
+    expect(await restarted.stream.done).toEqual({ ok: false, code: 'RESULT_UNAVAILABLE', error: 'This live view ended because the SQL backend restarted.' })
+    expect(gone.getSnapshot().state).toBe('lost')
+    const lost = await started()
+    await lost.event(tick(1, 10))
+    const orphaned = lost.client.open(table(10))
+    lost.worker().toWorker({ t: 'end', rid: 1, ok: false, code: 'BACKEND_LOST', message: 'The SQL backend stopped before answering. The request was not retried.' })
+    expect(await lost.stream.done).toMatchObject({ ok: false, code: 'BACKEND_LOST' })
+    expect(orphaned.getSnapshot().state).toBe('lost')
+    await expect(orphaned.getWindow(0, 4)).rejects.toMatchObject({ code: 'RESULT_UNAVAILABLE' })
+
+    const closed = await started()
+    closed.client.dispose()
+    expect(await closed.stream.done).toEqual({ ok: false, code: 'PORT_CLOSED', error: 'The workbench closed.' })
+    expect(await closed.client.live(subscription(), () => {}).done).toMatchObject({ ok: false, code: 'PORT_CLOSED' })
+  })
+
+  it('keeps a stream\'s bookkeeping when the page fails on an event, which then stays unacknowledged', async () => {
+    const f = fixture()
+    f.handOver()
+    await f.client.ready()
+    f.worker().toWorker({ t: 'backend', generation: 1, status: 'ready' })
+    await settle()
+    const seen: number[] = []
+    const stream = f.client.live(subscription(), event => {
+      seen.push(event.seq)
+      throw new Error('the page failed to apply it')
+    })
+    await settle()
+    const sent = f.worker().received.find(message => message.type === 'live')
+    const id = sent?.type === 'live' ? sent.id : -1
+    // The worker's message as the client receives it, synchronously, so an exception would surface here.
+    const deliver = (event: LiveEvent) => { for (const listener of f.worker().listeners.message) listener({ data: { type: 'live', id, bytes: 100, event } }) }
+    expect(() => deliver(tick(1, 10))).not.toThrow()
+    const older = f.client.open(table(10))
+    expect(() => deliver(tick(2, 11, [10]))).not.toThrow()
+    expect(seen).toEqual([1, 2])
+    const newer = f.client.open(table(11))
+    expect([older.getSnapshot().state, newer.getSnapshot().state]).toEqual(['released', 'complete'])
+    await settle()
+    expect(f.worker().fromWorker.filter(request => request.t === 'credit')).toEqual([])
+    f.worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'cancelled', ticks: 2, elapsedMs: 9 } })
+    expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'cancelled' } })
+    expect(newer.getSnapshot().state).toBe('released')
+  })
+
+  it('keeps counting a cancelled stream\'s results without handing its events to the page', async () => {
+    const { client, stream, events, event, worker } = await started()
+    stream.cancel()
+    await event(tick(1, 10))
+    expect(events).toEqual([])
+    const handle = client.open(table(10))
+    expect(handle.getSnapshot().state).toBe('complete')
+    worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'cancelled', ticks: 1, elapsedMs: 9 } })
+    await stream.done
+    expect(handle.getSnapshot().state).toBe('released')
   })
 })
