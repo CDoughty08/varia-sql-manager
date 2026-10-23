@@ -2,8 +2,9 @@
 // the tree for suites that answer explorer.children in main instead of through a backend.
 import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { explorerTree, part } from './ui.mjs'
 
-export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
+export { explorerTree }
 
 /**
  * The row at a path of labels from a server down (`'server-a', 'Databases', 'AppData'`), once it is rendered: rows are
@@ -14,17 +15,17 @@ export async function explorerRow(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}, labels = path
   let id = null
   await expect.poll(async () => {
-    id = await page.evaluate(path => {
-      const rows = [...document.querySelectorAll('.explorer-tree [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+    id = await page.evaluate(({ path, part }) => {
+      const rows = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
       const stack = []
       for (const row of rows) {
         const level = Number(row.getAttribute('aria-level'))
         stack.length = level - 1
-        stack[level - 1] = row.querySelector('.oe-label')?.textContent ?? row.querySelector('.oe-text')?.textContent ?? ''
+        stack[level - 1] = row.querySelector(part.explorerLabel)?.textContent ?? row.querySelector(part.explorerText)?.textContent ?? ''
         if (level === path.length && path.every((label, index) => stack[index] === label)) return row.id
       }
       return null
-    }, labels)
+    }, { path: labels, part })
     return id
   }, { message: 'Object Explorer row ' + labels.join(' › '), ...options }).not.toBeNull()
   return page.locator('#' + id)
@@ -59,15 +60,15 @@ export async function expandExplorerPath(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}
   for (let length = 1; length <= path.length; length++) {
     const row = await explorerRow(page, ...path.slice(0, length), options)
-    if (await row.getAttribute('aria-expanded') === 'false') await row.locator('.oe-twistie').click({ force: true })
+    if (await row.getAttribute('aria-expanded') === 'false') await row.locator(part.explorerTwistie).click({ force: true })
     await expect(row).toHaveAttribute('aria-expanded', 'true', options)
   }
 }
 
 /** The visible rows as `level label [expanded]` lines, for failure messages and screenshots of the structure. */
-export const explorerLines = page => page.evaluate(() => [...document.querySelectorAll('.explorer-tree [role="treeitem"]')]
+export const explorerLines = page => page.evaluate(part => [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')]
   .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-  .map(row => `${row.getAttribute('aria-level')} ${row.querySelector('.oe-label, .oe-text')?.textContent}${row.hasAttribute('aria-expanded') ? ` [${row.getAttribute('aria-expanded')}]` : ''}`))
+  .map(row => `${row.getAttribute('aria-level')} ${row.querySelector(part.explorerRowText)?.textContent}${row.hasAttribute('aria-expanded') ? ` [${row.getAttribute('aria-expanded')}]` : ''}`), part)
 
 /**
  * The static folders a SQL Server 2022 box serves below each kind and folder, with their labels, as plain data: a stub

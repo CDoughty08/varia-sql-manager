@@ -1,6 +1,7 @@
 // The states kit's words: live labels, ages, stale notices and the text Copy details puts on the clipboard. Kept pure
 // so the sentences are tested once and every live view says the same thing.
 import type { ErrorDetails } from '../../../shared/contracts'
+import type { IconId } from '../../../shared/icons'
 
 const pad = (value: number) => String(value).padStart(2, '0')
 
@@ -66,7 +67,7 @@ export function liveLabel({ state, intervalMs, effectiveMs, pausedBy, ended }: L
 }
 
 /** The glyph a view that is not collecting shows in place of the dot. */
-export function liveIcon({ state, ended }: LiveStatus): string | undefined {
+export function liveIcon({ state, ended }: LiveStatus): IconId | undefined {
   switch (state) {
     case 'connecting': return 'circle-outline'
     case 'paused': case 'dormant': return 'debug-pause'

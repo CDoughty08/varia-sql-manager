@@ -1,6 +1,8 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
+import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, part, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -45,14 +47,13 @@ const variable = key => page.evaluate(name => getComputedStyle(document.document
 const variables = keys => Promise.all(keys.map(variable))
 const native = () => application.evaluate(({ BrowserWindow, nativeTheme }) => ({ source: nativeTheme.themeSource, dark: nativeTheme.shouldUseDarkColors, background: BrowserWindow.getAllWindows()[0].getBackgroundColor().toLowerCase() }))
 const backgroundOf = selector => page.locator(selector).first().evaluate(element => getComputedStyle(element).backgroundColor)
-const shellClasses = () => page.locator('.dv-shell').evaluate(element => [...element.classList].filter(name => /^(dockview-theme-|varia-dock$)/.test(name)).sort())
-const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
+const editorText = () => editorTextOf(page)
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
 const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
 // The neutral status bar shares Object Explorer's fill; without a connection color its own top line sets it apart.
-const statusBarEdge = () => page.locator('.status-bar').evaluate(bar => { const style = getComputedStyle(bar); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
-const contextMenuBorder = () => page.locator('.menu').evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
+const statusBarEdge = () => statusBar(page).evaluate(bar => { const style = getComputedStyle(bar); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
+const contextMenuBorder = () => openMenus(page).evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 // A theme color as the browser resolves it, to compare with computed styles.
 const colorOf = key => page.evaluate(name => {
   const probe = document.body.appendChild(document.createElement('div'))
@@ -91,10 +92,10 @@ try {
   expect(await variable('editor.background')).toBe('#16181d')
   expect(await backgroundOf('.monaco-editor')).toBe('rgb(22, 24, 29)')
   expect(await native()).toMatchObject({ source: 'dark', background: '#16181d' })
-  expect(await shellClasses()).toEqual(['dockview-theme-dark', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-dark'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['dark', 'dark'])
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
-  await expect(page.locator('.status-bar')).toHaveAttribute('data-state', 'disconnected')
+  await expect(themeNotice(page)).toHaveCount(0)
+  await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
@@ -102,25 +103,84 @@ try {
     const style = getComputedStyle(document.documentElement)
     return { xs: style.getPropertyValue('--varia-size-xs').trim(), fast: style.getPropertyValue('--varia-motion-fast').trim(), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
   })).toEqual({ xs: '11px', fast: '0ms', reduced: true })
-  expect(await page.locator('.status-bar').evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
+  expect(await statusBar(page).evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
   expect(await statusBarEdge()).toBe('1px solid rgb(38, 42, 49)')
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
     && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
   // Monaco's codicon spinners (the query status bar's, the tree's Loading rows) stop too, not only Varia's own.
-  const spinners = () => page.evaluate(() => Object.fromEntries([['status', 'query-status-state', 'codicon codicon-loading codicon-modifier-spin'], ['tree', 'oe-icon', 'codicon codicon-loading']].map(([name, host, icon]) => {
+  const spinners = () => page.evaluate(({ queryState, explorerIcon }) => Object.fromEntries([['status', queryState, 'codicon codicon-loading codicon-modifier-spin'], ['tree', explorerIcon, 'codicon codicon-loading']].map(([name, host, icon]) => {
     const probe = document.body.appendChild(document.createElement('span'))
-    probe.className = host
+    probe.className = host.replaceAll('.', ' ').trim()
     const glyph = probe.appendChild(document.createElement('span'))
     glyph.className = icon
     const animation = getComputedStyle(glyph).animationName
     probe.remove()
     return [name, animation]
-  })))
+  })), part)
   expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
   console.log('Theme checks: metric tokens apply, with no text under 11 px and no spinner turning under reduced motion.')
 
+  // The font stacks apply, and where Windows has the fonts, the first family is the one drawn: Chromium falls back
+  // silently when a family name does not match (Windows 11's variable font matches only as 'Segoe UI Variable Text').
+  const fonts = await page.evaluate(() => {
+    const context = document.createElement('canvas').getContext('2d')
+    const width = family => { context.font = `13px ${family}`; return context.measureText('Object Explorer: 0123456789 Wwi').width }
+    const stack = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+    const view = document.querySelector('.monaco-editor .view-lines'), editor = getComputedStyle(view)
+    return {
+      body: getComputedStyle(document.body).fontFamily, ui: width(stack('--varia-font-ui')), variable: width("'Segoe UI Variable Text', monospace"), segoe: width("'Segoe UI', monospace"), monospace: width('monospace'),
+      mono: width(stack('--varia-font-mono')), cascadia: width("'Cascadia Mono', serif"), consolas: width('Consolas, serif'), serif: width('serif'),
+      editor: [editor.fontSize, editor.fontFeatureSettings]
+    }
+  })
+  expect(fonts.body.startsWith('"Segoe UI Variable Text", "Segoe UI", ')).toBe(true)
+  // Monaco turns ligatures off with font-feature-settings, so Cascadia Code draws <= and <> as two glyphs; 13 px is the default size.
+  expect(fonts.editor[0]).toBe('13px')
+  expect(fonts.editor[1]).toMatch(/"liga" (?:0|off)/)
+  expect(fonts.editor[1]).toMatch(/"calt" (?:0|off)/)
+  if (process.platform === 'win32') {
+    const windowsFonts = join(process.env.SystemRoot ?? 'C:\\Windows', 'Fonts'), has = file => readdir(windowsFonts).then(names => names.some(name => name.toLowerCase() === file), () => false)
+    if (await has('seguivar.ttf')) {
+      expect(fonts.variable).not.toBe(fonts.monospace)
+      expect([fonts.ui === fonts.variable, fonts.ui === fonts.segoe]).toEqual([true, false])
+    }
+    if (await has('cascadiamono.ttf')) expect([fonts.mono === fonts.cascadia, fonts.mono === fonts.consolas, fonts.cascadia === fonts.serif]).toEqual([true, false, false])
+  }
+  // Icons come from the registry: Varia's SVGs and codicons share the 16 px grid, and a document tab shows an icon, not a badge.
+  const icons = await page.evaluate(({ titleBarBrand, documentTabs, tabIcon }) => {
+    const box = element => { const rect = element?.getBoundingClientRect(); return rect && [rect.width, rect.height] }
+    const brand = document.querySelector(titleBarBrand + ' [data-icon]'), tab = document.querySelector(documentTabs + ' ' + tabIcon)
+    return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('[role="tab"]')?.textContent] }
+  }, part)
+  expect(icons).toEqual({ brand: ['svg', 'varia', [16, 16], 'round'], tab: ['database', [16, 16], expect.stringMatching(/^SQLQuery\d+\.sql$/)] })
+  // Under forced colours an svg keeps a colour set on itself (Chromium's preserve-parent-color), so the tab's kind icon
+  // would stay the theme's pale amber on the system's Canvas; it takes the tab text's system colour instead.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forcedTab = await documentTabs(page).getByRole('tab').first().evaluate((tab, { tabIcon, tabName }) => [getComputedStyle(tab.querySelector(tabIcon + ' path')).stroke, getComputedStyle(tab.querySelector(tabName)).color], part)
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedTab[0]).toBe(forcedTab[1])
+  // Every glyph size rule wins over Monaco's codicon.css (16px/1 codicon), so each icon glyphUse names is drawn at its size.
+  const glyphs = await page.evaluate(use => Object.fromEntries(Object.entries(use).flatMap(([name, selectors]) => selectors.map(selector => {
+    // A probe that matches the selector (class compounds joined by descendant or child combinators): Icon.tsx draws a
+    // codicon as a span with the codicon classes, and Varia's own icons as an svg.icon.
+    const compounds = selector.split(/\s*>\s*|\s+/)
+    let parent = document.body, root
+    compounds.forEach((compound, index) => {
+      const classes = compound.split('.').filter(Boolean), svg = classes.includes('icon'), last = index === compounds.length - 1
+      const element = parent.appendChild(svg ? document.createElementNS('http://www.w3.org/2000/svg', 'svg') : document.createElement('span'))
+      element.setAttribute('class', [...classes, ...last && !svg ? ['codicon', 'codicon-close'] : []].join(' '))
+      root ??= element
+      parent = element
+    })
+    const size = getComputedStyle(parent).fontSize
+    root.remove()
+    return [selector, `${name} ${size}`]
+  }))), glyphUse)
+  expect(glyphs).toEqual(Object.fromEntries(Object.entries(glyphUse).flatMap(([name, selectors]) => selectors.map(selector => [selector, `${name} ${glyphSizes[name].px}px`]))))
+  console.log('Theme checks: the font stacks are the ones drawn, the editor has no ligatures, and icons sit on the 16 px grid.')
+
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
-  await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
+  await movePane(page, 'output', 'float')
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   expect(await backgroundOf('.dv-floating-titlebar')).toBe('rgb(17, 19, 23)')
   await menu('layout.reset')
@@ -130,13 +190,13 @@ try {
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(143, 156, 255)'])
   // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
-  await expect(page.locator('.menu')).toBeVisible()
+  await expect(openMenus(page)).toBeVisible()
   expect(await contextMenuBorder()).toBe('1px solid rgb(107, 114, 134)')
   await page.keyboard.press('ArrowDown')
-  await expect(page.locator('.menu-item[data-active]')).toBeFocused()
-  expect(await page.locator('.menu-item[data-active]').evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))
+  await expect(activeMenuItem(page)).toBeFocused()
+  expect(await activeMenuItem(page).evaluate(item => getComputedStyle(item).backgroundColor)).toBe(await colorOf('menu.selectionBackground'))
   await page.keyboard.press('Escape')
-  await expect(page.locator('.menu')).toHaveCount(0)
+  await expect(openMenus(page)).toHaveCount(0)
   // The find and hover widgets take their shadow from --vscode-shadow-lg, which standalone Monaco leaves undefined too.
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+F')
@@ -165,7 +225,7 @@ try {
   await menu('theme.mode.light')
   await expect.poll(() => variables(lightKeys)).toEqual(['#ffffff', '#1c1f26', '#4453d0', '#f7f8fa', '#c42b3c'])
   await expect.poll(() => backgroundOf('.monaco-editor')).toBe('rgb(255, 255, 255)')
-  expect(await shellClasses()).toEqual(['dockview-theme-light', 'varia-dock'])
+  expect(await dockShell(page)).toEqual({ themes: ['dockview-theme-light'], varia: true })
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['light', 'light'])
   await expect.poll(native).toMatchObject({ source: 'light', background: '#ffffff' })
   if (process.platform !== 'darwin') expect(await application.evaluate(() => globalThis.themeOverlays.at(-1))).toEqual({ color: '#f7f8fa', symbolColor: '#1c1f26' })
@@ -188,12 +248,12 @@ try {
   await expect.poll(() => variables(['button.background', 'tab.activeBorderTop', 'editor.background'])).toEqual(['#ffb000', '#ffb000', '#16181d'])
   await expect.poll(native).toMatchObject({ source: 'dark', background: '#16181d' })
   await expect.poll(appearance).toEqual({ version: 1, mode: 'dark', darkTheme: 'smoke', lightTheme: 'varia-light' })
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
 
   // Theme values never reach CSS as text: the grammar drops this entry and the default accent is used.
   await writeFile(smokeTheme, '{ "kind": "varia-color-theme", "version": 1, "name": "Smoke", "type": "dark", "palette": { "accent": "red;}body{display:none" } }')
   await menu('theme.reload')
-  const notice = page.locator('.theme-notice[role="status"]')
+  const notice = themeNotice(page).and(page.getByRole('status'))
   await expect(notice).toContainText('smoke.json /palette/accent')
   await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
   await expect.poll(() => variable('button.background')).toBe('#8f9cff')
@@ -218,14 +278,14 @@ try {
   await notice.getByRole('button', { name: 'Open Themes Folder', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.openedThemes)).toBe(themesFolder)
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
   // Dismissing hides that notice, not its text: reloading again reports again.
   await menu('theme.reload')
   await expect(notice).toContainText('Reloaded 1 theme; 1 has problems.')
   await notice.getByRole('button', { name: 'Dismiss', exact: true }).click()
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
-  await page.locator('.toolbar').getByRole('button', { name: 'New query', exact: true }).click()
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(2)
+  await expect(themeNotice(page)).toHaveCount(0)
+  await toolbarButton(page, 'New query').click()
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   expect((await page.evaluate(() => window.varia.health())).ok).toBe(true)
   console.log('Theme checks: custom themes load and switch, and an injection attempt only warns.')
 
@@ -236,32 +296,32 @@ try {
   await launch({ motion: true })
   // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens (none if
   // the system asks for reduced motion), and the spinners turn.
-  await page.locator('.toolbar-actions button:not(:disabled)').first().hover()
-  const motion = await page.evaluate(() => {
+  await toolbar(page).locator('button:not(:disabled)').first().hover()
+  const motion = await page.evaluate(({ toolbar, menu }) => {
     const probe = document.body.appendChild(document.createElement('div'))
-    probe.className = 'menu'
-    const menu = getComputedStyle(probe).animationDuration
+    probe.className = menu.replaceAll('.', ' ').trim()
+    const entrance = getComputedStyle(probe).animationDuration
     probe.remove()
-    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('.toolbar-actions button:hover')).transitionDuration, menu }
-  })
+    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector(toolbar + ' button:hover')).transitionDuration, menu: entrance }
+  }, part)
   await page.mouse.move(0, 0)
   expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
   expect(await spinners()).toEqual(motion.reduced ? { status: 'none', tree: 'none' } : { status: 'codicon-spin', tree: 'codicon-spin' })
   // Only hover fades: a tree row moved to with the keys, the current dialog page and a menu-bar button opened from the
   // keyboard take their colours at once, as in SSMS. A row given a transition of its own shows that this would see one.
-  const states = await page.evaluate(() => {
-    const element = (parent, tag, className, attributes = {}) => {
+  const states = await page.evaluate(({ explorerTreeBox, explorerRow, dialogPages, titleBarMenus }) => {
+    const element = (parent, tag, selector, attributes = {}) => {
       const child = parent.appendChild(document.createElement(tag))
-      if (className) child.className = className
+      if (selector) child.className = selector.replaceAll('.', ' ').trim()
       for (const [name, value] of Object.entries(attributes)) child.setAttribute(name, value)
       return child
     }
     const colour = key => { const probe = element(document.body, 'div', '', { style: `background: var(--varia-${key})` }); const value = getComputedStyle(probe).backgroundColor; probe.remove(); return value }
     const host = element(document.body, 'div', '', { style: 'position: fixed; right: 0; bottom: 0; width: 240px' })
-    const tree = element(host, 'div', 'explorer-tree', { tabindex: '-1', style: 'height: 80px' })
-    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', 'explorer-row', { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
-    const current = element(element(host, 'div', 'object-dialog-pages'), 'button', '', { type: 'button' })
-    const menu = element(element(host, 'div', 'title-bar-menus'), 'button', '', { type: 'button' })
+    const tree = element(host, 'div', explorerTreeBox, { tabindex: '-1', style: 'height: 80px' })
+    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', explorerRow, { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
+    const current = element(element(host, 'div', dialogPages), 'button', '', { type: 'button' })
+    const menu = element(element(host, 'div', titleBarMenus), 'button', '', { type: 'button' })
     tree.focus()
     for (const target of [first, second, control, current, menu]) getComputedStyle(target).backgroundColor
     first.setAttribute('aria-selected', 'false')
@@ -277,10 +337,10 @@ try {
     }
     host.remove()
     return result
-  })
+  }, part)
   expect(states).toEqual({ selected: true, deselected: true, page: true, menu: true, control: true })
   console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for hovered buttons and 120 ms for menus'}, and selection changes at once.`)
-  const alert = page.locator('.theme-notice[role="alert"]')
+  const alert = themeNotice(page).and(page.getByRole('alert'))
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')
   await expect(alert).toContainText('Varia Dark is used instead')
@@ -298,7 +358,7 @@ try {
   await expect.poll(async () => (await appearance())?.darkTheme).toBe('custom-theme')
   expect(JSON.parse(await readFile(join(themesFolder, 'custom-theme.json'), 'utf8'))).toMatchObject({ kind: 'varia-color-theme', version: 1, name: 'My Theme', type: 'dark', palette: { accent: '#8f9cff' } })
   expect(JSON.parse(await readFile(join(themesFolder, 'varia-theme.schema.json'), 'utf8')).title).toMatch(/Varia/)
-  await expect(page.locator('.theme-notice')).toHaveCount(0)
+  await expect(themeNotice(page)).toHaveCount(0)
   console.log('Theme checks: Create Custom Theme writes a starter and the schema, then selects the starter.')
 
   await menu('theme.mode.system')

@@ -1,4 +1,5 @@
 import { useState, type Ref } from 'react'
+import Icon from '../Icon'
 import { copyStatus, copyText, errorDetailsText, type CopyRecord, type ErrorReport } from './format'
 
 export interface ErrorAction { readonly label: string; readonly run: () => void; readonly buttonRef?: Ref<HTMLButtonElement> }
@@ -25,7 +26,7 @@ export default function InlineError({ actions = [], copy = true, role = 'alert',
   const text = errorDetailsText(report)
   const copyDetails = () => { void copyText(writeClipboard, text).then(setCopied) }
   return <div className={className ? `inline-error ${className}` : 'inline-error'}>
-    <span className="codicon codicon-error" aria-hidden="true" />
+    <Icon name="error" />
     <div className="inline-error-body">
       {/* Only the sentence is the live region: the copy outcome below is a status of its own, announced once. */}
       <p className="inline-error-message" role={role}>{report.message}</p>
