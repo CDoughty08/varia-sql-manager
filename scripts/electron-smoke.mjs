@@ -11,6 +11,7 @@ const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
+await mkdir(join(control, 'extra'))
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -501,13 +502,16 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
   await expect(denied).toHaveCount(0)
-  // F5 refreshes the selected folder only; its old rows stay until the new ones replace them.
-  const stale = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  // F5 reconciles the selected folder only: a role created meanwhile appears, and the rows still there keep theirs.
+  const kept = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  await writeFile(join(control, 'extra', 'serverRoles'), '')
   await (await explorerRow(page, 'server-a', 'Security', 'Server Roles')).click()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await loads()).filter(([, node]) => node === 'serverRoles').length).toBe(2)
-  await expect.poll(async () => (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).not.toBe(stale)
+  await expect(await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'VariaAuditors')).toBeVisible()
+  expect(await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).toBe(kept)
   expect((await loads()).filter(([, node]) => node === 'logins')).toHaveLength(1)
+  await rm(join(control, 'extra', 'serverRoles'))
   // The other server's tree loads through its own connection.
   await toggle('server-a', 'Security')
   await toggle('server-b', 'Security')

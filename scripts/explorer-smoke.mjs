@@ -132,9 +132,9 @@ const childLabels = (...path) => page.evaluate(({ path, part }) => {
   return children
 }, { path, part })
 /**
- * Presses F5 on the selected folder (`folder` at `path`) and waits until its refreshed rows have replaced the old ones:
- * its first page was requested and the folder lists exactly `objects` (its rows that are not static folders). Until
- * then, a row found by its path may be an old one that the first page is about to replace.
+ * Presses F5 on the selected folder (`folder` at `path`) and waits until the refresh has reconciled its rows: its first
+ * page was requested and the folder lists exactly `objects` (its rows that are not static folders). Until then, rows the
+ * first page is about to remove are still listed.
  */
 async function refreshTo(folder, path, objects) {
   const from = (await stubCalls()).length
@@ -273,19 +273,34 @@ try {
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
 
-  // 4. F5 in the tree refreshes the selected folder once; what was expanded below it comes back collapsed.
+  // 4. F5 in the tree reconciles the selected folder: rows still there keep their row, and what is expanded below them
+  // stays expanded and reloads too; the live region says what changed.
   await setStub({ pageDelayMs: 0, pageSize: 2000, tables: 3 })
   await select('server-a', 'Databases', 'AppData', 'Tables')
   await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
   await expect(explorerTree(page).locator(part.explorerSyntheticRow)).toHaveCount(0)
   await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+  const ordersRow = await (await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')).getAttribute('id')
   await select('server-a', 'Databases', 'AppData', 'Tables')
+  await setStub({ tables: 4 })
   const refreshedFrom = (await stubCalls()).length
   await press('F5', 'Tables')
-  await expect.poll(async () => (await stubCalls()).slice(refreshedFrom).map(params => params.node)).toEqual([{ type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'tables' }])
-  await expect.poll(async () => (await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')).getAttribute('aria-expanded')).toBe('false')
+  const reloaded = async () => (await stubCalls()).slice(refreshedFrom).map(params => params.node.type === 'folder' ? params.node.folder : `${params.node.object.kind} ${params.node.object.name}`)
+  await expect.poll(reloaded).toEqual(['tables', 'table Orders'])
+  await expect(liveRegion()).toHaveText('Tables: 1 added')
+  await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table3')
+  const kept = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders')
+  expect(await kept.getAttribute('id')).toBe(ordersRow)
+  await expect(kept).toHaveAttribute('aria-expanded', 'true')
   await page.waitForTimeout(200)
-  expect((await stubCalls()).length).toBe(refreshedFrom + 1)
+  expect(await reloaded()).toEqual(['tables', 'table Orders'])
+  // Later steps start from what they found before: dbo.Orders collapsed, three tables.
+  await kept.locator(part.explorerTwistie).click({ force: true })
+  await expect(kept).toHaveAttribute('aria-expanded', 'false')
+  await setStub({ tables: 3 })
+  await select('server-a', 'Databases', 'AppData', 'Tables')
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
+  await expect(liveRegion()).toHaveText('Tables: 1 removed')
   // F5 in the query editor still executes the query.
   const executed = (await stubCalls('query.execute')).length
   await textbox().focus()
@@ -293,7 +308,7 @@ try {
   await page.keyboard.insertText('SELECT 1')
   await page.keyboard.press('F5')
   await expect.poll(async () => (await stubCalls('query.execute')).length).toBe(executed + 1)
-  console.log('Object Explorer checks: F5 refreshes the selected folder with one request and brings its descendants back collapsed; F5 in the editor executes.')
+  console.log('Object Explorer checks: F5 reconciles the selected folder, keeping its rows and what is expanded below them, which reloads too, and announces what changed; F5 in the editor executes.')
 
   // 5. Speed: stream 120,000 tables, scroll, End and Home, type-ahead, `*` over 10,000 views, and refresh 2,000 tables.
   const perf = { limitMs: longTaskLimit, attempts: [] }
@@ -709,23 +724,28 @@ try {
     // Set before the batch runs, and the database is marked in the batch that creates it: a failure after CREATE still
     // drops it here, or leaves it marked for ScratchDatabase's sweep, which drops only marked online databases.
     let created = false
+    // Databases is listed before the database exists, so F5 adds its row while the rows already there keep theirs.
+    await expandExplorerPath(page, server, 'Databases', wait)
+    const systemRow = await (await explorerRow(page, server, 'Databases', 'System Databases', wait)).getAttribute('id')
     try {
       created = true
       await run(`CREATE DATABASE [${name}];\nEXEC [${name}].sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;`, 'created')
       await run(`USE [${name}];\nCREATE TABLE dbo.Orders (Id int PRIMARY KEY);\nUSE master;`, 'tabled')
-      await expandExplorerPath(page, server, 'Databases', wait)
-      const stale = await (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id')
       await select(server, 'Databases')
       await press('F5')
-      // The old rows stay until the refreshed list arrives; then the database is a new row.
-      await expect.poll(async () => (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id'), wait).not.toBe(stale)
+      await explorerRow(page, server, 'Databases', name, wait)
+      expect(await (await explorerRow(page, server, 'Databases', 'System Databases', wait)).getAttribute('id')).toBe(systemRow)
       await expandExplorerPath(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', wait)
-      await expect(await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Id', wait)).toHaveAttribute('aria-label', 'Id (PK, int, not null)')
+      const idRow = await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Id', wait)
+      await expect(idRow).toHaveAttribute('aria-label', 'Id (PK, int, not null)')
+      const idRowId = await idRow.getAttribute('id')
       await run(`ALTER TABLE [${name}].dbo.Orders ADD Note nvarchar(20) NULL;`, 'altered')
-      await select(server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns')
+      // F5 on the server reloads everything expanded below it, which stays expanded.
+      await select(server)
       await press('F5')
       await expect(await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Note', wait)).toHaveAttribute('aria-label', 'Note (nvarchar(20), null)')
-      console.log('Object Explorer checks: a real server lists a new scratch database\'s table and its key column, and F5 on Columns shows a column added by a query.')
+      expect(await (await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Id', wait)).getAttribute('id')).toBe(idRowId)
+      console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, and F5 on the server shows a column added by a query below what stays expanded.')
     } finally {
       // Object Explorer's pool holds no database open, so nothing it did blocks the drop.
       if (created) await run(`USE master;\nIF DB_ID(N'${name}') IS NOT NULL\nBEGIN\n  ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n  DROP DATABASE [${name}];\nEND`, 'dropped')
