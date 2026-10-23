@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, statusBar, themeNotice, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, part, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -17,8 +17,8 @@ let page
 const failures = []
 const watchdog = setTimeout(() => { console.error('Theme suite exceeded its time limit.'); application?.process()?.kill(); process.exitCode = 1 }, 180000)
 
-async function launch() {
-  application = await electron.launch(launchOptions)
+async function launch(options = {}) {
+  application = await electron.launch({ ...launchOptions, ...options })
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
@@ -94,6 +94,27 @@ try {
   await expect(themeNotice(page)).toHaveCount(0)
   await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
+
+  // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
+  expect(await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement)
+    return { xs: style.getPropertyValue('--varia-size-xs').trim(), fast: style.getPropertyValue('--varia-motion-fast').trim(), reduced: matchMedia('(prefers-reduced-motion: reduce)').matches }
+  })).toEqual({ xs: '11px', fast: '0ms', reduced: true })
+  expect(await statusBar(page).evaluate(element => [getComputedStyle(element).fontSize, element.getBoundingClientRect().height])).toEqual(['11px', 24])
+  expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
+    && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
+  // Monaco's codicon spinners (the query status bar's, the tree's Loading rows) stop too, not only Varia's own.
+  const spinners = () => page.evaluate(({ queryState, explorerIcon }) => Object.fromEntries([['status', queryState, 'codicon codicon-loading codicon-modifier-spin'], ['tree', explorerIcon, 'codicon codicon-loading']].map(([name, host, icon]) => {
+    const probe = document.body.appendChild(document.createElement('span'))
+    probe.className = host.replaceAll('.', ' ').trim()
+    const glyph = probe.appendChild(document.createElement('span'))
+    glyph.className = icon
+    const animation = getComputedStyle(glyph).animationName
+    probe.remove()
+    return [name, animation]
+  })), part)
+  expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
+  console.log('Theme checks: metric tokens apply, with no text under 11 px and no spinner turning under reduced motion.')
 
   // Floating groups live outside .dock-workbench; they used to fall back to Dockview's own grey.
   await movePane(page, 'output', 'float')
@@ -208,7 +229,53 @@ try {
   const broken = '{ "kind": "varia-color-theme", "version": 1, "name": "Smoke", '
   await writeFile(smokeTheme, broken)
   await close()
-  await launch()
+  await launch({ motion: true })
+  // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens (none if
+  // the system asks for reduced motion), and the spinners turn.
+  await toolbar(page).locator('button:not(:disabled)').first().hover()
+  const motion = await page.evaluate(({ toolbar, menu }) => {
+    const probe = document.body.appendChild(document.createElement('div'))
+    probe.className = menu.replaceAll('.', ' ').trim()
+    const entrance = getComputedStyle(probe).animationDuration
+    probe.remove()
+    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector(toolbar + ' button:hover')).transitionDuration, menu: entrance }
+  }, part)
+  await page.mouse.move(0, 0)
+  expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
+  expect(await spinners()).toEqual(motion.reduced ? { status: 'none', tree: 'none' } : { status: 'codicon-spin', tree: 'codicon-spin' })
+  // Only hover fades: a tree row moved to with the keys, the current dialog page and a menu-bar button opened from the
+  // keyboard take their colours at once, as in SSMS. A row given a transition of its own shows that this would see one.
+  const states = await page.evaluate(({ explorerTreeBox, explorerRow, dialogPages, titleBarMenus }) => {
+    const element = (parent, tag, selector, attributes = {}) => {
+      const child = parent.appendChild(document.createElement(tag))
+      if (selector) child.className = selector.replaceAll('.', ' ').trim()
+      for (const [name, value] of Object.entries(attributes)) child.setAttribute(name, value)
+      return child
+    }
+    const colour = key => { const probe = element(document.body, 'div', '', { style: `background: var(--varia-${key})` }); const value = getComputedStyle(probe).backgroundColor; probe.remove(); return value }
+    const host = element(document.body, 'div', '', { style: 'position: fixed; right: 0; bottom: 0; width: 240px' })
+    const tree = element(host, 'div', explorerTreeBox, { tabindex: '-1', style: 'height: 80px' })
+    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', explorerRow, { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
+    const current = element(element(host, 'div', dialogPages), 'button', '', { type: 'button' })
+    const menu = element(element(host, 'div', titleBarMenus), 'button', '', { type: 'button' })
+    tree.focus()
+    for (const target of [first, second, control, current, menu]) getComputedStyle(target).backgroundColor
+    first.setAttribute('aria-selected', 'false')
+    second.setAttribute('aria-selected', 'true')
+    control.setAttribute('aria-selected', 'true')
+    current.setAttribute('aria-current', 'page')
+    menu.setAttribute('aria-expanded', 'true')
+    const now = target => getComputedStyle(target).backgroundColor
+    const selected = colour(tree.matches(':focus') ? 'list-activeSelectionBackground' : 'list-inactiveSelectionBackground')
+    const result = {
+      selected: now(second) === selected, deselected: now(first) === now(tree), page: now(current) === colour('list-inactiveSelectionBackground'),
+      menu: now(menu) === colour('menubar-selectionBackground'), control: now(control) !== selected
+    }
+    host.remove()
+    return result
+  }, part)
+  expect(states).toEqual({ selected: true, deselected: true, page: true, menu: true, control: true })
+  console.log(`Theme checks: without emulation, motion is ${motion.reduced ? 'off, as the system asks' : '80 ms for hovered buttons and 120 ms for menus'}, and selection changes at once.`)
   const alert = themeNotice(page).and(page.getByRole('alert'))
   await expect(alert).toBeVisible()
   await expect(alert).toContainText('smoke.json')

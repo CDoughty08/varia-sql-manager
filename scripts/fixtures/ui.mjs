@@ -98,7 +98,14 @@ export const part = {
   activeDockingGuideCell: '.docking-guide-cell.active',
   dockingPreview: '.docking-preview',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
-  dockShell: '.varia-dock'
+  dockShell: '.varia-dock',
+  // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
+  // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
+  menu: '.menu',
+  explorerTreeBox: '.explorer-tree',
+  explorerRow: '.explorer-row',
+  dialogPages: '.object-dialog-pages',
+  titleBarMenus: '.title-bar-menus'
 }
 
 /** The query status facts by key (QueryStatusSegment's keys), each in its own segment. */
