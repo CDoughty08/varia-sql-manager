@@ -151,6 +151,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
+  // A server's connection dot keeps its color on every row state; its shape (dot or ring) and the row's words say the same.
+  ...graphic(['objectExplorer.connectedIndicator', 'objectExplorer.connectionErrorIndicator', 'objectExplorer.disconnectedIndicator'], sideBar, treeHover, treeServer, treeActive, treeInactive),
+  // Characters that match the Filter loaded objects box (selected rows draw them in the row's own color, in bold).
+  ...text(['list.highlightForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),
   // A connection's edge stays on both status bars, and the backend's dot on the main one, in every state.

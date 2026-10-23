@@ -387,8 +387,8 @@ export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
 export const explorerLimits = {
   pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
   cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
-  typeAheadMax: 64, rowHeight: 22, indent: 16, overscan: 10, deleteSlice: 10_000,
-  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512
+  typeAheadMax: 64, rowHeight: 22, serverRowHeight: 30, indent: 16, overscan: 10, deleteSlice: 10_000,
+  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, quickFilter: 128
 } as const
 
 const byOrder = (a: { readonly order: number }, b: { readonly order: number }) => a.order - b.order

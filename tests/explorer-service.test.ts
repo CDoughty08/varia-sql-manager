@@ -7,7 +7,7 @@ import { EventBus } from '../src/renderer/src/core/events'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService } from '../src/renderer/src/services/connections'
-import { ExplorerService, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
@@ -132,7 +132,9 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   events.subscribe(event => emitted.push(event))
   const clock = steppedTimers()
   let ids = 0
-  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits })
+  // The wall clock listings are stamped with; tests move it by hand.
+  const wall = { now: 1_800_000_000_000 }
+  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
   disposals.push(() => explorer.dispose())
   const connect = (name = 'server-a') => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa' }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
@@ -150,7 +152,7 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
     return under!
   }
   const calls = () => backend.sent.map(entry => entry.params)
-  return { ...backend, backend, explorer, connections, events, emitted, clock, connect, rows, labels, find, open, calls }
+  return { ...backend, backend, explorer, connections, events, emitted, clock, wall, connect, rows, labels, find, open, calls }
 }
 
 describe('ExplorerService: loading', () => {
@@ -1451,5 +1453,90 @@ describe('ExplorerService: lifecycle', () => {
     await settle()
     expect(listener).not.toHaveBeenCalled()
     expect(rowKindOf(syntheticId(3, RowKind.Paused))).toBe(RowKind.Paused)
+  })
+})
+
+describe('ExplorerService: Filter loaded objects, server rows and freshness', () => {
+  it('narrows the rows to loaded matches with their ancestors, announces the count once, and shows the selection again when cleared', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases', 'AppData', 'Tables')
+    f.connect('server-b')
+    await settle()
+    f.explorer.collapse(f.find('server-b.example'))
+    const before = f.labels(), requests = f.calls().length
+    const t1 = f.find('dbo.T1')
+    f.explorer.select(t1)
+    f.explorer.setQuickFilter('  T1 ')
+    // Servers always show; the match keeps Databases › AppData › Tables above it, and nothing else of theirs.
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
+    expect(f.explorer.getSnapshot().filter).toEqual({ text: 't1', matches: 1 })
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: 1 loaded item matches')
+    // Positions count the siblings that show.
+    const rows = f.rows(), at = Array.from(rows.ids).indexOf(t1)
+    expect([rows.posinset[at], rows.setsize[at]]).toEqual([1, 1])
+    // It asks the backend for nothing, and a later tick does not announce it again.
+    expect(f.calls()).toHaveLength(requests)
+    const announced = f.explorer.getSnapshot().announcement
+    f.explorer.expand(f.find('server-b.example'))
+    expect(f.explorer.getSnapshot().announcement).toBe(announced)
+    f.explorer.collapse(f.find('server-b.example'))
+    // A folder that matches shows its expanded rows as usual; a collapsed folder is not searched.
+    f.explorer.setQuickFilter('tables')
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        System Tables', '        dbo.T0', '        dbo.T1', '        dbo.T2', 'server-b.example'])
+    f.explorer.setQuickFilter('zzz')
+    expect(f.labels()).toEqual(['server-a.example', 'server-b.example'])
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: no loaded items match')
+    const reveal = f.explorer.getSnapshot().reveal ?? 0
+    f.explorer.setQuickFilter('')
+    expect(f.labels()).toEqual(before)
+    expect(f.explorer.getSnapshot().filter).toBeUndefined()
+    expect(f.explorer.getSnapshot().selected).toBe(t1)
+    expect(f.explorer.getSnapshot().reveal).toBe(reveal + 1)
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter cleared')
+    // The text is bounded.
+    f.explorer.setQuickFilter('x'.repeat(500))
+    expect(f.explorer.quickFilter.getSnapshot().input).toHaveLength(128)
+  })
+  it('hands focus to the box once per Filter Loaded Objects, even when the box mounts later', () => {
+    const f = fixture()
+    expect(f.explorer.takeQuickFilterFocus()).toBe(false)
+    f.explorer.focusQuickFilter()
+    expect(f.explorer.takeQuickFilterFocus()).toBe(true)
+    expect(f.explorer.takeQuickFilterFocus()).toBe(false)
+  })
+  it('gives a server row its version and login in brief, keeping SSMS\'s text for its name and tooltip', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const root = f.explorer.node(f.find('server-a.example'))!
+    expect([root.brief, root.sublabel]).toEqual(['16.0 · sa', '(SQL Server 16.0.4135.4 - sa)'])
+    expect(serverBrief({ serverVersion: '15.00.2000', productVersion: undefined, login: undefined })).toBe('15.0')
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'CONTOSO\dba' })).toBe('17.0 · CONTOSO\dba')
+  })
+  it('stamps each listing when its first page arrives, and marks the rows a failed refresh kept stale until a load succeeds', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const loaded = f.wall.now
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const t1 = f.find('dbo.T1')
+    // A row is described by the listing it is in; an expanded folder by its own.
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(f.find('Security'))).toEqual({ label: 'server-a.example', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(undefined)).toBeUndefined()
+    f.wall.now += 60_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded, staleSince: loaded + 60_000 })
+    f.wall.now += 5_000
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded + 65_000 })
+    // A collapsed folder that is not loaded yet has no listing of its own: its parent's describes it.
+    expect(f.explorer.listingFreshness(f.find('Views'))).toEqual({ label: 'AppData', updatedAt: loaded })
   })
 })

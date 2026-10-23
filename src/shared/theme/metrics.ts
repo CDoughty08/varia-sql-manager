@@ -24,7 +24,6 @@ export interface PendingTypeStep { readonly what: string; readonly selectors: re
  * its planned step means removing its entry here.
  */
 export const typeScalePending: readonly PendingTypeStep[] = [
-  { what: 'Object Explorer rows', selectors: ['.explorer-row'], now: 'sm', planned: 'md' },
   { what: 'Document tabs (buttons) and dialog fields', selectors: ['button', 'select, input'], now: 'sm', planned: 'md' },
   { what: 'Results grid column headers', selectors: ['.rg-ch, .rg-corner'], now: 'sm', planned: 'xs' }
 ]
@@ -104,11 +103,11 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
 }
 /**
  * The styles.css rules whose height is each token today; tests/theme-metrics.test.ts checks the list both ways. The title
- * bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows
- * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
+ * bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px)
+ * keep their sizes until the shell, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
+  header: [], bar: ['.query-tabs', '.explorer-toolbar'], control: ['.icon-button', '.explorer-filter'], row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
@@ -200,7 +199,7 @@ export function renderMetricDocs(): string {
     '',
     '## Bars and rows',
     '',
-    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.`,
+    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.`,
     '',
     table(['Token', 'Compact px', 'Comfortable px', 'Planned for', 'Sized with it now'], densityRows),
     ''

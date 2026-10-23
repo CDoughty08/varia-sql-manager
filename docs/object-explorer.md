@@ -249,6 +249,7 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 | `typeAheadMs` | 1,000 | Type-ahead buffer reset, in ms |
 | `typeAheadMax` | 64 | Type-ahead buffer length |
 | `rowHeight` | 22 | Row height, in px |
+| `serverRowHeight` | 30 | Height of a server row, in px |
 | `indent` | 16 | Indentation per level, in px |
 | `overscan` | 10 | Rows rendered beyond each edge of the viewport |
 | `deleteSlice` | 10,000 | Nodes removed per task when a subtree is dropped |
@@ -257,3 +258,4 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 | `sublabel` | 200 | Characters in a sublabel |
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
+| `quickFilter` | 128 | Characters in the Filter loaded objects box |

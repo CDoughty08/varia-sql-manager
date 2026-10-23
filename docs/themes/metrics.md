@@ -20,7 +20,6 @@ These surfaces keep their earlier size until they are restyled:
 
 | Surface | Rules | Now | Planned |
 | --- | --- | --- | --- |
-| Object Explorer rows | `.explorer-row` | `sm` | `md` |
 | Document tabs (buttons) and dialog fields | `button`, `select, input` | `sm` | `md` |
 | Results grid column headers | `.rg-ch, .rg-corner` | `sm` | `xs` |
 
@@ -81,12 +80,12 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 
 ## Bars and rows
 
-Compact is the default and the only density `:root` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.
+Compact is the default and the only density `:root` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.
 
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
 | `--varia-header` | 40 | 44 | The title bar. | Not yet |
-| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs` |
-| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button` |
+| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.explorer-toolbar` |
+| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.explorer-filter` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

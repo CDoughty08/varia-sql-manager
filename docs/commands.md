@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (143)
+## Commands (144)
 
 ### File
 
@@ -120,6 +120,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
 | Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
+| Filter Loaded Objects | `explorer.filterLoaded` | — | — | — | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |

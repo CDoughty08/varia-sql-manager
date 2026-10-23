@@ -45,7 +45,8 @@ describe('built-in theme contrast', () => {
   })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
-    const foregrounds = colorKeys.filter(key => /[Ff]oreground$/.test(key))
+    // Indicators (status dots and rings) are glyphs: they need a pair as text colors do.
+    const foregrounds = colorKeys.filter(key => /(?:[Ff]oreground|Indicator)$/.test(key))
     const missing = [...foregrounds.filter(key => !checked.has(key) && !contrastExemptions[key]), ...sqlScopes.filter(scope => !checked.has('syntax:' + scope))]
     expect(missing).toEqual([])
     for (const [key, reason] of Object.entries(contrastExemptions)) {
