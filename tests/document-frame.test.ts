@@ -188,6 +188,10 @@ describe('document frame markup', () => {
     expect(html(createElement(DocumentFrameView, { id: 'am', title: 'Activity Monitor', facts: [{ label: 'Server', value: 'localhost' }], children: createElement('div', { className: 'tiles' }) })))
       .toBe('<div class="document-frame" role="region" aria-labelledby="am-title" data-document-frame="am"><header class="document-header"><div class="document-heading"><h1 class="document-title" id="am-title">Activity Monitor</h1></div></header>'
         + '<dl class="document-facts"><div><dt>Server</dt><dd>localhost</dd></div></dl><div class="document-content"><div class="tiles"></div></div></div>')
+    // A notice sits between the facts and the content, above the section list too.
+    const noticed = html(createElement(DocumentFrameView, { id: 'n', title: 'Loads', facts: [{ label: 'Folder', value: 'Finance' }], notice: createElement('p', null, 'Refresh failed.'), sections: frameSections, frame }))
+    expect(noticed).toContain('</dl><div class="document-notice"><p>Refresh failed.</p></div><div class="document-body">')
+    expect(html(createElement(DocumentFrameView, { id: 'n', title: 'Loads', sections: frameSections, frame }))).not.toContain('document-notice')
   })
   it('keeps the Script drawer\'s bar when it is closed, and shows each state of the script when it is open', () => {
     const drawer = (open: boolean, content: ScriptContent, notice?: string) => html(createElement(ScriptDrawer, { id: 'doc-3', open, size: 0.4, content, notice, onToggle: () => {}, onResize: () => {}, onDeliver: () => {} }))

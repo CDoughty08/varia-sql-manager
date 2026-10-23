@@ -147,6 +147,8 @@ export function FrameSectionView({ id, section, collapsed, onToggle }: { readonl
 export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   readonly verbs?: readonly HeaderVerb[]
   readonly facts?: readonly Fact[]
+  /** Above the content: what the document needs said before its sections (an InlineError, a note that it is out of date). */
+  readonly notice?: ReactNode
   /** Sections with a list beside them; without them the frame shows `children` under the header. */
   readonly sections?: readonly FrameSection[]
   readonly children?: ReactNode
@@ -165,11 +167,12 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
  * service, and every change goes back through `onFrame`.
  */
 export function DocumentFrameView(props: DocumentFrameViewProps) {
-  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], sections, children, frame, onFrame, script, attributes } = props
+  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], notice, sections, children, frame, onFrame, script, attributes } = props
   const change = onFrame ?? (() => {})
   return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
+    {notice && <div className="document-notice">{notice}</div>}
     {sections && frame ? <SectionedBody id={id} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}

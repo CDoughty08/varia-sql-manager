@@ -1,6 +1,7 @@
 import type { BackendStatus, RecentFile } from '../../../shared/contracts'
 import { contextRecord, type ContextKeys } from '../../../shared/commands/context-keys'
 import type { Platform } from '../../../shared/commands/keybindings'
+import { isSsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import { isQueryDocument, isTextDocument } from '../documents'
 import type { DocumentSnapshot } from '../services/documents'
 import type { BookmarkSnapshot } from '../editor/bookmarks'
@@ -84,7 +85,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     editorWhitespace: !!inputs.whitespace, editorLineNumbers: !!inputs.lineNumbers,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
-    hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner',
+    hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,

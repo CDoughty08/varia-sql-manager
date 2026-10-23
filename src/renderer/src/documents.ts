@@ -1,4 +1,5 @@
 import type { DocumentKind, SqlFile } from '../../shared/contracts'
+import { isSsisDocumentKind, ssisDocumentSpecs, type SsisDocumentKind } from '../../shared/ssis/catalog.ts'
 
 export interface QueryDocument {
   readonly id: string
@@ -12,12 +13,12 @@ export interface QueryDocument {
    *  lost); its next execution says so before its own messages. */
   readonly sessionNotice?: SessionNotice
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
-   *  designer has no text at all. */
+   *  designer and an SSIS Catalog object's properties have no text at all. */
   readonly kind?: Exclude<WorkbenchDocumentKind, 'sql'>
 }
-/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
- *  which lives only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner'
+/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer
+ *  or an SSIS Catalog object's properties, which live only in the renderer. */
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | SsisDocumentKind
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -29,15 +30,18 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-/** A document whose content is text in the editor (a query or a value), as opposed to a table designer. */
-export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) !== 'tableDesigner'
+/** A document a provider owns (DocumentService.registerProvider): a table designer or an SSIS properties document. */
+export const isCustomKind = (kind: WorkbenchDocumentKind): kind is CustomDocumentKind => kind === 'tableDesigner' || isSsisDocumentKind(kind)
+/** A document whose content is text in the editor (a query or a value), as opposed to a table designer or SSIS properties. */
+export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && !isCustomKind(documentKind(document))
 /** Each kind's editor language, tab badge (a codicon's name for `icon`), and the sentence that names it (the query context bar, banners). */
 export const kindInfo: Readonly<Record<WorkbenchDocumentKind, { readonly language: string; readonly badge: string; readonly label: string; readonly value: string; readonly icon?: string }>> = {
   sql: { language: 'sql', badge: 'SQL', label: 'Transact-SQL', value: 'SQL' },
   xml: { language: 'xml', badge: 'XML', label: 'XML document', value: 'XML' },
   json: { language: 'json', badge: 'JSON', label: 'JSON document', value: 'JSON' },
   sqlplan: { language: 'xml', badge: 'PLAN', label: 'Execution plan', value: 'execution plan' },
-  tableDesigner: { language: '', badge: 'Table Designer', label: 'Table Designer', value: 'table', icon: 'table' }
+  tableDesigner: { language: '', badge: 'Table Designer', label: 'Table Designer', value: 'table', icon: 'table' },
+  ...Object.fromEntries((Object.keys(ssisDocumentSpecs) as SsisDocumentKind[]).map(kind => [kind, { language: '', badge: ssisDocumentSpecs[kind].title, label: ssisDocumentSpecs[kind].title, value: ssisDocumentSpecs[kind].noun, icon: ssisDocumentSpecs[kind].icon }])) as Record<SsisDocumentKind, { readonly language: string; readonly badge: string; readonly label: string; readonly value: string; readonly icon: string }>
 }
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {

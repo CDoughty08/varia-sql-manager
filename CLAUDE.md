@@ -160,8 +160,9 @@ pages, limits, error codes, display formats, benchmarks).
   from a constant table generated from the catalogue; a live dry run proves the server builds exactly
   `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
   `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, error codes, features, limits) live only in
-  `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's catalogue. After changing it, regenerate
+- SSIS Catalog semantics (code tables, `ssis.describe` views, verbs and their commands, documents, error codes,
+  features, limits) live only in `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's
+  catalogue. After changing it, regenerate
   the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
   backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read only on
   the SSIS read pool (the application name plus " - Integration Services", Initial Catalog the catalog's database), never

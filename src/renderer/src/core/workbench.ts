@@ -47,6 +47,8 @@ import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
+import { ssisContribution } from '../contributions/ssis'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -118,6 +120,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** The SSIS Catalog's properties documents (Folder, Project, Package and Environment Properties). */
+  readonly ssisProperties: SsisPropertiesService
   readonly theme: ThemeService
 }
 /**
@@ -174,6 +178,15 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
+  })
+  // Focus goes to the document's current section in its list, else to its first button (Refresh).
+  const ssisProperties = new SsisPropertiesService({
+    api, documents, connections,
+    focus: id => nextFrame(() => {
+      const root = modalOpen() ? null : document.querySelector(`[data-ssis-document="${CSS.escape(id)}"]`)
+      const target = root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]') ?? root?.querySelector<HTMLElement>('button:not(:disabled)')
+      target?.focus()
+    })
   })
   const context = new ContextKeyService({
     platform,
@@ -250,6 +263,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    ssisProperties,
     theme,
     dispose: () => {
       if (disposed) return
@@ -271,6 +285,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()
+      ssisProperties.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -308,6 +323,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    ssisContribution(workbench),
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
