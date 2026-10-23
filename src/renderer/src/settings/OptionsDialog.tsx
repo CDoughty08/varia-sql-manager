@@ -179,7 +179,7 @@ export default function OptionsDialog({ page: requested }: { page?: string }) {
             {rows.map(row => <li key={row.page.id} role="treeitem" aria-level={row.level} aria-expanded={row.expandable ? row.expanded : undefined} aria-selected={row.page.id === page}
               tabIndex={row.page.id === focusId ? 0 : -1} data-page={row.page.id} style={{ paddingLeft: 4 + (row.level - 1) * 14 }}
               onClick={() => showPage(row.page.id, row.page.id)} onFocus={() => setTreeFocus(row.page.id)}>
-              <span className="options-twisty">{row.expandable && <Icon name="chevron" />}</span>{highlight(row.page.title)}
+              <span className="options-twisty">{row.expandable && <Icon name="chevron-right" />}</span>{highlight(row.page.title)}
             </li>)}
           </ul>}
       </div>

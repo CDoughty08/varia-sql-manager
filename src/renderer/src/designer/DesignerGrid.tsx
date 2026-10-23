@@ -3,6 +3,8 @@ import { systemTypes } from '../../../shared/designer/catalog.ts'
 import { defaultType, formatTypeText } from '../../../shared/designer/type-text.ts'
 import { useWorkbench } from '../core/WorkbenchContext'
 import { useMenuTarget } from '../menus/useMenuTarget'
+import { codiconClass } from '../../../shared/icons'
+import Icon from '../Icon'
 import { selectorPress, TableDesignerService, type DesignerColumn, type DesignerState } from './TableDesignerService'
 
 /** Every row has one height, so only the rows in view (and a few more) are rendered. */
@@ -161,7 +163,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
             data-current={index === current.row || undefined} style={{ top: index * designerRowHeight, height: designerRowHeight }}>
             <span className="designer-selector" role="rowheader" aria-label={placeholder ? 'New column' : `${row.name || 'Unnamed column'}${key ? ', primary key' : ''}`}
               onPointerDown={event => selector(event, index)}>
-              {key ? <span className="codicon codicon-key" aria-hidden="true" /> : index === current.row ? <span className="codicon codicon-triangle-right" aria-hidden="true" /> : null}
+              {key ? <Icon name="key" /> : index === current.row ? <Icon name="triangle-right" /> : null}
             </span>
             {columns.map(column => {
               const cellId = `${id}-cell-${index}-${column}`, problem = row ? problemAt(index, column) : undefined
@@ -173,7 +175,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
                 return <span key={column} {...common} className="designer-cell designer-nulls" onPointerDown={() => move(index, column)}>
                   {row && <input type="checkbox" tabIndex={-1} aria-label={`Allow Nulls for ${row.name || 'the unnamed column'}`} checked={row.allowNulls} disabled={!editable || locked}
                     onChange={() => { service.toggleNulls(id, index); focusGrid() }} />}
-                  {problem && <span className="designer-problem codicon codicon-error" id={cellId + '-problem'} role="img" aria-label={problem} title={problem} />}
+                  {problem && <span className={'designer-problem ' + codiconClass('error')} id={cellId + '-problem'} role="img" aria-label={problem} title={problem} />}
                 </span>
               }
               const text = row ? (column === 'name' ? row.name : row.typeText) : ''
@@ -183,7 +185,7 @@ export default function DesignerGrid({ state, service, editable }: { state: Desi
                     onChange={event => setEditing({ ...editing, text: event.target.value })} onBlur={() => commit()}
                     onFocus={event => { const end = event.currentTarget.value.length; event.currentTarget.setSelectionRange(end, end) }} />
                   : <span className="designer-text">{text}</span>}
-                {problem && !isEditing && <span className="designer-problem codicon codicon-error" id={cellId + '-problem'} role="img" aria-label={problem} title={problem} />}
+                {problem && !isEditing && <span className={'designer-problem ' + codiconClass('error')} id={cellId + '-problem'} role="img" aria-label={problem} title={problem} />}
               </span>
             })}
           </div>

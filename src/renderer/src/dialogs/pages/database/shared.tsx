@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { DatabasePropertiesModel } from '../../../../../shared/actions/schema.ts'
 import type { DatabaseDraft } from '../../database-properties'
 import type { OpenObjectDialog } from '../../ObjectDialogService'
+import Icon from '../../../Icon'
 
 /** The open Database Properties dialog's model and draft, once its describe has answered. */
 export function databaseState(open: OpenObjectDialog): { readonly model?: DatabasePropertiesModel; readonly draft?: DatabaseDraft } {
@@ -15,7 +16,7 @@ export function DescriptionPane({ title, text, notes = [] }: { title: string; te
 
 /** A page's note (why it is read-only, what is not supported yet). */
 export function PageNote({ children }: { children: ReactNode }) {
-  return <p className="field-note object-dialog-note"><span className="codicon codicon-info" aria-hidden="true" />{children}</p>
+  return <p className="field-note object-dialog-note"><Icon name="info" />{children}</p>
 }
 
 /** "16.00 MB": two decimals in the user's locale, as SSMS shows sizes. */

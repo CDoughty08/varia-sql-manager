@@ -143,7 +143,7 @@ describe('ThemeService', () => {
   })
   it('shows presets in the color picker as the active theme paints them, without changing what is stored', () => {
     const dark = resolveBuiltin('dark'), light = resolveBuiltin('light')
-    expect(connectionPickerColor('#e66b73', dark)).toBe('#e66b73')
+    expect(connectionPickerColor('#e66b73', dark)).toBe(dark.colors['connection.red'])
     expect(connectionPickerColor('#e66b73', light)).toBe(light.colors['connection.red'])
     expect(connectionPickerColor(undefined, light)).toBe(light.colors['connection.blue'])
     expect(connectionPickerColor('not a color', dark)).toBe(dark.colors['connection.blue'])

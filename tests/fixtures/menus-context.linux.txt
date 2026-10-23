@@ -10,6 +10,7 @@ editor.context, for the query editor
     &Reconnect…  ++++
     ---
     C&hange Connection…  ++--
+    &Environment…  -++-
   ---
   E&xecute  F5  ++--
   Ca&ncel Executing Query  Alt+Pause  --+-
@@ -94,6 +95,7 @@ explorer.context, for Object Explorer's empty area
 explorer.context, for a server
   &Connect…  ++++
   &Disconnect  -+--
+  &Environment…  -++-
   ---
   New &Query  -++-
   ---

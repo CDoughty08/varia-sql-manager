@@ -34,9 +34,9 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
-    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'svg:database')],
-    systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'svg:database', { subtype: 'system' })],
-    tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'svg:table')),
+    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
+    systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
+    tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })]
   }

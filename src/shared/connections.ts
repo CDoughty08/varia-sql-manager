@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { AdvancedConnectionOptions, ConnectionOptions } from './contracts'
 import { authenticationModes, requiresUser, showsIdentity, usesPassword } from './auth'
+import { environmentSchema } from './environments'
 
 export const advancedDefaults: AdvancedConnectionOptions = {
   commandTimeout: 0, connectTimeout: 15, columnEncryption: false, secureEnclaves: false,
@@ -48,7 +49,7 @@ export const connectionOptionsSchema = z.object({
   server: z.string().trim().min(1, 'Enter a server name.').max(256), database: z.string().trim().max(128), authentication: z.enum(authenticationModes),
   username: text.optional(), password: z.string().max(1024).optional(), trustServerCertificate: z.boolean(),
   encrypt: z.enum(['optional', 'mandatory', 'strict']).optional(), hostNameInCertificate: z.string().max(256).optional(),
-  displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), advanced: advancedConnectionSchema.optional()
+  displayName: text.optional(), color: z.string().regex(/^#[\da-f]{6}$/i).optional(), environment: environmentSchema.optional(), advanced: advancedConnectionSchema.optional()
 }).strict().refine(value => !requiresUser(value.authentication) || !!value.username?.trim(), { error: issue => (issue.input as ConnectionOptions).authentication === 'sql' ? 'SQL authentication requires a username.' : 'This authentication requires a user name.' })
 
 // Persistence is built from a whitelist; neither passwords nor raw connection strings enter the file.
@@ -62,6 +63,10 @@ export interface ConnectionProfile { id: string; options: Omit<ConnectionOptions
 export interface ConnectionLibrary { version: 1; profiles: ConnectionProfile[] }
 export interface ConnectionProfileInput { id?: string; options: ConnectionOptions; favorite?: boolean; registered?: boolean }
 export const connectionProfileInputSchema = z.object({ id: z.uuid().optional(), options: connectionOptionsSchema, favorite: z.boolean().optional(), registered: z.boolean().optional() }).strict()
+/** Set Connection Environment: the live connection's options name its entry (by connectionKey), and only the entry's label
+ *  changes; `environment` absent is None. */
+export interface ConnectionEnvironmentInput { options: ConnectionOptions; environment?: string }
+export const connectionEnvironmentInputSchema = z.object({ options: connectionOptionsSchema, environment: environmentSchema.optional() }).strict()
 const savedOptionsSchema = connectionOptionsSchema.refine(value => value.password === undefined, 'Saved connections cannot contain passwords.')
 export const connectionLibrarySchema = z.object({
   version: z.literal(1), profiles: z.array(z.object({ id: z.uuid(), options: savedOptionsSchema, favorite: z.boolean(), registered: z.boolean(), lastConnected: z.iso.datetime().optional() }).strict()).max(200)
@@ -79,7 +84,7 @@ export interface SecretStorageState { available: boolean; reason?: 'no-keyring' 
 export function canRememberPassword(authentication: ConnectionOptions['authentication']): boolean { return usesPassword(authentication) }
 /**
  * Everything that decides where a password goes and how the server is verified. A remembered password is sent only to
- * a request with the same binding, so changing the database, name or color keeps it, and anything else needs it typed.
+ * a request with the same binding, so changing the database, name, color or environment keeps it, and anything else needs it typed.
  */
 export function credentialBinding(options: Omit<ConnectionOptions, 'password'>): string {
   return JSON.stringify([options.server.trim().toLowerCase(), options.authentication, options.username ?? '', options.encrypt ?? 'mandatory',
@@ -100,8 +105,9 @@ export function rememberedProfile(profiles: readonly ConnectionProfile[], savedI
   return candidates.sort((a, b) => { const [ra, la] = recency(a), [rb, lb] = recency(b); return ra - rb || lb.localeCompare(la) })[0]
 }
 /** The fourth argument of `varia:request`, for `connections.connect` and `.databases` only. `requestId` is what the
- *  dialog's Stop cancels the request by (varia:connections-cancel). */
-export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional() }).strict()
+ *  dialog's Stop cancels the request by (varia:connections-cancel). `setsEnvironment` says the user set the form's
+ *  Environment (or cleared it); without it a connect that carries no label keeps the one its entry has. */
+export const connectContextSchema = z.object({ profileId: z.uuid().optional(), remember: z.boolean().optional(), requestId: z.uuid().optional(), setsEnvironment: z.boolean().optional() }).strict()
 export type ConnectContext = z.infer<typeof connectContextSchema>
 /** The library with the ids of the entries that have a remembered password; never the password or its ciphertext. */
 export interface ConnectionLibraryView { library: ConnectionLibrary; savedPasswords: string[] }

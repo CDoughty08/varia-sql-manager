@@ -579,7 +579,8 @@ app.whenReady().then(async () => {
     },
     ...liveness
   })
-  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain() })
+  // Test-only live sources (debug.synthetic) are accepted only in unpackaged smoke runs, whose backend has its test hooks.
+  const results = resultsPort = new ResultsPortHost({ backend: supervisorResults(backend), createChannel: () => new MessageChannelMain(), testSources: testSeams })
   const explorerRequests = new ExplorerRequests(backend)
   // Read early, but never awaited before the window: the renderer waits at most 1.5 s for it.
   const loaded = settings.load()
@@ -669,6 +670,7 @@ app.whenReady().then(async () => {
   handle('varia:connections-load', async () => ({ ...await library.load(), windowsIdentity: process.platform === 'win32' ? [process.env.USERDOMAIN, userInfo().username].filter(Boolean).join('\\') : userInfo().username }))
   handle('varia:connections-save', value => library.save(value))
   handle('varia:connections-remove', value => library.remove(value))
+  handle('varia:connections-environment', value => library.setEnvironment(value))
   handle('varia:settings-get', () => settings.load({ showsWarning: true }))
   handle('varia:settings-update', value => settings.update(value))
   handle('varia:layouts-load', () => layouts.load())
