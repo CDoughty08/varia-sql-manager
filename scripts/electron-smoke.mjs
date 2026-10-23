@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindBadge, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -216,7 +216,7 @@ try {
   await undoToClean()
   await redoToText(typed)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
-  await expect(kindBadge(activeDocument(page), 'Transact-SQL')).toHaveAttribute('data-icon', 'database')
+  await expect(kindIcon(activeDocument(page), 'Transact-SQL')).toHaveAttribute('data-icon', 'database')
   // The unsaved dot sits in the Close button's place; pointing at the tab brings the × back in its stead.
   const dirtyName = await activeDocument(page).getAttribute('aria-label'), dirtyClose = closeDocumentButton(page, dirtyName)
   const [dot, closeBox] = [await unsavedMark(activeDocument(page)).boundingBox(), await dirtyClose.boundingBox()]

@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindBadge, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -682,7 +682,7 @@ try {
   expect(await editorLanguage()).toBe('xml')
   await expect(queryStatus(page)).toHaveText('XML document')
   // A value's tab shows its kind by icon, not a text badge.
-  await expect(kindBadge(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
+  await expect(kindIcon(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
   await expect(activeDocument(page)).toHaveAccessibleName(forXmlName)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   await expect(server()).toBeDisabled()
@@ -711,7 +711,7 @@ try {
   await expect(valueTab('ExecutionPlan1.sqlplan')).toHaveAttribute('aria-selected', 'true')
   expect(await editorLanguage()).toBe('xml')
   await expect(queryStatus(page)).toHaveText('Execution plan')
-  await expect(kindBadge(activeDocument(page), 'Execution plan')).toHaveAttribute('data-icon', 'execution-plan')
+  await expect(kindIcon(activeDocument(page), 'Execution plan')).toHaveAttribute('data-icon', 'execution-plan')
   expect(await editorText()).toBe('<ShowPlanXML>\n  <BatchSequence>\n    <Batch />\n  </BatchSequence>\n</ShowPlanXML>')
   await page.keyboard.press('Control+W')
   await expect(queryTabs()).toHaveCount(1)

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
-import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, documentTabs, kindBadge, menuItemNames, part, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, documentTabs, kindIcon, menuItemNames, part, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'table-designer-profile-'))
@@ -106,7 +106,7 @@ try {
   await expect(rows().nth(1).getByRole('checkbox')).toBeChecked()
   // The tab shows its unsaved changes, and so does the window title.
   await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
-  await expect(kindBadge(activeDocument(page), 'Table Designer')).toHaveCount(1)
+  await expect(kindIcon(activeDocument(page), 'Table Designer')).toHaveCount(1)
   await expect.poll(() => page.title()).toBe('* server-a.AppData - dbo.Table_1 — Varia SQL Manager')
   console.log('Table designer checks: typing, Tab, Space and the empty last row add columns, and the tab is dirty.')
 
