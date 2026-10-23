@@ -10,7 +10,8 @@ export type MethodKind = 'unary' | 'stream'
  *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
  *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
  *  browser, for up to 3 minutes; those sign-ins run one at a time. A live subscription (lane live) takes no slot: its own
- *  task samples on its own schedule, one tick at a time. */
+ *  task samples on its own schedule, one tick at a time. Its statements, and those of a unary method on lane live, run
+ *  under the live gates (2 per connection, 8 in all, each waited for at most the statement's budget, then BUSY). */
 export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'live'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {

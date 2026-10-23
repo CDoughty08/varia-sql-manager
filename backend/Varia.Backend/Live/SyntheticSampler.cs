@@ -53,8 +53,8 @@ internal sealed class SyntheticSampler : ILiveSampler
         lock (gate) args = new(next.Rows ?? args.Rows, next.TickMs ?? args.TickMs, next.EndAfterTicks ?? args.EndAfterTicks, next.ErrorEvery ?? args.ErrorEvery);
     }
 
-    public IReadOnlyList<LiveOpenedProbe> Open(IReadOnlyList<LiveProbeState> probes) =>
-        [.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, probe.IntervalMs, probe.Spec.IntervalMs.Min, probe.Spec.IntervalMs.Max, "ok"))];
+    public Task<LiveOpening> OpenAsync(IReadOnlyList<LiveProbeState> probes, IReadOnlyList<LiveCursor> resume, CancellationToken token) =>
+        Task.FromResult(new LiveOpening([.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, probe.IntervalMs, probe.Spec.IntervalMs.Min, probe.Spec.IntervalMs.Max, "ok"))]));
 
     public Task<LiveSampleBatch> SampleAsync(IReadOnlyList<LiveDue> due, CancellationToken token)
     {

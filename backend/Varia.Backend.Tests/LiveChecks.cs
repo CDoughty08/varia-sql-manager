@@ -112,7 +112,8 @@ internal static class LiveChecks
         using var host = new HostHarness(dispatcher: () => new SqlService(store, hooks: true));
         host.Hello();
         var subscription = Guid.NewGuid().ToString();
-        host.Request(1, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString()), credit: Credit);
+        // 200 ms between samples: tick 2 is not late unless an acknowledgement takes that long, even on a loaded machine.
+        host.Request(1, "live.subscribe", Subscribe(subscription, Guid.NewGuid().ToString(), args: new { tickMs = 200 }), credit: Credit);
         Frame? frame = null;
         var opened = Next(host, 1, ref frame);
         // Nothing more until the opened frame is acknowledged.
@@ -124,7 +125,7 @@ internal static class LiveChecks
         for (var i = 0; i < 3; i++) if (Next(host, 1, ref frame) is { } tick) ticks.Add(tick);
         var tables = ticks.Select(tick => tick.GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.TableProbe).GetProperty("tables")[0]).ToList();
         check(ticks.Count == 3 && ticks.Select(tick => tick.GetProperty("seq").GetInt64()).SequenceEqual([1L, 2L, 3L])
-            && ticks[0].GetProperty("samples").EnumerateArray().All(sample => sample.GetProperty("gap").GetString() == "baseline" && !sample.TryGetProperty("elapsedMs", out _))
+            && ticks[0].GetProperty("samples").EnumerateArray().All(sample => sample.GetProperty("gap").GetString() == "baseline" && !sample.TryGetProperty("elapsedMs", out _) && !sample.TryGetProperty("skipped", out _))
             && ticks[1].GetProperty("samples").EnumerateArray().All(sample => !sample.TryGetProperty("gap", out _) && sample.GetProperty("elapsedMs").GetInt64() >= 0)
             && ticks[0].GetProperty("samples").EnumerateArray().First(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.MetricsProbe).GetProperty("metrics")[2].ValueKind == JsonValueKind.Null
             && ticks[1].GetProperty("sampledAt").GetInt64() > ticks[0].GetProperty("sampledAt").GetInt64(),
@@ -330,10 +331,14 @@ internal static class LiveChecks
         host.Request(2, "live.subscribe", Subscribe(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), [SyntheticSampler.TableProbe, SyntheticSampler.StatusProbe], new { tickMs = 20, errorEvery = 1 }), credit: Credit);
         frame = null;
         var errorTicks = new List<JsonElement>();
-        for (var i = 0; i < 3; i++) if (Next(host, 2, ref frame) is { } value && value.GetProperty("type").GetString() == "live.tick") errorTicks.Add(value);
-        check(errorTicks.Count == 2 && errorTicks.All(tick => tick.GetProperty("errors")[0].GetProperty("code").GetString() == "SQL_ERROR" && !tick.GetProperty("errors")[0].GetProperty("terminal").GetBoolean()
-            && tick.GetProperty("samples").EnumerateArray().Single().GetProperty("probe").GetString() == SyntheticSampler.StatusProbe),
-            "a probe's failure is a value in the tick, and the subscription and its other probes keep going");
+        for (var i = 0; i < 9; i++) if (Next(host, 2, ref frame) is { } value && value.GetProperty("type").GetString() == "live.tick") errorTicks.Add(value);
+        var failures = errorTicks.Where(tick => tick.TryGetProperty("errors", out _)).Select(tick => tick.GetProperty("errors")[0]).ToList();
+        // The failing probe backs off (20 ms, then about 40 and 80), so later ticks carry only the status probe.
+        check(errorTicks.Count == 8 && failures.Count is >= 2 and < 8 && failures.All(error => error.GetProperty("code").GetString() == "SQL_ERROR" && !error.GetProperty("terminal").GetBoolean())
+            && failures[0].GetProperty("retryInMs").GetInt32() == 20 && failures[1].GetProperty("retryInMs").GetInt32() is >= 36 and <= 44
+            && errorTicks.All(tick => tick.GetProperty("samples").EnumerateArray().All(sample => sample.GetProperty("probe").GetString() == SyntheticSampler.StatusProbe))
+            && errorTicks.Count(tick => tick.GetProperty("samples").GetArrayLength() == 1) >= 6,
+            "a probe's failure is a value in the tick that says when it retries, backing off, and the subscription and its other probes keep going");
         host.Send(FrameKind.Cancel, 2, 3, []);
         check(Result(host.Next(FrameKind.Response)).GetProperty("ended").GetString() == "cancelled", "CANCEL reason 3 (the port closed) also ends it as cancelled");
 
@@ -539,40 +544,5 @@ internal static class LiveChecks
             "live.update checks filters, views and the source against the catalogue as subscribe does: " + string.Join(", ", updates.Select(item => item.Key + " " + item.Value)));
         await Settle();
         foreach (var context in contexts) context.Dispose();
-    }
-
-    private sealed class FixtureHost(Dictionary<string, string> servers, ResultStore store) : ILiveHost
-    {
-        public bool TestHooks => false;
-        public bool IsConnected(string connectionId) => servers.ContainsKey(connectionId);
-        public string? ServerOf(string connectionId) => servers.GetValueOrDefault(connectionId);
-        public ResultStore Store => store;
-    }
-
-    /// <summary>Opens every probe and samples nothing.</summary>
-    private sealed class IdleSampler : ILiveSampler
-    {
-        public int? PeriodMs => null;
-        public bool Ended => false;
-        public IReadOnlyList<LiveOpenedProbe> Open(IReadOnlyList<LiveProbeState> probes) => [.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, 1000, 1000, 1000, "ok"))];
-        public Task<LiveSampleBatch> SampleAsync(IReadOnlyList<LiveDue> due, CancellationToken token) => Task.FromResult(new LiveSampleBatch([], []));
-        public void Apply(object args) { }
-        public uint[] Keep() => [];
-        public void Release() { }
-        public void Dispose() { }
-    }
-
-    /// <summary>A sampler whose one sample is over the event limit (17 statuses of 128 characters would not be; this is bigger).</summary>
-    private sealed class OversizedSampler : ILiveSampler
-    {
-        public int? PeriodMs => 10;
-        public bool Ended => false;
-        public IReadOnlyList<LiveOpenedProbe> Open(IReadOnlyList<LiveProbeState> probes) => [.. probes.Select(probe => new LiveOpenedProbe(probe.Spec.Id, 1000, 1000, 1000, "ok"))];
-        public Task<LiveSampleBatch> SampleAsync(IReadOnlyList<LiveDue> due, CancellationToken token) =>
-            Task.FromResult(new LiveSampleBatch([new LiveSample(due[0].Probe.Spec.Id, 0, 1000, Status: [new LiveStatus("phase", new string('x', 300 * 1024))])], []));
-        public void Apply(object args) { }
-        public uint[] Keep() => [];
-        public void Release() { }
-        public void Dispose() { }
     }
 }

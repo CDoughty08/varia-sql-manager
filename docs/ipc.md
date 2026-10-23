@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts` | `Live/LiveService.cs`, `LiveCatalog.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues), `LiveSql.cs` (probe text, lint), `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -193,7 +193,10 @@ backend schedules it: `control` runs at once, `metadata` waits for one of 8 slot
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot.
+for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot. `live` takes no slot either: a
+live subscription samples on its own task, and its statements, like those of any unary method on lane `live` (none yet;
+`LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
+statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names never pile up).
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -724,8 +727,8 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 (series values), up to 4 snapshot tables (replaced by each sample) and 4 append tables (that grow), and status values.
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
-`src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only, and none
-is shipped yet; the test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+`src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
+Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -763,7 +766,8 @@ retired?: u32[1] }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16]
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
 probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
-DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING or NOT_FOUND.
+DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
+LOGIN_FAILED.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
 tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, status ids the
 probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
@@ -791,12 +795,14 @@ backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a
   acknowledges an event (hung, or applying it failed) stops the source after that event.
 - **Schedule.** Fixed rate per probe: a probe due while a frame is unacknowledged, or late for any reason, is sampled once
   when it can be, with `gap: 'late'` and the slots it missed in `skipped`, never replayed in a burst. The first sample is
-  `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now.
+  `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now (see the scheduler, below).
 
 **End** (the RESPONSE): `{ ended: cancelled | disconnected | sourceEnded | failed | shutdown, code?, message? (failed
 only), kept?: u32[≤ 64] (sourceEnded only), resume?, ticks, elapsedMs }`. CANCEL with reason 1 or 3 ends it
 `cancelled`, reason 4 or the backend's shutdown `shutdown`, and `connections.disconnect` of its connection id
-`disconnected`. Every end but `sourceEnded` releases the subscription's results first; `sourceEnded` keeps `kept`
+`disconnected`. When every probe has stopped for good (each terminal, or opened unavailable) it ends `failed` with the
+first probe's own error code (a live code such as `PERMISSION_DENIED`, which `liveEndSchema` accepts beside the request
+codes) and message, since nothing would ever be sampled. Every end but `sourceEnded` releases the subscription's results first; `sourceEnded` keeps `kept`
 readable until the renderer closes them with `results.close`.
 
 **Update answer:** `{ applied: true, probes: { probe, intervalMs, effectiveIntervalMs, paused }[] }` for every probe of the
@@ -826,11 +832,93 @@ probe stores again once memory is free. The per-subscription cap (64 MiB, all li
 comes with the SQL sources' snapshot writers. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
+**Scheduler** (`LiveSubscription` in `Live/LiveService.cs`; every rule below runs on times passed in, and the offline
+checks drive it on a fake clock):
+- **Phase.** A subscription starts, and resumes after a pause, at a random point within a quarter of its first second,
+  one phase for all its probes, so views opened together never wake together while a view's probes share ticks (one round
+  of SQL and one frame).
+- **Quick second sample.** After a sample the source marks `baseline` or `resumed` the next is due within a second (rates
+  need two), then the probe settles on its interval. The sample decides, not the schedule: a source also starts again from
+  a baseline after a failed first attempt or a lost connection. A `baseline` sample never carries `skipped`.
+- **Refresh** makes every unpaused probe due now, but never within its catalogue `minGapMs`, nor its minimum interval, of
+  its last attempt, so refreshes in a loop never run a probe more often than its fastest interval would. A probe that is
+  backing off keeps its delay and its failure count (a refresh never hammers a failing server or sign-in); one a terminal
+  error stopped starts again from a clean count (not one the source opened unavailable).
+- **Error back-off.** The first failure retries at the interval; after f failures in a row the next try is
+  min(interval × 2^(f−1), cap) × U(0.9, 1.1), where the cap is 60 s or the asked interval when that is longer. A sample
+  resets the count. `BUDGET` retries at the interval without backing off (memory may free at any time); a terminal error
+  (`PERMISSION_DENIED`, `NOT_SUPPORTED`, `LOGIN_FAILED`) stops its probe (`retryInMs` 0). Every error in a tick carries `retryInMs`.
+- **Load guard.** An EWMA (α 0.3) of each probe's `costMs`: over its catalogue `maxDutyCycle` (0.25 by default, 0.2 for
+  `activity.*`) of the interval in force for 3 samples in a row doubles that interval, up to the cap; under 10 % for 10
+  samples halves it back toward the asked one. Samples report the interval in force as `effectiveIntervalMs` (so the UI
+  can say "slowed to 4 s"), and so does the update answer. A new interval from `live.update` starts the guard again.
+- **Idle.** While every probe is paused, when the next sample is at least 30 s away, and between the samples of probes
+  whose intervals in force are all 30 s or longer (the wait after a sample is a little under the interval; never before a
+  quick second sample), the source gives back its connection (to the pool, healthy), and opens one again when a probe comes
+  due. A subscription whose probes all start paused opens none until one resumes.
+
+**SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source): one pooled connection per subscription
+from the connection's own **" - Activity Monitor"** pool (registered with the connection's pools, so a disconnect clears
+it), held while it samples so its session id is known (`live.opened`'s `spid`; a tick carries `spid` when it reopened).
+SSISDB sources (later) use the **" - Integration Services"** pool in `SSISDB` with their own prologue
+(`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
+state: `SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;`
+for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Connecting takes
+no live gate (a server that stopped answering a login never holds one that views on other servers need) and has its own
+15 s bound, a `TIMEOUT` value past it, since a profile's Connect Timeout may be 0 (none); a connect that failed in a tick
+is reported for that tick's other due probes rather than tried again at once. Opening connects and runs one session
+probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
+SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
+a parameter. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
+from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
+`NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
+A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
+its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
+the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
+more than `LOCK_TIMEOUT`. Probe SQL is constant text per probe and band in `Live/LiveSql.cs`: one row whose columns it
+declares, mapped to the catalogue's series; values only as parameters; no metadata built-ins (they ignore
+`LOCK_TIMEOUT` and the isolation level), temporary tables, `SELECT … INTO`, writes, DDL, transactions, `WAITFOR`,
+`EXEC` or `sp_executesql`, remote reads (`OPENQUERY`, `OPENROWSET`, `OPENDATASOURCE`), comments (they belong in C#), and
+no `TOP`, with or without parentheses, without an `ORDER BY` at its own level (one inside `OVER (…)` or another statement
+orders nothing it takes). An offline lint renders every probe at every band and refuses all of those, reading literals,
+comments and bracketed or quoted names as SQL Server does, so a quote in one hides no code from it and a built-in spaced
+from its parenthesis still counts. Values are read by the column's declared position, so every read first checks the
+result's columns against the declaration (names, order, count, numeric types); a mismatch is a bug, which ends the view
+`failed` with `BACKEND_ERROR` rather than put one series' value in another's. The live checks also run every query at the
+server's band and compare its columns.
+
+**Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
+`PERMISSION_DENIED` and 207 and 208 `NOT_SUPPORTED` (both terminal); 4060, 911, 942, 952 and the other offline,
+restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above and transport errors
+`CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
+advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
+must change, 18452 untrusted domain) `LOGIN_FAILED`, terminal, since retrying alone would only count more failures against
+the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
+connection or a budget cancel drops the connection without returning it to the pool (its pool is cleared), and the next
+due tick reopens it under the back-off, for as long as the view runs; only `NOT_CONNECTED` (the connection id is gone)
+ends the view `disconnected`. Nothing is logged.
+
+**Deltas** (`Live/LiveDeltas.cs`): the backend keeps baselines only; history is the renderer's. Each series has a counter
+kind in the catalogue: `gauge` (as read), `rate` and `msPerSecond` (change per second), `ratio` (change over a base
+counter's change; none when the base did not move) and `cpuPercent` (100 × Δ CPU ms / (elapsed × schedulers), 0 to 100).
+Elapsed time is the server's own (Δ`ms_ticks` of `sys.dm_os_sys_info`) when the probe reads it, so a slow round trip never
+skews a rate, and the backend's clock otherwise; `elapsedMs` reports it. A changed start time (a restart) drops every
+baseline (`gap: 'reset'`); a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
+pause and the first after a lost connection (which may have reached another server) have no rates (`baseline`,
+`resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
+while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines for snapshot rates (L2b's tables): keyed by an
+identity column (a session's login time), bounded by the row cap, dropped after two samples absent.
+
+**Resume tokens** (`Live/LiveResume.cs`): base64url of `{"v":1,"source":…,"cursors":[[probe,table,settledId],…]}`, at
+most 256 characters (a set of cursors that would not fit makes no token), parsed strictly against the subscription's
+source and its append tables (`INVALID_PARAMS` on any other shape, a repeat or an unsafe id). A tick carries `resume` only
+when a cursor moved, the end carries the last one, and a subscription resumed with one hands its source the cursors.
+Only append tables have cursors (L2b), so for now every source refuses `resume`.
+
 **Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
 and results worker](#results-port-and-results-worker)).
 
-Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets;
-the renderer's `LiveService` (owners, visibility, pause and resume, history rings).
+Later: append tables and facets; the renderer's `LiveService` (owners, visibility, pause and resume, history rings).
 
 ## Results port and results worker
 
@@ -1041,7 +1129,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
-| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results | zod, main and backend |
+| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |

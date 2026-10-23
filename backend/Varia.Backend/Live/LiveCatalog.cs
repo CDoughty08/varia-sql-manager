@@ -5,19 +5,31 @@ namespace Varia.Backend.Live;
 
 internal sealed record LiveIntervalJson(int Default, int Min, int Max);
 internal sealed record LiveIntervalBoundsJson(int Min, int Max);
-internal sealed record LiveSeriesJson(string Id, string Unit, string Label);
+/// <summary>Counter is how Live/LiveDeltas.cs turns raw values into samples: gauge, rate, msPerSecond, ratio or cpuPercent.</summary>
+internal sealed record LiveSeriesJson(string Id, string Unit, string Label, string Counter = "gauge");
 internal sealed record LiveColumnJson(string Id, string Name, string DataType);
 /// <summary>Mode is snapshot (replaced by each sample) or append (grows); Key names the columns that identify a row.</summary>
 internal sealed record LiveTableJson(string Id, string Mode, List<LiveColumnJson> Columns, List<string> Key);
-/// <summary>FilterMode is memory, restart or none (the probe refuses filters).</summary>
+/// <summary>Gates: the probe runs from this major version (the live band) on these EngineEdition values.</summary>
+internal sealed record LiveGatesJson(int MinMajor, List<int> Editions);
+/// <summary>FilterMode is memory, restart or none (the probe refuses filters). BudgetMs bounds a statement's budget (0.8 × the
+/// interval), MinGapMs is the least time between two samples a refresh may cause, MaxDutyCycle the load guard's share of the
+/// interval, Gates where the probe runs (null: everywhere its source runs), and Permission serverState or none.</summary>
 internal sealed record LiveProbeJson(string Id, string Source, string Label, string Description, LiveIntervalJson IntervalMs, List<LiveSeriesJson> Series,
-    List<LiveTableJson> Tables, List<string> Status, List<string> Views, string FilterMode);
+    List<LiveTableJson> Tables, List<string> Status, List<string> Views, string FilterMode, LiveIntervalBoundsJson? BudgetMs = null, int MinGapMs = 0,
+    double MaxDutyCycle = 0.25, LiveGatesJson? Gates = null, string Permission = "none")
+{
+    /// <summary>The budget when the entry names none: cheap DMV reads.</summary>
+    public static readonly LiveIntervalBoundsJson DefaultBudget = new(500, 5000);
+    public LiveIntervalBoundsJson Budget => BudgetMs ?? DefaultBudget;
+}
 /// <summary>Scope is server, ssisdb or none (a test source that touches no SQL Server).</summary>
 internal sealed record LiveSourceJson(string Id, string Label, string Description, string Scope, bool TestOnly, List<string> Probes);
 /// <summary>limits.live of src/shared/ipc/wire/protocol.ts, plus the event body limit.</summary>
 internal sealed record LiveLimitsJson(int PortStreams, int BackendSubscriptions, int PerServer, int Probes, int TablesPerProbe, int AppendPerProbe, int TablesPerTick,
     int Series, int Statuses, int StatusCharacters, int Errors, int MessageCharacters, int NoteCharacters, int Columns, LiveIntervalBoundsJson IntervalMs, int InitialCredit,
-    int FrameBudget, int SortColumns, int FilterCharacters, int FilterColumns, int TrackedKeys, int KeyCharacters, int ResumeCharacters, int Kept, int EventBody);
+    int FrameBudget, int SortColumns, int FilterCharacters, int FilterColumns, int TrackedKeys, int KeyCharacters, int ResumeCharacters, int Kept, int EventBody,
+    int StatementsPerConnection, int Statements, LiveIntervalBoundsJson BudgetMs, int BackoffMs, int IdleMs);
 
 /// <summary>The live catalogue, embedded as live-catalog.json (a vitest file snapshot keeps the copy in sync with
 /// src/shared/live/catalog.ts): sources, probes and what each emits, and the live limits. C# holds no ids of its own;
