@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import Icon from '../Icon'
 import Keybinding from '../Keybinding'
 import type { MatchRange } from './fuzzy'
 import type { QuickInputMessage, QuickInputRow, QuickInputView } from './QuickInputService'
@@ -107,7 +108,7 @@ function Widget({ view }: { view: QuickInputView }) {
         pressed.current = undefined
         if (event.detail <= 1) quickInput.accept(index, session)
       }}>
-      {icons && <span className={`quick-input-icon${item.icon ? ` codicon codicon-${item.icon}` : ''}`} aria-hidden="true" />}
+      {icons && <span className="quick-input-icon" aria-hidden="true">{item.icon && <Icon name={item.icon} />}</span>}
       <span className="quick-input-label"><Highlighted text={item.label} ranges={row.ranges} /></span>
       {item.description && <span className="quick-input-description"><Highlighted text={item.description} ranges={row.descriptionRanges} /></span>}
       <span className="quick-input-end">

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { colorKeys, colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
+import { densityVariables, metricVariables, reducedMotionVariables } from '../src/shared/theme/metrics'
 import { editorFontFamily, monoFontFamily, uiFontFamily } from '../src/renderer/src/fonts'
+import { stylesheetRules } from './fixtures/css-rules'
 
 const rendererDir = 'src/renderer/src'
 const stylesheet = readFileSync(join(rendererDir, 'styles.css'), 'utf8')
@@ -10,6 +12,7 @@ const css = stylesheet.replace(/\/\*[\s\S]*?\*\//g, '')
 const sources = readdirSync(rendererDir, { recursive: true, encoding: 'utf8' }).filter(file => /\.tsx?$/.test(file) && !file.endsWith('.d.ts'))
   .map(file => ({ file, code: readFileSync(join(rendererDir, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1') }))
 const fontVariables = ['--varia-font-ui', '--varia-font-mono']
+const metrics = metricVariables(), metricNames = Object.keys(metrics)
 // CSS Color 4 named colors; `transparent` and `currentColor` stay allowed.
 const namedColors = new Set(('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral '
   + 'cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred '
@@ -47,12 +50,25 @@ describe('theme tokens in the renderer', () => {
     }
     expect(found, 'Use var(--varia-*) and add a key to src/shared/theme/registry.ts instead:\n' + found.join('\n')).toEqual([])
   })
-  it('refers only to registry keys and the font variables', () => {
-    const unknown = [...variablesIn(css), ...sources.flatMap(({ code }) => variablesIn(code))].filter(name => !keyByVariable.has(name) && !fontVariables.includes(name))
+  it('refers only to registry keys, the font variables and the metric tokens', () => {
+    const unknown = [...variablesIn(css), ...sources.flatMap(({ code }) => variablesIn(code))].filter(name => !keyByVariable.has(name) && !fontVariables.includes(name) && !metricNames.includes(name))
     expect(unknown).toEqual([])
-    // Colors are set at runtime from the registry; the stylesheet only defines the fixed font stacks.
-    const defined = declarations.filter(({ property }) => property.startsWith('--varia-')).map(({ property }) => property)
-    expect(defined).toEqual(fontVariables)
+  })
+  it('defines only the font stacks and the metric tokens of metrics.ts, never a color key', () => {
+    // Colors are set at runtime from the registry; the stylesheet defines the fixed font stacks and the metrics on :root,
+    // and reduced motion turns the transitions off there.
+    const defined = stylesheetRules().flatMap(({ at, selector, declarations }) => declarations.filter(({ property }) => property.startsWith('--varia-')).map(({ property, value }) => ({ at: at.join(' '), selector, property, value })))
+    const root = defined.filter(({ at, selector }) => !at && selector === ':root')
+    expect(root.map(({ property }) => property)).toEqual([...fontVariables, ...metricNames])
+    expect(Object.fromEntries(root.filter(({ property }) => metricNames.includes(property)).map(({ property, value }) => [property, value]))).toEqual(metrics)
+    const reduced = defined.filter(({ at, selector }) => at === '@media (prefers-reduced-motion: reduce)' && selector === ':root')
+    expect(Object.fromEntries(reduced.map(({ property, value }) => [property, value]))).toEqual(reducedMotionVariables())
+    // The Comfortable density, once styles.css offers it, overrides exactly the bar and row heights.
+    const comfortable = defined.filter(({ at, selector }) => !at && selector === ':root[data-density="comfortable"]')
+    if (comfortable.length) expect(Object.fromEntries(comfortable.map(({ property, value }) => [property, value]))).toEqual(densityVariables('comfortable'))
+    expect(defined.length).toBe(root.length + reduced.length + comfortable.length)
+    // Metric names never meet a color key's variable (a key such as size.xs would be --varia-size-xs) or a font stack.
+    expect(metricNames.filter(name => keyByVariable.has(name) || fontVariables.includes(name))).toEqual([])
   })
   it('uses every key the registry assigns to CSS, and no others', () => {
     const used = new Set(variablesIn(css).map(name => keyByVariable.get(name)).filter((key): key is ColorKey => !!key))
@@ -78,12 +94,13 @@ describe('theme tokens in the renderer', () => {
     const workbench = declarations.filter(({ selector }) => selector === '.dock-workbench')
     expect(workbench.map(({ property }) => property).sort()).toEqual(['--dv-floating-titlebar-height', '--dv-paneview-header-height', '--dv-tab-font-size', '--dv-tabs-and-actions-container-height'])
   })
-  it('matches the font stacks in fonts.ts and keeps the Windows fonts first', () => {
+  it('matches the font stacks in fonts.ts and puts the Windows 11 fonts first, then the Windows 10 ones', () => {
     const root = new Map(declarations.filter(({ selector }) => selector === ':root').map(({ property, value }) => [property, value]))
     expect(root.get('--varia-font-ui')).toBe(uiFontFamily)
     expect(root.get('--varia-font-mono')).toBe(monoFontFamily)
-    expect(uiFontFamily.startsWith("'Segoe UI', ")).toBe(true)
-    expect(monoFontFamily.startsWith('Consolas, ')).toBe(true)
+    // The variable font's family for text sizes; Chromium does not match its bare name, 'Segoe UI Variable'.
+    expect(uiFontFamily.startsWith("'Segoe UI Variable Text', 'Segoe UI', ")).toBe(true)
+    expect(monoFontFamily.startsWith("'Cascadia Mono', Consolas, ")).toBe(true)
     expect(editorFontFamily.startsWith("'Cascadia Code', Consolas, ")).toBe(true)
     for (const stack of [uiFontFamily, monoFontFamily, editorFontFamily]) expect(stack).toMatch(/, (sans-serif|monospace)$/)
     const families = declarations.filter(({ property, value }) => /^font(-family)?$/.test(property) && !value.includes('var(--varia-font-') && value !== 'inherit')

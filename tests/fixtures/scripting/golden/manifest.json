@@ -70,6 +70,7 @@
     "16/database-trigger-drop.sql": "varia",
     "16/default-create.sql": "varia",
     "16/default-drop.sql": "varia",
+    "16/full-text-catalog-create-full-text.sql": "varia",
     "16/full-text-catalog-create.sql": "varia",
     "16/full-text-catalog-drop.sql": "varia",
     "16/full-text-stoplist-create.sql": "varia",
