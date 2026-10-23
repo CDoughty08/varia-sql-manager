@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useLayoutEffect, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { applicationMenus, mnemonicIndex, type MenubarId } from '../../shared/commands/menus'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import Icon from './Icon'
@@ -8,11 +8,12 @@ interface ControlsOverlay extends EventTarget { visible: boolean }
 const point = (event: ReactPointerEvent) => ({ x: event.clientX, y: event.clientY })
 
 /**
- * The title bar: the menubar on Windows and Linux (macOS uses its native menu bar, so there it is only the caption), the
- * caption, and room for the native window controls. The menubar has no key handlers: `KeybindingService` routes keys
- * to the menus while they own the keyboard, and focus follows the menus' state.
+ * The header, one row: the menubar on Windows and Linux (macOS uses its native menu bar and shows the caption there
+ * instead), the search box in the middle, the toolbar, and room for the native window controls. The window's title is
+ * the document title on every platform. The menubar has no key handlers: `KeybindingService` routes keys to the menus
+ * while they own the keyboard, and focus follows the menus' state.
  */
-export default function TitleBar({ title }: { title: string }) {
+export default function TitleBar({ title, center, actions }: { title: string; center?: ReactNode; actions?: ReactNode }) {
   const { menus, platform } = useWorkbench()
   const view = useServiceSnapshot(menus.controller)
   const { altHeld } = useServiceSnapshot(menus.access)
@@ -54,9 +55,10 @@ export default function TitleBar({ title }: { title: string }) {
         {platform !== 'darwin' && <nav className="title-bar-menus" role="menubar" aria-label="Application menu" data-mnemonics={altHeld || (view.mnemonics && focused) ? 'visible' : 'hidden'}>
           {applicationMenus.map(menu => button(menu.id, menu.label, menu.mnemonic))}
         </nav>}
+        {platform === 'darwin' && <span className="title-bar-caption" title={title}>{title}</span>}
       </div>
-      <span className="title-bar-caption" title={title}>{title}</span>
-      <span className="title-bar-spacer" />
+      <div className="title-bar-center">{center}</div>
+      <div className="title-bar-actions">{actions}</div>
     </div>
   </header>
 }

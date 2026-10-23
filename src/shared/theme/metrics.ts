@@ -79,7 +79,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 /** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
-  sm: ['.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon'],
+  sm: ['.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon'],
   md: ['.icon'],
   lg: ['.explorer-empty > .icon']
 }
@@ -106,7 +106,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
+  header: ['.title-bar'], bar: ['.query-tabs', '.explorer-header'], control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {

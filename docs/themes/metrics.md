@@ -74,7 +74,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use | Sized with it |
 | --- | --- | --- | --- |
 | `--varia-glyph-badge` | 9 | The status mark at a tree icon's corner. | `.oe-icon .oe-badge` |
-| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.editor-status .codicon` |
+| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.tab-select .tab-running`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.editor-status .codicon` |
 | `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
 | `--varia-glyph-lg` | 24 | Empty states. | `.explorer-empty > .icon` |
 
@@ -84,8 +84,8 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
-| `--varia-header` | 40 | 44 | The title bar. | Not yet |
-| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs` |
-| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button` |
+| `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
+| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.explorer-header` |
+| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.command-centre`, `.header-context select`, `.header-toolbar .execute` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

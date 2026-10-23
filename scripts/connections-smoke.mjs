@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -23,12 +23,12 @@ const failures = []
 const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
-async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
+async function launch(options = launchOptions, runtime) {
   app = await electron.launch(options)
   page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(ready)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, runtime)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
@@ -372,8 +372,8 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(queryStatus(page)).toContainText('Development')
-  // The query status bar sits below the query by default, so the connection's colour is its top edge, facing the query.
-  expect(await queryStatus(page).evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
+  // The active query's connection colour is the status bar's top edge.
+  expect(await statusBar(page).evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
@@ -525,7 +525,7 @@ async function rememberPassword() {
     return dialog
   }
 
-  await launch(options, 'fake · Ready')
+  await launch(options, 'fake')
   // (1) Typed and remembered, then (2) only ciphertext under the history entry's id.
   let dialog = await open()
   await fill(dialog, marker)
@@ -559,7 +559,7 @@ async function rememberPassword() {
   await noSecrets()
   // (6) Kept across a restart.
   await app.close(); app = undefined
-  await launch(options, 'fake · Ready')
+  await launch(options, 'fake')
   dialog = await remembered()
   await connected(dialog)
   // (7) Rejected after a password change: forgotten, and the dialog says so.
@@ -630,7 +630,7 @@ async function rememberPassword() {
   await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
   await app.close(); app = undefined
   // (12) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
-  await launch({ ...launchOptions, env: seamless }, 'fake · Ready')
+  await launch({ ...launchOptions, env: seamless }, 'fake')
   const backend = await app.evaluate(({ safeStorage }) => process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os')
   dialog = await open()
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')

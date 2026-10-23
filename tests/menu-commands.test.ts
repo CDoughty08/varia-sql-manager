@@ -235,6 +235,34 @@ describe('context menu commands', () => {
     vi.mocked(host.paneLocation).mockReturnValue('closed')
     expect(enabled(tab('output'))).toEqual([])
   })
+  it('dock a panel at a side or as a tab beside another open panel, from its tab or its ⋯ button', async () => {
+    const { commands, host, menus } = setup()
+    const tab = (pane: 'explorer' | 'editor' | 'output'): CommandArgs => ({ target: { kind: 'dockTab', pane, floating: false } })
+    vi.mocked(host.paneLocation).mockImplementation(pane => pane === 'editor' ? 'closed' : 'grid')
+    const ids = ['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput'] as const
+    const enabled = (args?: CommandArgs) => ids.filter(id => commands.isEnabled(id, args))
+    // Never beside itself, and never beside a closed panel; a closed panel has nothing to move.
+    expect(enabled(tab('output'))).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer'])
+    expect(enabled(tab('editor'))).toEqual([])
+    expect(enabled()).toEqual([])
+    // The menu hides the Tab with item that would name the panel itself.
+    const titles = (pane: 'explorer' | 'output') => menus.resolve('dockTab.context', { kind: 'dockTab', pane, floating: false }).flatMap(item => item.kind === 'command' && item.id.startsWith('pane.tabWith') ? [item.title] : [])
+    expect(titles('explorer')).toEqual(['Tab with Query Editor', 'Tab with Query Output'])
+    expect(titles('output')).toEqual(['Tab with Object Explorer', 'Tab with Query Editor'])
+    await commands.execute('pane.dockRight', tab('explorer'), 'menu')
+    await commands.execute('pane.dockTop', tab('output'), 'menu')
+    await commands.execute('pane.tabWithExplorer', tab('output'), 'menu')
+    expect([vi.mocked(host.dockPaneAt).mock.calls, vi.mocked(host.tabPaneWith).mock.calls]).toEqual([[['explorer', 'right'], ['output', 'top']], [['output', 'explorer']]])
+  })
+  it('show and hide the tabs of panels alone in their group from Window › Panel Tabs, and remember it', async () => {
+    const { commands, context, shellOptions, api } = setup()
+    expect([context.getState().panelTabsVisible, shellOptions.getSnapshot().panelTabs]).toEqual([false, false])
+    await commands.execute('window.togglePanelTabs', undefined, 'menu')
+    expect([context.getState().panelTabsVisible, shellOptions.getSnapshot().panelTabs]).toEqual([true, true])
+    expect(api.updateSettings).toHaveBeenLastCalledWith({ 'environment.layout.panelTabs': true })
+    await commands.execute('window.togglePanelTabs', undefined, 'menu')
+    expect(context.getState().panelTabsVisible).toBe(false)
+  })
   it('open the focused element\'s menu for Shift+F10, except over the quick input', async () => {
     const { commands, menus, quickInput } = setup()
     const open = vi.spyOn(menus, 'openForElement').mockReturnValue(true)

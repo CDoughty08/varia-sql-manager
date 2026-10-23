@@ -294,6 +294,34 @@ describe('ExplorerService: loading', () => {
   })
 })
 
+describe('ExplorerService: search', () => {
+  it('lists the loaded objects with their paths, leaves folders and unloaded objects out, and stops at the limit', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases')
+    const sent = f.calls().length
+    expect(f.explorer.loadedObjects(100).map(item => [item.label, item.path, item.icon])).toEqual([
+      ['server-a.example', '', 'server'], ['AppData', 'server-a.example › Databases', 'database'], ['Locked', 'server-a.example › Databases', 'database'], ['Offline', 'server-a.example › Databases', 'database']])
+    expect(f.explorer.loadedObjects(2).map(item => item.label)).toEqual(['server-a.example', 'AppData'])
+    expect(f.calls()).toHaveLength(sent)
+  })
+  it('reveals a loaded node under collapsed folders by expanding them and selecting it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const databases = await f.open('Databases')
+    const appData = f.find('AppData')
+    f.explorer.collapse(databases)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
+    const reveals = f.explorer.getSnapshot().reveal ?? 0
+    expect(f.explorer.reveal(appData)).toBe(true)
+    expect(f.labels()).toContain('    AppData')
+    expect(f.explorer.getSnapshot()).toMatchObject({ selected: appData, reveal: reveals + 1 })
+    expect(f.explorer.reveal(987_654)).toBe(false)
+  })
+})
+
 describe('ExplorerService: errors', () => {
   it('shows a folder error as a row, keeps static folders, and retries with Enter', async () => {
     const f = fixture()

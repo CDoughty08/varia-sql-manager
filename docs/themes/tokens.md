@@ -78,7 +78,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (206)
+## Color keys (210)
 
 ### Base
 
@@ -112,6 +112,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `titleBar.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Line below the title bar. |
 | `titleBar.iconForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Application icon in the title bar. |
 | `titleBar.controlsForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
+| `commandCenter.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Search box in the title bar (the command centre). |
+| `commandCenter.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Search box text, icon and key. |
+| `commandCenter.activeBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Search box while hovered. |
+| `commandCenter.border` | VS Code | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of the search box. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the open title-bar menu. |
 | `menubar.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the open, hovered, or focused title-bar menu; none by default. |
@@ -153,7 +157,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
 | `sideBar.background` | VS Code | `$sideBar` | `#111317` | `#f7f8fa` | Object Explorer. |
-| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Side bar section titles. Not used yet; reserved for side bar section titles. |
+| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Section titles of side panels, such as the Object Explorer header. |
 | `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Lines around the Object Explorer toolbar and footer. |
 | `list.hoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#29314f` | `#d9e0fb` | Selected row of a focused list. |

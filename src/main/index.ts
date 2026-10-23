@@ -32,6 +32,7 @@ import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
+import { defaultDensity, densities } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
@@ -412,6 +413,7 @@ function applyAppearance(state: ThemeState): void {
 }
 
 /** `bounds` and `maximized` place a window that replaces one whose renderer was lost. */
+const headerHeight = densities[defaultDensity].header
 function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): void {
   // Lifecycle state belongs to one window; on macOS a forced close keeps the app running for the next window.
   closeApproved = false
@@ -426,7 +428,8 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
     title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, minWidth: 1024, minHeight: 700,
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
-    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
+    // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: (headerHeight - 16) / 2 } } : { titleBarOverlay: { ...chrome.overlay, height: headerHeight } }),
     webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }

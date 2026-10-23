@@ -22,6 +22,7 @@ export const part = {
   titleBar: '.title-bar',
   titleBarContent: '.title-bar-content',
   titleBarCaption: '.title-bar-caption',
+  titleBarMenus: '.title-bar-menus',
   /** The Varia mark at the title bar's start. */
   titleBarBrand: '.title-bar-brand',
   /** The banners above the workspace: command, file and theme notices and the backend's. */
@@ -68,11 +69,15 @@ export const part = {
   explorerIcon: '.oe-icon',
   explorerBadge: '.oe-badge',
   explorerAccent: '.oe-accent',
+  /** The tree's own box and rows, for page code that builds a probe tree to read the row styles. */
+  explorerTreeView: '.explorer-tree',
+  explorerRow: '.explorer-row',
   explorerProgressRow: '.explorer-row.progress',
   explorerErrorRow: '.explorer-row.error',
   explorerSyntheticRow: '.explorer-row.synthetic',
   explorerError: '.explorer-error',
   // Menus and the quick input
+  menu: '.menu',
   menuLayer: '.menu-layer',
   menuMnemonic: '.menu-mnemonic',
   menuKeybinding: '.menu-keybinding',
@@ -84,6 +89,8 @@ export const part = {
   quickInputEmpty: '.quick-input-empty',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** An object dialog's page list (Database Properties). */
+  dialogPages: '.object-dialog-pages',
   optionsNote: '.options-note',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',
@@ -102,14 +109,7 @@ export const part = {
   activeDockingGuideCell: '.docking-guide-cell.active',
   dockingPreview: '.docking-preview',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
-  dockShell: '.varia-dock',
-  // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
-  // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
-  menu: '.menu',
-  explorerTreeBox: '.explorer-tree',
-  explorerRow: '.explorer-row',
-  dialogPages: '.object-dialog-pages',
-  titleBarMenus: '.title-bar-menus'
+  dockShell: '.varia-dock'
 }
 
 /** The query status facts by key (QueryStatusSegment's keys), each in its own segment. */
@@ -155,7 +155,10 @@ export const titleBar = page => page.locator(part.titleBar)
 /** Dockview's theme classes on its shell, and whether Varia's own class sits beside them. */
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
-/** The Standard toolbar: Connect, New query, Open, Save, Execute, Cancel, Layouts, and the server and database pickers. */
+/**
+ * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All, the server and
+ * database pickers, Execute and Cancel; with the classic toolbar on, the same names as text buttons plus Layouts.
+ */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
@@ -168,8 +171,15 @@ export const backendBanner = page => page.locator(part.backendBanner)
 export const themeNotice = page => page.locator(part.themeNotice)
 export const layoutError = page => banner(page).filter({ has: page.getByRole('button', { name: 'Dismiss layout error', exact: true }) })
 export const statusBar = page => page.getByRole('contentinfo', { name: 'Status bar', exact: true })
+/**
+ * The status bar's backend segment once the backend is ready: Ready, with the runtime in its tooltip ('fake' for the
+ * fake backend; by default the real one's .NET).
+ */
+export const backendReady = (page, runtime = /\.NET \d+\./) => statusBar(page).getByTitle(new RegExp('^SQL backend: ' + (typeof runtime === 'string' ? runtime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : runtime.source)))
+/** The header's search box (the command centre). */
+export const searchBox = page => titleBar(page).getByRole('button', { name: 'Search', exact: true })
 /** The status bar's Object Explorer segment (renames, scripting, notices), a live region. */
-export const statusSegment = page => statusBar(page).getByRole('status')
+export const statusSegment = page => statusBar(page).locator(part.statusSegment)
 export const editorStatus = page => statusBar(page).locator(part.editorStatus)
 export const caretStatus = page => editorStatus(page).getByLabel(/^Line \d+, column \d+, character \d+$/)
 export const inputModeStatus = page => editorStatus(page).getByTitle(/ mode \(Insert switches to/)
@@ -207,11 +217,22 @@ export const editorText = page => page.locator('.monaco-editor .view-lines').inn
 // Panes: the dock's panels, each with a tab in its group's header
 
 const paneTitles = { explorer: 'Object Explorer', editor: 'Query editor', output: 'Query output' }
+/** The panel menu's names for the panels, in its Tab with items. */
+const paneMenuTitles = { explorer: 'Object Explorer', editor: 'Query Editor', output: 'Query Output' }
+const paneMoves = { left: 'Dock Left', right: 'Dock Right', top: 'Dock Top', bottom: 'Dock Bottom', float: 'Float', dock: 'Dock', close: 'Close' }
 export const pane = (page, id) => page.locator(`[data-pane="${id}"]`)
 export const paneTab = (page, id) => page.locator(`[data-pane-tab="${id}"]`)
+/** The close button on a panel's dock tab, which shows only while the tab does (a group of several panels, a floating one, or Window › Panel Tabs). */
 export const closePaneButton = (page, id) => page.getByRole('button', { name: 'Close ' + paneTitles[id], exact: true })
-/** Moves the pane its group shows: left, right, top, bottom, float, close, or tab:<pane>. */
-export const movePane = (page, id, where) => page.getByLabel('Move ' + paneTitles[id], { exact: true }).selectOption(where)
+/** The ⋯ button in a panel's own header, which opens the panel's menu. */
+export const paneMenuButton = (page, id) => page.getByRole('button', { name: paneTitles[id] + ' panel menu', exact: true })
+/** Moves a pane through its ⋯ menu: left, right, top, bottom, float, dock, close, or tab:<pane>. */
+export const movePane = async (page, id, where) => {
+  await paneMenuButton(page, id).click()
+  const name = where.startsWith('tab:') ? 'Tab with ' + paneMenuTitles[where.slice(4)] : paneMoves[where]
+  if (!name) throw new Error('No panel move ' + where)
+  await page.getByRole('menu').getByRole('menuitem', { name, exact: true }).click()
+}
 
 // Query output
 

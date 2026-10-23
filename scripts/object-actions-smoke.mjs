@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
-import { documentTabs, errorBanner, explorerLabel, menuItemNames, objectDialogConnection, objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, renameBox, statusSegment, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, errorBanner, explorerLabel, menuItemNames, objectDialogConnection, objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, renameBox, statusSegment, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'object-actions-profile-'))
@@ -63,7 +63,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await application.evaluate(installActionsStub, actionsStubData())
   await connect('server-a')
   // Top down, so no row moves once its own folder has loaded: a right-click must land on the row it selects.
