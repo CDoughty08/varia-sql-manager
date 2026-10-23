@@ -11,7 +11,7 @@ import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/i
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
 import type { BackendMethod, BackendMethods, ResultDescriptor } from '../src/shared/contracts'
 import { decodePage } from '../src/shared/ipc/wire/pages'
-import { cellText } from '../src/shared/ipc/wire/cells'
+import { CELL_NULL, cellFlags, cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
 import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiveEvent } from '../src/shared/live/schema'
@@ -647,6 +647,51 @@ describe('real .NET sidecar live subscriptions (test hooks)', () => {
     await expect.poll(() => disconnected.events.length).toBe(1)
     await call(connection, 'connections.disconnect', { connectionId: value.connectionId })
     expect(await disconnected.done).toMatchObject({ ended: 'disconnected' })
+  }, 60_000)
+
+  /** Every row of a stored result as the worker decodes it: each cell's text, null for NULL. */
+  async function rowsOf(connection: BackendConnection, descriptor: ResultDescriptor | { resultId: number; columns: readonly { wire: 'text' | 'binary' }[] }) {
+    const rows: (string | null)[][] = []
+    const read = connection.send('results.read', { resultId: descriptor.resultId, firstRow: 0, maxRows: 65_536 }, { deadlineMs: 60_000, credit: 16 * 1024 * 1024, stream: { data: (_seq, body) => {
+      const view = decodePage(body, descriptor.columns)
+      for (let row = 0; row < view.rowCount; row++) rows.push(descriptor.columns.map((_, column) => cellFlags(view, column, row) & CELL_NULL ? null : cellText(view, column, row).text))
+    } } })
+    await read.done
+    return rows
+  }
+
+  it('sends main-valid table samples (two tables, facets, an append log) whose keys equal the cells the worker decodes', async () => {
+    const connection = backend(hooks)
+    const value = params({ tickMs: 20, rows: 6, logRows: 3, lateEvery: 2 }, ['debug.synthetic.grid', 'debug.synthetic.log'])
+    const live = subscribe(connection, value)
+    for (let tick = 0; tick < 5; tick++) {
+      await expect.poll(() => live.events.length).toBe(tick + 1)
+      live.ack()
+    }
+    await expect.poll(() => live.events.length).toBe(6)
+    expect(live.invalid).toEqual([])
+    const ticks = live.events.map(item => item.event).filter(event => event.type === 'live.tick')
+    const grid = ticks.at(-1)!.samples.find(sample => sample.probe === 'debug.synthetic.grid')!
+    expect(grid.tables?.map(table => table.table)).toEqual([0, 1])
+    expect(ticks[0].samples.find(sample => sample.probe === 'debug.synthetic.grid')!.tables![0].facets).toMatchObject([{ column: 'group' }])
+    const items = await rowsOf(connection, grid.tables![0].descriptor)
+    expect(items.map(row => row[2])).toEqual(items.map(row => 'Item ' + row[0]))
+    // Track two keys as the grid will: the cell texts the worker decoded.
+    const keys = [items[1][0]!, items[4][0]!]
+    await call(connection, 'live.update', { subscriptionId: value.subscriptionId, source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 9, keys }] } as BackendMethods['live.update']['params'])
+    live.ack()
+    await expect.poll(() => live.events.length).toBe(7)
+    const next = live.events.at(-1)!.event
+    const tracked = next.type === 'live.tick' ? next.samples.find(sample => sample.probe === 'debug.synthetic.grid')!.tables![0] : undefined
+    const after = await rowsOf(connection, tracked!.descriptor)
+    expect(tracked!.tracked!.seq).toBe(9)
+    expect(tracked!.tracked!.rows.map(row => after[row][0])).toEqual(keys)
+    const log = ticks.flatMap(event => event.samples.filter(sample => sample.probe === 'debug.synthetic.log').flatMap(sample => sample.append ?? [])).at(-1)!
+    const messages = (await rowsOf(connection, log.descriptor)).map(row => Number(row[0]))
+    expect(new Set(messages).size).toBe(messages.length)
+    expect(messages.length).toBeGreaterThan(5)
+    connection.cancel(live.id, 1)
+    expect(await live.done).toMatchObject({ ended: 'cancelled' })
   }, 60_000)
 
   it('has no synthetic source without its test hooks', async () => {

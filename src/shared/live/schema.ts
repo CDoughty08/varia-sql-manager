@@ -11,15 +11,30 @@ import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type Liv
 
 const L = limits.live
 
+/** Where an append table starts, for a source whose args take it: at its first row, at the last `tail` rows (a note row
+ *  says how many earlier rows are not shown), or at the rows just before an id (older rows than a view already shows; the
+ *  table then ends there). */
+export const liveStartSchema = z.union([
+  z.literal('beginning'),
+  z.object({ tail: z.number().int().min(1).max(L.segmentRows) }).strict(),
+  z.object({ before: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).strict()
+])
+export type LiveStart = z.infer<typeof liveStartSchema>
+
 /** Per-source `args`: what a source needs beyond its probes. Each member is bounded; unknown members are refused. */
 export const liveArgsSchemas = {
   // Test controls: the snapshot's row count, a sampling period below the 1 s minimum so tests run fast, a sample count
-  // after which the source ends (sourceEnded, its last table kept), and a probe error value every n-th sample.
+  // after which the source ends (sourceEnded, its last tables kept), a probe error value every n-th sample, and the log's
+  // messages per sample, lowest level shown, late messages and start.
   'debug.synthetic': z.object({
     rows: z.number().int().min(0).max(10_000).optional(),
     tickMs: z.number().int().min(10).max(60_000).optional(),
     endAfterTicks: z.number().int().min(1).max(10_000).optional(),
-    errorEvery: z.number().int().min(1).max(1000).optional()
+    errorEvery: z.number().int().min(1).max(1000).optional(),
+    logRows: z.number().int().min(0).max(10_000).optional(),
+    logLevel: z.number().int().min(0).max(3).optional(),
+    lateEvery: z.number().int().min(1).max(1000).optional(),
+    start: liveStartSchema.optional()
   }).strict(),
   // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
   activity: z.never()
@@ -75,6 +90,8 @@ export interface LiveProbeError {
   series?: number[]
 }
 export interface LiveOpenedProbe { probe: LiveProbeId; intervalMs: number; minIntervalMs: number; maxIntervalMs: number; state: 'ok' | 'limited' | 'unavailable'; reason?: LiveErrorCode; note?: string }
+/** One column's distinct values with how many rows hold each, most frequent first; `more` when values were left out. */
+export interface LiveFacet { column: string; values: { text: string; count: number }[]; more?: true }
 export interface LiveSnapshotSample<D = BackendResultDescriptor> {
   /** The table's index in the probe's catalogue entry. */
   table: number
@@ -85,8 +102,15 @@ export interface LiveSnapshotSample<D = BackendResultDescriptor> {
   diff?: { added: number; removed: number; changed: number }
   /** The new row of each tracked key, in the order of the track list with this `seq`; -1 when the row is gone. */
   tracked?: { seq: number; rows: number[] }
+  /** Rows of this revision that left the source and stay for this one revision because they were tracked (a table whose
+   *  catalogue entry has `departed`). */
+  departed?: number[]
+  /** The facet columns whose values changed since the last facets this table sent, over every row the source gave
+   *  (before the view and filter). */
+  facets?: LiveFacet[]
 }
-export interface LiveAppendSample<D = BackendResultDescriptor> { table: number; descriptor: D; segment: number; rolledFrom?: number; retired?: number[] }
+/** `restarted`: the table started again (a new filter or args), and `retired` names every segment it had. */
+export interface LiveAppendSample<D = BackendResultDescriptor> { table: number; descriptor: D; segment: number; rolledFrom?: number; retired?: number[]; restarted?: true }
 export interface LiveSample<D = BackendResultDescriptor> {
   probe: LiveProbeId
   costMs: number
@@ -138,6 +162,7 @@ const tableIndex = z.number().int().min(0).max(L.tablesPerProbe + L.appendPerPro
 /** Catalogue ids of columns, views and status values: camelCase, at most 32 characters. */
 const catalogId = z.string().regex(/^[a-z][A-Za-z0-9]{0,31}$/)
 const resumeToken = z.string().min(1).max(L.resumeCharacters).regex(/^[A-Za-z0-9_-]+$/)
+const utf8 = new TextEncoder()
 const idEnum = (ids: readonly string[]) => ids.length > 0 ? z.enum(ids as [string, ...string[]]) : z.never()
 
 /** Every live schema for one catalogue; `test` admits its test-only sources in requests. */
@@ -243,14 +268,21 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
     retired: z.array(u32).min(1).max(2).optional(),
     diff: z.object({ added: nonNegative31, removed: nonNegative31, changed: nonNegative31 }).strict().optional(),
-    tracked: z.object({ seq: u31, rows: z.array(z.number().int().min(-1).max(2 ** 31 - 1)).max(L.trackedKeys) }).strict().optional()
+    tracked: z.object({ seq: u31, rows: z.array(z.number().int().min(-1).max(2 ** 31 - 1)).max(L.trackedKeys) }).strict().optional(),
+    departed: z.array(nonNegative31).min(1).max(L.trackedKeys).optional(),
+    facets: z.array(z.object({
+      column: catalogId,
+      values: z.array(z.object({ text: z.string().max(L.facetCharacters), count: u31 }).strict()).max(L.facetValues),
+      more: z.literal(true).optional()
+    }).strict()).min(1).max(L.facetColumns).optional()
   }).strict()
   const appendSample = z.object({
     table: tableIndex,
     descriptor: backendDescriptorSchema,
     segment: nonNegative31,
     rolledFrom: u32.optional(),
-    retired: z.array(u32).min(1).max(1).optional()
+    retired: z.array(u32).min(1).max(L.segmentResults).optional(),
+    restarted: z.literal(true).optional()
   }).strict()
   const sample = z.object({
     probe: probeId,
@@ -268,7 +300,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
   /** What every sample may hold according to its probe's catalogue entry. */
   function checkSamples(samples: readonly z.infer<typeof sample>[], ctx: z.RefinementCtx): void {
     if (new Set(samples.map(item => item.probe)).size !== samples.length) ctx.addIssue({ code: 'custom', message: 'A probe is sampled once per tick.', path: ['samples'] })
-    let tables = 0
+    let tables = 0, facetBytes = 0
     samples.forEach((item, index) => {
       const spec = catalog.probes[item.probe]
       const issue = (message: string) => ctx.addIssue({ code: 'custom', message, path: ['samples', index] })
@@ -282,10 +314,18 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
         }
         tables += entries.length
       }
+      for (const entry of item.tables ?? []) {
+        const table = spec.tables?.[entry.table]
+        if (entry.departed !== undefined && (table?.departed !== true || new Set(entry.departed).size !== entry.departed.length)) issue('Only a table that keeps departed rows lists them, each once.')
+        const columns = entry.facets?.map(facet => facet.column) ?? []
+        if (columns.some(column => !(table?.facets ?? []).includes(column)) || new Set(columns).size !== columns.length) issue('Facets name the table\'s facet columns, each once.')
+        for (const facet of entry.facets ?? []) for (const value of facet.values) facetBytes += utf8.encode(value.text).length
+      }
       const ids = item.status?.map(value => value.id) ?? []
       if (ids.some(id => !(spec.status ?? []).includes(id)) || new Set(ids).size !== ids.length) issue('Unknown status value.')
     })
     if (tables > L.tablesPerTick) ctx.addIssue({ code: 'custom', message: 'Too many tables in one tick.', path: ['samples'] })
+    if (facetBytes > L.facetBytes) ctx.addIssue({ code: 'custom', message: 'Too much facet text in one tick.', path: ['samples'] })
   }
 
   const event = z.discriminatedUnion('type', [

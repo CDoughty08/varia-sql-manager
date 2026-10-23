@@ -80,7 +80,7 @@ internal static class LiveChecks
         var catalog = LiveCatalog.Current;
         check(catalog.Limits is { PortStreams: 16, BackendSubscriptions: 32, PerServer: 8, Probes: 8, InitialCredit: Credit, EventBody: ProtocolLimits.EventBody, FrameBudget: 192 * 1024 }
             && catalog.Sources.TryGetValue(SyntheticSampler.Source, out var source) && source.TestOnly
-            && source.Probes.SequenceEqual([SyntheticSampler.MetricsProbe, SyntheticSampler.TableProbe, SyntheticSampler.StatusProbe])
+            && source.Probes.SequenceEqual([SyntheticSampler.MetricsProbe, SyntheticSampler.TableProbe, SyntheticSampler.StatusProbe, SyntheticSampler.GridProbe, SyntheticSampler.LogProbe, SyntheticSampler.WideProbe])
             && catalog.Probes[SyntheticSampler.TableProbe].Tables is [{ Mode: "snapshot", Key: ["id"], Columns.Count: 3 }],
             "the embedded live catalogue carries main's limits and the synthetic source's probes");
         using var service = new SqlService();

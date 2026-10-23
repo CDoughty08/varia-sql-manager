@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { limits } from '../src/shared/ipc/wire/protocol'
-import { defaultBudgetMs, liveCatalogJson, liveCounters, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
+import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 
@@ -51,14 +51,39 @@ describe('live catalogue', () => {
       for (const table of tables) {
         expect(table.columns.length, id).toBeGreaterThan(0)
         expect(table.columns.length, id).toBeLessThanOrEqual(L.columns)
-        for (const column of table.columns) expect(column.id, id).toMatch(catalogId)
+        for (const column of table.columns) { expect(column.id, id).toMatch(catalogId); expect(liveDataTypes, id).toContain(column.dataType) }
         for (const key of table.key) expect(table.columns.map(column => column.id), id).toContain(key)
+        const columnIds = table.columns.map(column => column.id)
+        if (table.mode === 'snapshot') {
+          // A snapshot's own settings: a row cap within the limit, departed rows only where rows have a key, facets on its own columns.
+          expect(table.rowCap === undefined || (Number.isInteger(table.rowCap) && table.rowCap >= 1 && table.rowCap <= L.snapshotRows), id).toBe(true)
+          expect(!table.departed || table.key.length > 0, id).toBe(true)
+          expect((table.facets ?? []).length, id).toBeLessThanOrEqual(L.facetColumns)
+          expect(new Set(table.facets ?? []).size, id).toBe((table.facets ?? []).length)
+          for (const facet of table.facets ?? []) expect(columnIds, id).toContain(facet)
+          expect(table.settle === undefined && table.batchRows === undefined, id).toBe(true)
+        } else {
+          // An append table reads by one integer keyset id, settles within a minute, and reads at most batchRows a tick.
+          expect(table.key.length, id).toBe(1)
+          expect(['int', 'bigint'], id).toContain(table.columns.find(column => column.id === table.key[0])?.dataType)
+          expect(table.settle === undefined || (Number.isInteger(table.settle.ticks) && table.settle.ticks >= 1 && table.settle.ticks <= 10 && Number.isInteger(table.settle.ms) && table.settle.ms >= 0 && table.settle.ms <= 60_000), id).toBe(true)
+          expect(table.batchRows === undefined || (Number.isInteger(table.batchRows) && table.batchRows >= 1 && table.batchRows <= L.batchRows), id).toBe(true)
+          expect(table.rowCap === undefined && table.departed === undefined && table.facets === undefined, id).toBe(true)
+        }
       }
       expect((probe.status ?? []).length, id).toBeLessThanOrEqual(L.statuses)
       for (const status of probe.status ?? []) expect(status, id).toMatch(catalogId)
       for (const view of probe.views ?? []) expect(view, id).toMatch(catalogId)
       expect((probe.series ?? []).length + tables.length + (probe.status ?? []).length, id).toBeGreaterThan(0)
     }
+  })
+  it('keeps a statusOnly source\'s hidden sampling to probes without tables', () => {
+    for (const id of liveSourceIds) {
+      const source = liveSources[id]
+      expect([undefined, 'pause', 'statusOnly'], id).toContain(source.hidden)
+      if (source.hidden === 'statusOnly') expect(source.probes.some(probe => (liveProbes[probe as typeof liveProbeIds[number]].tables ?? []).length === 0), id).toBe(true)
+    }
+    expect(L.hiddenIntervalMs).toBeGreaterThanOrEqual(30_000)
   })
   it('gives every source its args schema, and keeps test-only sources out of production', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
