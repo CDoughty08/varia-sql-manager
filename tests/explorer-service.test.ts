@@ -153,6 +153,49 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   return { ...backend, backend, explorer, connections, events, emitted, clock, connect, rows, labels, find, open, calls }
 }
 
+/** Measure reconciliation's work, not a shared runner's GC pauses or setTimeout(0) wakeup time. Old refs count matching
+ *  work; table reads catch a scan of every pending load for each unchanged leaf. Flattening visits the visible nodes
+ *  directly, so it does not charge a table lookup for every visible row. */
+async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, matches: (params: ExplorerChildrenParams) => boolean = isFolder('tables')) {
+  let refs = 0, lookups = 0
+  const table = f.explorer.table, get = table.get
+  table.get = function(id) { lookups++; return get.call(this, id) }
+  for (const child of f.explorer.node(tables)!.children!) {
+    const ref = child.ref
+    Object.defineProperty(child, 'ref', { configurable: true, enumerable: true, get: () => { refs++; return ref } })
+  }
+  let pages = 0
+  try {
+    for (;;) {
+      const pending = f.sent.filter(entry => !entry.settled && matches(entry.params))
+      if (!pending.length) break
+      expect(pending).toHaveLength(1)
+      const offset = pending[0].params.cursor ? Number(pending[0].params.cursor.split('.')[2]) : 0
+      const count = Math.min(f.state.pageSize, f.state.tables.length - offset) + (offset === 0 ? 1 : 0)
+      const version = f.explorer.getSnapshot().version
+      refs = lookups = 0
+      f.release(matches)
+      // The next page stays unanswered across this event-loop turn: its predecessor must be published independently.
+      await settle()
+      // Work grows with the arriving page, rather than the old folder or the unrelated pending-load queue per row.
+      const budget = count * 16
+      expect(refs, `page ${pages + 1}: old-node identity reads`).toBeLessThanOrEqual(budget)
+      expect(lookups, `page ${pages + 1}: node-table reads`).toBeLessThanOrEqual(budget)
+      const loaded = Math.min(offset + f.state.pageSize, f.state.tables.length)
+      expect(f.explorer.node(tables)!.children![loaded].label).toBe(f.state.tables[loaded - 1])
+      expect(f.explorer.getSnapshot().version).toBeGreaterThan(version)
+      const next = f.sent.filter(entry => !entry.settled && matches(entry.params))
+      expect(next).toHaveLength(loaded < f.state.tables.length ? 1 : 0)
+      // A user selection is still applied while the next page waits, rather than waiting for the entire folder.
+      const selected = pages % 2 ? tables : f.explorer.node(tables)!.children![1].id
+      f.explorer.select(selected)
+      expect(f.explorer.getSnapshot().selected).toBe(selected)
+      pages++
+    }
+    return pages
+  } finally { table.get = get }
+}
+
 describe('ExplorerService: loading', () => {
   it('expands a new server, loads nothing below its static folders, and selects it', async () => {
     const f = fixture()
@@ -880,7 +923,7 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added')
     expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
   })
-  it('reconciles a folder of 99,000 rows page by page, each page within the budget', async () => {
+  it('reconciles 99,000 rows with bounded matching work and publishes each page before the next', async () => {
     const f = fixture()
     const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names
@@ -893,21 +936,12 @@ describe('ExplorerService: reconcile', () => {
     f.state.tables = [...names.slice(1), 'dbo.Extra']
     f.hold(isFolder('tables'))
     f.explorer.reconcile(tables)
-    const durations: number[] = []
-    while (f.sent.some(entry => !entry.settled)) {
-      const start = performance.now()
-      f.release()
-      await settle()
-      durations.push(performance.now() - start)
-    }
-    expect(durations).toHaveLength(50)
+    expect(await reconcilePages(f, tables)).toBe(50)
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.node(tables)!.children!.at(-1)!.label).toBe('dbo.Extra')
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
-    // A garbage collection can land in any page.
-    expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
   })
-  it('reconciles 99,000 rows without chevrons page by page within the budget while 300 loads wait on another server', async () => {
+  it('reconciles 99,000 leaves with bounded work while 300 loads wait on another server', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 300 }, (_, index) => `dbo.Wait${index}`)
     f.connect('server-a')
@@ -928,18 +962,10 @@ describe('ExplorerService: reconcile', () => {
     const isA = (params: ExplorerChildrenParams) => params.connectionId === cid('server-a') && isFolder('tables')(params)
     f.hold(isA)
     f.explorer.reconcile(tables)
-    const durations: number[] = []
-    while (f.sent.some(entry => !entry.settled && isA(entry.params))) {
-      const start = performance.now()
-      f.release(isA)
-      await settle()
-      durations.push(performance.now() - start)
-    }
-    expect(durations).toHaveLength(50)
+    expect(await reconcilePages(f, tables, isA)).toBe(50)
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     expect(f.explorer.context.getSnapshot().explorerLoading).toBe(true)
-    expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
   })
 })
 
