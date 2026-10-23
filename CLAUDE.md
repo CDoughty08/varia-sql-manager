@@ -55,8 +55,9 @@ pages, limits, error codes, display formats, benchmarks).
   cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
   cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
   holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
-  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, and `window.__variaTestShellFault()`,
-  which makes the workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
+  `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
+  the synthetic live source and stands in for a hidden window, and `window.__variaTestShellFault()`, which makes the
+  workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
   that took 500 ms or more.
@@ -87,13 +88,16 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
+  O(visible cells).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
 - Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
-  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). Sources and
+  EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
+  worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
+  stream's `ack` (`ResultClient.live`), never more than the stream's events took. Sources and
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
@@ -102,6 +106,10 @@ pages, limits, error codes, display formats, benchmarks).
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
   the live gates and a per-statement budget, and its failures are values that back off.
+  Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
+  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
+  while off screen or hidden, at most two vertices a pixel column, colors only from the theme's `charts.*` keys.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -184,6 +192,11 @@ pages, limits, error codes, display formats, benchmarks).
   `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
+- Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
+  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
+  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
+  spinners included; regenerate `docs/themes/metrics.md` with
+  `npx vitest run tests/theme-metrics.test.ts -u`.
 
 ## Testing expectations
 
@@ -228,6 +241,9 @@ pages, limits, error codes, display formats, benchmarks).
   context menus on macOS.
 - SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
   Entra ID next.
-- Visuals: SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's
-  SSMS icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
+- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default and
+  Comfortable as an option), not SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Dense
+  Power's environment and status indicators are in (the red Production tag on connections, live Object Explorer status
+  chips), showing only what a probe produces. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's SSMS
+  icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
   system like VS Code or opencode.

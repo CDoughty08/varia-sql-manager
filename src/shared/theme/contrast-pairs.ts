@@ -1,4 +1,6 @@
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from './charts'
 import { sqlScopes, type ColorKey, type SqlScope } from './registry'
+import { statusTones, toneKeys } from './tones'
 
 /**
  * A foreground drawn on a stack of backgrounds (bottom first). Translucent layers are composited over the layer below;
@@ -18,6 +20,8 @@ const quickInputHover: ColorKey[] = ['quickInput.background', 'list.hoverBackgro
 const treeActive: ColorKey[] = ['sideBar.background', 'list.activeSelectionBackground'], treeInactive: ColorKey[] = ['sideBar.background', 'list.inactiveSelectionBackground']
 const treeHover: ColorKey[] = ['sideBar.background', 'list.hoverBackground'], treeServer: ColorKey[] = ['sideBar.background', 'objectExplorer.activeConnectionBackground']
 const strip: ColorKey[] = ['documentTabs.background'], statusBar: ColorKey[] = ['statusBar.background']
+const statusBarStates: ColorKey[][] = [['statusBar.executingBackground'], ['statusBar.disconnectedBackground'], ['statusBar.errorBackground']]
+const statusBars: ColorKey[][] = [statusBar, ...statusBarStates, ['queryStatusBar.background'], ['queryStatusBar.executingBackground'], ['queryStatusBar.errorBackground']]
 const dockTabs = (tab: ColorKey): ColorKey[] => ['editorGroupHeader.tabsBackground', tab]
 /** A secondary button's hover fill over the surface it sits on. */
 const hovered = (...surface: ColorKey[]): ColorKey[] => [...surface, 'button.secondaryHoverBackground']
@@ -25,10 +29,16 @@ const dock: ColorKey[] = ['dock.background'], grid: ColorKey[] = ['resultsGrid.b
 const widgetInactiveSelection: ColorKey[] = ['editorWidget.background', 'list.inactiveSelectionBackground']
 const suggestFocus: ColorKey[] = ['editorWidget.background', 'quickInputList.focusBackground']
 const headerHover: ColorKey[] = ['resultsGrid.headerBackground', 'resultsGrid.hoverBackground']
+const surfacesOfCharts: ColorKey[][] = chartSurfaces.map(surface => [surface])
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
 /** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
   'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
+const tile: ColorKey[] = ['tile.background']
+/** Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar state and tiles. */
+const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile]
+/** Chips, live labels and tiles sit in documents, panels, side bars and dialogs. */
+const contentSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, dock, tile]
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
   foregrounds.flatMap(foreground => backgrounds.map(background => ({ foreground, background, minimum })))
 const text = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(4.5, foregrounds, ...backgrounds)
@@ -145,14 +155,15 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),
-  ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, statusBar, widget),
+  // A connection's edge stays on both status bars, and the backend's dot on the main one, in every state.
+  ...graphic(['connection.red', 'connection.orange', 'connection.yellow', 'connection.green', 'connection.blue', 'connection.purple'], sideBar, strip, editor, widget, ...statusBars),
   ...graphic(['connection.default'], widget, activeSelection),
   ...graphic(['connection.favoriteForeground'], widget),
   ...graphic(['tab.activeBorderTop', 'documentTabs.modifiedIndicator', 'documentTabs.closeForeground'], strip),
   ...graphic(['panelTitle.activeBorder'], panelTitle, widget),
   ...graphic(['resultsGrid.activeCellBorder'], panel, ['resultsGrid.background', 'resultsGrid.selectionBackground']),
   ...graphic(['resultsGrid.truncationForeground', 'resultsGrid.splitterBackground'], panel),
-  ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar),
+  ...graphic(['statusBar.onlineIndicator', 'statusBar.idleIndicator'], statusBar, ...statusBarStates),
   // A bookmark is the only sign of itself in the indicator margin.
   ...graphic(['editorBookmark.foreground'], editor),
   ...graphic(['button.background'], widget),
@@ -162,7 +173,37 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['input.border'], input, widget, toolbar, panel),
   ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
-  ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground'])
+  ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
+  // Charts sit on documents, cards and widgets: their labels and legends are text, their series and status marks are
+  // graphics (WCAG 1.4.11).
+  ...text(['charts.foreground'], ...surfacesOfCharts),
+  ...graphic([...chartSeriesColors, ...chartStatusColors], ...surfacesOfCharts),
+
+  // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
+  // Empty states and inline errors: the title and line, the error glyph and message, and their outlined actions.
+  ...text(['emptyState.titleForeground', 'emptyState.foreground', 'descriptionForeground', 'foreground', 'errorForeground', 'button.secondaryForeground'], ...contentSurfaces),
+  ...graphic(['button.border'], ...contentSurfaces),
+  // Filter chips, off and on; the outline of an on chip marks its state with the fill and the check mark.
+  ...text(['chip.foreground'], ...contentSurfaces.map(surface => [...surface, 'chip.background'] as ColorKey[])),
+  ...text(['chip.activeForeground'], ...contentSurfaces.map(surface => [...surface, 'chip.activeBackground'] as ColorKey[])),
+  ...graphic(['chip.activeBorder'], ...contentSurfaces),
+  ...text(['button.secondaryHoverForeground'], ...contentSurfaces.map(surface => hovered(...surface))),
+  // Live views: the dot (also on document tabs), the paused label, and the stale badge.
+  ...graphic(['live.indicator'], ...contentSurfaces, strip, ['documentTabs.background', 'documentTabs.activeBackground']),
+  ...text(['live.pausedForeground'], ...contentSurfaces),
+  // The stale badge also goes in the status bar (every state) and on Object Explorer rows.
+  ...text(['live.staleForeground'], ...kitSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
+  // A tile's threshold outline and glyph.
+  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile),
+
+  // The document frame (src/renderer/src/kit): the current section in its list, its accent edge (beside it, or under it
+  // in a narrow document), a section's problem glyph and the focus ring on it; the Script drawer's splitter, hovered or focused.
+  // A pressed header verb takes the current section's colours; a danger verb keeps its words in the error colour when hovered.
+  ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
+  ...text(['errorForeground'], hovered(...editor)),
+  ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
+  ...graphic(['sash.hoverBorder'], panel)
 ]
 
 /**
@@ -173,7 +214,9 @@ export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
   ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
   // The highlighted menu item follows the pointer and the keyboard alike.
-  ...pairs(1.2, ['menu.selectionBackground'], ['menu.background'])
+  ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
+  // Loading placeholders say only that something is coming, so they are held to the same floor.
+  ...pairs(1.2, ['skeleton.background'], ...contentSurfaces)
 ]
 
 /** Foreground keys that are deliberately not checked, with the reason. */
@@ -181,5 +224,6 @@ export const contrastExemptions: Readonly<Partial<Record<ColorKey, string>>> = {
   'statusBar.separatorForeground': 'Decorative divider between status items; the items carry the meaning.',
   'emptyState.iconForeground': 'Decorative glyph beside text that says the same thing.',
   'editorWhitespace.foreground': 'Decorative glyph beside the text: View White Space marks spaces and tabs the text already has.',
-  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.'
+  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.',
+  'charts.lines': 'Decorative grid lines; the values are in the axis labels, the crosshair tooltip and the data table.'
 }

@@ -1,15 +1,18 @@
 # Color themes
 
-Varia ships two themes, **Varia Dark** (the default) and **Varia Light**, and can follow the operating system. Custom themes
-are small JSON files that override a named palette, individual color keys, and SQL syntax colors on top of the built-in
-theme of their type. Key names follow VS Code wherever the concept matches, and palette references work like opencode's.
+Varia ships two themes, **Varia Dark** (the default) and **Varia Light**, and can follow the operating system. Both use
+graphite neutrals and one iris accent; in the workbench chrome, red, amber, and green are kept for state. SQL syntax
+colors, chart series, and the connection colors you choose are separate sets. Custom themes are small JSON files that
+override a named palette, individual color keys, and SQL syntax colors on top of the built-in theme of their type. Key
+names follow VS Code wherever the concept matches, and palette references work like opencode's.
 
 - [`tokens.md`](tokens.md) lists every palette slot, color key, and SQL scope with its default in both themes.
+- [`metrics.md`](metrics.md) lists the type scale, spacing, radii, shadows, motion and bar heights, which themes do not set.
 - [`varia-theme.schema.json`](varia-theme.schema.json) is the JSON Schema; editors that understand `$schema` complete and check keys.
 - [`examples/`](examples) holds [`harbor.json`](examples/harbor.json), a dual theme using every feature, and
   [`amber-accent.json`](examples/amber-accent.json), the smallest useful theme.
 
-Both generated files come from `src/shared/theme/`; do not edit them by hand (see [For contributors](#for-contributors)).
+The generated files come from `src/shared/theme/`; do not edit them by hand (see [For contributors](#for-contributors)).
 
 ## Choosing a theme
 
@@ -98,6 +101,9 @@ A theme is applied on top of the built-in theme of its type: Varia Dark for `dar
 
 Because every key defaults to a slot, overriding one slot recolors everything that uses it. Overriding `accent` changes
 `button.background`, `tab.activeBorderTop`, `panelTitle.activeBorder`, and every other key that defaults to `$accent`.
+The accent's companions are slots of their own: `textAccent` (selected labels and the status bar text while a query
+runs), `accentSurface` (that status bar tint and the active connection row) and the `selection` slots stay iris until a
+theme sets them, as `harbor.json` does for its teal.
 
 ### Values
 
@@ -113,10 +119,11 @@ characters.
 
 ### Palette
 
-The 61 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-61). Slots group
+The 67 built-in slots, with both built-in values, are listed in [`tokens.md`](tokens.md#palette-slots-67). Slots group
 the colors that belong together: surfaces (`canvas`, `panel`, `sideBar`, `chrome`, `raised`, `overlay`, `input`),
 interaction (`hover`, `active`, `selection`, `selectionStrong`), text tiers (`text` down to `textMuted`), borders,
-accents, status colors, glyphs, the six connection colors, and the SQL syntax colors (`syntaxKeyword` and so on).
+accents, status colors (with `successText`, the success color for text on tinted fills such as success pills), glyphs, the six connection colors, five chart series colors (`chart1` to `chart5`, a categorical
+set checked for color-vision deficiencies, used only inside charts), and the SQL syntax colors (`syntaxKeyword` and so on).
 
 You can add your own slots, named like `nord0` (a lowercase letter, then up to 31 letters and digits), and refer to them
 from other slots, `colors`, and `tokenColors`. A slot may refer to another slot. A chain of more than four references, or a
@@ -124,11 +131,16 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 196 keys are listed in [`tokens.md`](tokens.md#color-keys-196) by area: title bar and menus, buttons and inputs,
+The 242 keys are listed in [`tokens.md`](tokens.md#color-keys-242) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
-dialogs, and connection colors. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
-are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
-effect when those features ship.
+dialogs, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
+(`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
+`charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
+"Other". `charts.red` is a status color for marks such as a failed execution, never a series' color. Series colors are checked at 3:1 and chart text at
+4.5:1 against the editor, panel and widget backgrounds. Under Windows High Contrast and other forced colors, charts
+use the system colors and tell series apart by their dashes. Keys marked (VS Code) mean the same as in VS Code; the
+rest are Varia's own. Some keys are reserved for upcoming features (notifications, the new Object Explorer and results
+grid): they resolve now and take effect when those features ship.
 
 A key that is not in the registry is ignored with a warning. Near misses get a "did you mean" suggestion, and a pasted
 block of VS Code keys gets one summary warning.
@@ -151,7 +163,8 @@ block of VS Code keys gets one summary warning.
 - A sub-scope such as `keyword.block` inherits from `keyword` unless a rule names it.
 - `settings.foreground` takes any value above. `settings.fontStyle` is empty or up to four of `italic`, `bold`,
   `underline`, and `strikethrough`, separated by single spaces. Other settings, including `background`, are ignored.
-- When several rules name the same scope, later rules win; `foreground` and `fontStyle` override independently.
+- When several rules name the same scope, later rules win; `foreground` and `fontStyle` override independently. Comments
+  are italic by default, so a rule that sets only their `foreground` keeps the italics; `"fontStyle": ""` removes them.
 - Brackets are colored by nesting depth, like VS Code's bracket pair colorization, so their color comes from the
   `editorBracketHighlight.*` keys in `colors` rather than from the `delimiter` scopes.
 
@@ -202,7 +215,31 @@ bidirectional-text characters are removed from names, and the window chrome only
   a pair in `contrast-pairs.ts`, then regenerate the docs with `npx vitest run tests/theme-schema.test.ts -u`.
 - `tests/theme-contrast.test.ts` holds both built-ins to WCAG AA (4.5:1 for text, 3:1 for indicators) on every
   surface each text color is drawn on, Monaco's widgets included, and fails when a `styles.css` rule sets a text color
-  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` keeps
-  Varia Dark within a small distance of the colors it replaced.
+  and a background without that pair. Disabled text stays exempt (WCAG 1.4.3). `tests/theme-fidelity.test.ts` holds the
+  built-ins to the design language: graphite neutrals, one accent hue with status colors far from it, chart colors that
+  stay apart for protanopia, deuteranopia and tritanopia and reach 3:1 on the editor, widget and panel backgrounds, NULL
+  as muted italics, and a status bar tinted only while a query runs or the backend is down.
+- Every key default names a slot or another key; no key has a literal default, so a theme recolors everything,
+  the docking compass included.
+- State is drawn with the states kit in `src/renderer/src/kit` (empty states, inline errors with Copy details, loading
+  placeholders, status pills and environment tags, filter chips, live labels and metric tiles), never with ad-hoc
+  colors. A pill has one of six tones (`src/shared/theme/tones.ts`: running, success, warning, critical, info, neutral),
+  each with its own `statusPill.<tone>Background` and `Foreground` keys, and always carries a word.
+  `contrast-pairs.ts` holds every tone's text to 4.5:1 over every surface pills sit on: documents, panels, dialogs,
+  tab strips, Object Explorer rows (hovered, selected, the active server) and every status bar state, which is why pill
+  text uses the status surface texts (`errorSurfaceText`, `warningSurfaceText`, `successText`) rather than the plain
+  status colors. `tests/states-kit.test.ts` checks the components' markup and words, and that a placeholder waits
+  `--varia-motion-delay` (300 ms) before it appears.
+- Sizes are not theme keys. The type scale (nothing under 11 px), spacing, radii, shadows, motion and bar heights live in
+  `metrics.ts`, and `:root` in `styles.css` repeats them as `--varia-size-*`, `--varia-line-*`, `--varia-space-*`,
+  `--varia-radius-*`, `--varia-shadow-*` (offset and blur, followed by a color key), `--varia-motion-*`, `--varia-header`,
+  `--varia-bar`, `--varia-control`, `--varia-row` and `--varia-status`. `tests/theme-css.test.ts` keeps the two equal and
+  apart from the color keys' variables; `tests/theme-metrics.test.ts` rejects px font sizes, radii and shadows and literal
+  durations outside the tokens (icon glyphs and 1 px indicator edges excepted) and font-size literals in renderer code,
+  keeps the fast transition on `:hover` rules (state rules such as a selected row set `transition: none`), requires every
+  looping animation, Monaco's codicon spinners included, to stop under `prefers-reduced-motion: reduce` (which sets the
+  transitions to 0 ms), and regenerates [`metrics.md`](metrics.md)
+  with `npx vitest run tests/theme-metrics.test.ts -u`. Smoke runs emulate reduced motion in every window, so their
+  checks never read a color partway through a transition.
 - `scripts/theme-smoke.mjs`, part of `npm run test:smoke`, switches themes in the real app and saves
   `artifacts/theme-dark.png` and `artifacts/theme-light.png`.

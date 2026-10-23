@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveSqlReader.cs` (multi-statement sources), `Activity/ActivityReader.cs` and `ActivityRows.cs` (the Activity Monitor source), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveSqlReader.cs` (multi-statement sources), `Activity/ActivityReader.cs` and `ActivityRows.cs` (the Activity Monitor source), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -853,9 +853,13 @@ from its own state; the writers do the rest.
 - **Main's rule** (`BackendConnection.route`): an EVENT of such a request is accepted only when granted − received ≥ the
   initial credit and the body is at most 256 KiB; it then counts as received. Anything else, and any DATA frame on such a
   request, is a contained violation (`STREAM_PROTOCOL`, CANCEL reason 3), as an over-credit DATA frame is.
-- **Acknowledgement.** Main posts `{ t: 'live', rid, bytes, event }` to the worker; the page applies the event and the
-  worker sends the existing `{ t: 'credit', rid, bytes }`. `ResultsPortHost` and `BackendConnection.credit` both clamp an
-  acknowledgement to the bytes outstanding, so no acknowledgement, however large, lets two frames be in flight.
+- **Acknowledgement.** Main posts `{ t: 'live', rid, bytes, event }` to the worker, which relays it to the page without
+  decoding anything; `ResultClient` applies the event's tables and forgets what it retired, the page applies the event
+  and calls the stream's `ack(bytes)`, and only then does the worker send the existing `{ t: 'credit', rid, bytes }`. The
+  worker grants back at most the bytes the stream's events took and the page has not acknowledged yet (more, twice, or
+  for a stream that ended is dropped), and `ResultsPortHost` and `BackendConnection.credit` both clamp an acknowledgement
+  to the bytes outstanding, so no acknowledgement, however large, lets two frames be in flight. A page that never
+  acknowledges an event (hung, or applying it failed) stops the source after that event.
 - **Schedule.** Fixed rate per probe: a probe due while a frame is unacknowledged, or late for any reason, is sampled once
   when it can be, with `gap: 'late'` and the slots it missed in `skipped`, never replayed in a burst. The first sample is
   `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now (see the scheduler, below).
@@ -1005,6 +1009,93 @@ when a cursor moved, the end carries the last one, and a subscription resumed wi
 append table starts after the id its cursor settled. A source without append tables (the Activity Monitor) refuses
 `resume`.
 
+**Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
+and results worker](#results-port-and-results-worker)). Views never call it themselves: they open a `LiveHandle` from
+`LiveService` (`src/renderer/src/live/LiveService.ts`, `workbench.live`), which owns the whole lifecycle.
+
+- **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
+  for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
+  `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
+  connection, and closes with the tab. At most 16 views are open in a window, first come, whoever owns them; another, or
+  one naming probes its source does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or
+  `INVALID_PARAMS` as a value, never an exception, and runs nothing. An owner of many background views (a status chip per
+  connected server) should share handles rather than take one each, or the documents a user opens find none left.
+- **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
+  tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
+  then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.
+- **Hidden.** A view whose owner is hidden, or whose window is (`document.visibilityState`; test mode's `setPageHidden`),
+  for `liveData.pauseAfterSeconds` (2 s) sends `live.update { paused: true }`; shown again it sends `paused: false` at once.
+  A view opened or reconnected while hidden counts from then, and a change of either delay applies to views already
+  hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
+  is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
+  continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
+  `hidden: 'statusOnly'` (none does yet; the backend only carries the field in its JSON):
+  a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
+  goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause. A view that ends, is lost,
+  closes or shows gives its slot to the oldest hidden view that paused only because none was free.
+- **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
+  (interval, pause, sort, view, filter) changed within 150 ms go as one update, with `clear` for what a change drops.
+  Updates wait for `live.opened` (the backend registers a subscription just before it and refuses an earlier update
+  `NOT_FOUND`), then go one at a time, in order, each computed from what the backend last accepted, so a resume never
+  overtakes its pause. A refused one leaves the view showing what the backend still runs (a refused pause never reads
+  Paused), with the reason in `error` and on the indicator; `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT` and
+  `BACKEND_UNAVAILABLE` refusals go again after 1 s, doubling to 30 s, any other with the view's next change, and the next
+  accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe` (there is no
+  subscription-wide pause there) and unpauses them when it resumes. `setArgs` changes the source's `args` in place (the
+  history and state carry on, and later subscriptions use them). Refresh sends `refresh: true` (a dormant view subscribes
+  again); `track` sends a keyed table's tracked keys with a new `seq` each time, and a new subscription sends them again
+  with new ones.
+- **Ends.** A backend that went away (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost`
+  with its history and its tables' handles (they read `lost`); nothing resubscribes by itself, since the connection went
+  with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it
+  once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
+  server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
+  view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
+  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  `ResultClient` closes what it kept at once.
+- **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
+  and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
+  Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
+  32 MiB in all, keeping the newest samples. It lives in renderer memory only, so it survives a backend restart.
+- **Charts.** `ChartView` (`live/ChartView.ts`, imperative like `GridView`) draws one probe's ring on a canvas, and
+  `LiveChart` (`live/LiveChart.tsx`) mounts it with its legend and "View as table"; React renders nothing per point.
+  Series are lines, a line over a faint area, or stacked bands parted by a one-pixel line of the surface; a chart is a
+  full chart (labels for the scale's top, or value and time axes) or a sparkline (one trace, no text). The window is the
+  last `spanMs` up to the newest sample, or up to a fixed time. A draw happens at most once an animation frame (a tick,
+  a resize, a theme or forced-colors change asks for one), only if the ring's revision, the window, the size, the pixel
+  ratio, the theme or the crosshair changed, and only while the canvas is on screen (`IntersectionObserver`) and the
+  page is visible (`live.page`, test mode's `setPageHidden` included). Each series is reduced to the smallest and largest
+  value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
+  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks the line, and a lone
+  sample between gaps shows as a one-pixel tick. Colors come only from the active theme's `charts.*` keys (series
+  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
+  status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
+  draws in `CanvasText`, `Canvas` and `GrayText`, without fills, and each series after the first takes the dash of its
+  place in the chart, as the legend shows it. A change of device pixel ratio alone (a move to a display of another scale)
+  redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s, `aria-roledescription="chart"`,
+  and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  the crosshair; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
+  or a blur hides it, and each step is announced through a polite status region (these are the chart's own keys, as the
+  grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
+  and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
+  plot's place, at its size and scrolling there, newest first, at most 120 rows (a longer window is sampled evenly), a
+  row marked when any sample since the row before it follows a gap; the table, `latest()` and the keys read the window,
+  not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
+  `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
+  from its catalogue. A live window ends at the newest sample, so history stays in view when collection stops; once that
+  sample is older than twice the step between samples (at least 2 s), a timer wakes the chart and its times read as
+  clock times rather than "now" and "ago", and its name, like a fixed window's, gives the clock range ("… from 13:05:00
+  to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
+- **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
+  `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
+  probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
+  is the one timer a running view keeps; it reads nothing. `liveIndicator` (`live/status.ts`) turns a snapshot into the
+  pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
+  `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
+  hidden or stale view reads stale.
+
+
 ## Results port and results worker
 
 **Opening.** The renderer calls `window.varia.openResultsPort()` (`varia:results-port-open`, `trusted()`, at most 10 a
@@ -1047,6 +1138,23 @@ caching each page (a page that arrives twice, the boundary page of two adjacent 
 decoded again). A page that fails `decodePage` ends its read with `PAGE_INVALID` and is not cached. A new generation
 fails pending work with `RESULT_UNAVAILABLE` and drops older pages.
 
+The worker also relays live subscriptions. The page sends `live { id, params }`, `liveUpdate { id, live, params }` (`live`
+names the stream by the page's id), `liveAck { id, bytes }`, `cancel { id }` and `forget { generation, resultIds }`; the
+worker answers `live { id, bytes, event }`, `liveEnd { id, result }`, `liveUpdated { id, result }` or `error`. It takes a
+port rid for each from the counter reads use, skipping rids still in use (a live stream can outlive 2^31 reads), and
+sends a stream to the generation main last announced on the port. Main takes a stream only for a generation that is
+ready (an `unresponsive` one still is), so requests that come before main's first `backend` message, or while the
+backend is `starting` or `restarting`, wait and go to the generation that becomes ready, never to more than one; a view
+restored at launch, or resubscribed as soon as the page hears of a new generation, is not reported lost. With no backend
+running (generation 0: `stopped` or `failed`) a stream fails `BACKEND_UNAVAILABLE`, including one that was waiting.
+An update goes to its stream's generation; one for a stream that ended or is being cancelled fails `NOT_FOUND` at once.
+A stream cancelled before it was sent ends `cancelled` with no ticks. Events are relayed as main validated them, never decoded; `liveAck`
+becomes `credit` only within the bytes outstanding. When a new generation is announced the worker ends the older
+generation's streams and updates with `RESULT_UNAVAILABLE` ("This live view ended because the SQL backend restarted."),
+in case main's own `BACKEND_LOST` never arrives, and a replaced port ends them with `PORT_CLOSED`; later answers for them
+are dropped. `forget` drops the pages of results the backend already released and ends reads still bringing rows of
+them with `RESULT_RELEASED`, without sending `close`.
+
 **`ResultClient`** (`ResultClient.ts`) is the renderer's API, the contract the PR7 grid builds on: `open(descriptor)`
 returns a `ResultHandle` with `getSnapshot`, `subscribe` (coalesced per animation frame), `getWindow(first, count, o)`
 (at most 4,096 rows, 262,144 cells and 4,000,000 characters; 1,024 characters per cell by default, at most 2,097,152;
@@ -1063,6 +1171,20 @@ down, and ones main refused as busy (`TOO_MANY_REQUESTS`) are sent again 250 ms 
 and reattached at most 3 times a minute; after that, results show "Results cannot be displayed; reload the
 workbench."
 
+`live(params, onEvent)` runs a live subscription and returns a `LiveStream`: `done` (settles once with the `LiveEnd`, or
+with the failure as a value: never a rejection), `update(patch)` (live.update with the stream's subscription id and
+source; failures are values, and a stream that ended answers `NOT_FOUND`), `cancel()` (`done` settles `cancelled` at once
+when the stream was never sent, even if the port never attaches) and `ack(bytes)`. An exception from `onEvent` is
+caught: the stream's bookkeeping goes on and the event stays unacknowledged. Before `onEvent(event, bytes)` runs, each table the event carries is applied (`applyLive`) and the results it retires are
+forgotten, but only those this stream delivered (a retired list can never release a query's results). The caller applies
+the event synchronously and then acknowledges it with `ack(bytes)`; nothing more arrives until it does. A cancelled
+stream's events still count its results but no longer reach `onEvent`. When the stream ends, its results are forgotten
+too, except those a finished source kept, which stay readable until `release` closes them. A failed worker ends streams
+with `RESULT_DECODER_FAILED` (main cancels them when the new worker's port opens) and `dispose` with `PORT_CLOSED`.
+`applyLive(descriptor)` creates or updates a result as query events do, so an append table's handle notifies its
+listeners as it grows. `forget(keys)` marks results the backend already released as released, drops their windows, and
+tells the worker to drop their pages, without `results.close`.
+
 
 ## Malformed input
 
@@ -1076,6 +1198,7 @@ workbench."
 | backend ← main | An oversized REQUEST | Body skipped; RESPONSE `TOO_LARGE` with its id |
 | backend ← main | Invalid params | `INVALID_PARAMS` |
 | worker ← main | A page failing `decodePage` | That read ends with `PAGE_INVALID`; the worker keeps going |
+| worker ← page | A live acknowledgement for more bytes than the stream's unacknowledged events took, not a positive integer, repeated, or for a stream that ended | Dropped: no credit is sent |
 | backend | Unhandled exception, out of memory | Best-effort GOAWAY `BACKEND_CRASH` (exception type only), exit 70 |
 
 Error details carry only a kind, an offset and a code: never bytes, SQL or server names.
@@ -1384,9 +1507,24 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 - **Real backend.** `tests/backend-sidecar.test.ts` drives the Release build over `BackendConnection`, including
   malformed frames, stdout purity and, with the test hooks, synthetic results, streams, cancellation, the budget, and live
   subscriptions whose every frame must pass main's schemas. `tests/live-protocol.test.ts` runs main's whole live path
-  (supervisor, results port, a worker stand-in) over the fake backend.
+  (supervisor, results port, a worker stand-in) over the fake backend, then the same path through the real worker
+  core and `ResultClient`, and a `LiveService` view on it hidden, shown, lost with a restart and back after a Reconnect.
+  `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
+  update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
+  memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
+  `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
+  pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
+  from the theme (system colors and dashes under forced colors), stacked bands, the 5 s accessible name, the keyboard
+  and pointer crosshair, linked charts and the table.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
-  backend, and UI responsiveness while a million stored rows are read. `scripts/results-smoke.mjs` drives the grid on
+  backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
+  `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
+  runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
+  hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/chart-smoke.mjs` mounts charts of such
+  a view and reads their canvas pixels: the series in the theme's chart color, redrawn as ticks arrive and not while the
+  window is hidden, the accessible name, the keyboard and pointer crosshair, the table, a legend of two series, a switch
+  to Light, and forced colors. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.
@@ -1394,7 +1532,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -1411,7 +1549,10 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   values of about 4 KB. Both come from `debug.results.synthesize`, so the backend stores them as it would query rows.
 - **The node pipeline** runs main's real classes: `BackendSupervisor` and `BackendConnection` over stdio to the Release
   backend, `ResultsPortHost` over a `MessageChannel`, and `ResultsWorkerCore` in a worker thread reading windows of
-  every row with every cell decoded (four windows in flight).
+  every row with every cell decoded (four windows in flight). Its live round trip subscribes the worker core to the
+  backend's `debug.synthetic` source every 10 ms and has the bench's thread (the page) acknowledge each event 20 ms after
+  it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
+  next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
 - **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
   backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
   rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
@@ -1424,9 +1565,12 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
-  planning, and the shared window cache (full, so every insert evicts).
+  planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
+  times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
+  with axes, into a context that only counts calls: what a live chart costs a frame at most.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
-  the UI thread for long tasks and animation-frame gaps; `--live` stores a million W1-like rows from SQL Server with
+  the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
+  source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
   `maxRows: 0`, and times 200 executions of `SELECT 1` in a warm tab.
 - **The grid run** (`scripts/grid-bench.mjs`) drives the built app in a 1600 × 1000 window (or the screen, if smaller)
   on the fake backend's synthetic sets: the first data cell painted after `resultSet.opened`, the UI thread's busy share
@@ -1452,11 +1596,14 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |
 | Page bytes sent ÷ distinct page bytes, W1 | ≤ 1.05 | reported only | 1.29 | 1.29 |
 | Budget charged ÷ page bytes | ≤ 1.15 | ≤ 1.5 | 1.00 | 1.00 |
+| Live tick round trip, acknowledgement → next tick at the page, p50 | ≤ 2 ms | ≤ 10 ms | 0.7 ms, p99 3.6 ms (Windows, 24 CPUs) | not measured |
 | Grid frame: 64 selection blocks clipped, 1,800 cells tested | ≥ 5,000 ops/s | ≥ 1,000 ops/s | 4,500 – 4,900 ops/s | 5,300 – 5,700 ops/s |
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
+| Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |
 | B1 into the worker | ≥ 200 MB/s | ≥ 40 MB/s | 90 – 143 MB/s | 90 MB/s |
 | First 100-row window of a stored result | ≤ 50 ms | ≤ 250 ms | 17 – 21 ms | 20 ms |
