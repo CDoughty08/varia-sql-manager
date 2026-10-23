@@ -2,6 +2,7 @@
 // text, datetime2(7), decimal, uniqueidentifier, a longer text, bit and an int that is NULL in every fifth row, with the
 // text SSMS shows for each, so a copy or a saved file can be compared exactly. The rows come from a cross join every
 // version from 2016 has (about 2,600² rows on SQL Server 2022), cheap for the server to produce.
+import { toolbarButton } from './ui.mjs'
 
 export const liveColumns = ['id', 'name', 'created', 'amount', 'key', 'note', 'active', 'score']
 
@@ -24,7 +25,7 @@ export function liveRow(n) {
 /** Fills the Connect dialog for VARIA_TEST_SQL_SERVER (SQL authentication when a test login is set) and connects. */
 export async function connectLive(page, expect) {
   const user = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill(process.env.VARIA_TEST_SQL_SERVER)

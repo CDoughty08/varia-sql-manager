@@ -44,10 +44,15 @@ internal sealed class PageBuilder
     private long rowBytes;
     private long dataBytes;
 
-    public PageBuilder(uint resultId, IReadOnlyList<WireKind> wires, long firstRow = 0)
+    private readonly int sealBytes;
+
+    /// <param name="sealBytes">The page size at which a page is full (live sets seal smaller pages; see LiveBudget).</param>
+    public PageBuilder(uint resultId, IReadOnlyList<WireKind> wires, long firstRow = 0, int sealBytes = SealBytes)
     {
         if (resultId == 0) throw new ArgumentOutOfRangeException(nameof(resultId));
         if (wires.Count is < 1 or > MaxColumns) throw new ArgumentOutOfRangeException(nameof(wires));
+        if (sealBytes is < 1 or > SealBytes) throw new ArgumentOutOfRangeException(nameof(sealBytes));
+        this.sealBytes = sealBytes;
         ResultId = resultId;
         FirstRow = firstRow;
         columns = [.. wires.Select(wire => new Column(wire))];
@@ -60,7 +65,7 @@ internal sealed class PageBuilder
     public bool HasRows => rows > 0;
     /// <summary>Approximate encoded size of the committed rows: cell bytes plus offsets.</summary>
     public long ByteCount => dataBytes + 4L * columns.Length * (rows + 1);
-    public bool IsFull => rows >= MaxRows || ByteCount >= SealBytes;
+    public bool IsFull => rows >= MaxRows || ByteCount >= sealBytes;
     /// <summary>Cell bytes the open row has added so far.</summary>
     public long OpenRowBytes => next < 0 ? 0 : rowBytes;
     /// <summary>Bytes held by the builder's buffers, for memory accounting.</summary>

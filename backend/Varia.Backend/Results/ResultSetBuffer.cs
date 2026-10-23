@@ -29,7 +29,7 @@ internal sealed class ResultSetBuffer
 
     /// <param name="metadata">Bytes already reserved for the column metadata; returned with everything else on release.</param>
     internal ResultSetBuffer(ResultStore store, QueryBudget budget, uint resultId, int index, int batchNumber, int iteration, string kind, IReadOnlyList<ResultColumn> columns,
-        IReadOnlyList<WireKind> wires, long metadata = 0)
+        IReadOnlyList<WireKind> wires, long metadata = 0, int sealBytes = PageBuilder.SealBytes)
     {
         this.store = store;
         charged = metadata;
@@ -41,7 +41,7 @@ internal sealed class ResultSetBuffer
         Kind = kind;
         Columns = columns;
         Wires = wires;
-        builder = new PageBuilder(resultId, wires);
+        builder = new PageBuilder(resultId, wires, sealBytes: sealBytes);
     }
 
     public QueryBudget Budget { get; }
@@ -231,7 +231,7 @@ internal sealed class ResultSetBuffer
             if (--leases > 0 || !freePending) return;
             freed = FreeLocked();
         }
-        store.Freed(freed);
+        store.Freed(freed, Budget.Live is not null);
     }
 
     public int Leases { get { lock (gate) return leases; } }
