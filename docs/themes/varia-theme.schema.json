@@ -220,6 +220,11 @@
           "description": "Success text. Varia Dark #74d19c · Varia Light #146f3b",
           "markdownDescription": "Success text. Varia Dark `#74d19c` · Varia Light `#146f3b`"
         },
+        "successText": {
+          "$ref": "#/definitions/value",
+          "description": "Success text on tinted fills, such as success status pills over a selected row or a tinted status bar. Varia Dark #a6e8bf · Varia Light #0f5a2f",
+          "markdownDescription": "Success text on tinted fills, such as success status pills over a selected row or a tinted status bar. Varia Dark `#a6e8bf` · Varia Light `#0f5a2f`"
+        },
         "info": {
           "$ref": "#/definitions/value",
           "description": "Information text. Follows $accent. Varia Dark #8f9cff · Varia Light #4453d0",
@@ -1038,8 +1043,8 @@
         },
         "emptyState.iconForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. Default $iconMuted/60 (Dark #7f869499, Light #6b728099).",
-          "markdownDescription": "(Varia) Decorative glyph of empty views. Not used yet; reserved for the empty views of the output pane and documents. Default `$iconMuted/60` (Dark `#7f869499`, Light `#6b728099`)."
+          "description": "(Varia) Decorative glyph of empty views. Default $iconMuted/60 (Dark #7f869499, Light #6b728099).",
+          "markdownDescription": "(Varia) Decorative glyph of empty views. Default `$iconMuted/60` (Dark `#7f869499`, Light `#6b728099`)."
         },
         "panel.background": {
           "$ref": "#/definitions/value",
@@ -1385,6 +1390,141 @@
           "$ref": "#/definitions/value",
           "description": "(VS Code) Line above each command palette group. Default $separator (Dark #30343c, Light #dcdfe5).",
           "markdownDescription": "(VS Code) Line above each command palette group. Default `$separator` (Dark `#30343c`, Light `#dcdfe5`)."
+        },
+        "statusPill.runningBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills and tags of work in progress, such as a running execution or a restoring database. Default $accentSurface (Dark #232842, Light #dde1f9).",
+          "markdownDescription": "(Varia) Status pills and tags of work in progress, such as a running execution or a restoring database. Default `$accentSurface` (Dark `#232842`, Light `#dde1f9`)."
+        },
+        "statusPill.runningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of running pills. Default $textAccent (Dark #bcc5ff, Light #3240b0).",
+          "markdownDescription": "(Varia) Text and glyph of running pills. Default `$textAccent` (Dark `#bcc5ff`, Light `#3240b0`)."
+        },
+        "statusPill.successBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills of a good outcome, such as a succeeded execution or a healthy availability group. Default $success/14 (Dark #74d19c24, Light #146f3b24).",
+          "markdownDescription": "(Varia) Status pills of a good outcome, such as a succeeded execution or a healthy availability group. Default `$success/14` (Dark `#74d19c24`, Light `#146f3b24`)."
+        },
+        "statusPill.successForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of success pills. Default $successText (Dark #a6e8bf, Light #0f5a2f).",
+          "markdownDescription": "(Varia) Text and glyph of success pills. Default `$successText` (Dark `#a6e8bf`, Light `#0f5a2f`)."
+        },
+        "statusPill.warningBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills that need attention, such as a stopping execution or a read-only database. Default $warning/14 (Dark #e4bb6a24, Light #87580024).",
+          "markdownDescription": "(Varia) Status pills that need attention, such as a stopping execution or a read-only database. Default `$warning/14` (Dark `#e4bb6a24`, Light `#87580024`)."
+        },
+        "statusPill.warningForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of warning pills. Default $warningSurfaceText (Dark #f0d49e, Light #6b4400).",
+          "markdownDescription": "(Varia) Text and glyph of warning pills. Default `$warningSurfaceText` (Dark `#f0d49e`, Light `#6b4400`)."
+        },
+        "statusPill.criticalBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills of a failure or a state at risk, and the Production environment tag. Default $error/14 (Dark #f39a9a24, Light #b4222924).",
+          "markdownDescription": "(Varia) Status pills of a failure or a state at risk, and the Production environment tag. Default `$error/14` (Dark `#f39a9a24`, Light `#b4222924`)."
+        },
+        "statusPill.criticalForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of critical pills and the Production tag. Default $errorSurfaceText (Dark #f6bcc1, Light #8f1d24).",
+          "markdownDescription": "(Varia) Text and glyph of critical pills and the Production tag. Default `$errorSurfaceText` (Dark `#f6bcc1`, Light `#8f1d24`)."
+        },
+        "statusPill.infoBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills and tags that inform without alarming, such as a Staging environment. Default $info/14 (Dark #8f9cff24, Light #4453d024).",
+          "markdownDescription": "(Varia) Status pills and tags that inform without alarming, such as a Staging environment. Default `$info/14` (Dark `#8f9cff24`, Light `#4453d024`)."
+        },
+        "statusPill.infoForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of information pills. Default $textAccent (Dark #bcc5ff, Light #3240b0).",
+          "markdownDescription": "(Varia) Text and glyph of information pills. Default `$textAccent` (Dark `#bcc5ff`, Light `#3240b0`)."
+        },
+        "statusPill.neutralBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Status pills and tags without a state color, such as a canceled execution or a Test environment. Default $active (Dark #30343e, Light #d6dae0).",
+          "markdownDescription": "(Varia) Status pills and tags without a state color, such as a canceled execution or a Test environment. Default `$active` (Dark `#30343e`, Light `#d6dae0`)."
+        },
+        "statusPill.neutralForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of neutral pills. Default $textSecondary (Dark #bcc1cb, Light #3a404b).",
+          "markdownDescription": "(Varia) Text and glyph of neutral pills. Default `$textSecondary` (Dark `#bcc1cb`, Light `#3a404b`)."
+        },
+        "chip.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. Default $text/0 (Dark #d9dce300, Light #1c1f2600).",
+          "markdownDescription": "(Varia) Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default. Default `$text/0` (Dark `#d9dce300`, Light `#1c1f2600`)."
+        },
+        "chip.foreground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Label of a filter chip while off. Default $textSecondary (Dark #bcc1cb, Light #3a404b).",
+          "markdownDescription": "(Varia) Label of a filter chip while off. Default `$textSecondary` (Dark `#bcc1cb`, Light `#3a404b`)."
+        },
+        "chip.border": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of a filter chip while off. Default $controlBorder/45 (Dark #6b728673, Light #878e9b73).",
+          "markdownDescription": "(Varia) Outline of a filter chip while off. Default `$controlBorder/45` (Dark `#6b728673`, Light `#878e9b73`)."
+        },
+        "chip.activeBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) A filter chip while on. Default $selection (Dark #21273b, Light #e7ebfc).",
+          "markdownDescription": "(Varia) A filter chip while on. Default `$selection` (Dark `#21273b`, Light `#e7ebfc`)."
+        },
+        "chip.activeForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Label and check mark of a filter chip while on. Default $textAccent (Dark #bcc5ff, Light #3240b0).",
+          "markdownDescription": "(Varia) Label and check mark of a filter chip while on. Default `$textAccent` (Dark `#bcc5ff`, Light `#3240b0`)."
+        },
+        "chip.activeBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on. Default $accent (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(Varia) Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on. Default `$accent` (Dark `#8f9cff`, Light `#4453d0`)."
+        },
+        "live.indicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. Default $success (Dark #74d19c, Light #146f3b).",
+          "markdownDescription": "(Varia) Dot of a live view that is collecting; it pulses unless the system asks for reduced motion. Default `$success` (Dark `#74d19c`, Light `#146f3b`)."
+        },
+        "live.pausedForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of a live view that is not collecting: starting, paused, stopped or ended. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) Text and glyph of a live view that is not collecting: starting, paused, stopped or ended. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+        },
+        "live.staleForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default $warningSurfaceText (Dark #f0d49e, Light #6b4400).",
+          "markdownDescription": "(Varia) Text and glyph of live data that is out of date, as in \"Stale since 22:44:03\". Default `$warningSurfaceText` (Dark `#f0d49e`, Light `#6b4400`)."
+        },
+        "live.staleBackground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Badge behind out-of-date live data. Default $warning/14 (Dark #e4bb6a24, Light #87580024).",
+          "markdownDescription": "(Varia) Badge behind out-of-date live data. Default `$warning/14` (Dark `#e4bb6a24`, Light `#87580024`)."
+        },
+        "tile.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Metric tiles of live documents. Default $panel (Dark #16181d, Light #ffffff).",
+          "markdownDescription": "(Varia) Metric tiles of live documents. Default `$panel` (Dark `#16181d`, Light `#ffffff`)."
+        },
+        "tile.border": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of a metric tile. Default $border (Dark #262a31, Light #e3e6eb).",
+          "markdownDescription": "(Varia) Outline of a metric tile. Default `$border` (Dark `#262a31`, Light `#e3e6eb`)."
+        },
+        "tile.warningBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of a tile whose value crossed its warning threshold. Default $warning (Dark #e4bb6a, Light #875800).",
+          "markdownDescription": "(Varia) Outline of a tile whose value crossed its warning threshold. Default `$warning` (Dark `#e4bb6a`, Light `#875800`)."
+        },
+        "tile.criticalBorder": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Outline of a tile whose value crossed its critical threshold. Default $error (Dark #f39a9a, Light #b42229).",
+          "markdownDescription": "(Varia) Outline of a tile whose value crossed its critical threshold. Default `$error` (Dark `#f39a9a`, Light `#b42229`)."
+        },
+        "skeleton.background": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Placeholder bars shown while a first load takes longer than 300 ms. Default $active (Dark #30343e, Light #d6dae0).",
+          "markdownDescription": "(Varia) Placeholder bars shown while a first load takes longer than 300 ms. Default `$active` (Dark `#30343e`, Light `#d6dae0`)."
         },
         "connection.red": {
           "$ref": "#/definitions/value",

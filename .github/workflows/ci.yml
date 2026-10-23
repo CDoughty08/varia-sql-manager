@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       regression-suite:
-        description: Focused Electron regressions (none runs the full CI suite)
+        description: Focused regressions (none runs full CI; all runs Electron suites)
         type: choice
-        options: [none, dialogs, results, all]
+        options: [none, dialogs, results, all, activity]
         default: none
 
 concurrency:

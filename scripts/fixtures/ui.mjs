@@ -53,6 +53,19 @@ export const part = {
   jobProgress: '.job-strip:not(.job-notice)',
   jobNotice: '.job-notice',
   outputEmpty: '.output-empty',
+  // The states kit's empty view (src/renderer/src/kit/EmptyState.tsx) and the surfaces that place one.
+  emptyState: '.empty-state',
+  emptyStateIcon: '.empty-state-icon',
+  emptyStateTitle: '.empty-state-title',
+  emptyStateDetail: '.empty-state-detail',
+  /** The filled action of an empty view; a view has at most one. */
+  primaryAction: 'button.primary',
+  explorerEmpty: '.explorer-empty',
+  workspaceEmpty: '.workspace-empty',
+  dockEmpty: '.dock-empty',
+  /** Object Explorer's fault view (an InlineError) and the outcome line of its Copy details. */
+  explorerFault: '.explorer-fault',
+  inlineErrorStatus: '.inline-error-status',
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
@@ -82,8 +95,19 @@ export const part = {
   quickInputHighlight: '.quick-input-hl',
   quickInputGroup: '.quick-input-group',
   quickInputEmpty: '.quick-input-empty',
+  // Connection environment labels (src/renderer/src/EnvironmentTag.tsx): the kit's tag, in a wrapper that bounds it per
+  // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
+  environmentTag: '.environment-tag',
+  statusPill: '.status-pill',
+  statusPillLabel: '.status-pill-label',
+  /** The status bars' spans that hold the tag with its visually hidden prefix. */
+  queryEnvironment: '.query-status-environment',
+  statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
+  connectionScroll: '.connection-scroll',
+  environmentPreview: '.environment-preview',
   optionsNote: '.options-note',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',
@@ -108,6 +132,8 @@ export const part = {
   menu: '.menu',
   explorerTreeBox: '.explorer-tree',
   explorerRow: '.explorer-row',
+  explorerServerRow: '.explorer-row.server',
+  activeDocumentTab: '.query-tab.active',
   dialogPages: '.object-dialog-pages',
   titleBarMenus: '.title-bar-menus'
 }
@@ -227,6 +253,17 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)
+/** A surface's empty view, matched only when it is the states kit's (so a hand-made one fails), and its parts. */
+export const emptyState = surface => matching(surface, part.emptyState)
+export const explorerEmpty = page => page.locator(part.explorerEmpty)
+export const workspaceEmpty = page => page.locator(part.workspaceEmpty)
+export const dockEmpty = page => page.locator(part.dockEmpty)
+export const emptyStateIcon = view => view.locator(part.emptyStateIcon)
+export const emptyStateTitle = view => view.locator(part.emptyStateTitle)
+export const emptyStateDetail = view => view.locator(part.emptyStateDetail)
+export const primaryAction = view => view.locator(part.primaryAction)
+export const explorerFault = page => page.locator(part.explorerFault)
+export const copyOutcome = view => view.locator(part.inlineErrorStatus)
 export const messages = page => page.getByRole('log', { name: 'Messages', exact: true })
 /** Each message and tail line; an error's differs only in its colour. */
 export const messageLines = page => messages(page).locator('pre')
@@ -265,6 +302,8 @@ export const optionsForm = dialog => dialog.locator(part.optionsForm)
 export const optionsDescription = dialog => dialog.locator(part.optionsDescription)
 /** Saved connections in the Connect dialog's history, by the text they show. */
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
+/** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
+export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
 
 // Menus and the quick input
 

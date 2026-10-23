@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -123,9 +123,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .dock-workbench { --dv-paneview-header-height: 28px; --dv-tabs-and-actions-container-height: 28px; --dv-tab-font-size: var(--varia-size-xs); --dv-floating-titlebar-height: 16px; }
 .dock-pane { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .dock-slot { width: 100%; height: 100%; overflow: hidden; }
-.dock-empty { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); }
-.dock-empty p { margin: 5px 0; }
-.dock-empty button { margin-top: 14px; border-color: var(--varia-button-border); }
+.dock-empty { height: 100%; }
 .pane-tab { height: 100%; display: flex; flex: 1; min-width: 0; }
 .pane-tab .dv-default-tab { flex: 1; }
 .docking-guides { position: fixed; inset: 0; z-index: 15000; pointer-events: none; user-select: none; }
@@ -141,10 +139,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-empty { padding: 25px 18px; }
-.explorer-empty > .icon { font-size: var(--varia-glyph-lg); color: var(--varia-icon-foreground); margin-bottom: 14px; }
-.explorer-empty p { color: var(--varia-descriptionForeground); line-height: 1.6; font-size: var(--varia-size-sm); }
-.explorer-empty button { border: 1px solid var(--varia-button-border); margin-top: 8px; }
 .explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
@@ -262,8 +256,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .options-row:has(:disabled) > label, .options-row :disabled, .options-form-row[data-disabled] { color: GrayText; }
   .options-dialog mark { color: Highlight; }
 }
-.explorer-fault { padding: 18px; font-size: var(--varia-size-sm); color: var(--varia-errorForeground); }
-.explorer-fault button { margin-top: 8px; border: 1px solid var(--varia-button-border); }
 /* The failure screen keeps a draggable strip where the title bar was, under the native window controls. */
 .shell-failure { height: 100vh; overflow: auto; padding: calc(env(titlebar-area-height, 34px) + 24px) 32px 32px; background: var(--varia-editor-background); color: var(--varia-foreground); font-size: var(--varia-size-md); }
 .shell-failure::before { content: ''; position: fixed; inset: 0 0 auto 0; height: env(titlebar-area-height, 34px); -webkit-app-region: drag; }
@@ -315,8 +307,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-database { flex-shrink: 1; }
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
-.workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-md); }
-.workspace-empty button { border-color: var(--varia-button-border); margin: 0 5px; }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
 .output-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; height: 42px; border-bottom: 1px solid var(--varia-panel-border); padding-right: 18px; background: var(--varia-panelTitle-background); }
 .output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
@@ -324,9 +314,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
 .output-toolbar small { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
-.output-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); }
-.output-empty strong { font-weight: 500; color: var(--varia-emptyState-titleForeground); }
-.output-empty p { font-size: var(--varia-size-xs); margin-top: 8px; }
 .output-toolbar { gap: 8px; padding-right: 10px; }
 .output-toolbar > div { display: flex; flex-shrink: 0; }
 .output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -682,4 +669,103 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   .designer-cell[data-active], .table-designer-splitter:focus-visible { outline: 1px solid CanvasText; }
   .designer-row[data-selected] .designer-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+}
+/* The states kit (src/renderer/src/kit): one empty state, inline errors, loading placeholders, status pills and tags,
+   filter chips, live labels and metric tiles. Colour is never the only sign: pills and badges carry a word, an on chip
+   a check mark, and a tile over its threshold a glyph. */
+.empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: var(--varia-space-1); min-height: 0; padding: var(--varia-space-5) var(--varia-space-4); text-align: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.empty-state-icon { margin-bottom: var(--varia-space-1); color: var(--varia-emptyState-iconForeground); }
+.empty-state-title { margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; color: var(--varia-emptyState-titleForeground); }
+.empty-state-detail { margin: 0; max-width: 48ch; }
+.empty-state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+.empty-state-actions button:not(.primary) { border-color: var(--varia-button-border); }
+.inline-error { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
+.inline-error > .codicon { flex: none; color: var(--varia-errorForeground); }
+.inline-error-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
+.inline-error-message { margin: 0; user-select: text; }
+.inline-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.inline-error-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
+.inline-error-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+/* Held back for --varia-motion-delay (transparent until then), so a quick load never flashes a placeholder. */
+.skeleton { display: flex; flex-direction: column; padding: var(--varia-space-1) var(--varia-space-3); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) var(--varia-motion-delay) both; }
+.skeleton-row { display: flex; align-items: center; height: var(--varia-row); }
+.skeleton-row::before { content: ''; width: 64%; height: 8px; border-radius: var(--varia-radius-sm); background: var(--varia-skeleton-background); }
+.skeleton-row:nth-child(3n + 2)::before { width: 82%; }
+.skeleton-row:nth-child(3n)::before { width: 46%; }
+.status-pill { display: inline-flex; align-items: center; flex: none; gap: var(--varia-space-1); max-width: 100%; height: 20px; padding: 0 var(--varia-space-2); overflow: hidden; border-radius: var(--varia-radius-pill); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: middle; }
+.status-pill.small { height: 18px; padding: 0 6px; }
+/* An environment tag (PROD): squarer than a state pill, so the two read apart side by side. */
+.status-pill.tag { border-radius: var(--varia-radius-sm); letter-spacing: 0.04em; }
+/* Pills and chips take any registry icon: a codicon, or one of Varia's svg icons, sized as the glyph it replaces. */
+.status-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill > .icon { font-size: var(--varia-glyph-sm); }
+.chip > .codicon { font-size: var(--varia-glyph-sm); }
+.chip > .icon { font-size: var(--varia-glyph-sm); }
+.live-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
+.tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
+.status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
+.status-pill[data-tone="warning"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
+.status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
+.status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
+.status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+/* A connection's environment tag where it labels the connection. A preset's word always fits; a custom label (up to 32
+   characters) is bounded and ends in an ellipsis, with the full label in the tooltip and accessible name, so it never
+   takes the server's name, the tab or the bar it sits in. */
+.environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
+.environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
+.environment-tag[data-place="explorer"] { max-width: min(40%, 12em); margin-left: var(--varia-space-1); }
+.environment-tag[data-place="tab"] { max-width: 10em; }
+.environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
+.environment-tag[data-place="list"] { vertical-align: middle; }
+.query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
+/* Apart from the backend's state, which it does not describe. */
+.status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
+.environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
+.environment-preview .environment-tag { flex: 0 1 auto; }
+.connection-choice-title { display: flex; align-items: center; min-width: 0; }
+.connection-choice .connection-choice-title strong { flex: 0 1 auto; min-width: 0; }
+.environment-field input { flex: 1; min-width: 0; }
+.chip-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 10px; border: 1px solid var(--varia-chip-border); border-radius: var(--varia-radius-pill); background: var(--varia-chip-background); color: var(--varia-chip-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.chip[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }
+/* An on chip stays filled under the pointer, so the click that turned it on shows at once, as a key press does. */
+.chip[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); transition: none; }
+.chip-count { font-weight: 600; font-variant-numeric: tabular-nums; }
+.live-pill, .stale-badge { display: inline-flex; align-items: center; gap: 6px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--varia-live-indicator); }
+/* A ring grows from the dot and fades; the dot keeps its color, so it reads at rest and mid-beat alike. */
+.live-pill[data-state="live"] .live-dot { animation: varia-pulse var(--varia-motion-pulse) var(--varia-motion-ease) infinite; }
+@keyframes varia-pulse { from { box-shadow: 0 0 0 0 var(--varia-live-indicator); } 70%, to { box-shadow: 0 0 0 5px transparent; } }
+@media (prefers-reduced-motion: reduce) { .live-pill[data-state="live"] .live-dot { animation: none; } }
+/* Starting, paused, stopped or ended: muted, with a glyph in place of the dot. */
+.live-pill:not([data-state="live"], [data-state="slowed"]) { color: var(--varia-live-pausedForeground); }
+.stale-badge[data-stale] { height: 20px; padding: 0 var(--varia-space-2); border-radius: var(--varia-radius-pill); background: var(--varia-live-staleBackground); color: var(--varia-live-staleForeground); }
+.tile { display: flex; flex-direction: column; gap: var(--varia-space-1); min-width: 0; padding: var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); color: var(--varia-foreground); }
+/* Over a threshold the outline takes the tone at twice the width, inside the tile so nothing moves. */
+.tile[data-tone="warning"] { border-color: var(--varia-tile-warningBorder); box-shadow: inset 0 0 0 1px var(--varia-tile-warningBorder); }
+.tile[data-tone="critical"] { border-color: var(--varia-tile-criticalBorder); box-shadow: inset 0 0 0 1px var(--varia-tile-criticalBorder); }
+.tile-caption { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.tile-caption-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile[data-tone="warning"] .tile-caption > .codicon { color: var(--varia-tile-warningBorder); }
+.tile[data-tone="critical"] .tile-caption > .codicon { color: var(--varia-tile-criticalBorder); }
+.tile-value { margin: 0; font-size: var(--varia-size-xl); line-height: var(--varia-line-xl); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile-unit { margin-left: 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); font-weight: 400; }
+.tile-context { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.tile-chart { min-width: 0; min-height: 0; }
+@media (forced-colors: active) {
+  /* Forced colors drop fills: pills, badges and tiles keep an outline, and an on chip takes the selection colors. */
+  .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }
+  .tile[data-tone] { border-width: 2px; box-shadow: none; }
+  .chip { border-color: ButtonText; }
+  /* Kept out of forcing, an on chip and the live dot must set every colour they show, hovered and focused too. */
+  .chip[aria-pressed="true"], .chip[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .chip[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
+  .live-dot, .skeleton-row::before { forced-color-adjust: none; background: CanvasText; }
+  /* The pulse ring is the theme colour, so the dot holds still: its word still says it is live. */
+  .live-pill[data-state="live"] .live-dot { animation: none; }
+  /* On a selected row a pill follows the row's text. */
+  [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
 }

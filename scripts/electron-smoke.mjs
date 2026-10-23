@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, emptyState, emptyStateIcon, emptyStateTitle, primaryAction, workspaceEmpty, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -11,6 +11,7 @@ const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
+await mkdir(join(control, 'extra'))
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -319,6 +320,13 @@ try {
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  // The empty workspace is the states kit's empty state: a title, a glyph, and one filled action.
+  const emptyWorkspace = emptyState(workspaceEmpty(page))
+  await expect(emptyStateTitle(emptyWorkspace)).toHaveText('No open queries')
+  await expect(emptyStateIcon(emptyWorkspace)).toHaveAttribute('data-icon', 'file-code')
+  await expect(emptyWorkspace.getByRole('button', { name: 'Open SQL file', exact: true })).toBeVisible()
+  await expect(primaryAction(emptyWorkspace)).toHaveText(['New query'])
+  await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()
@@ -494,13 +502,16 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
   await expect(denied).toHaveCount(0)
-  // F5 refreshes the selected folder only; its old rows stay until the new ones replace them.
-  const stale = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  // F5 reconciles the selected folder only: a role created meanwhile appears, and the rows still there keep theirs.
+  const kept = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  await writeFile(join(control, 'extra', 'serverRoles'), '')
   await (await explorerRow(page, 'server-a', 'Security', 'Server Roles')).click()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await loads()).filter(([, node]) => node === 'serverRoles').length).toBe(2)
-  await expect.poll(async () => (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).not.toBe(stale)
+  await expect(await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'VariaAuditors')).toBeVisible()
+  expect(await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).toBe(kept)
   expect((await loads()).filter(([, node]) => node === 'logins')).toHaveLength(1)
+  await rm(join(control, 'extra', 'serverRoles'))
   // The other server's tree loads through its own connection.
   await toggle('server-a', 'Security')
   await toggle('server-b', 'Security')
