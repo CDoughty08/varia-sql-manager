@@ -28,13 +28,16 @@ internal static partial class CatalogSql
     /// <summary>Browsing never waits more than 5 s behind another session's uncommitted DDL, and loses deadlocks.</summary>
     public const string Prologue = "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 5000; SET DEADLOCK_PRIORITY LOW;\n";
     /// <summary>One declaration list for every statement, so the scope wrapper's text is constant.</summary>
+    /// <summary>@ssis_folder and @ssis_project carry the owner's SSIS folder and project, @ssis_catalog the SSIS Catalog's
+    /// database (SSISDB); @kb is the bigint keyset key.</summary>
     public const string Declarations = "@object_schema sysname, @object_name sysname, @k1 sysname, @k2 sysname, @kn int, @take int, @first bit, "
-        + "@fname nvarchar(400), @fschema nvarchar(400), @fowner nvarchar(400), @d1 date, @d2 date";
+        + "@fname nvarchar(400), @fschema nvarchar(400), @fowner nvarchar(400), @d1 date, @d2 date, @ssis_folder nvarchar(128), @ssis_project nvarchar(128), @kb bigint, @ssis_catalog sysname";
     /// <summary>Runs @stmt in another database without a connection (or pool) per database: the name reaches T-SQL only
     /// through QUOTENAME.</summary>
     public const string ModuleCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
         + "EXEC @module @stmt, @decl, @object_schema = @object_schema, @object_name = @object_name, @k1 = @k1, @k2 = @k2, @kn = @kn, @take = @take, "
-        + "@first = @first, @fname = @fname, @fschema = @fschema, @fowner = @fowner, @d1 = @d1, @d2 = @d2;";
+        + "@first = @first, @fname = @fname, @fschema = @fschema, @fowner = @fowner, @d1 = @d1, @d2 = @d2, @ssis_folder = @ssis_folder, @ssis_project = @ssis_project, @kb = @kb, "
+        + "@ssis_catalog = @ssis_catalog;";
 
     /// <summary>The filter fragments, each "AND (…)", for the properties the shape uses.</summary>
     public static string Filters(FilterShape shape, FilterColumns columns)

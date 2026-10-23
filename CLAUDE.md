@@ -160,6 +160,18 @@ pages, limits, error codes, display formats, benchmarks).
   from a constant table generated from the catalogue; a live dry run proves the server builds exactly
   `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
   `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
+- SSIS Catalog semantics (code tables, `ssis.describe` views, error codes, features, limits) live only in
+  `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's catalogue. After changing it, regenerate
+  the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
+  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read only on
+  the SSIS read pool (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
+  the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
+  (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
+  `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
+  RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
+  until disconnect. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
+  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
+  names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read
