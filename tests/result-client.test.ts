@@ -526,6 +526,23 @@ describe('ResultClient live streams', () => {
     expect(failed.getSnapshot().state).toBe('released')
   })
 
+  it('closes what a finished source kept when the stream was cancelled before its end arrived', async () => {
+    const { client, stream, event, worker, flush } = await started()
+    await event(tick(1, 10))
+    await event(tick(2, 11))
+    const newer = client.open(table(11))
+    // The view closed while the source was finishing: the cancel crossed the end.
+    stream.cancel()
+    await settle()
+    worker().toWorker({ t: 'end', rid: 1, ok: true, result: { ended: 'sourceEnded', kept: [11], ticks: 2, elapsedMs: 40 } })
+    expect(await stream.done).toMatchObject({ ok: true, value: { ended: 'sourceEnded' } })
+    await settle()
+    flush()
+    expect(newer.getSnapshot().state).toBe('released')
+    expect(worker().fromWorker.filter(request => request.t === 'close')).toEqual([{ t: 'close', rid: expect.any(Number), generation: 1, resultIds: [11] }])
+    expect(client.liveStreams).toBe(0)
+  })
+
   it('updates a running stream, and answers updates of an ended one as values', async () => {
     const { stream, worker, params } = await started()
     const pending = stream.update({ paused: true })

@@ -8,6 +8,8 @@ import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/
 import type { PortMessage } from '../src/shared/ipc/port-messages'
 import { liveSources, type LiveProbeId } from '../src/shared/live/catalog'
 import type { LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
+import { defaultSettings } from '../src/shared/settings/catalog'
+import { LiveService, type LiveOwner } from '../src/renderer/src/live/LiveService'
 
 // Main's whole live path over the fake backend's debug.synthetic source: the supervisor, the results port, and a worker
 // stand-in that acknowledges each event as the page will once it has applied it; then the same path through the real
@@ -266,6 +268,67 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       expect(handles.every(handle => handle.getSnapshot().state === 'released')).toBe(true)
       expect([host.liveCount, host.ownedCount, client.liveStreams, worker()!.core.liveStreams]).toEqual([0, 0, 0, 0])
     } finally {
+      close()
+    }
+  })
+
+  it('runs a LiveService view end to end: hidden pauses it, showing resumes it, a restart loses it, and a Reconnect brings it back', async () => {
+    const port = new LoopPort()
+    const { supervisor, host } = await workbench(port)
+    const { client, close } = connect(host, port)
+    // A tab stand-in: shown or hidden, and the connection it follows.
+    const listeners = new Set<() => void>()
+    let shown = true, connection: string | undefined = crypto.randomUUID()
+    const notify = () => listeners.forEach(listener => listener())
+    const owner: LiveOwner = { key: 'tab:test', visible: () => shown, connectionId: () => connection, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+    const values = { ...defaultSettings, 'liveData.pauseAfterSeconds': 1 }
+    const service = new LiveService({ client, settings: { getSnapshot: () => ({ values }), subscribe: () => () => {} }, page: { hidden: () => false, subscribe: () => () => {} } })
+    try {
+      await client.ready()
+      await expect.poll(() => client.backendGeneration).toBe(1)
+      const handle = service.open({ connectionId: connection, source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.table' }, { probe: 'debug.synthetic.metrics' }], args: { tickMs: 30 } }, owner)
+      const gaps: (string | undefined)[] = []
+      handle.onTick(({ tick }) => { gaps.push(tick.samples[0]?.gap) })
+      await expect.poll(() => gaps.length).toBeGreaterThanOrEqual(3)
+      expect(gaps[0]).toBe('baseline')
+      expect(handle.getSnapshot().status).toBe('live')
+      expect(handle.ring('debug.synthetic.metrics')!.length).toBeGreaterThanOrEqual(3)
+      const table = handle.table('debug.synthetic.table')!
+      expect((await table.handle.getWindow(0, 10)).count).toBe(3)
+
+      shown = false
+      notify()
+      await expect.poll(() => handle.getSnapshot().status, { timeout: 3000 }).toBe('paused')
+      await new Promise(done => setTimeout(done, 100))
+      const paused = gaps.length
+      await new Promise(done => setTimeout(done, 300))
+      expect(gaps.length).toBe(paused)
+      expect(handle.getSnapshot()).toMatchObject({ pausedBy: 'hidden' })
+      shown = true
+      notify()
+      await expect.poll(() => gaps.length).toBeGreaterThan(paused + 1)
+      expect(gaps[paused]).toBe('resumed')
+
+      const history = handle.ring('debug.synthetic.metrics')!.length
+      void supervisor.restart('manual')
+      await expect.poll(() => handle.getSnapshot().status).toBe('lost')
+      expect(handle.ring('debug.synthetic.metrics')!.length).toBeGreaterThanOrEqual(history)
+      // The newest table went with its backend; an older one was already released when a later tick retired it.
+      expect(handle.table('debug.synthetic.table')!.handle.getSnapshot().state).toBe('lost')
+      expect(table.handle.getSnapshot().state).toBe('released')
+      await expect.poll(() => supervisor.state.status).toBe('ready')
+      // Reconnect moves the tab to the new generation's connection; the view follows it.
+      connection = crypto.randomUUID()
+      notify()
+      await expect.poll(() => handle.getSnapshot().status).toBe('live')
+      const before = gaps.length
+      await expect.poll(() => gaps.length).toBeGreaterThan(before + 1)
+      expect(handle.getSnapshot().connectionId).toBe(connection)
+      handle.dispose()
+      await expect.poll(() => host.liveCount).toBe(0)
+      expect(client.liveStreams).toBe(0)
+    } finally {
+      service.dispose()
       close()
     }
   })
