@@ -1,0 +1,121 @@
+name: CI regressions
+
+# Manual entry points only: this workflow adds no automatic CI runs.
+on:
+  workflow_call:
+    inputs:
+      suite:
+        description: Electron regressions to run (dialogs, results, or all)
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Electron regressions to run
+        type: choice
+        options: [dialogs, results, all]
+        default: all
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  electron:
+    name: ${{ matrix.os }} (${{ inputs.suite }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Validate suite
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+        run: |
+          case "$SUITE" in
+            dialogs|results|all) ;;
+            *) echo '::error::Choose dialogs, results, or all.'; exit 1 ;;
+          esac
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Type check, offline .NET checks, vitest, production build
+        id: check
+        run: npm run check
+      - name: Prepare the Electron sandbox and display
+        id: display
+        if: runner.os == 'Linux'
+        # Match the main CI job's sandbox and virtual display configuration.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Dialog lifecycle regression
+        id: dialogs
+        if: inputs.suite == 'dialogs' || inputs.suite == 'all'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/dialog-lifecycle-smoke.mjs
+          else
+            node scripts/dialog-lifecycle-smoke.mjs
+          fi
+      - name: Results grid smoke test
+        id: results
+        if: (success() || failure()) && steps.check.outcome == 'success' && (runner.os != 'Linux' || steps.display.outcome == 'success') && (inputs.suite == 'results' || inputs.suite == 'all')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/results-smoke.mjs
+          else
+            node scripts/results-smoke.mjs
+          fi
+      - name: Results grid smoke test on a 1024x768 display
+        id: results-small
+        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success' && runner.os == 'Linux' && (inputs.suite == 'results' || inputs.suite == 'all')
+        timeout-minutes: 8
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
+      - name: Upload regression screenshots and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regressions-${{ matrix.os }}-${{ inputs.suite }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Summarize regression checks
+        if: always()
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          DIALOGS_OUTCOME: ${{ steps.dialogs.outcome }}
+          RESULTS_OUTCOME: ${{ steps.results.outcome }}
+          SMALL_OUTCOME: ${{ steps.results-small.outcome }}
+        run: |
+          {
+            printf '## Electron regressions (%s, %s)\n\n' "$RUNNER_OS" "$SUITE"
+            printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
+            printf '| Check | Result |\n| --- | --- |\n'
+            printf '| Build and offline checks | %s |\n' "$CHECK_OUTCOME"
+            printf '| Dialog lifecycle | %s |\n' "$DIALOGS_OUTCOME"
+            printf '| Results grid | %s |\n' "$RESULTS_OUTCOME"
+            printf '| Results grid at 1024x768 | %s |\n' "$SMALL_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"

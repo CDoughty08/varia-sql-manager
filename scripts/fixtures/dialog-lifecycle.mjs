@@ -58,6 +58,24 @@ const answer = (application, title, response) => application.evaluate((_electron
   return !!reply
 }, [title, response])
 const crash = application => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+/** Native crash state for CI diagnostics, including Linux zombies which still answer signal 0. */
+const rendererSnapshot = (application, previousPid = 0) => application.evaluate(({ BrowserWindow }, previous) => {
+  const contents = BrowserWindow.getAllWindows()[0]?.webContents
+  if (contents && !globalThis.variaNativeLosses) {
+    globalThis.variaNativeLosses = []
+    contents.on('render-process-gone', (_event, details) => globalThis.variaNativeLosses.push(details))
+  }
+  const pid = contents && !contents.isDestroyed() ? contents.getOSProcessId() : 0
+  const observed = pid || previous
+  let alive = false, state
+  if (observed) {
+    try { process.kill(observed, 0); alive = true } catch {}
+    if (process.platform === 'linux') {
+      try { state = process.getBuiltinModule('node:fs').readFileSync(`/proc/${observed}/status`, 'utf8').match(/^State:\s*(.+)$/m)?.[1] } catch {}
+    }
+  }
+  return { pid, observed, alive, state, crashed: contents?.isCrashed(), destroyed: contents?.isDestroyed(), losses: globalThis.__variaTest.rendererLosses, nativeLosses: globalThis.variaNativeLosses }
+}, previousPid)
 // Electron turns SIGTERM into app.quit() on Linux and macOS. On Windows Playwright starts Electron through cmd.exe, so the
 // child is that shell and kill() terminates only it: main is asked to quit instead. The child still exits with the app.
 const quit = (application, child) => process.platform === 'win32'
@@ -149,10 +167,16 @@ export async function dialogLifecycle(launchOptions) {
     // and what the dead page asked for and was not shown yet (the Script As save, the close prompt) never is.
     const beforeCrash = await spawns()
     const beforeLoss = (await rendererLosses(application)).length
+    const beforeRenderer = await rendererSnapshot(application)
     await crash(application)
     // forcefullyCrashRenderer returns before Chromium reports the crash (or the watchdog observes it). Keep the file
     // chooser open until main has handled that loss; shared runners can take longer than a fixed one-second delay.
-    await expect.poll(async () => (await rendererLosses(application)).slice(beforeLoss).some(loss => loss.handled), { timeout: 15000 }).toBe(true)
+    try {
+      await expect.poll(async () => (await rendererLosses(application)).slice(beforeLoss).some(loss => loss.handled), { timeout: 15000 }).toBe(true)
+    } catch (error) {
+      console.error('Renderer loss was not handled: ' + JSON.stringify({ before: beforeRenderer, after: await rendererSnapshot(application, beforeRenderer.pid) }))
+      throw error
+    }
     expect(await shown(application)).toEqual(['Save Grid Results'])
     await application.evaluate(() => globalThis.variaReleaseGridSave())
     await expect.poll(() => shown(application), { timeout: 15000 }).toEqual(['Save Grid Results', 'Workbench stopped'])

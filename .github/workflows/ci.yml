@@ -7,6 +7,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      regression-suite:
+        description: Focused Electron regressions (none runs the full CI suite)
+        type: choice
+        options: [none, dialogs, results, all]
+        default: none
 
 concurrency:
   # A new push supersedes a pull request's earlier run; every main commit and manual run gets its own complete run.
@@ -23,6 +29,7 @@ env:
 jobs:
   linux:
     name: Linux (live SQL Server, Electron smoke)
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     services:
@@ -119,7 +126,7 @@ jobs:
   desktop:
     name: ${{ matrix.os }}
     # Windows minutes bill at 2x and macOS at 10x, so draft pull requests run only the Linux job.
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: (github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     strategy:
       fail-fast: false
       matrix:
@@ -173,3 +180,9 @@ jobs:
           path: artifacts/bench/
           if-no-files-found: ignore
           retention-days: 30
+
+  regressions:
+    if: github.event_name == 'workflow_dispatch' && inputs.regression-suite != 'none'
+    uses: ./.github/workflows/ci-regressions.yml
+    with:
+      suite: ${{ inputs.regression-suite }}
