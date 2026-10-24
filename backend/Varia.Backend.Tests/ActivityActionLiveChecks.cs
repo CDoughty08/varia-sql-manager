@@ -20,7 +20,7 @@ internal static class ActivityActionLiveChecks
         public ActivityKillSessionDto Kill() => new(Spid, SessionActions.FormatLoginTime(LoginTime), HostProcessId);
     }
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json, bool requirePermissionChecks = false)
     {
         var host = (IActionHost)service;
         var profile = host.Profile(info.Id);
@@ -28,6 +28,7 @@ internal static class ActivityActionLiveChecks
         var edition = ActivityCatalog.Current.EditionOf(profile.EngineEdition);
         if (band is null || edition is null)
         {
+            if (requirePermissionChecks) throw new InvalidOperationException("Activity Monitor session action checks require a supported SQL Server.");
             Console.WriteLine("Activity Monitor session action checks skipped: the server is not one the monitor serves yet.");
             return;
         }
@@ -225,7 +226,7 @@ internal static class ActivityActionLiveChecks
                 check(state == 2 && await Works(other.Connection), "the kill batch answers own (2) for its own session and runs no KILL");
             }
 
-            await PermissionAsync(check, service, info, live, json, Open, Works);
+            await PermissionAsync(check, service, info, live, json, Open, Works, requirePermissionChecks);
         }
         finally
         {
@@ -243,10 +244,11 @@ internal static class ActivityActionLiveChecks
     /// <summary>Scratch only: a login with server state but without ALTER ANY CONNECTION is denied and the session lives; a
     /// login without server state cannot see the session, so Details and Kill answer ended and nothing is killed.</summary>
     private static async Task PermissionAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json,
-        Func<string, Func<SqlConnectionStringBuilder, SqlConnectionStringBuilder>?, Task<Victim>> open, Func<SqlConnection, Task<bool>> works)
+        Func<string, Func<SqlConnectionStringBuilder, SqlConnectionStringBuilder>?, Task<Victim>> open, Func<SqlConnection, Task<bool>> works, bool required)
     {
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
+            if (required) throw new InvalidOperationException("Activity Monitor session action permission checks require VARIA_TEST_SQL_SCRATCH=1.");
             Console.WriteLine("Kill Process permission checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named login on a disposable development server.");
             return;
         }
@@ -266,6 +268,7 @@ internal static class ActivityActionLiveChecks
         await using var scratch = ScratchDatabase.Bare((text, _) => Sql(text));
         if (!await scratch.CreateLoginAsync())
         {
+            if (required) throw new InvalidOperationException("Activity Monitor session action permission checks require a SQL Server that accepts SQL logins.");
             Console.WriteLine("Kill Process permission checks skipped: this server accepts Windows logins only.");
             return;
         }
@@ -280,14 +283,24 @@ internal static class ActivityActionLiveChecks
             async Task<T> Call<T>(string method, object args) => (T)await service.DispatchAsync(method, JsonSerializer.SerializeToElement(args, json), json);
             var unseen = await Call<ActivityKillResult>("activity.kill", new ActivityKillArgs(limited.Id, [victim.Kill()]));
             var unseenDetails = await Call<ActivityDetailsResult>("activity.details", new ActivityDetailsArgs(limited.Id, Guid.NewGuid().ToString(), victim.Spid, SessionActions.FormatLoginTime(victim.LoginTime)));
-            check(unseen.Results is [{ Outcome: "ended" }] && unseenDetails is { State: "ended", Error: null } && await works(victim.Connection),
-                "a login without server state sees no other session: Kill and Details answer ended and nothing is killed");
+            var unseenAlive = await works(victim.Connection);
+            check(unseen.Results is [{ Outcome: "ended" }] && unseenDetails is { State: "ended", Error: null } && unseenAlive,
+                "a login without server state sees no other session: Kill and Details answer ended and nothing is killed; "
+                + "kill=" + string.Join(", ", unseen.Results.Select(result => result.Outcome + ":" + result.Message))
+                + "; killError=" + unseen.Error?.Code + ":" + unseen.Error?.Message
+                + "; details=" + unseenDetails.State + "; detailsError=" + unseenDetails.Error?.Code + ":" + unseenDetails.Error?.Message
+                + "; victimAlive=" + unseenAlive);
             var granted = await Sql("GRANT VIEW SERVER STATE TO " + login + ";");
             var denied = await Call<ActivityKillResult>("activity.kill", new ActivityKillArgs(limited.Id, [victim.Kill()]));
             var seen = await Call<ActivityDetailsResult>("activity.details", new ActivityDetailsArgs(limited.Id, Guid.NewGuid().ToString(), victim.Spid, SessionActions.FormatLoginTime(victim.LoginTime)));
-            check(granted.Status == "completed" && denied.Results is [{ Outcome: "denied", Message: null }] && denied.Error is null && seen is { State: "present" } && await works(victim.Connection),
-                "a login with server state but without ALTER ANY CONNECTION reads Details, and its Kill is denied as a value while the session lives: "
-                + string.Join(", ", denied.Results.Select(result => result.Outcome)) + " " + granted.Error);
+            var seenAlive = await works(victim.Connection);
+            check(granted.Status == "completed" && denied.Results is [{ Outcome: "denied", Message: null }] && denied.Error is null && seen is { State: "present" } && seenAlive,
+                "a login with server state but without ALTER ANY CONNECTION reads Details, and its Kill is denied as a value while the session lives; "
+                + "grant=" + granted.Status + ":" + granted.Error
+                + "; kill=" + string.Join(", ", denied.Results.Select(result => result.Outcome + ":" + result.Message))
+                + "; killError=" + denied.Error?.Code + ":" + denied.Error?.Message
+                + "; details=" + seen.State + "; detailsError=" + seen.Error?.Code + ":" + seen.Error?.Message
+                + "; victimAlive=" + seenAlive);
         }
         finally
         {

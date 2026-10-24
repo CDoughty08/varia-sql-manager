@@ -750,6 +750,24 @@ try {
   // 40 px in, where a zoomed-out window's bar still is) selects nothing and opens nothing; the same press on the plan
   // cell under it selects the cell and opens the plan.
   const overlayStyle = await page.addStyleTag({ content: `[data-result-grid] ${gridPart.scroller} { max-width: 520px; max-height: 80px } [data-result-grid] ${gridPart.scroller}::-webkit-scrollbar { width: 0; height: 0 }` })
+  // Scroll a numeric cell into view and press it in the same task, before a scroll event or frame can update the grid.
+  // The previous offset would put this point over the XML column: the press must select the numeric cell, opening no tab.
+  const firstColumnWidth = await cell(0, 0).evaluate(element => element.getBoundingClientRect().width)
+  await scroller().evaluate((element, width) => { element.scrollLeft = width }, firstColumnWidth)
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+  expect(await scroller().evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
+  await grid().evaluate((root, { parts, selector }) => {
+    root.querySelector(parts.scroller).scrollLeft = 0
+    const target = root.querySelector(selector), box = target.getBoundingClientRect()
+    const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, button: 0, detail: 1 }
+    const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true }
+    target.dispatchEvent(new PointerEvent('pointerdown', { ...init, ...pointer, buttons: 1 }))
+    target.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 }))
+    target.dispatchEvent(new PointerEvent('pointerup', { ...init, ...pointer, buttons: 0 }))
+    target.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }))
+  }, { parts: gridPart, selector: gridCellSelector(0, 0) })
+  await expect.poll(() => active()).toMatchObject({ row: 0, column: 0 })
+  await expect(queryTabs()).toHaveCount(1)
   await cell(0, 0).click()
   await page.keyboard.press('End')
   await settled()

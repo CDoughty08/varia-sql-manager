@@ -56,9 +56,14 @@ internal static class ActivityActionChecks
         var details = ActivitySql.Statements("activity.details", Render);
         var fed = details.SelectMany(statement => statement.Feeds).ToHashSet(StringComparer.Ordinal);
         check(Catalog.DetailsSections.SequenceEqual(["session", "statement", "batch", "inputBuffer", "waits", "transactions", "tempdb", "locks"])
-            && Catalog.DetailsTexts.SetEquals(["statement", "batch", "inputBuffer"]) && fed.SetEquals(Catalog.DetailsSections) && details[0].Id == "session"
+            && Catalog.DetailsTexts.SetEquals(["statement", "batch", "inputBuffer"]) && fed.SetEquals(Catalog.DetailsSections) && details[0].Id == "identity" && details[1].Id == "session"
             && details.All(statement => statement.Batch.StartsWith(ActivitySql.Prologue, StringComparison.Ordinal)),
-            "Details reads the session first, then one statement per section of the catalogue (texts feed both statement and batch), each with the live prologue");
+            "Details checks identity before its session joins, then one statement per section of the catalogue (texts feed both statement and batch), each with the live prologue");
+        var identity = details[0];
+        check(identity.Text.Contains("FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id;", StringComparison.Ordinal)
+            && !identity.Text.Contains("JOIN", StringComparison.OrdinalIgnoreCase) && !identity.Text.Contains("sys.dm_exec_connections", StringComparison.OrdinalIgnoreCase)
+            && identity.Columns.SequenceEqual(["session_id", "same_session"]) && identity.Parameters.Select(parameter => parameter.Name).ToHashSet().SetEquals(["@session_id", "@login_time"]),
+            "Details' visibility and identity preflight needs only sessions, so an invisible target requires no joined-DMV permissions");
         check(Catalog.KillOutcomes.SequenceEqual(["killed", "ended", "changed", "own", "system", "varia", "denied", "failed"])
             && Enumerable.Range(-1, 8).Select(SessionActions.KillOutcome).All(Catalog.KillOutcomes.Contains)
             && Catalog.Limit("detailsBudgetMs") == 10_000 && Catalog.Limit("killBudgetMs") == 25_000 && Catalog.Limit("detailsPreviewChars") == 65_536 && Catalog.Limit("detailsChars") == 1_000_000
