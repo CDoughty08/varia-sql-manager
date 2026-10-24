@@ -332,6 +332,35 @@ async function crashHeldRenderer(application) {
   return (await rendererLosses(application))[losing].source
 }
 
+/** Records Chromium's report and whether it was still blind when recovery created a replacement window. The file also
+ *  survives a pending quit, whose recovered page exits before Playwright can inspect it. */
+const observeRecovery = (application, file) => application.evaluate(({ app, BrowserWindow }, path) => {
+  globalThis.variaStopObservingRecovery?.()
+  const contents = BrowserWindow.getAllWindows()[0].webContents
+  const { appendFileSync } = process.getBuiltinModule('node:fs')
+  const record = value => appendFileSync(path, JSON.stringify(value) + '\n')
+  const nativeLoss = (_event, details) => { if (details.reason !== 'clean-exit') record({ kind: 'event' }) }
+  const replacement = () => record({ kind: 'replacement', nativeSeen: contents.isCrashed() })
+  contents.on('render-process-gone', nativeLoss)
+  app.on('browser-window-created', replacement)
+  globalThis.variaStopObservingRecovery = () => {
+    contents.off('render-process-gone', nativeLoss)
+    app.off('browser-window-created', replacement)
+  }
+}, file)
+const recoveryRecords = async file => (await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+/** Same-window reload needs Chromium's report; replacement must occur while only the watchdog knows the process died. */
+function recoveryReplaced(records, source) {
+  const replaced = records[0]?.kind === 'replacement'
+  expect(records).toEqual([
+    ...replaced ? [{ kind: 'replacement', nativeSeen: false }] : [],
+    ...records.some(record => record.kind === 'event') ? [{ kind: 'event' }] : []
+  ])
+  if (replaced) expect(source).toBe('watchdog')
+  else expect(records).toEqual([{ kind: 'event' }])
+  return replaced
+}
+
 /**
  * The renderer watchdog (menus-smoke.mjs step 16), in fresh apps on the fake backend. A process spawned as the reload
  * after a crash launches the new renderer inherits that renderer's channel on Windows, so the renderer's own crash
@@ -340,7 +369,7 @@ async function crashHeldRenderer(application) {
  * reports the crash too (main ignores it), and Reload reloads the page. An idle process that never lets go leaves
  * Chromium blind for good, so Reload opens the workbench in a new window instead, which takes over a quit the lost page
  * could not finish; and Close closes the window at once instead of waiting for an unload the dead renderer never
- * answers. Elsewhere Chromium sees every crash, and the same answers do the same.
+ * answers. Linux may also leave an unseen zombie renderer; recovery follows Chromium's observed report there too.
  */
 export async function rendererWatchdog(launchOptions) {
   const run = await launch(launchOptions, 'watchdog')
@@ -358,17 +387,23 @@ export async function rendererWatchdog(launchOptions) {
         await crashAndAwaitLoss(application, `setup ${holder} attempt ${attempt}`)
         await expect.poll(ready, { timeout: 30000 }).toBe(true)
         const [losing, prompts, [before]] = [(await losses()).length, (await shown(application)).length, await windowIds()]
+        const recoveryFile = join(profile, `recovery-${holder}-${attempt}.jsonl`)
+        await observeRecovery(application, recoveryFile)
         await crashAndAwaitLoss(application, `${holder} attempt ${attempt}`, losing)
         await expect.poll(() => shown(application), { timeout: 15000 }).toHaveLength(prompts + 1)
         // Reload: in place once Chromium has seen the crash too, or in a new window when it never does.
         await expect.poll(ready, { timeout: 30000 }).toBe(true)
         unseen = (await losses())[losing].source === 'watchdog'
         const released = holder === 'process' ? await application.evaluate(() => globalThis.__variaTest.releaseHolders()) : 0
+        await application.evaluate(() => globalThis.variaStopObservingRecovery())
         if (onWindows && !unseen) { console.log(`Renderer watchdog: Chromium saw the ${holder} holder's crash itself (attempt ${attempt}); trying again.`); continue }
+        const replaced = recoveryReplaced(await recoveryRecords(recoveryFile), (await losses())[losing].source)
         expect({ windows: (await windowIds()).map(id => id === before ? 'same' : 'new'), prompts: (await shown(application)).slice(prompts), released })
-          .toEqual({ windows: [unseen && holder === 'process' ? 'new' : 'same'], prompts: ['Workbench stopped'], released: holder === 'process' ? 1 : 0 })
-        expect((await losses()).slice(losing)).toEqual(!onWindows ? [{ source: 'event', handled: true }]
-          : holder === 'backend' ? [{ source: 'watchdog', handled: true }, { source: 'event', handled: false }] : [{ source: 'watchdog', handled: true }])
+          .toEqual({ windows: [onWindows ? unseen && holder === 'process' ? 'new' : 'same' : replaced ? 'new' : 'same'], prompts: ['Workbench stopped'], released: holder === 'process' ? 1 : 0 })
+        const reported = (await losses()).slice(losing)
+        expect(reported).toEqual(onWindows
+          ? holder === 'backend' ? [{ source: 'watchdog', handled: true }, { source: 'event', handled: false }] : [{ source: 'watchdog', handled: true }]
+          : [{ source: unseen ? 'watchdog' : 'event', handled: true }, ...unseen && reported.length > 1 ? [{ source: 'event', handled: false }] : []])
         unseen = true
       }
       expect(unseen, `a crash Chromium could not see, held by the ${holder}`).toBe(true)
@@ -406,11 +441,8 @@ export async function rendererWatchdog(launchOptions) {
       const { application, child, profile, errors } = quitRun
       const dialogs = join(profile, 'watchdog-quit')
       await mockDialogs(application, dialogs, ['Workbench stopped', 'Unsaved query'])
-      await application.evaluate(({ app }, file) => {
-        const { appendFileSync } = process.getBuiltinModule('node:fs')
-        app.on('browser-window-created', () => appendFileSync(file, 'window\n'))
-      }, dialogs + '.windows')
       await crashToHolder(application, 'process')
+      await observeRecovery(application, dialogs + '.recovery')
       // Playwright gives up on a page whose renderer crashed, so the query is typed through Electron.
       await expect.poll(() => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript("(() => { const input = document.querySelector('.monaco-editor [role=\"textbox\"]'); input?.focus(); return !!input && document.activeElement === input })()")), { timeout: 15000 }).toBe(true)
       await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.insertText('SELECT 1 -- unsaved'))
@@ -428,7 +460,8 @@ export async function rendererWatchdog(launchOptions) {
       await expect.poll(() => exited, { timeout: 30000 }).toBe(true)
       expect((await readFile(dialogs + '.dialogs', 'utf8')).trim().split('\n')).toEqual(['Workbench stopped', 'Unsaved query', 'Workbench stopped'])
       // Reload opened the workbench in a new window only where Chromium could not see the crash.
-      expect(await readFile(dialogs + '.windows', 'utf8').catch(() => '')).toBe(source === 'watchdog' ? 'window\n' : '')
+      const replaced = recoveryReplaced(await recoveryRecords(dialogs + '.recovery'), source)
+      if (onWindows) expect(replaced).toBe(source === 'watchdog')
       expect(errors).toEqual([])
       handedOver = true
     } finally { await quitRun.cleanup() }
