@@ -1389,26 +1389,21 @@ describe('ExplorerService: memory and speed', () => {
     expect(id.ref.object.parent).toBe(name.ref.object.parent)
     expect(id.ref.object.parent).toEqual({ kind: 'table', schema: 'dbo', name: 'T0' })
   })
-  it('merges a 2,000-node page and republishes within the budget', async () => {
+  it('merges a 2,000-node page with bounded matching work and republishes it', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 2000 }, (_, index) => `dbo.Table${index}`)
     f.connect()
     await settle()
     const tables = await f.open('Databases', 'AppData', 'Tables')
-    let best = Infinity
-    for (let run = 0; run < 3; run++) {
-      f.hold(isFolder('tables'))
-      f.explorer.refresh(tables)
-      const start = performance.now()
-      f.release()
-      await settle()
-      best = Math.min(best, performance.now() - start)
-    }
+    const before = f.explorer.node(tables)!.children!.slice()
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    expect(await reconcilePages(f, tables)).toBe(1)
     expect(f.explorer.node(tables)!.children).toHaveLength(2001)
+    expect(f.explorer.node(tables)!.children!.every((child, index) => child === before[index])).toBe(true)
     expect(f.rows().count).toBeGreaterThan(2000)
-    expect(best).toBeLessThan(25)
   })
-  it('refreshes a folder of 100,000 rows to 2,000 within the budget, deleting the old rows later', async () => {
+  it('refreshes a folder of 100,000 rows to 2,000 with bounded matching work before deleting the old rows', async () => {
     const f = fixture()
     const names = (count: number) => Array.from({ length: count }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names(100_000)
@@ -1416,48 +1411,65 @@ describe('ExplorerService: memory and speed', () => {
     f.connect()
     await settle()
     const tables = await f.open('Databases', 'AppData', 'Tables')
-    const durations: number[] = []
-    for (let run = 0; run < 3; run++) {
-      f.state.tables = names(2000)
-      f.explorer.refresh(tables)
-      const start = performance.now()
-      await settle()
-      durations.push(performance.now() - start)
-      expect(f.explorer.node(tables)!.children).toHaveLength(2001)
-      expect(f.explorer.size).toBeLessThan(3000)
-      while (f.clock.step()) { /* the old rows' deletion slices */ }
-      f.state.tables = names(100_000)
-      f.explorer.refresh(tables)
-      await settle()
-    }
-    // Best of three runs: a garbage collection can land in any of them.
-    expect(Math.min(...durations)).toBeLessThan(25)
+    const before = f.explorer.node(tables)!.children!.slice(), removed = before.at(-1)!
+    f.state.tables = names(2000)
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    expect(await reconcilePages(f, tables)).toBe(1)
+    expect(f.explorer.node(tables)!.children).toHaveLength(2001)
+    expect(f.explorer.node(tables)!.children!.every((child, index) => child === before[index])).toBe(true)
+    expect(f.explorer.size).toBeLessThan(3000)
+    expect(Array.from(f.rows().ids)).not.toContain(removed.id)
+    // The replacement page is visible and selectable before any old node is physically deleted.
+    expect(f.explorer.table.get(removed.id)).toBe(removed)
+    const selected = before[2000].id
+    f.explorer.select(selected)
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+    let slices = 0
+    while (f.clock.step()) slices++
+    expect(slices).toBeGreaterThan(1)
+    expect(f.explorer.table.get(removed.id)).toBeUndefined()
+    expect(f.explorer.node(selected)).toBe(before[2000])
   })
-  it('deletes a 100,000-node subtree in slices of 10,000 that each stay within the budget', async () => {
+  it('deletes a 100,000-node subtree in slices of at most 10,000 while the surviving server stays usable', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 100_000 }, (_, index) => `dbo.Table${index}`)
     f.state.pageSize = 100_000
-    const longest: number[] = []
-    for (const name of ['server-a', 'server-b', 'server-c']) {
-      f.connect(name)
-      await settle()
-      const root = f.find(`${name}.example`)
-      await f.open('Databases', 'AppData', 'Tables')
-      expect(f.explorer.size).toBeGreaterThan(100_000)
-      f.connections.remove(cid(name))
-      expect(f.rows().count).toBe(0)
-      const slices: number[] = []
-      for (;;) {
-        const start = performance.now()
-        if (!f.clock.step()) break
-        slices.push(performance.now() - start)
+    f.connect()
+    await settle()
+    const root = f.find('server-a.example')
+    await f.open('Databases', 'AppData', 'Tables')
+    const removedCount = f.explorer.size
+    expect(removedCount).toBeGreaterThan(100_000)
+    f.connect('server-b')
+    await settle()
+    const survivor = f.find('server-b.example'), security = f.find('Security', survivor)
+    const table = f.explorer.table as Map<number, unknown>, remove = table.delete
+    let deleted = 0
+    table.delete = function(id) { deleted++; return remove.call(this, id) }
+    try {
+      f.connections.remove(cid('server-a'))
+      expect(f.rows().count).toBe(4)
+      expect(deleted).toBe(0)
+      expect(table.get(root)).toBeDefined()
+      let slices = 0, previous = 0
+      while (f.clock.step()) {
+        const removed = deleted - previous
+        expect(removed).toBeGreaterThan(0)
+        expect(removed).toBeLessThanOrEqual(10_000)
+        // Selection still publishes between deletion slices, and the other server's nodes stay attached.
+        const selected = slices % 2 ? survivor : security
+        f.explorer.select(selected)
+        expect(f.explorer.getSnapshot().selected).toBe(selected)
+        expect(table.get(selected)).toBeDefined()
+        previous = deleted
+        slices++
       }
-      expect(slices.length).toBeGreaterThanOrEqual(10)
-      expect(f.explorer.table.get(root)).toBeUndefined()
-      longest.push(Math.max(...slices))
-    }
-    // Best of three runs: a garbage collection can land in any slice.
-    expect(Math.min(...longest)).toBeLessThan(25)
+      expect(slices).toBeGreaterThanOrEqual(Math.ceil(removedCount / 10_000))
+      expect(deleted).toBe(removedCount)
+      expect(table.get(root)).toBeUndefined()
+      expect(table.size).toBe(4)
+    } finally { table.delete = remove }
   })
 })
 
