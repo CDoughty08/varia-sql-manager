@@ -1,6 +1,6 @@
 // A 2D canvas context, canvas and chart environment for ChartView in Node: the context records what a draw does (styles,
 // paths and their vertices, text, dashes) without drawing, so tests and the chart benchmark can count it.
-import type { ChartEnvironment } from '../../src/renderer/src/live/ChartView'
+import type { ChartEnvironment, SystemColors } from '../../src/renderer/src/live/ChartView'
 
 export interface Stroke { readonly style: string; readonly vertices: number; readonly moves: number; readonly dash: readonly number[]; readonly width: number; readonly points: readonly (readonly [number, number])[] }
 export interface Fill { readonly style: string; readonly alpha: number; readonly vertices: number }
@@ -99,6 +99,8 @@ export class FakeChartEnvironment implements ChartEnvironment {
   requested = 0
   time = 1_000_000
   forced = false
+  /** What the DOM resolves the system colors to under forced colors: a Night sky palette until a test changes it. */
+  palette: SystemColors = { text: 'rgb(255, 255, 255)', canvas: 'rgb(0, 0, 0)', gray: 'rgb(166, 166, 166)' }
   ratio = 1
   timers: { at: number; callback: () => void; id: number }[] = []
   visibility?: (visible: boolean) => void
@@ -110,6 +112,7 @@ export class FakeChartEnvironment implements ChartEnvironment {
   observeVisibility(_element: Element, listener: (visible: boolean) => void): () => void { this.visibility = listener; return () => { this.visibility = undefined } }
   observeSize(_element: Element, listener: () => void): () => void { this.size = listener; return () => { this.size = undefined } }
   forcedColors(): boolean { return this.forced }
+  systemColors(): SystemColors { return this.palette }
   observeForcedColors(listener: () => void): () => void { this.forcedListener = listener; return () => { this.forcedListener = undefined } }
   observeDevicePixelRatio(listener: () => void): () => void { this.ratioListener = listener; return () => { this.ratioListener = undefined } }
   devicePixelRatio(): number { return this.ratio }

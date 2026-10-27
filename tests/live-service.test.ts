@@ -5,7 +5,11 @@ import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type Liv
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import { documentOwner, LiveService, liveServiceLimits, type LiveCatalog, type LiveOwner, type LiveSpec, type PageVisibility } from '../src/renderer/src/live/LiveService'
+import { bindChart, ChartView, probeCurrent } from '../src/renderer/src/live/ChartView'
 import { ringGap } from '../src/renderer/src/live/ring'
+import { formatClock } from '../src/renderer/src/live/chart-format'
+import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { FakeCanvas, FakeChartEnvironment, fakeOwner } from './fixtures/fake-canvas'
 import { liveIndicator } from '../src/renderer/src/live/status'
 import type { LivePatch, LiveStream, ResultHandle } from '../src/renderer/src/results/ResultClient'
 import type { ResultKey } from '../src/renderer/src/results/worker-protocol'
@@ -1057,5 +1061,146 @@ describe('LiveService', () => {
     const late = service.open(spec(['debug.synthetic.status']), owner().value)
     expect(late.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'PORT_CLOSED' } })
     expect(client.streams).toHaveLength(2)
+  })
+})
+
+// A chart of a view, as LiveChart binds it: whether its newest sample reads "now" follows the probe's state and the
+// interval the backend runs, never the spacing of the samples in the ring.
+describe('charts of a live view', () => {
+  const metrics = 'debug.synthetic.metrics'
+  function chartOf(handle: ReturnType<LiveService['open']>) {
+    const owner = fakeOwner(), env = new FakeChartEnvironment()
+    env.time = Date.now()
+    const canvas = new FakeCanvas(owner, 400, 100)
+    const view = new ChartView({
+      canvas: canvas as unknown as HTMLCanvasElement, root: owner.createElement('div') as unknown as HTMLElement, ring: () => handle.ring(metrics), title: 'Wave',
+      series: [{ index: 1, label: 'Wave', color: 'charts.blue' }], scale: { unit: 'percent', max: 100 }, window: { spanMs: 600_000, end: 'live' }, colors: resolveBuiltin('dark').colors, env, labels: 'axes',
+      current: probeCurrent(handle.getSnapshot(), metrics, Date.now())
+    })
+    const bound = bindChart(view, handle, metrics)
+    let told = 0
+    view.subscribe(() => { told++ })
+    const draw = () => { env.time = Date.now(); env.flush() }
+    return { view, env, canvas, bound, told: () => told, newest: () => view.table(1).rows[0]?.time, axisEnd: () => { canvas.context.reset(); view.setTitle('Wave'); draw(); return canvas.context.texts.at(-1)?.text }, draw }
+  }
+  /** A tick with one metrics sample, run at the given interval. */
+  const sample = (fake: FakeStream, effectiveIntervalMs: number, gap?: 'resumed'): LiveTick => ({
+    type: 'live.tick', seq: ++seq, sampledAt: Date.now(),
+    samples: fake.params.probes.map(probe => ({ probe: probe.probe, costMs: 1, effectiveIntervalMs, ...gap ? { gap } : {}, ...probe.probe === metrics ? { metrics: [seq, 50, null] } : {} }))
+  } as LiveTick)
+  function openMetrics(intervalMs: number, others: LiveProbeId[] = []) {
+    makeService()
+    const handle = service.open({ connectionId, source: 'debug.synthetic', probes: [{ probe: metrics, intervalMs }, ...others.map(probe => ({ probe }))] }, owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    return { handle, fake }
+  }
+  const state = (handle: ReturnType<LiveService['open']>) => handle.getSnapshot().probes[metrics].state
+
+  it('keeps "now" through an interval raised from 2 s to 10 s, and turns to clock times only when the probe goes stale', async () => {
+    const { handle, fake } = openMetrics(2000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 5; at++) { deliver(fake, sample(fake, 2000)); vi.advanceTimersByTime(2000) }
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [{ probe: metrics, intervalMs: 10_000, effectiveIntervalMs: 10_000, paused: false }] } })
+    handle.setProbe(metrics, { intervalMs: 10_000 })
+    vi.advanceTimersByTime(150)
+    await settle()
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(5000)
+    // Five seconds after a 10 s probe's sample, the probe is fresh and the chart still says so.
+    expect(state(handle)).toBe('fresh')
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    expect(chart.axisEnd()).toBe('now')
+    deliver(fake, sample(fake, 10_000))
+    const last = Date.now()
+    vi.advanceTimersByTime(19_999)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // Twice the interval without a sample: stale, and the chart reads clock times without a tick.
+    vi.advanceTimersByTime(1)
+    expect(state(handle)).toBe('stale')
+    expect(chart.newest()).toBe(formatClock(last))
+    expect(chart.axisEnd()).toBe(formatClock(last))
+    // Told when the first sample made it current, when the new interval resized its ring, and when it went stale.
+    expect(chart.told()).toBe(3)
+  })
+
+  it('keeps "now" after an off-schedule refresh sample, a back-off and a first slow sample', () => {
+    const { handle, fake } = openMetrics(10_000, ['debug.synthetic.status'])
+    const chart = chartOf(handle)
+    // A 10 s probe's first sample: 15 s on (one and a half intervals) it is still current.
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(15_000)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // A Refresh sample 3 s after a regular one, then the next regular sample 7 s later.
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(3000)
+    handle.refresh()
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(7000)
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(7000)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // Backed off to 40 s (the cost doubled it twice): 30 s after a sample, three times the interval asked, it is current.
+    for (let at = 0; at < 3; at++) {
+      deliver(fake, sample(fake, 40_000))
+      vi.advanceTimersByTime(30_000)
+      // The view's other probe ticks: the chart hears of the view's state again, and still reads it as current.
+      deliver(fake, { type: 'live.tick', seq: ++seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 1, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: seq }] }] } as LiveTick)
+      chart.draw()
+      expect(chart.newest()).toBe('now')
+      vi.advanceTimersByTime(10_000)
+    }
+    // Current from the first sample on, never stale.
+    expect(chart.told()).toBe(1)
+  })
+
+  it('reads clock times at once when paused, and "now" again with the first sample after the resume', async () => {
+    const { handle, fake } = openMetrics(1000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 5; at++) { deliver(fake, sample(fake, 1000)); vi.advanceTimersByTime(1000) }
+    const last = Date.now() - 1000
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    handle.setUserPaused(true)
+    await settle()
+    expect(chart.newest()).toBe(formatClock(last))
+    vi.advanceTimersByTime(60_000)
+    // Resumed, the probe is fresh again before its first sample: the pre-pause sample is still a minute old.
+    handle.setUserPaused(false)
+    await settle()
+    expect(state(handle)).toBe('fresh')
+    expect(chart.newest()).toBe(formatClock(last))
+    deliver(fake, sample(fake, 1000, 'resumed'))
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // The first sample, the pause, the first sample after the resume.
+    expect(chart.told()).toBe(3)
+  })
+
+  it('redraws a paused view\'s chart and lists its table again when the history setting shrinks its ring', async () => {
+    const { handle, fake } = openMetrics(1000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 400; at++) { deliver(fake, sample(fake, 1000)); vi.advanceTimersByTime(1000) }
+    handle.setUserPaused(true)
+    await settle()
+    chart.draw()
+    const draws = chart.view.stats.draws, told = chart.told()
+    expect(chart.view.table().total).toBe(400)
+    settings.set({ 'liveData.historyMinutes': 5 })
+    expect(handle.ring(metrics)!.capacity).toBe(300)
+    chart.draw()
+    expect(chart.view.stats.draws).toBe(draws + 1)
+    expect(chart.told()).toBe(told + 1)
+    expect(chart.view.table().total).toBe(300)
+    // A resize that changes nothing tells nobody.
+    service.rebalance()
+    expect(chart.told()).toBe(told + 1)
+    chart.bound.dispose()
+    settings.set({ 'liveData.historyMinutes': 2 })
+    expect(chart.told()).toBe(told + 1)
   })
 })

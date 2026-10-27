@@ -3,8 +3,8 @@
 // smoke runs cannot change for real (their windows keep background throttling off, so the page always counts as visible).
 // Main enables test mode only in unpackaged smoke runs, and only its test schemas accept the synthetic source.
 import { liveProbes, type LiveProbeId, type LiveUnit } from '../../../shared/live/catalog'
-import type { ChartSeriesColor } from '../../../shared/theme/charts'
-import { cssVariable } from '../../../shared/theme/registry'
+import type { ChartSurface } from '../../../shared/theme/charts'
+import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
 import { chartColor, type ChartLabels, type ChartStyle, type ChartView } from './ChartView'
@@ -42,42 +42,60 @@ export interface ChartOptions {
   /** The "View as table" button (true by default), and the table shown from outside, as a catalogue command would. */
   readonly tableToggle?: boolean
   readonly tableShown?: boolean
+  readonly tableRows?: number
+  readonly surface?: ChartSurface
+  /** Mounts the chart in a metric tile's chart slot (the states kit's Tile), with this caption. */
+  readonly tile?: string
   readonly width?: number
   readonly height?: number
 }
-/** Renders a LiveChart into a container (start.tsx, inside the workbench's provider): render again with new props, or
- *  unmount it. */
-export type RenderChart = (container: HTMLElement) => { render(props: LiveChartProps): void; unmount(): void }
+/** Renders a LiveChart into a container (start.tsx, inside the workbench's provider), alone or in a Tile with the given
+ *  caption: render again with new props, or unmount it. */
+export type RenderChart = (container: HTMLElement) => { render(props: LiveChartProps, tile?: string): void; unmount(): void }
 
-/** How many of the canvas's pixels are exactly each chart color of the active theme, and how many are drawn at all. */
-function pixelsOf(canvas: HTMLCanvasElement, colors: readonly ChartSeriesColor[]): { drawn: number; colors: Record<string, number> } {
+/** How many of the canvas's pixels are exactly each given color of the active theme, how many are drawn at all, and how
+ *  many of those stand well apart (a channel 96 or more away) from the background behind the canvas: under forced colors
+ *  a chart drawn in a stale palette can vanish into it. */
+function pixelsOf(canvas: HTMLCanvasElement, colors: readonly ColorKey[], background: string): { drawn: number; colors: Record<string, number>; contrasting: number } {
   const style = getComputedStyle(document.documentElement)
   const wanted = colors.map(color => [color, Number.parseInt(style.getPropertyValue(cssVariable(color)).trim().slice(1, 7), 16)] as const)
+  const behind = (background.match(/\d+/g) ?? []).slice(0, 3).map(Number)
   const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
   const counts = Object.fromEntries(colors.map(color => [color, 0]))
-  let drawn = 0
+  let drawn = 0, contrasting = 0
   for (let at = 0; at < data.length; at += 4) {
     if (data[at + 3] === 0) continue
     drawn++
     if (data[at + 3] !== 255) continue
     const rgb = (data[at] << 16) | (data[at + 1] << 8) | data[at + 2]
     for (const [color, value] of wanted) if (rgb === value) counts[color]++
+    if (behind.length === 3 && behind.some((channel, index) => Math.abs(channel - data[at + index]) >= 96)) contrasting++
   }
-  return { drawn, colors: counts }
+  return { drawn, colors: counts, contrasting }
+}
+/** The first ancestor's background that is not transparent: what the canvas is seen against. */
+function backgroundOf(element: Element): string {
+  for (let at: Element | null = element; at; at = at.parentElement) {
+    const color = getComputedStyle(at).backgroundColor
+    if (color && color !== 'transparent' && !/^rgba\(.*,\s*0\)$/.test(color)) return color
+  }
+  return ''
 }
 
 export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, renderChart?: RenderChart) {
   const handles = new Map<string, LiveHandle>()
   const handle = (id: string) => handles.get(id)
-  interface MountedChart { container: HTMLElement; owner: LiveHandle; options: ChartOptions; root: ReturnType<RenderChart>; view?: ChartView; colors: ChartSeriesColor[] }
+  interface MountedChart { container: HTMLElement; owner: LiveHandle; options: ChartOptions; root: ReturnType<RenderChart>; view?: ChartView; colors: ColorKey[] }
   const charts = new Map<string, MountedChart>()
   const propsOf = (entry: MountedChart): LiveChartProps => {
     const o = entry.options, probe = o.probe ?? 'debug.synthetic.metrics', specs = liveProbes[probe].series ?? []
     const indexes = o.series ?? [1]
-    entry.colors = indexes.map((_, at) => chartColor(at))
+    const colors = indexes.map((_, at) => chartColor(at))
+    entry.colors = [...colors, o.surface ?? 'panel.background']
     return {
       handle: entry.owner, probe, title: o.title ?? liveProbes[probe].label, variant: o.variant, labels: o.labels, onView: view => { entry.view = view },
-      series: indexes.map((index, at) => ({ index, label: specs[index]?.label ?? String(index), color: entry.colors[at], style: o.style })),
+      series: indexes.map((index, at) => ({ index, label: specs[index]?.label ?? String(index), color: colors[at], style: o.style })),
+      ...o.surface ? { surface: o.surface } : {}, ...o.tableRows !== undefined ? { tableRows: o.tableRows } : {},
       scale: { unit: o.unit ?? specs[indexes[0]]?.unit ?? 'count', ...o.max !== undefined ? { max: o.max } : {} }, window: { spanMs: o.spanMs ?? 60_000, end: 'live' },
       ...o.tableToggle !== undefined ? { tableToggle: o.tableToggle } : {}, ...o.tableShown !== undefined ? { tableShown: o.tableShown } : {}
     }
@@ -113,7 +131,7 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
       document.body.append(container)
       const entry: MountedChart = { container, owner, options: o, root: renderChart(container), colors: [] }
       charts.set(key, entry)
-      entry.root.render(propsOf(entry))
+      entry.root.render(propsOf(entry), o.tile)
       return key
     },
     /** Renders a mounted chart again with some of its options changed (its series, window, title or table), as a
@@ -122,14 +140,15 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
       const entry = charts.get(key)
       if (!entry) return false
       entry.options = { ...entry.options, ...o }
-      entry.root.render(propsOf(entry))
+      entry.root.render(propsOf(entry), entry.options.tile)
       return true
     },
-    /** A mounted chart's draws, accessible name, latest values, newest table rows and canvas pixels. */
+    /** A mounted chart's draws, accessible name, latest values, newest table rows and canvas pixels (its series' colors
+     *  and its surface's). */
     chart: (key: string) => {
       const entry = charts.get(key), view = entry?.view
       const canvas = entry?.container.querySelector('canvas')
-      return view && canvas ? { ...view.stats, label: view.ariaLabel, latest: view.latest(), rows: view.table(5).rows, width: canvas.width, height: canvas.height, pixels: pixelsOf(canvas, entry.colors) } : undefined
+      return view && canvas ? { ...view.stats, label: view.ariaLabel, latest: view.latest(), rows: view.table(5).rows, width: canvas.width, height: canvas.height, pixels: pixelsOf(canvas, entry.colors, backgroundOf(canvas)) } : undefined
     },
     unmountChart: (key: string) => { const entry = charts.get(key); entry?.root.unmount(); entry?.container.remove(); charts.delete(key) }
   }

@@ -8,13 +8,13 @@ import type { ChartSurface } from '../../../shared/theme/charts'
 import { cssVariable } from '../../../shared/theme/registry'
 import { onUnexpectedError } from '../core/errors'
 import { useWorkbench } from '../core/WorkbenchContext'
-import { ChartView, chartLimits, forcedColorsDashes, type ChartLabels, type ChartLink, type ChartScale, type ChartSeries, type ChartTableRow, type ChartWindow } from './ChartView'
-import type { LiveHandle } from './LiveService'
+import { bindChart, ChartView, chartLimits, forcedColorsDashes, probeCurrent, type ChartLabels, type ChartLink, type ChartScale, type ChartSeries, type ChartSource, type ChartTableRow, type ChartWindow } from './ChartView'
 
 export interface LiveChartProps {
-  readonly handle: Pick<LiveHandle, 'ring' | 'onTick'>
+  readonly handle: ChartSource
   readonly probe: LiveProbeId
   readonly title: string
+  /** At most chartLimits.series (12); the rest are left out of the plot, the legend and the table alike. */
   readonly series: readonly ChartSeries[]
   readonly scale: ChartScale
   readonly window: ChartWindow
@@ -45,8 +45,9 @@ function subscribeForced(listener: () => void): () => void {
 const forcedNow = () => typeof matchMedia === 'function' && matchMedia(forcedQuery).matches
 
 export function LiveChart(props: LiveChartProps) {
-  const { handle, probe, title, series, scale, window, variant = 'chart', labels, surface, link, tableRows, className, onView, onTableShownChange, tableToggle = true } = props
+  const { handle, probe, title, scale, window, variant = 'chart', labels, surface, link, tableRows, className, onView, onTableShownChange, tableToggle = true } = props
   const { theme, live } = useWorkbench()
+  const series = useMemo(() => props.series.slice(0, chartLimits.series), [props.series])
   const rootRef = useRef<HTMLDivElement>(null), canvasRef = useRef<HTMLCanvasElement>(null), viewRef = useRef<ChartView | undefined>(undefined)
   const [view, setView] = useState<ChartView>()
   const [ownTableShown, setOwnTableShown] = useState(false)
@@ -63,15 +64,15 @@ export function LiveChart(props: LiveChartProps) {
     const initial = first.current
     const view = new ChartView({
       canvas: canvasRef.current!, root: rootRef.current!, ring: () => handle.ring(probe), title: initial.title, series: initial.series, scale: initial.scale,
-      window: initial.window, colors: theme.getSnapshot().active.colors, variant, labels, surface, page: live.page, link
+      window: initial.window, colors: theme.getSnapshot().active.colors, current: probeCurrent(handle.getSnapshot(), probe, Date.now()), variant, labels, surface, page: live.page, link
     })
     viewRef.current = view
     setView(view)
     onViewRef.current?.(view)
-    const ticks = handle.onTick(() => view.invalidate())
+    const bound = bindChart(view, handle, probe)
     const themed = theme.subscribe(() => view.setTheme(theme.getSnapshot().active.colors))
     return () => {
-      ticks.dispose()
+      bound.dispose()
       themed()
       view.dispose()
       if (viewRef.current === view) viewRef.current = undefined
@@ -83,7 +84,8 @@ export function LiveChart(props: LiveChartProps) {
   useEffect(() => { viewRef.current?.setSeries(series, scale) }, [seriesKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { viewRef.current?.setWindow(window) }, [windowKey]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { viewRef.current?.setTitle(title) }, [title])
-  // The table follows the ticks only while it shows, and the moment its newest sample goes stale (no tick says so).
+  // The table follows the ticks only while it shows, and what changes it without a tick: the probe stopping or starting,
+  // a ring resized.
   const limit = Math.max(1, Math.min(tableRows ?? chartLimits.tableRows, chartLimits.tableRows))
   useEffect(() => {
     if (!tableShown || !view) return
@@ -108,9 +110,9 @@ export function LiveChart(props: LiveChartProps) {
       </li>)}
     </ul>}
     <canvas ref={canvasRef} className="live-chart-canvas" tabIndex={chart ? 0 : -1} onKeyDown={chart ? keyDown : undefined} />
-    {tableOn && <div className="live-chart-table-wrap"><table className="live-chart-table">
+    {tableOn && <div className="live-chart-table-wrap" tabIndex={0} role="region" aria-label={`${title} table`}><table className="live-chart-table">
       <caption>{table.total === 0 ? `${title}: no samples yet` : `${title}: ${table.rows.length < table.total ? `${table.rows.length} of ${table.total}` : table.total} samples, newest first`}</caption>
-      <thead><tr><th scope="col">Time</th>{series.map(entry => <th key={entry.index} scope="col">{entry.label}</th>)}</tr></thead>
+      <thead style={{ background: `var(${cssVariable(surface ?? 'panel.background')})` }}><tr><th scope="col">Time</th>{series.map(entry => <th key={entry.index} scope="col">{entry.label}</th>)}</tr></thead>
       <tbody>{table.rows.map((row, at) => <tr key={at}><th scope="row">{row.gapBefore ? `${row.time} (after a gap)` : row.time}</th>{row.values.map((value, column) => <td key={column}>{value}</td>)}</tr>)}</tbody>
     </table></div>}
     {chart && tableToggle && <button type="button" className="live-chart-toggle" aria-pressed={tableShown} onClick={toggleTable}>View as table</button>}

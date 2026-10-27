@@ -137,7 +137,7 @@ dialogs, status pills, chips, live views and tiles, connection colors, and chart
 (`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
 `charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
 "Other". `charts.red` is a status color for marks such as a failed execution, never a series' color. Series colors are checked at 3:1 and chart text at
-4.5:1 against the editor, panel and widget backgrounds. Under Windows High Contrast and other forced colors, charts
+4.5:1 against the editor, panel, widget and tile backgrounds. Under Windows High Contrast and other forced colors, charts
 use the system colors and tell series apart by their dashes. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
 are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
 effect when those features ship.

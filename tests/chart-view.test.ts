@@ -168,13 +168,69 @@ describe('ChartView', () => {
     const series: ChartSeries[] = [{ index: 0, label: 'A', color: 'charts.blue', style: 'area' }, { index: 1, label: 'B', color: 'charts.orange' }, { index: 2, label: 'C', color: 'charts.green', style: 'stacked' }]
     const { canvas } = chart({ ringValue: ring, env, series, scale: { unit: 'count' } })
     env.flush()
-    expect(new Set(canvas.context.styles)).toEqual(new Set(['CanvasText', 'Canvas', 'GrayText']))
+    // The system colors as the DOM resolves them, never the keywords: a canvas keeps its own stale reading of those.
+    expect(new Set(canvas.context.styles)).toEqual(new Set(Object.values(env.palette)))
     // No translucent area and no filled band; only the end markers are filled.
     expect(canvas.context.fills.every(fill => fill.alpha === 1 && fill.vertices === 0)).toBe(true)
     // Each series takes the dash of its place in the chart, as the legend shows it: the stacked band (C, third) is
     // stroked first, then the area (A, first) and the line (B, second).
     const lines = canvas.context.strokes.filter(stroke => stroke.width === 1.75)
     expect(lines.map(stroke => stroke.dash)).toEqual([[...forcedColorsDashes[2]], [...forcedColorsDashes[0]], [...forcedColorsDashes[1]]])
+  })
+  it('follows the forced palette the DOM resolves, which changes while forced colors stay on', () => {
+    // Windows going from Night sky to Desert: forced colors stay active, the palette (and the color scheme) flips.
+    const env = new FakeChartEnvironment()
+    env.forced = true
+    const { view, canvas } = chart({ ringValue: ringOf(30, 1, index => index), env, labels: 'axes' })
+    env.flush()
+    expect(seriesStrokes(canvas, 'rgb(255, 255, 255)')).toHaveLength(1)
+    canvas.context.reset()
+    env.palette = { text: 'rgb(61, 61, 61)', canvas: 'rgb(255, 250, 239)', gray: 'rgb(96, 0, 0)' }
+    env.forcedListener!()
+    env.flush()
+    expect(view.stats.draws).toBe(2)
+    expect(seriesStrokes(canvas, 'rgb(61, 61, 61)')).toHaveLength(1)
+    expect(canvas.context.texts.every(text => text.style === 'rgb(61, 61, 61)')).toBe(true)
+    expect(canvas.context.styles).not.toContain('rgb(255, 255, 255)')
+    // With no event at all, the next tick's draw still reads the palette again.
+    canvas.context.reset()
+    env.palette = { text: 'rgb(255, 255, 0)', canvas: 'rgb(0, 0, 0)', gray: 'rgb(0, 255, 0)' }
+    view.invalidate(); env.flush()
+    expect(seriesStrokes(canvas, 'rgb(255, 255, 0)')).toHaveLength(1)
+  })
+  it('breaks stacked bands only at a sample with no stacked value at all', () => {
+    // A missing series counts as nothing in its column (its band drops onto the one below); a sample with none breaks them.
+    const ring = ringOf(30, 2, (index, series) => index === 15 ? null : series === 1 && index === 5 ? null : 10)
+    const series: ChartSeries[] = [0, 1].map(at => ({ index: at, label: `C${at}`, color: chartColor(at), style: 'stacked' }))
+    const { canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count', max: 40 }, labels: 'none', width: 60 })
+    env.flush()
+    const bands = canvas.context.fills.filter(fill => fill.vertices > 0)
+    expect(bands.map(band => band.style)).toEqual([dark['charts.blue'], dark['charts.blue'], dark['charts.orange'], dark['charts.orange']])
+    expect(canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'])).toHaveLength(4)
+  })
+  it('puts a stacked crosshair\'s dots on the bands drawn in its column', () => {
+    // 3,600 samples over a 100 px plot: 38 a column. A alternates 0 and 100, so its band sits at the column's mean, far
+    // from either sample's own value.
+    const ring = ringOf(3600, 2, (index, series) => series === 1 ? 10 : index % 2 ? 100 : 0)
+    const series: ChartSeries[] = [0, 1].map(at => ({ index: at, label: `S${at}`, color: chartColor(at), style: 'stacked' }))
+    const { view, canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count', max: 120 }, labels: 'none', width: 100, window: { spanMs: 3_600_000, end: 'live' } })
+    env.flush()
+    view.key({ key: 'ArrowLeft', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    view.key({ key: 'ArrowLeft', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    canvas.context.reset()
+    env.flush()
+    const [line] = canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')
+    const x = line.points[0][0]
+    const dots = canvas.context.arcs.filter(arc => arc.radius === 3 && arc.x === x)
+    expect(dots).toHaveLength(2)
+    // The top of each band where the crosshair stands: the band's parting line passes through the dot.
+    const parts = canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'] && stroke.width === 1)
+    expect(parts).toHaveLength(2)
+    for (const [at, part] of parts.entries()) {
+      const top = part.points.find(([px]) => Math.abs(px - x) < 1e-9)
+      expect(top, `band ${at}`).toBeDefined()
+      expect(dots[at].y).toBeCloseTo(top![1], 6)
+    }
   })
   it('stacks bands on each other, parted by the surface', () => {
     const ring = ringOf(20, 3, (index, series) => series === 2 && index === 5 ? null : [100, 50, 25][series])
@@ -190,6 +246,25 @@ describe('ChartView', () => {
     const y = (value: number) => 15 + (1 - value / 200) * (98 - 15)
     expect(parts[2].points[0][1]).toBeCloseTo(y(175), 5)
     expect(parts[0].points[0][1]).toBeCloseTo(y(100), 5)
+  })
+  it('holds its accessible name still while it has focus, and catches up on blur', () => {
+    // A screen reader speaks the focused element's name each time it changes: stepping the crosshair would be cut across
+    // by the whole chart sentence every 5 s.
+    const ring = ringOf(10, 1, index => 10 + index)
+    const { view, canvas, env } = chart({ ringValue: ring })
+    env.flush()
+    const before = canvas.getAttribute('aria-label')
+    canvas.listeners.get('focus')!({})
+    for (let at = 1; at <= 14; at++) {
+      env.time = start + at * 1000
+      ring.push(env.time, [50 + at])
+      view.invalidate(); env.flush(); env.advance(0)
+    }
+    env.advance(6000)
+    expect(canvas.getAttribute('aria-label')).toBe(before)
+    canvas.listeners.get('blur')!({})
+    env.advance(0)
+    expect(canvas.getAttribute('aria-label')).toBe('Wave: 64 %, 55 % to 64 % over the last 1 minute')
   })
   it('keeps its accessible name current, at most once every 5 s', () => {
     const ring = ringOf(10, 1, index => 10 + index)
@@ -373,9 +448,9 @@ describe('ChartView', () => {
     two.canvas.context.reset(); two.view.setTitle('Other'); two.env.flush()
     expect(crosshair()).toHaveLength(0)
   })
-  it('steps right, clamps at the newest sample, and hides a crosshair whose sample left the live window', () => {
+  it('steps right, clamps at the newest sample, and keeps a keyboard crosshair on the oldest sample as the window moves', () => {
     const ring = ringOf(61, 1, index => index)
-    const { view, env, root } = chart({ ringValue: ring })
+    const { view, env, root, canvas } = chart({ ringValue: ring })
     env.flush()
     const press = (key: string) => view.key({ key, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
     const status = () => (root.children.find(child => (child as FakeElement).attributes?.get('role') === 'status') as FakeElement).text
@@ -389,9 +464,23 @@ describe('ChartView', () => {
     env.flush()
     const tip = root.children[0] as FakeElement
     expect(tip.hidden).toBe(false)
-    // A new sample moves the window on: the oldest sample, under the crosshair, is no longer in it.
+    // A new sample moves the window on past the oldest sample, under the crosshair: the crosshair moves to the window's
+    // new oldest sample rather than vanishing while the status still says where it is.
     env.time = start + 1000
     ring.push(start + 1000, [61])
+    canvas.context.reset()
+    view.invalidate(); env.flush()
+    expect(tip.hidden).toBe(false)
+    expect(tip.text).toBe('1:00 ago · 1 %')
+    expect(canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')).toHaveLength(1)
+    press('ArrowRight')
+    expect(status()).toBe('0:59 ago · 2 %')
+    // A pointer's crosshair is where the pointer was: once its sample leaves the window, it goes.
+    canvas.listeners.get('pointermove')!({ clientX: 1 })
+    env.flush()
+    expect(tip.text).toBe('1:00 ago · 1 %')
+    env.time = start + 2000
+    ring.push(start + 2000, [62])
     view.invalidate(); env.flush()
     expect(tip.hidden).toBe(true)
   })
@@ -421,7 +510,7 @@ describe('ChartView', () => {
     expect(Number.parseFloat(tip.style.left) + tip.offsetWidth).toBeLessThan(crosshairX())
     expect(Number.parseFloat(tip.style.left)).toBeGreaterThanOrEqual(1)
   })
-  it('says when the newest sample is stale instead of calling it now', () => {
+  it('reads clock times instead of "now" while its probe is not current, as its view says', () => {
     const ring = ringOf(30, 1, index => index)
     const changes: number[] = []
     const { view, canvas, env } = chart({ ringValue: ring, labels: 'axes', scale: { unit: 'count' }, window: { spanMs: 60_000, end: 'live' } })
@@ -429,19 +518,41 @@ describe('ChartView', () => {
     env.flush()
     expect(canvas.context.texts.slice(3).map(text => text.text)).toEqual(['1 min ago', 'now'])
     expect(view.table().rows[0].time).toBe('now')
-    // Collection stopped (a pause, a lost backend): no tick comes, yet within a few seconds the chart stops saying "now".
+    // The chart does not guess from the spacing of its samples: however long no sample comes, it waits for its view.
+    env.advance(60_000)
+    view.invalidate(); env.flush()
+    expect(view.table().rows[0].time).toBe('now')
+    expect(env.timers).toEqual([])
+    // Collection stopped (a pause, a stale or failing probe, a lost backend): the view says so, and the chart's times
+    // turn to clock times at once, its listeners told (no tick comes).
     canvas.context.reset()
-    env.advance(2001)
-    expect(changes).toEqual([start + 2001])
+    view.setCurrent(false)
+    view.setCurrent(false)
+    expect(changes).toEqual([env.time])
     env.flush()
     expect(canvas.context.texts.slice(3).map(text => text.text)).toEqual([formatClock(start - 60_000), formatClock(start)])
     expect(view.table().rows[0].time).toBe(formatClock(start))
     env.advance(5000)
     expect(view.ariaLabel).toBe(`Wave: 29, 0 to 29 from ${formatClock(start - 60_000)} to ${formatClock(start)}`)
-    // A new sample makes it current again.
+    // Collecting again: "now" again.
     ring.push(env.time, [30])
-    view.invalidate(); env.flush()
+    view.setCurrent(true)
+    env.flush()
     expect(view.table().rows[0].time).toBe('now')
+    expect(changes).toHaveLength(2)
+    // Built not current (a chart of a paused view), it starts with clock times.
+    expect(chart({ ringValue: ring, current: false }).view.table().rows[0].time).toBe(formatClock(env.time))
+  })
+  it('redraws and tells its listeners when its ring is resized without a tick', () => {
+    const ring = ringOf(30, 1, index => index)
+    const { view, env } = chart({ ringValue: ring })
+    let told = 0
+    view.subscribe(() => { told++ })
+    env.flush()
+    ring.resize(10)
+    view.ringChanged()
+    env.flush()
+    expect([view.stats.draws, told, view.table().total]).toEqual([2, 1, 10])
   })
   it('names a fixed window by its clock times', () => {
     expect(chartLabel('SQL Server CPU', 'percent', { from: new Date(2026, 9, 22, 13, 5, 0).getTime(), to: new Date(2026, 9, 22, 13, 10, 0).getTime() }, [{ label: 'CPU', latest: 12, min: 3, max: 40 }]))

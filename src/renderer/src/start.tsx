@@ -23,6 +23,7 @@ import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
+import Tile from './kit/Tile'
 import { LiveChart } from './live/LiveChart'
 import { liveTestHooks } from './live/test-hooks'
 import 'dockview-react/dist/styles/dockview.css'
@@ -54,7 +55,10 @@ export async function start(root: Root): Promise<void> {
       // Live views on the synthetic source, charts of them, and the window's visibility (live-smoke.mjs, chart-smoke.mjs).
       __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, container => {
         const chart = createRoot(container)
-        return { render: props => chart.render(<WorkbenchProvider workbench={workbench}><LiveChart {...props} /></WorkbenchProvider>), unmount: () => chart.unmount() }
+        return {
+          render: (props, tile) => chart.render(<WorkbenchProvider workbench={workbench}>{tile ? <Tile caption={tile}><LiveChart {...props} /></Tile> : <LiveChart {...props} />}</WorkbenchProvider>),
+          unmount: () => chart.unmount()
+        }
       })
     })
   }

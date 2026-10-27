@@ -10,7 +10,8 @@ export const chartSeriesColors = [...chartCategorical, 'charts.gray'] as const s
 export type ChartSeriesColor = typeof chartSeriesColors[number]
 /** Status marks a chart may draw over its series (a failed execution on a timeline); never a series' color. */
 export const chartStatusColors = ['charts.red'] as const satisfies readonly ColorKey[]
-/** What a chart may sit on: a document, a card in the output panel's colors, or a widget. Its end markers are ringed in
- *  this color and its stacked bands are parted by it. */
-export const chartSurfaces = ['editor.background', 'panel.background', 'editorWidget.background'] as const satisfies readonly ColorKey[]
+/** What a chart may sit on: a document, a card in the output panel's colors, a widget, or a metric tile (the states kit's
+ *  Tile, whose chart slot takes a sparkline). Its end markers are ringed in this color and its stacked bands are parted by
+ *  it. */
+export const chartSurfaces = ['editor.background', 'panel.background', 'editorWidget.background', 'tile.background'] as const satisfies readonly ColorKey[]
 export type ChartSurface = typeof chartSurfaces[number]

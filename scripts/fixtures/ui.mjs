@@ -332,3 +332,5 @@ export const chartTooltip = box => box.locator(part.chartTooltip)
 /** The legend, named after the chart's title: shown only for two or more series. */
 export const chartLegend = box => box.getByRole('list', { name: / series$/ })
 export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('line')
+/** View as table's scroll box, a region named after the chart's title. */
+export const chartTableRegion = box => box.getByRole('region', { name: / table$/ })

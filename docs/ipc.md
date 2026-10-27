@@ -1037,31 +1037,43 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   Series are lines, a line over a faint area, or stacked bands parted by a one-pixel line of the surface; a chart is a
   full chart (labels for the scale's top, or value and time axes) or a sparkline (one trace, no text). The window is the
   last `spanMs` up to the newest sample, or up to a fixed time. A draw happens at most once an animation frame (a tick,
-  a resize, a theme or forced-colors change asks for one), only if the ring's revision, the window, the size, the pixel
-  ratio, the theme or the crosshair changed, and only while the canvas is on screen (`IntersectionObserver`) and the
+  a ring resized by `LiveService` (`onRings`), a resize, a theme, forced-colors or color-scheme change asks for one), only
+  if the ring's revision, the window, the size, the pixel ratio, the theme, the forced palette or the crosshair changed, and only while the canvas is on screen (`IntersectionObserver`) and the
   page is visible (`live.page`, test mode's `setPageHidden` included). Each series is reduced to the smallest and largest
   value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
-  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks the line, and a lone
-  sample between gaps shows as a one-pixel tick. Colors come only from the active theme's `charts.*` keys (series
+  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks a line, and a lone
+  sample between gaps shows as a one-pixel tick. Stacked bands break at a gap flag or at a sample with no stacked value at
+  all; a single series missing from a sample counts as 0 in its column, so its band drops onto the one below rather than
+  breaking every band above it. Colors come only from the active theme's `charts.*` keys (series
   `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
   status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
-  draws in `CanvasText`, `Canvas` and `GrayText`, without fills, and each series after the first takes the dash of its
-  place in the chart, as the legend shows it. A change of device pixel ratio alone (a move to a display of another scale)
+  draws in `CanvasText`, `Canvas` and `GrayText` as the DOM resolves them at each draw (from a hidden element styled with
+  them), since a canvas keeps its own stale reading of those keywords when the contrast theme changes while forced colors
+  stay on; it draws without fills, and each series after the first takes the dash of its place in the chart, as the legend
+  shows it. A chart sits on `editor.background`, `panel.background` (the default), `editorWidget.background` or
+  `tile.background`: its end markers are ringed and its bands parted in that color, and series and text are checked
+  against all four. A tile's sparkline goes in the states kit's `Tile` chart slot (`<Tile><LiveChart variant="sparkline"
+  surface="tile.background" …/></Tile>`), 32 px tall. A change of device pixel ratio alone (a move to a display of another scale)
   redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
-  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s, `aria-roledescription="chart"`,
-  and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s and never while the canvas has
+  focus (a screen reader would read the whole name again at each change; it catches up on blur),
+  `aria-roledescription="chart"`, and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
   the crosshair; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
-  or a blur hides it, and each step is announced through a polite status region (these are the chart's own keys, as the
+  or a blur hides it (a keyboard crosshair whose sample a live window moves past stays on the window's oldest sample), and each step is announced through a polite status region (these are the chart's own keys, as the
   grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
   and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
-  plot's place, at its size and scrolling there, newest first, at most 120 rows (a longer window is sampled evenly), a
-  row marked when any sample since the row before it follows a gap; the table, `latest()` and the keys read the window,
+  plot's place, at its size and scrolling there (a focusable region named "<title> table", its header kept in view),
+  newest first, at most 120 rows or `tableRows` (a longer window is sampled evenly), a row marked when any sample since
+  the row before it follows a gap; the table, `latest()` and the keys read the window,
   not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
   `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
-  from its catalogue. A live window ends at the newest sample, so history stays in view when collection stops; once that
-  sample is older than twice the step between samples (at least 2 s), a timer wakes the chart and its times read as
-  clock times rather than "now" and "ago", and its name, like a fixed window's, gives the clock range ("… from 13:05:00
-  to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
+  from its catalogue; it draws at most 12 series (`chartLimits.series`), and its legend and table list the same ones.
+  A live window ends at the newest sample, so history stays in view when collection stops. Whether that sample reads as
+  "now" comes from the view, not from the spacing of the ring's samples (which a refresh, a back-off or a new interval
+  would mislead): `bindChart` follows the handle's snapshot, and the times read "now" and "ago" only while the probe is
+  `fresh` or `limited` and its newest sample came within twice its effective interval (so a resumed view is not "now"
+  until its first sample). Otherwise (paused, stale, failing, lost, ended) they read as clock times at once, and the name,
+  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
@@ -1070,7 +1082,7 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
 
-Later: `ChartView` (L4) and `LiveGrid` (L5) on these views.
+Later: `LiveGrid` (L5) on these views.
 
 ## Results port and results worker
 
@@ -1491,8 +1503,11 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
   `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
   pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
-  from the theme (system colors and dashes under forced colors), stacked bands, the 5 s accessible name, the keyboard
-  and pointer crosshair, linked charts and the table.
+  from the theme (the DOM's system colors, followed through a palette change, and dashes under forced colors), stacked
+  bands and where they break, crosshair dots on the bands, the 5 s accessible name held while focused, the keyboard and
+  pointer crosshair (kept on the oldest sample as a live window moves), linked charts and the table;
+  `tests/live-service.test.ts` binds a chart to a view and checks that "now" follows the probe's state through an
+  interval change, a refresh, a back-off, a pause and a resume, and that a ring resize redraws a paused view's chart.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
@@ -1500,8 +1515,9 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
   closing, and a killed backend reported lost and back after Reconnect. `scripts/chart-smoke.mjs` mounts charts of such
   a view and reads their canvas pixels: the series in the theme's chart color, redrawn as ticks arrive and not while the
-  window is hidden, the accessible name, the keyboard and pointer crosshair, the table, a legend of two series, a switch
-  to Light, and forced colors. `scripts/results-smoke.mjs` drives the grid on
+  window is hidden, the accessible name (held while focused), the keyboard and pointer crosshair, the table (its caption,
+  header, focus ring and row cap), a legend of two series and none for one, a tile's sparkline, a switch to Light, and
+  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.

@@ -131,6 +131,9 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   table(probe: LiveProbeId, index?: number): LiveTable | undefined
   /** Each applied tick, synchronously, before it is acknowledged. */
   onTick(listener: (tick: AppliedTick) => void): Disposable
+  /** The service resized this view's rings (the history setting, the memory all views share, an interval change), which
+   *  no tick announces: a chart of a paused or ended view redraws from what the ring still holds. */
+  onRings(listener: () => void): Disposable
 }
 export interface LiveHandleSummary { readonly id: string; readonly source: LiveSourceId; readonly connectionId: string; readonly ownerKey: string; readonly status: LiveStatus }
 export interface LiveServiceSnapshot { readonly handles: readonly LiveHandleSummary[] }
@@ -314,7 +317,15 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
       return sized
     })
     const scale = Math.min(1, liveServiceLimits.ringBytes / Math.max(1, total))
-    for (const rings of capped) for (const { ring, capacity } of rings) ring.resize(Math.floor(capacity * scale))
+    capped.forEach((rings, at) => {
+      let resized = false
+      for (const { ring, capacity } of rings) {
+        const before = ring.capacity
+        ring.resize(Math.floor(capacity * scale))
+        resized ||= ring.capacity !== before
+      }
+      if (resized) handles[at].ringsResized()
+    })
   }
 
   /** A handle's state changed: the service's list is published with the next frame. */
@@ -370,6 +381,7 @@ class Handle implements LiveHandle {
   status: LiveStatus = 'connecting'
   private readonly listeners = new Set<() => void>()
   private readonly tickListeners = new Set<(tick: AppliedTick) => void>()
+  private readonly ringListeners = new Set<() => void>()
   private readonly settings = new Map<LiveProbeId, ProbeSettings>()
   private readonly runtime = new Map<LiveProbeId, ProbeRuntime>()
   private readonly rings = new Map<LiveProbeId, MetricRing>()
@@ -945,6 +957,18 @@ class Handle implements LiveHandle {
     return { dispose: () => { this.tickListeners.delete(listener) } }
   }
 
+  onRings(listener: () => void): Disposable {
+    this.ringListeners.add(listener)
+    return { dispose: () => { this.ringListeners.delete(listener) } }
+  }
+
+  /** The service resized at least one of this view's rings. */
+  ringsResized(): void {
+    for (const listener of [...this.ringListeners]) {
+      try { listener() } catch (error) { onUnexpectedError(error) }
+    }
+  }
+
   frames(): LiveFrames {
     const { lastPatch, ...counts } = this.counts
     return { ...counts, ...lastPatch ? { lastPatch } : {} }
@@ -970,6 +994,7 @@ class Handle implements LiveHandle {
     if (this.kept.length) void this.service.client.release(this.kept)
     this.kept = []
     this.tickListeners.clear()
+    this.ringListeners.clear()
     if (this.status !== 'lost') this.status = 'ended'
     this.snapshot = this.build()
     for (const listener of [...this.listeners]) {

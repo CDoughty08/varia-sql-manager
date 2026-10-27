@@ -1,13 +1,15 @@
 // Live charts in the real app (src/renderer/src/live/ChartView.ts) on the fake backend's debug.synthetic source, mounted
 // over the workbench through window.__variaLive: the canvas draws the series in the theme's chart colors and redraws as
 // ticks arrive, stops drawing while the window is hidden, names itself for screen readers, follows the keyboard and the
-// pointer with a crosshair (gone when focus leaves), lists its samples as a table in the plot's place, follows its props,
-// shows a legend for several series, stops calling a stale sample "now", follows a theme switch, and draws in system
-// colors under forced colors, legend included.
+// pointer with a crosshair (gone when focus leaves, kept on the oldest sample as the window moves), keeps its name still
+// while focused, lists its samples as a table in the plot's place (one-line caption, a header that stays, a themed focus
+// ring, a row cap), follows its props, shows a legend only for several series, stops calling a paused sample "now", draws
+// a sparkline in a metric tile, follows a theme switch, and draws in the system colors the DOM resolves under forced
+// colors, through a change of contrast theme, legend included.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { chartLegend, chartSwatchLines, chartTooltip, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { chartLegend, chartSwatchLines, chartTableRegion, chartTooltip, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
@@ -64,6 +66,8 @@ try {
   expect(drawn.width).toBe(Math.round((await canvas.evaluate(element => element.clientWidth)) * ratio))
   expect(drawn.label).toMatch(/^Synthetic metrics: \d+(\.\d)? %, \d+(\.\d+)? % to \d+(\.\d+)? % over the last 10 seconds$/)
   await expect(canvas).toHaveAttribute('aria-label', drawn.label)
+  // One series needs no legend: the chart's name says what it is.
+  await expect(chartLegend(box)).toHaveCount(0)
   // Ticks redraw it: one draw a frame at most, and only when the ring moved.
   await expect.poll(async () => (await chart(key)).draws).toBeGreaterThan(drawn.draws + 3)
   const counted = await chart(key)
@@ -86,6 +90,8 @@ try {
   const tip = chartTooltip(box)
   const status = box.locator('[role="status"]')
   await canvas.focus()
+  // The name holds still while the chart has focus, though its value changes every tick and the name every 5 s otherwise.
+  const focusedLabel = await canvas.getAttribute('aria-label'), focusedAt = Date.now()
   await page.keyboard.press('ArrowLeft')
   await expect(status).toHaveText(/^now · \d+(\.\d+)? %$/)
   await expect(tip).toBeVisible()
@@ -94,11 +100,17 @@ try {
   await page.keyboard.press('Home')
   await expect(status).toHaveText(/^0:(0[1-9]|10) ago · \d+(\.\d+)? %$/)
   const oldest = await status.textContent()
+  // Ticks move the window past that sample: the crosshair stays on the window's oldest sample, shown, not gone.
+  await sleep(400)
+  await expect(tip).toBeVisible()
+  await expect(tip).toHaveText(/^0:(0\d|10) ago · \d+(\.\d+)? %$/)
   await page.keyboard.press('ArrowRight')
   await expect(status).not.toHaveText(oldest)
   await page.keyboard.press('Escape')
   await expect(tip).toBeHidden()
   await expect(status).toHaveText('')
+  await sleep(Math.max(0, 5600 - (Date.now() - focusedAt)))
+  expect(await canvas.getAttribute('aria-label')).toBe(focusedLabel)
   // Focus leaving the chart takes its crosshair and tooltip along.
   await page.keyboard.press('ArrowLeft')
   await expect(tip).toBeVisible()
@@ -106,7 +118,9 @@ try {
   await expect(canvas).not.toBeFocused()
   await expect(tip).toBeHidden()
   await expect(status).toHaveText('')
-  console.log('Keyboard crosshair passed: Left, Home, Right and Escape move, announce and clear it; Tab away clears it too.')
+  // Blurred, the name catches up.
+  await expect.poll(() => canvas.getAttribute('aria-label')).not.toBe(focusedLabel)
+  console.log('Keyboard crosshair passed: Left, Home, Right and Escape move, announce and clear it; it stays on the oldest sample as the window moves; Tab away clears it; the name held still while focused.')
 
   step = 'pointer crosshair'
   const bounds = await canvas.boundingBox()
@@ -145,10 +159,37 @@ try {
     expect(seen.bottom).toBeLessThanOrEqual(boxBounds.y + boxBounds.height + 1)
     await sleep(150)
   }
+  // The caption takes one line across the plot's width, and the header stays in view as the rows scroll.
+  const region = chartTableRegion(box)
+  const layout = await region.evaluate(element => {
+    const caption = element.querySelector('caption'), header = element.querySelector('thead th')
+    const lines = caption.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(caption).lineHeight)
+    element.scrollTop = element.scrollHeight
+    return { lines, scrolled: element.scrollTop, top: element.getBoundingClientRect().top, header: header.getBoundingClientRect().top, wide: element.querySelector('table').getBoundingClientRect().width / element.clientWidth }
+  })
+  expect(layout.lines).toBeLessThan(1.5)
+  expect(layout.wide).toBeGreaterThan(0.99)
+  expect(layout.scrolled).toBeGreaterThan(50)
+  expect(Math.abs(layout.header - layout.top)).toBeLessThan(2)
+  // Shift+Tab from the toggle reaches the scroll box, ringed like every other control.
+  await box.getByRole('button', { name: 'View as table', exact: true }).focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(region).toBeFocused()
+  const ring = await region.evaluate(element => { const style = getComputedStyle(element); return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor } })
+  const focusBorder = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.color = 'var(--varia-focusBorder)'; document.body.append(probe); const color = getComputedStyle(probe).color; probe.remove(); return color })
+  expect(ring).toEqual({ style: 'solid', width: '2px', color: focusBorder })
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
   await expect(table).toHaveCount(0)
   await expect(canvas).toBeVisible()
-  console.log('Table passed: the window\'s samples, newest first, in the plot\'s place and filled on every tick.')
+  console.log('Table passed: the window\'s samples, newest first, in the plot\'s place and filled on every tick, with a one-line caption, a header that stays and a themed focus ring.')
+
+  step = 'table rows'
+  const capped = await live('mountChart', id, { series: [1], max: 100, spanMs: 10_000, width: 360, height: 200, tableShown: true, tableRows: 7 })
+  const cappedBox = page.locator(`[data-chart-test="${capped}"]`)
+  await expect(cappedBox.getByRole('table').locator('caption')).toHaveText(/^Synthetic metrics: 7 of \d+ samples, newest first$/)
+  await expect(cappedBox.getByRole('table').locator('tbody tr')).toHaveCount(7)
+  await live('unmountChart', capped)
+  console.log('Table rows passed: tableRows caps the table.')
 
   step = 'table from outside'
   // A document that offers View as table as a catalogue command hides the button and drives the table itself.
@@ -193,6 +234,16 @@ try {
   await expect.poll(async () => (await chart(key)).label).toMatch(/ over the last 10 seconds$/)
   console.log('Stale passed: paused, the chart names its window by the clock, and says "now" again once samples arrive.')
 
+  step = 'tile'
+  // A sparkline in a metric tile's chart slot: drawn on the tile's surface, its end marker ringed in the tile's color.
+  const tiled = await live('mountChart', id, { series: [1], style: 'area', max: 100, variant: 'sparkline', surface: 'tile.background', tile: 'Wave', width: 220, height: 140 })
+  const tileBox = page.locator(`[data-chart-test="${tiled}"]`)
+  await expect(tileBox.getByRole('group', { name: 'Wave: no data yet', exact: true })).toBeVisible()
+  await expect.poll(async () => { const pixels = (await chart(tiled)).pixels.colors; return pixels['charts.blue'] > 10 && pixels['tile.background'] > 0 }).toBe(true)
+  expect((await tileBox.locator('canvas').boundingBox()).height).toBe(32)
+  await live('unmountChart', tiled)
+  console.log('Tile passed: a sparkline in the tile\'s chart slot, 32 px tall, on the tile\'s surface.')
+
   step = 'theme'
   const darkBlue = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-charts-blue').trim())
   await menu('theme.mode.light')
@@ -203,11 +254,23 @@ try {
   console.log('Theme passed: the chart redrew in Light\'s chart colors.')
 
   step = 'forced colors'
+  // In the Dark theme, whose color-scheme the canvas would otherwise read the system color keywords by.
+  await menu('theme.mode.dark')
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-charts-blue').trim())).toBe(darkBlue)
+  await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBeGreaterThan(20)
   const before = (await chart(key)).draws
-  await page.emulateMedia({ forcedColors: 'active' })
+  // Night sky (dark), then Desert (light) with forced colors still on, as Windows switches contrast themes.
+  await page.emulateMedia({ forcedColors: 'active', colorScheme: 'dark' })
   await expect.poll(async () => (await chart(key)).draws).toBeGreaterThan(before)
   await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBe(0)
   expect((await chart(key)).pixels.drawn).toBeGreaterThan(100)
+  // The series and the labels stand out from the box behind them, in whichever palette is on.
+  await expect.poll(async () => (await chart(key)).pixels.contrasting, { message: 'forced dark' }).toBeGreaterThan(100)
+  await page.emulateMedia({ forcedColors: 'active', colorScheme: 'light' })
+  await expect.poll(async () => (await chart(key)).pixels.contrasting, { message: 'forced light after dark' }).toBeGreaterThan(100)
+  await page.emulateMedia({ forcedColors: 'none', colorScheme: 'light' })
+  await page.emulateMedia({ forcedColors: 'active', colorScheme: 'dark' })
+  await expect.poll(async () => (await chart(key)).pixels.contrasting, { message: 'forced dark after a forced light session' }).toBeGreaterThan(100)
   // The legend shows each series' dash in the order the canvas gives them.
   const pair = await live('mountChart', id, { series: [1, 2], unit: 'count', spanMs: 10_000, width: 360, height: 160 })
   const swatches = chartSwatchLines(page.locator(`[data-chart-test="${pair}"]`))
@@ -216,7 +279,7 @@ try {
   await expect(swatches.nth(1)).toHaveAttribute('stroke-dasharray', '6 3')
   await page.screenshot({ path: resolve('artifacts', 'chart-forced.png') })
   await live('unmountChart', pair)
-  await page.emulateMedia({ forcedColors: 'none' })
+  await page.emulateMedia({ forcedColors: 'none', colorScheme: 'no-preference' })
   await expect.poll(async () => (await chart(key)).pixels.colors['charts.blue']).toBeGreaterThan(20)
   console.log('Forced colors passed: the chart drew in system colors and went back to the theme after.')
 

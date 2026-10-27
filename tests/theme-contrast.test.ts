@@ -33,7 +33,8 @@ describe('built-in theme contrast', () => {
     expect(failures, failures.join('\n')).toEqual([])
   })
   it('holds chart series to 3:1 and chart text to 4.5:1 on every surface a chart sits on', () => {
-    // Series are the chart's data (WCAG 1.4.11); grid lines are decorative and exempt.
+    // Series are the chart's data (WCAG 1.4.11); grid lines are decorative and exempt. A tile's sparkline sits on the tile.
+    expect(chartSurfaces).toContain('tile.background')
     for (const surface of chartSurfaces) {
       for (const color of [...chartSeriesColors, ...chartStatusColors]) expect(contrastPairs).toContainEqual({ foreground: color, background: [surface], minimum: 3 })
       expect(contrastPairs).toContainEqual({ foreground: 'charts.foreground', background: [surface], minimum: 4.5 })

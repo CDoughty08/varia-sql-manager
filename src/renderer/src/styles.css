@@ -682,14 +682,20 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
 .live-chart[data-table] .live-chart-canvas { display: none; }
 /* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
-.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; }
-.live-chart-table { border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
-.live-chart-table caption { padding-bottom: 2px; text-align: left; color: var(--varia-charts-foreground); }
+.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.live-chart-table-wrap:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+/* As wide as the plot it replaces, so the caption takes one line; the header stays in view as the rows scroll (on the
+   chart's surface, which LiveChart sets on the thead). */
+.live-chart-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
+.live-chart-table caption { padding-bottom: 2px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
+.live-chart-table thead { position: sticky; top: 0; z-index: 1; }
 .live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
 .live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
 .live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
 @media (forced-colors: active) {
   .live-chart-swatch line { stroke: CanvasText; }
+  /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */
+  .live-chart-system { forced-color-adjust: none; color: CanvasText; background-color: Canvas; border-top-color: GrayText; }
   .live-chart-toggle[aria-pressed="true"] { outline: 1px solid CanvasText; }
 }
 /* The states kit (src/renderer/src/kit): one empty state, inline errors, loading placeholders, status pills and tags,
@@ -777,6 +783,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tile-unit { margin-left: 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); font-weight: 400; }
 .tile-context { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
 .tile-chart { min-width: 0; min-height: 0; }
+/* A tile's sparkline (live/LiveChart.tsx, variant sparkline on surface tile.background). */
+.tile-chart > .live-chart { height: 32px; }
 @media (forced-colors: active) {
   /* Forced colors drop fills: pills, badges and tiles keep an outline, and an on chip takes the selection colors. */
   .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }
