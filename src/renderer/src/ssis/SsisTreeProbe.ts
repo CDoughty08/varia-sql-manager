@@ -41,6 +41,8 @@ export class SsisTreeProbe implements Disposable {
   /** The last fingerprints seen per connection (status id → value), kept while its server stays in the tree. */
   private readonly seen = new Map<string, ReadonlyMap<string, number | string>>()
   private readonly stopped = new Map<string, Stopped>()
+  /** Nodes to reload whose first listing was on its way when a change was seen: that listing may predate the change. */
+  private readonly settling = new Map<number, ReconcileOptions>()
   private readonly stops: (() => void)[]
   private readonly timers: Timers
   private values: SettingsValues
@@ -53,7 +55,7 @@ export class SsisTreeProbe implements Disposable {
     this.timers = o.timers ?? browserTimers
     const events = o.events.subscribe(event => this.guard(() => { if (event.type === 'explorer.refreshed') this.refreshed(event.connectionId, event.nodeId) }))
     this.stops = [
-      o.explorer.subscribe(() => this.guard(() => this.sync())),
+      o.explorer.subscribe(() => this.guard(() => { this.sync(); this.settled() })),
       o.settings.subscribe(() => this.guard(() => this.settingsChanged())),
       () => events.dispose()
     ]
@@ -63,32 +65,22 @@ export class SsisTreeProbe implements Disposable {
   /** Connections with a view open (test mode and the checks). */
   get connections(): readonly string[] { return [...this.views.keys()] }
   handle(connectionId: string): LiveHandle | undefined { return this.views.get(connectionId)?.handle }
+  /**
+   * The last fingerprints seen on a connection (status id → value, `catalogFingerprintStatus`'s ids) while its server stays
+   * in the tree: a document showing what one covers (references, parameters, catalog properties) reads them here when it
+   * opens and follows `handle(connectionId)`'s ticks, rather than opening a probe of its own.
+   */
+  fingerprints(connectionId: string): ReadonlyMap<string, number | string> | undefined { return this.seen.get(connectionId) }
 
   /**
    * Reloads what shows these fingerprints on a connection, now: after Varia's own change to the catalog (a later PR's
-   * writes), so the tree need not wait for the next sample. The probe's next sample then finds the same fingerprints
-   * again only if nothing else changed.
+   * writes), so the tree need not wait for the next sample. The connection's view samples at once too, so the fingerprints
+   * after the change become the ones it compares with. That sample still differs from the ones seen before the change, so
+   * it reloads the same nodes once more: a reload still listing starts again, and one that finds nothing new announces nothing.
    */
   reload(connectionId: string, fingerprints: readonly CatalogFingerprint[]): void {
-    const kinds = new Set<string>(fingerprints.flatMap(fingerprint => fingerprint.reloads.kinds ?? []))
-    const folders = new Set<string>(fingerprints.flatMap(fingerprint => fingerprint.reloads.folders ?? []))
-    if (!kinds.size && !folders.size) return
-    for (const catalog of this.catalogs(connectionId)) {
-      if (catalog.children === undefined) continue
-      // One reconcile per subtree: a node to reload above another reloads deeply, which covers the one below.
-      if (kinds.has(catalog.kind)) { this.o.explorer.reconcile(catalog.id, { ...background, deep: true }); continue }
-      const visit = (node: TreeNode): void => {
-        for (const child of node.children ?? []) {
-          if (child.children === undefined) continue
-          if (child.kind === 'folder' && child.folder && folders.has(child.folder)) {
-            const deep = [...folders].some(folder => folder !== child.folder && this.below(child, folder))
-            this.o.explorer.reconcile(child.id, deep ? { ...background, deep } : background)
-          } else if (kinds.has(child.kind)) this.o.explorer.reconcile(child.id, { ...background, deep: true })
-          else visit(child)
-        }
-      }
-      visit(catalog)
-    }
+    this.reconcileFor(connectionId, fingerprints)
+    this.views.get(connectionId)?.handle.refresh()
   }
 
   dispose(): void {
@@ -98,6 +90,52 @@ export class SsisTreeProbe implements Disposable {
     for (const connectionId of [...this.views.keys()]) this.close(connectionId)
     for (const connectionId of [...this.stopped.keys()]) this.forget(connectionId)
     this.seen.clear()
+    this.settling.clear()
+  }
+
+  /** Reconciles, in the background, the listed nodes on a connection that show these fingerprints. */
+  private reconcileFor(connectionId: string, fingerprints: readonly CatalogFingerprint[]): void {
+    const kinds = new Set<string>(fingerprints.flatMap(fingerprint => fingerprint.reloads.kinds ?? []))
+    const folders = new Set<string>(fingerprints.flatMap(fingerprint => fingerprint.reloads.folders ?? []))
+    if (!kinds.size && !folders.size) return
+    // A node whose first listing is on its way may have read the catalog before the change: it reconciles once that
+    // listing settles. Reconciling it now would restart the user's own load behind the background ones.
+    const later = (node: TreeNode, options: ReconcileOptions): void => { if (node.load === 'loading') this.settling.set(node.id, options) }
+    for (const catalog of this.catalogs(connectionId)) {
+      // One reconcile per subtree: a node to reload above another reloads deeply, which covers the one below.
+      if (kinds.has(catalog.kind)) {
+        const options = { ...background, deep: true }
+        if (catalog.children === undefined) later(catalog, options)
+        else this.o.explorer.reconcile(catalog.id, options)
+        continue
+      }
+      if (catalog.children === undefined) continue
+      const visit = (node: TreeNode): void => {
+        for (const child of node.children ?? []) {
+          const folder = child.kind === 'folder' && !!child.folder && folders.has(child.folder)
+          if (child.children === undefined) {
+            if (folder || kinds.has(child.kind)) later(child, folder ? background : { ...background, deep: true })
+            continue
+          }
+          if (folder) {
+            const deep = [...folders].some(other => other !== child.folder && this.below(child, other))
+            this.o.explorer.reconcile(child.id, deep ? { ...background, deep } : background)
+          } else if (kinds.has(child.kind)) this.o.explorer.reconcile(child.id, { ...background, deep: true })
+          else visit(child)
+        }
+      }
+      visit(catalog)
+    }
+  }
+
+  /** Reconciles the nodes whose first listing settled after a change was seen; one that stopped or failed lists afresh anyway. */
+  private settled(): void {
+    for (const [id, options] of [...this.settling]) {
+      const node = this.o.explorer.node(id)
+      if (node?.load === 'loading') continue
+      this.settling.delete(id)
+      if (node?.load === 'loaded') this.o.explorer.reconcile(id, options)
+    }
   }
 
   private guard(work: () => void): void {
@@ -241,7 +279,7 @@ export class SsisTreeProbe implements Disposable {
     this.seen.set(connectionId, next)
     if (!previous) return
     const changed = catalogFingerprints.filter(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum'].some(id => previous.get(id) !== next.get(id)))
-    if (changed.length) this.reload(connectionId, changed)
+    if (changed.length) this.reconcileFor(connectionId, changed)
   }
 
   /** The connection's Integration Services Catalogs folders (one per server node). */

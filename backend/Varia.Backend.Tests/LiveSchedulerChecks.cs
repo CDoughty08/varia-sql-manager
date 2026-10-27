@@ -689,6 +689,27 @@ internal static class LiveSchedulerChecks
             check(opening is { Spid: null, Probes: [{ State: "ok" }] } && batch is { Samples: [], Errors: [{ Code: "TIMEOUT", Number: null, Terminal: false }] } && host.Opens == 2 && gates.Busy == 0,
                 "a connect that never finishes ends at its own bound: the opened frame still goes (state ok, session unknown) and the next sample is a TIMEOUT value, holding nothing");
         }
+        {
+            // The catalog's database will not open (4060), so the sampler reads why in the login's own database; the subscription
+            // is cancelled during that read, which SqlClient reports as a SqlException of its own.
+            var host = new ScriptedOpenHost(id);
+            using var service = new LiveService(host);
+            using var recorder = new LiveRecorder(7);
+            var lookups = 0;
+            host.Open = (connection, token) =>
+            {
+                if (connection.Database.Length > 0) throw ConnectionFailureChecks.Sql(4060);
+                Interlocked.Increment(ref lookups);
+                recorder.Context.Cancel(CancelReason.User);
+                throw ConnectionFailureChecks.Sql(0, 0, 11, "server", "Operation cancelled by user.");
+            };
+            var task = service.SubscribeAsync(new LiveSubscribeArgs(Guid.NewGuid().ToString(), id, "ssis.catalog", [new LiveProbeArgs(LiveSql.CatalogProbe, 10_000)]), recorder.Context, HostChecks.Json);
+            string ended;
+            try { ended = (await task.WaitAsync(TimeSpan.FromSeconds(10))).Ended; }
+            catch (Exception error) { ended = error.GetType().Name; }
+            check(lookups == 1 && ended == "cancelled" && service.Gates.Busy == 0,
+                "a subscription cancelled while an SSISDB source reads why its catalog's database will not open ends cancelled, however SqlClient words the cancel: " + ended);
+        }
     }
 
     /// <summary>The activity source through SqlService, with no SQL Server: refused as values before any connection.</summary>

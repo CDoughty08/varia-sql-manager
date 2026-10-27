@@ -909,8 +909,9 @@ SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earli
 a parameter; for an SSISDB source it also reads the catalog's `is_read_committed_snapshot_on` (`sys.databases` by the catalog's
 name, a parameter), which picks the prologue of its later commands and `live.opened`'s `isolation`, and whether the login is
 sysadmin or in ssis_admin (`IS_SRVROLEMEMBER` first, so a sysadmin's `IS_MEMBER` is never evaluated): only they may read
-`catalog.catalog_properties`, which the catalog probe reads in a statement of its own under `IF @admin = 1` (a bit parameter),
-so nobody else's sample runs it. An SSISDB source whose connection cannot open the catalog's database without saying why (4060,
+`catalog.catalog_properties`. The catalog probe has two constant texts, neither taking a parameter (a parameter would run the
+command through `sp_executesql`, which scopes the prologue's SET options to it): one that reads catalog_properties, for them,
+and one without it (its count and checksum 0) for everyone else, so nobody else's sample touches it. An SSISDB source whose connection cannot open the catalog's database without saying why (4060,
 916) reads why on a connection of the same pool in the login's own database (`sys.databases` state and user access, under a gate
 and the probe's budget): no row is `CATALOG_MISSING` (terminal), a database that is not online, single-user or restricted
 `DATABASE_UNAVAILABLE` (retried), and an online one the login may not open `PERMISSION_DENIED` (terminal), each with its own

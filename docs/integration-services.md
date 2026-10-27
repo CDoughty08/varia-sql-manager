@@ -64,7 +64,9 @@ What the checks prove:
   the profile answers `BLOCKED` while another session holds a change to `ssis_admin`'s members, then reads the login's
   roles and, for ssis_admin, `catalog_properties`. Every connection those reads leave in the catalog's database is the
   SSIS read pool's.
-- **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
+- **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry, and the SSIS tree's
+  catalog probe samples it read only (16 status values, each count the view's own as the login sees it, two samples alike,
+  its cost printed; a login that is not an admin is not checked there, since mapping one would change the catalog). With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
   `SSISDB` and gets no master key, CLR, logins or jobs. Run it once per server version that has Integration Services.
@@ -150,19 +152,21 @@ Catalogs folder are expanded), Object Explorer holds one live view of the `ssis.
 every 30 s by default (Tools › Options › SQL Server Integration Services; 10 to 300 s, or off), one
 query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per row, over the columns
 the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.
-`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it), in a
-statement of its own; for anyone else its fingerprint stays 0 and 0. The first sample of a connection is its baseline; a later one,
-or the first of a new view on the same connection (SSISDB closed and opened again, Object Explorer shown again), reloads in the
-background only the listed nodes that show a view whose fingerprint changed, keeping expansion and selection and announcing what
-was added or removed; a reload never opens a node, and one that a collapsed node hides waits until it shows. The view pauses 2 s
+`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it): anyone
+else's sample runs a second constant query without it, so its fingerprint stays 0 and 0 for them. The first sample of a connection
+is its baseline; a later one, or the first of a new view on the same connection (SSISDB closed and opened again, Object Explorer
+shown again), reloads in the background only the listed nodes that show a view whose fingerprint changed, keeping expansion and
+selection and announcing what was added or removed; a reload never opens a node, one that a collapsed node hides waits until it
+shows, and one whose first listing is still on its way (it may have read the catalog before the change) reloads once that listing
+answers. The view pauses 2 s
 after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog's database, READ
 UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view
 (`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or
 restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server
 or the window has no room for another live view, the backend restarted it) opens again after 2 s, doubling to 60 s while it keeps
 ending before a sample. One that the login cannot read or open, or whose sign-in is refused, stops for good (`PERMISSION_DENIED`,
-`LOGIN_FAILED`): SSISDB reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it or of its server,
-or closing and opening SSISDB, tries again.
+`LOGIN_FAILED`): SSISDB reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of
+the Integration Services Catalogs folder or of its server, or closing and opening SSISDB, tries again (a Refresh elsewhere does not).
 
 | Fingerprint | Catalog view | Object Explorer reloads |
 | --- | --- | --- |

@@ -251,12 +251,13 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
 
     /// <summary>Why an SSISDB source's connection could not open the catalog's database, read in the login's own database on the
     /// same pool's connection (under a live gate and the probe's budget); null when that read fails too, so the open's own
-    /// error is reported.</summary>
+    /// error is reported. A subscription that ends during the read is an OperationCanceledException, however SqlClient words it.</summary>
     private async Task<LiveProbeError?> CatalogFailureAsync(string probe, int budgetMs, CancellationToken token)
     {
+        SqlConnection? server = null;
         try
         {
-            await using var server = host.PoolConnection(connectionId, null, LiveConnections.SsisSuffix);
+            server = host.PoolConnection(connectionId, null, LiveConnections.SsisSuffix);
             using (var bound = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
                 bound.CancelAfter(ConnectBudgetMs);
@@ -275,10 +276,25 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string connect
                 ? LiveErrors.Catalog(probe, Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture))
                 : LiveErrors.Catalog(probe, null, null);
         }
-        catch (Exception error) when (!token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException
+        catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
+        {
+            // As in SampleAsync: the cancel in SqlClient's words ends the subscription cancelled, and a connection cancelled
+            // mid-statement goes back to no pool.
+            if (server is not null)
+            {
+                try { SqlConnection.ClearPool(server); }
+                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+            }
+            throw new OperationCanceledException(token);
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException
             || error is RequestException { Code: "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" })
         {
             return null;
+        }
+        finally
+        {
+            if (server is not null) await server.DisposeAsync().ConfigureAwait(false);
         }
     }
 

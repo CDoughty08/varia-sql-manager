@@ -27,14 +27,63 @@ internal static class SsisTreeLiveChecks
         "variables" => "environment_variables", "references" => "environment_references", "parameters" => "object_parameters", "properties" => "catalog_properties", _ => id
     };
 
+    /// <summary>The live catalogue with the tree probe allowed to run every second, so the checks need not wait 10 s between samples.</summary>
+    private static LiveCatalog Fast()
+    {
+        var current = LiveCatalog.Current;
+        return LiveCatalog.Create(current.Limits, current.Probes.Values.Select(probe => probe.Id == LiveSql.CatalogProbe ? probe with { IntervalMs = probe.IntervalMs with { Min = 1000 } } : probe),
+            current.Sources.Values);
+    }
+
+    /// <summary>Each fingerprinted view's row count in a catalog's database, in the catalogue's order, as this login reads it.</summary>
+    private static async Task<List<long>> CountsAsync(Func<string, string, string?, Task<SqlRun>> sql, string db) =>
+        (await sql(string.Join(" UNION ALL ", LiveSql.FingerprintIds.Select((id, index) => "SELECT " + index + ", COUNT_BIG(*) FROM [catalog].[" + View(id) + "]")) + " ORDER BY 1;", db, null))
+            .Sets[0].Select(row => long.Parse(row[1]!, CultureInfo.InvariantCulture)).ToList();
+
+    private static Dictionary<string, long>? Status(LiveTickEvent? tick) => tick?.Samples.FirstOrDefault()?.Status?.ToDictionary(value => value.Id, value => Convert.ToInt64(value.Value, CultureInfo.InvariantCulture));
+
+    /// <summary>With VARIA_TEST_SSIS=1 and the catalog on the server: ssis.catalogProbe against the real SSISDB, read only (it
+    /// creates, changes and drops nothing there), which the fake catalog cannot stand in for (row-level security, the internal
+    /// schema behind the views, catalog_properties for admins only, real sql_variant columns, the cost of hashing every
+    /// parameter). As this login: it opens, sends 16 status values whose counts are each view's own as the login reads it
+    /// (catalog_properties too for a sysadmin), and two samples agree; its cost is reported. A login that is not an admin is
+    /// not checked here: mapping one into SSISDB would change the catalog.</summary>
+    public static async Task RealAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, Func<string, string, string?, Task<SqlRun>> sql)
+    {
+        var db = service.Ssis.Options.CatalogDatabase;
+        using var live = new LiveService(service, Fast());
+        var recorder = new LiveRecorder(9400);
+        var task = live.SubscribeAsync(new LiveSubscribeArgs(Guid.NewGuid().ToString(), info.Id, "ssis.catalog", [new LiveProbeArgs(LiveSql.CatalogProbe, 2000)]), recorder.Context, json);
+        try
+        {
+            var sampled = await recorder.WaitAsync(view => view.Ticks.Count(tick => tick.Samples.Count > 0) >= 2 || view.Ticks.Any(tick => tick.Errors is not null) || task.IsCompleted, 60_000);
+            var samples = recorder.Ticks.Where(tick => tick.Samples.Count > 0).ToList();
+            var errors = recorder.Ticks.SelectMany(tick => tick.Errors ?? []).ToList();
+            var first = Status(samples.FirstOrDefault());
+            var counts = await CountsAsync(sql, db);
+            var sysadmin = (await sql("SELECT IS_SRVROLEMEMBER(N'sysadmin');", "master", null)).Scalar == "1";
+            Console.WriteLine("ssis.catalogProbe on " + db + ": " + string.Join(", ", samples.Select(tick => tick.Samples[0].CostMs + " ms")) + " per sample, counts "
+                + string.Join(",", counts) + (sysadmin ? "." : " (the login is not sysadmin, so catalog_properties is not compared)."));
+            check(sampled && errors.Count == 0 && samples.Count >= 2 && recorder.Opened is { Source: "ssis.catalog", Spid: > 0, Probes: [{ State: "ok" }] } && first is { Count: 16 }
+                && LiveSql.FingerprintIds.Select((id, index) => first[id + "Count"] == counts[index] || id == "properties" && !sysadmin).All(match => match)
+                && Status(samples[1])!.SequenceEqual(first),
+                "the catalog probe samples the real " + db + " read only: 16 status values, each count the view's own row count as the login sees it, the same in two samples: "
+                + Dump(first) + " vs " + string.Join(",", counts) + Dump(errors));
+        }
+        finally
+        {
+            recorder.Context.Cancel(CancelReason.User);
+            await task.WaitAsync(TimeSpan.FromSeconds(15));
+            recorder.Dispose();
+        }
+    }
+
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> connect, JsonSerializerOptions json,
         ScratchDatabase scratch, string db, Func<string, string, string?, Task<SqlRun>> sql, Func<string, Task<object>> close)
     {
         var options = service.Ssis.Options;
         var current = LiveCatalog.Current;
-        var fast = LiveCatalog.Create(current.Limits, current.Probes.Values.Select(probe => probe.Id == LiveSql.CatalogProbe ? probe with { IntervalMs = probe.IntervalMs with { Min = 1000 } } : probe),
-            current.Sources.Values);
-        using var live = new LiveService(service, fast);
+        using var live = new LiveService(service, Fast());
         uint next = 9500;
         (Task<LiveEnd> Task, LiveRecorder Recorder) Subscribe(int intervalMs, string? connectionId = null)
         {
@@ -48,7 +97,6 @@ internal static class SsisTreeLiveChecks
             view.Recorder.Dispose();
             return end;
         }
-        static Dictionary<string, long>? Status(LiveTickEvent? tick) => tick?.Samples.FirstOrDefault()?.Status?.ToDictionary(value => value.Id, value => Convert.ToInt64(value.Value, CultureInfo.InvariantCulture));
         static Dictionary<string, long>? Latest(LiveRecorder recorder) => Status(recorder.Ticks.LastOrDefault(tick => tick.Samples.Count > 0));
         // Waits for a sample whose fingerprints differ from `before`, and names the status values that changed.
         static async Task<List<string>?> Changed((Task<LiveEnd>, LiveRecorder Recorder) view, Dictionary<string, long> before)
@@ -58,8 +106,7 @@ internal static class SsisTreeLiveChecks
         }
         Task<SqlRun> Exec(string text, string? session = null) => sql(text, db, session);
         // Each fingerprinted view's row count, in the catalogue's order, as a sysadmin reads it.
-        async Task<List<long>> Counts() => (await Exec(string.Join(" UNION ALL ", LiveSql.FingerprintIds.Select((id, index) => "SELECT " + index + ", COUNT_BIG(*) FROM [catalog].[" + View(id) + "]"))
-            + " ORDER BY 1;")).Sets[0].Select(row => long.Parse(row[1]!, CultureInfo.InvariantCulture)).ToList();
+        Task<List<long>> Counts() => CountsAsync(sql, db);
         try
         {
             options.CatalogDatabase = db;

@@ -23,9 +23,12 @@ interface Catalog { folders: Record<string, { projects: Record<string, string[]>
 const folder = (owner: ObjectRef, id: FolderId): ExplorerNode => ({ ref: { type: 'folder', owner: { ...owner }, folder: id }, label: folderSpecs[id].label, icon: 'folder', hasChildren: true })
 const object = (value: ObjectRef, label: string, fields: Partial<ExplorerNode> = {}): ExplorerNode => ({ ref: { type: 'object', object: value }, label, icon: kindSpecs[value.kind].icon, hasChildren: true, ...fields })
 
-/** A server whose only folder is Integration Services Catalogs, holding SSISDB (when `exists`) as `catalog` describes it. */
+/** A server whose folders are `serverFolders` (Integration Services Catalogs alone, unless a test adds others), holding
+ *  SSISDB (when `exists`) as `catalog` describes it. A listing `hold` names reads the catalog when asked, and answers when released. */
 function fakeBackend() {
-  const state = { exists: true, catalog: { folders: { Finance: { projects: { Loads: ['Daily.dtsx'] }, environments: { Test: 2 } } } } as Catalog }
+  const state = { exists: true, catalog: { folders: { Finance: { projects: { Loads: ['Daily.dtsx'] }, environments: { Test: 2 } } } } as Catalog, serverFolders: ['integrationServicesCatalogs'] as FolderId[] }
+  const holds = new Map<string, Promise<void>>()
+  const hold = (name: string) => { let release!: () => void; holds.set(name, new Promise<void>(resolve => { release = resolve })); return () => { holds.delete(name); release() } }
   const sent: ExplorerChildrenParams[] = []
   const ok = (nodes: ExplorerNode[]): ApiResult<ExplorerChildrenResult> => ({ ok: true, value: { nodes, elapsedMs: 1, total: nodes.length } })
   function respond(params: ExplorerChildrenParams): ApiResult<ExplorerChildrenResult> {
@@ -34,7 +37,7 @@ function fakeBackend() {
     if (node.type === 'object') {
       const value = node.object
       switch (value.kind) {
-        case 'server': return ok([folder(value, 'integrationServicesCatalogs')])
+        case 'server': return ok(state.serverFolders.map(id => folder(value, id)))
         case 'ssisCatalog': return ok(Object.keys(folders).map(name => object({ kind: 'ssisFolder', name }, name)))
         case 'ssisFolder': return ok([folder(value, 'ssisProjects'), folder(value, 'ssisEnvironments')])
         case 'ssisProject': return ok([folder(value, 'ssisPackages')])
@@ -54,12 +57,16 @@ function fakeBackend() {
     explorerChildren: vi.fn<VariaApi['explorerChildren']>(async params => {
       sent.push(params)
       expect.soft(explorerChildrenParamsSchema.safeParse(params).success, JSON.stringify(params)).toBe(true)
-      return respond(params)
+      const result = respond(params)
+      await holds.get(listing(params))
+      return result
     }),
     explorerCancel: vi.fn<VariaApi['explorerCancel']>(async ids => ({ ok: true, value: { cancelled: ids.length } }))
   }
-  return { api, sent, state }
+  return { api, sent, state, hold }
 }
+/** A listing's name in `loads` and `hold`: its folder id, or its node's kind and name. */
+const listing = (params: ExplorerChildrenParams) => params.node.type === 'folder' ? params.node.folder : params.node.object.kind + ':' + params.node.object.name
 
 /** A live view as the probe sees it: its spec and owner, the ticks it is given, its status, and what was asked of it. */
 class FakeView {
@@ -83,6 +90,8 @@ class FakeView {
   }
   onTick(listener: (tick: AppliedTick) => void) { this.listeners.add(listener); return { dispose: () => { this.listeners.delete(listener) } } }
   setProbe(probe: string, patch: unknown) { this.patches.push({ probe, patch }) }
+  refreshes = 0
+  refresh() { this.refreshes++ }
   dispose() { this.disposed = true }
   tick(status: ReadonlyMap<string, number> | undefined, errors?: LiveProbeError[]) {
     const tick: LiveTick = {
@@ -136,7 +145,7 @@ function fixture(settings: Partial<SettingsValues> = {}) {
     return under!
   }
   /** The folders and nodes each explorer.children call since `from` listed. */
-  const loads = (from = 0) => backend.sent.slice(from).map(params => params.node.type === 'folder' ? params.node.folder : params.node.object.kind + ':' + params.node.object.name)
+  const loads = (from = 0) => backend.sent.slice(from).map(listing)
   return { ...backend, explorer, connections, emitted, views, probe, connect, labels, find, open, loads, setVisible, setSettings, refuse, advance, pending }
 }
 
@@ -333,6 +342,62 @@ describe('SsisTreeProbe: reloading what changed', () => {
     expect(f.sent.length).toBe(before)
     expect(view.disposed).toBe(false)
   })
+  it('reloads a listing that was on its way when a change was seen once it answers, without restarting the user\'s load', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB', 'Finance')
+    const view = f.views[0]
+    view.tick(fingerprints())
+    await settle()
+    // The user's listing of Projects reads the catalog before a deploy commits, and answers after the probe saw the deploy.
+    const release = f.hold('ssisProjects')
+    const before = f.sent.length
+    f.explorer.expand(f.find('Projects'))
+    await settle()
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    view.tick(fingerprints({ projectsCount: 2, projectsChecksum: 7 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisProjects'])
+    release()
+    await settle()
+    view.tick(fingerprints({ projectsCount: 2, projectsChecksum: 7 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisProjects', 'ssisProjects'])
+    expect(f.labels()).toContain('          Nightly')
+  })
+  it('reloads SSISDB when folders changed while its own first listing was on its way', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs')
+    const release = f.hold('ssisCatalog:SSISDB')
+    f.explorer.expand(f.find('SSISDB'))
+    await settle()
+    const view = f.views[0]
+    view.tick(fingerprints())
+    f.state.catalog.folders.Sales = { projects: {}, environments: {} }
+    view.tick(fingerprints({ foldersCount: 2, foldersChecksum: 7 }))
+    await settle()
+    release()
+    await settle()
+    expect(f.labels()).toEqual(expect.arrayContaining(['      Finance', '      Sales']))
+  })
+  it('reloads at once after Varia\'s own change and has the view sample now, and hands a document the last fingerprints', async () => {
+    const { f, view } = await opened()
+    expect(f.probe.fingerprints(cid(1))).toEqual(fingerprints())
+    expect(f.probe.fingerprints(cid(2))).toBeUndefined()
+    f.state.catalog.folders.Finance.environments.Prod = 1
+    const before = f.sent.length
+    f.probe.reload(cid(1), catalogFingerprints.filter(fingerprint => fingerprint.id === 'environments'))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisEnvironments'])
+    expect(f.labels()).toContain('          Prod (1 variables)')
+    // The sample it asks for becomes the baseline, so later samples compare with the catalog after the change.
+    expect(view.refreshes).toBe(1)
+    view.tick(fingerprints({ environmentsCount: 2 }))
+    expect(f.probe.fingerprints(cid(1))?.get('environmentsCount')).toBe(2)
+  })
 })
 
 describe('SsisTreeProbe: an empty catalog', () => {
@@ -514,6 +579,26 @@ describe('SsisTreeProbe: a view that stopped', () => {
     await settle()
     expect(f.views).toHaveLength(4)
     expect(f.views[3].disposed).toBe(false)
+  })
+  it('tries a view that stopped for good again only on a refresh of SSISDB, of what is in it, of its folder or of its server', async () => {
+    const f = fixture()
+    f.state.serverFolders = ['databases', 'integrationServicesCatalogs']
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB')
+    f.views[0].end('PERMISSION_DENIED', 'This login cannot read the SSIS Catalog.')
+    await settle()
+    const ssisdb = f.find('SSISDB')
+    // A refresh of another folder on the same server says nothing about the catalog: the note stays and nothing opens.
+    f.explorer.refresh(f.find('Databases'))
+    await settle()
+    expect(f.emitted.some(event => event.type === 'explorer.refreshed' && event.nodeId === f.find('Databases'))).toBe(true)
+    expect(f.views).toHaveLength(1)
+    expect(f.explorer.node(ssisdb)!.note?.label).toBe('(not updating)')
+    f.explorer.refresh(f.find('Integration Services Catalogs'))
+    await settle()
+    expect(f.views).toHaveLength(2)
+    expect(f.explorer.node(ssisdb)!.note).toBeUndefined()
   })
   it('tries again after CATALOG_MISSING while the catalogs folder still lists SSISDB (the catalog dropped and created again)', async () => {
     const f = await openedCatalog()
