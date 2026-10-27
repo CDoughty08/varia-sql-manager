@@ -189,8 +189,11 @@ try {
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
-    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
-    if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    // Windows Authentication has no Password field; SQL Server Authentication's starts empty.
+    if (liveUser) {
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     await expect(lostServerRows(page)).toHaveCount(0)

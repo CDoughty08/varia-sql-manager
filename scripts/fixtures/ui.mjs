@@ -113,6 +113,20 @@ export const part = {
   connectionChoice: '.connection-choice',
   /** The Connect dialog's failure: its InlineError, the explanation and the Error details expander. */
   connectFailure: '.connect-failure',
+  // Connect v2's layout, for the probes that measure it: the two panes, the form's own scroll, and at its bottom the
+  // outcome (busy, notices, the failure) above the footer with Connect.
+  connectPanes: '.connect-panes',
+  connectSourcesPane: '.connect-sources-pane',
+  connectFormPane: '.connect-form-pane',
+  connectFormScroll: '.connect-form-scroll',
+  connectActions: '.connect-actions',
+  connectOutcome: '.connect-outcome',
+  connectionFooter: '.connection-footer',
+  /** The saved connections' list, one of its rows (the entry with its star and ×), and a connection's colour dot. */
+  connectionSources: '.connection-sources',
+  connectionListRow: '.connection-list-row',
+  connectionSwatch: '.connection-swatch',
+  visuallyHidden: '.visually-hidden',
   /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
   connectionScroll: '.connection-scroll',
   environmentPreview: '.environment-preview',
@@ -298,6 +312,8 @@ export const renameBox = page => explorerTree(page).getByRole('textbox', { name:
 
 /** The Connect dialog's failed connect: the error, its fix actions and Copy details, and Error details. */
 export const connectFailure = dialog => dialog.locator(part.connectFailure)
+/** What shows at Connect while it works or after it: busy, notices and the failure. */
+export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 /** An InlineError's sentence and its note (why nothing there fixes it). */
 export const errorSentence = view => view.locator(part.inlineErrorMessage)
 export const errorNote = view => view.locator(part.inlineErrorNote)

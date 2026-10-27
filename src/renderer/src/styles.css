@@ -510,6 +510,52 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connect-error-details dl > div { display: contents; }
 .connect-error-details dt { color: var(--varia-descriptionForeground); }
 .connect-error-details dd { margin: 0; color: var(--varia-foreground); overflow-wrap: anywhere; user-select: text; }
+/* Connect v2: saved and discovered servers on the left, the form on the right, each scrolling on its own, so the dialog
+   keeps one size and Connect, with any error under it, never leaves the view. */
+.connection-modal.connect-dialog { width: min(720px, calc(100vw - 40px)); height: min(520px, calc(100vh - 40px)); max-height: none; }
+.connect-dialog .connection-heading { padding: var(--varia-space-3) var(--varia-space-4); border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-panes { display: flex; flex: 1; min-height: 0; }
+.connect-sources-pane { display: flex; flex-direction: column; flex: none; width: 272px; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3) var(--varia-space-3); border-right: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-sources-pane .connection-sources { flex: 1; height: auto; min-height: 0; border-bottom: 0; padding-bottom: 0; }
+/* A narrow pane: a long custom label gives way with the name, so both stay inside the row (its tooltip has the label
+   whole). A preset's word (PROD, STAGING) keeps the base flex: none and stays whole: only the name gives way to it. */
+.connect-sources-pane .environment-tag[data-place="list"][data-custom] { flex: 0 1 auto; max-width: 50%; }
+.connect-sources-pane .browse-toolbar { flex-wrap: wrap; }
+.connection-filter-box { position: relative; display: flex; align-items: center; margin-bottom: var(--varia-space-2); }
+.connection-filter-box > .codicon { position: absolute; left: var(--varia-space-2); color: var(--varia-icon-foreground); pointer-events: none; }
+.connect-dialog .connection-filter-box > input.connection-filter { width: 100%; margin: 0; padding-left: 28px; }
+.connect-form-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.connect-form-pane > .connection-property-tabs { flex: none; margin: 0; padding: var(--varia-space-2) var(--varia-space-4) 0; }
+.connect-form-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4) var(--varia-space-3); }
+.connect-dialog .property-row { grid-template-columns: 152px minmax(0, 1fr); }
+.connect-dialog .property-row > label { font-size: var(--varia-size-sm); }
+.connect-dialog .connection-preview textarea { height: 220px; }
+.connect-dialog .connection-footer { padding: var(--varia-space-2) var(--varia-space-4); }
+/* At Connect: busy, notices and the failure just above the footer, which stays put at the dialog's bottom, so Connect
+   and Stop never move under the pointer. Bounded, a long message scrolls here instead of pushing Connect out. */
+.connect-actions { display: flex; flex-direction: column; flex: none; max-height: 55%; min-height: 0; }
+.connect-outcome { flex: 0 1 auto; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) var(--varia-space-4); border-top: 1px solid var(--varia-dialog-separatorBackground); }
+.connect-outcome > .field-note { margin: 0; }
+.connect-dialog .advanced-action { align-items: center; gap: var(--varia-space-2); }
+.advanced-summary { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
+.custom-properties-header { display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; }
+.custom-properties-toggle { display: inline-flex; flex: none; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
+.custom-properties-summary { display: inline-flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow: hidden; color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); }
+.custom-properties-summary .connection-swatch { width: 8px; height: 8px; border-radius: 50%; }
+.custom-properties-summary .environment-tag[data-place="list"] { margin-left: 0; }
+.custom-properties-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connect-dialog .custom-properties > .property-grid { margin-top: var(--varia-space-2); }
+.connect-dialog .custom-properties > .property-grid[hidden] { display: none; }
+/* A narrow window (or a zoomed one) stacks the panes, saved servers above the form, in one scroll: nested scrolls would
+   leave each too little room. The list keeps two rows' height, and Connect with its outcome sticks to the bottom. */
+@media (max-width: 760px) {
+  .connect-panes { flex-direction: column; overflow-y: auto; }
+  .connect-sources-pane { flex: none; width: auto; border-right: 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+  .connect-sources-pane .connection-sources { flex: none; height: 136px; }
+  .connect-form-pane { flex: 1 0 auto; min-height: auto; }
+  .connect-form-scroll { flex: none; min-height: auto; overflow-y: visible; }
+  .connect-actions { position: sticky; bottom: 0; max-height: 40vh; background: var(--varia-editorWidget-background); }
+}
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .dialog-actions button { padding: 8px 17px; }
 .keybinding { display: inline-flex; gap: 3px; flex-shrink: 0; }
