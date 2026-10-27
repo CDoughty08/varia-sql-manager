@@ -22,6 +22,28 @@ void Check(bool condition, string name)
     if (!condition) throw new Exception("FAIL: " + name);
     passed++;
 }
+// A focused SQL Server lane: its permission checks are required, never an offline-only or skipped success.
+if (args is ["--activity-actions-live"])
+{
+    var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
+    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SERVER.");
+    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SCRATCH=1.");
+    var focusedUser = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_USER");
+    var focusedPassword = string.IsNullOrWhiteSpace(focusedUser) ? null
+        : Environment.GetEnvironmentVariable("VARIA_TEST_SQL_PASSWORD") ?? throw new Exception("VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.");
+    ConnectOptions FocusedLive(string database) => focusedPassword is null
+        ? new(focusedServer, database, "windows", null, null, true)
+        : new(focusedServer, database, "sql", focusedUser, focusedPassword, true);
+    using var focusedService = new SqlService();
+    var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
+    try
+    {
+        await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
+        Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+    }
+    finally { await focusedService.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(focusedInfo.Id), json), json); }
+    return;
+}
 void Invalid(string sql, string name)
 {
     try { SqlScript.Parse(sql); throw new Exception("Accepted invalid script: " + name); }
@@ -110,6 +132,7 @@ await LiveSchedulerChecks.RunAsync(Check);
 await LiveTableChecks.RunAsync(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
+SessionChecks.Run(Check);
 await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);

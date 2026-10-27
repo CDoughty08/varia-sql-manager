@@ -114,7 +114,7 @@ internal static class ActivityChecks
         var results = ActivitySql.Lint().ToList();
         var failing = results.Where(result => result.Problems.Count > 0).Select(result => result.Name + ": " + string.Join("; ", result.Problems)).ToList();
         var renders = ActivitySql.Renders().ToList();
-        check(failing.Count == 0 && renders.Count == 5 * 2 * 2 && results.Count == renders.Count * (7 + 5 + 4 + 3 + 7 + 1),
+        check(failing.Count == 0 && renders.Count == 5 * 2 * 2 && results.Count == renders.Count * (7 + 5 + 4 + 3 + 8 + 1),
             "every Activity Monitor statement, Details' and Kill's included, passes its lint for every band, kind of server and capability: " + string.Join(" | ", failing.Take(3)));
         var render = new ActivityRender(17, "box");
         var sessions = ActivitySql.Statements("activity.sessions", render).Single(statement => statement.Id == "sessions");

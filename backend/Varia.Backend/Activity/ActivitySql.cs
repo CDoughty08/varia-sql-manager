@@ -234,10 +234,15 @@ internal static partial class ActivitySql
     private static ActivityParameter LoginTime() => new("@login_time", SqlDbType.DateTime);
 
     /// <summary>Details' statements by section, each run on its own (so a permission or a lock that stops one leaves the
-    /// rest) on the monitor's pool with <see cref="Prologue"/>. "session" runs first and decides whether the rest run; "locks"
-    /// only when asked. MARS requests rank as the sessions statement ranks them: a blocked one first, else the lowest.</summary>
+    /// rest) on the monitor's pool with <see cref="Prologue"/>. "identity" checks visibility before the richer "session"
+    /// statement's permissioned DMVs; "locks" only when asked. MARS requests rank as the sessions statement ranks them:
+    /// a blocked one first, else the lowest.</summary>
     private static IReadOnlyList<ActivityStatement> Details() =>
     [
+        new("activity.details", "identity",
+            "SELECT s.session_id, CONVERT(bit, CASE WHEN s.login_time = @login_time THEN 1 ELSE 0 END) AS same_session\n"
+            + "FROM sys.dm_exec_sessions AS s WHERE s.session_id = @session_id;",
+            ["session_id", "same_session"], [Session(), LoginTime()], ["session"], NoLiterals),
         new("activity.details", "session",
             "SELECT s.session_id, s.login_time, CONVERT(bit, CASE WHEN s.login_time = @login_time THEN 1 ELSE 0 END) AS same_session, s.host_process_id, s.is_user_process,\n"
             + "       s.login_name, s.original_login_name, s.host_name, s.program_name, s.client_interface_name, s.status, s.transaction_isolation_level, s.cpu_time, s.reads,\n"

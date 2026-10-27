@@ -183,7 +183,24 @@ internal sealed partial class SessionActions
                 _ => throw new InvalidOperationException("No value for " + parameter.Name)
             };
             List<object?[]> rows;
-            try { rows = await ReadAsync(connection, statements["session"], Values(0), 1, token).ConfigureAwait(false); }
+            try
+            {
+                // SQL Server 2022 checks the joined DMVs' permissions even when this login cannot see the target session.
+                // Read sessions alone first so an invisible or reused id has its ended/changed answer without those joins.
+                var identity = await ReadAsync(connection, statements["identity"], Values(0), 1, token).ConfigureAwait(false);
+                if (identity.Count == 0)
+                {
+                    healthy = true;
+                    return new(args.SessionId, "ended", watch.ElapsedMilliseconds);
+                }
+                if (!(bool)identity[0][1]!)
+                {
+                    healthy = true;
+                    return new(args.SessionId, "changed", watch.ElapsedMilliseconds);
+                }
+                // The richer read checks the identity again: a session may end or its id be reused after the preflight.
+                rows = await ReadAsync(connection, statements["session"], Values(0), 1, token).ConfigureAwait(false);
+            }
             catch (SqlException error) when (!token.IsCancellationRequested)
             {
                 var failure = ActivityErrors.From(error, permission);
