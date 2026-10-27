@@ -109,6 +109,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// error partway through its rows on demand (those are resource errors such as 701 or 1105), and that path must still
     /// end the set as incomplete and go on with the batch.</summary>
     internal Func<Exception?>? RowFault { get; set; }
+    /// <summary>Called with each statement a commit or a state read is about to send in a tab's session; an exception it
+    /// returns is thrown there. Only the live checks set it, to raise the fatal transport error managed SNI can report before
+    /// Connection.State changes, which no server raises on demand.</summary>
+    internal Func<string, Exception?>? SessionFault { get; set; }
 
     /// <param name="store">Defaults to the system budget (<see cref="ResultStore.FromSystem"/>).</param>
     /// <param name="hooks">Adds debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1, set by main only for smoke tests).</param>
@@ -626,6 +630,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         using var events = new QueryEventSink(context is null ? null : context.SendEvent);
         QuerySession? session = null;
         var entered = false;
+        // The error that ended the script, which can end the session before managed SNI's asynchronous close updates its state.
+        SqlException? ended = null;
         var messages = new QueryMessages(events.Message);
         var sets = new List<ResultSetBuffer>();
         ResultSetBuffer? currentSet = null;
@@ -940,6 +946,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         catch (SqlException error)
         {
+            ended = error;
             if (currentSet is not null) currentSet.Incomplete = true;
             // Before the first batch, -2 is a connect timeout while opening the session, not the script deadline.
             status = running.UserCancelled ? "cancelled" : cancellation.IsCancellationRequested || error.Number == -2 && batchNumber > 0 ? "timedOut" : "failed";
@@ -990,13 +997,16 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
                 session.Connection.InfoMessage -= onInfo;
                 // Nothing runs in the session after the script: its @@ROWCOUNT, @@ERROR and most recent SQL stay the
                 // script's. Its transaction is read only when it is about to end (query.session.state), as SSMS does.
-                if (session.Connection.State == System.Data.ConnectionState.Open)
+                var state = session.Connection.State;
+                // A severity 20 error ends the session even while its connection still reads Open (IsSessionLost).
+                var lost = state is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken || ended is not null && IsSessionLost(ended, state);
+                if (!lost && state == System.Data.ConnectionState.Open)
                 {
                     database = session.Connection.Database;
                     spid = session.Spid;
                     login = session.Login;
                 }
-                if (session.Connection.State is System.Data.ConnectionState.Closed or System.Data.ConnectionState.Broken)
+                if (lost)
                 {
                     ((ICollection<KeyValuePair<string, QuerySession>>)sessions).Remove(new(args.SessionId, session));
                     session.Close();
@@ -1196,7 +1206,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (!session.HasOpened) throw new RequestException("SESSION_CLOSED", "This query has no open SQL session.");
-                throw Lost(args.SessionId, session, "The SQL session was lost, so SQL Server rolled back its transaction.");
+                throw Lost(args.SessionId, session, LostMessage(session, committing: false, commit: false));
             }
             try
             {
@@ -1205,7 +1215,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             }
             catch (Exception error) when (error is SqlException or InvalidOperationException && !token.IsCancellationRequested && IsSessionLost(error, connection.State))
             {
-                throw Lost(args.SessionId, session, "The SQL session was lost, so SQL Server rolled back its transaction.");
+                throw Lost(args.SessionId, session, LostMessage(session, committing: false, commit: false));
             }
         }
         finally { session.Exit(); }
@@ -1224,10 +1234,22 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     internal static bool IsSessionLost(Exception error, System.Data.ConnectionState state) =>
         state != System.Data.ConnectionState.Open || error is SqlException sql && sql.Errors.Cast<SqlError>().Any(item => item.Class >= 20);
 
+    internal const string LostRolledBack = "The SQL session was lost, so SQL Server rolled back its transaction.";
+    internal const string LostNothingCommitted = LostRolledBack + " Nothing was committed.";
+    internal const string LostWhileCommitting = "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again.";
+    internal const string LostAfterUnfinishedCommit = "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again.";
+
+    /// <summary>What a lost session's answer says became of its transaction: SQL Server rolled back what was open, unless a
+    /// commit was running (<paramref name="committing"/>) or one sent earlier never answered (<see cref="QuerySession.CommitInDoubt"/>).
+    /// <paramref name="commit"/> is a close with commit, which also says that nothing was committed.</summary>
+    internal static string LostMessage(QuerySession session, bool committing, bool commit) =>
+        committing ? LostWhileCommitting : session.CommitInDoubt ? LostAfterUnfinishedCommit : commit ? LostNothingCommitted : LostRolledBack;
+
     /// <summary>@@TRANCOUNT after the batch, or null when the batch compiled without executing. The token alone carries the
     /// deadline (see ExecuteAsync).</summary>
-    private static async Task<int?> CountAsync(SqlConnection connection, string sql, CancellationToken token)
+    private async Task<int?> CountAsync(SqlConnection connection, string sql, CancellationToken token)
     {
+        if (SessionFault?.Invoke(sql) is { } fault) throw fault;
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.CommandTimeout = 0;
@@ -1250,17 +1272,17 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// still running, SET options that keep it from executing even after they are turned off) throws and leaves the session
     /// open, so its tab stays open with its transaction for the user to decide again. A session found lost before the
     /// commit was sent had its transaction rolled back by SQL Server; for one lost while the commit ran, the outcome is
-    /// unknown, and the error says so. Either way the lost session is closed.</summary>
+    /// unknown, and the error says so. Either way the lost session is closed. A commit the deadline or a cancel interrupts
+    /// is answered by the request's TIMEOUT or CANCELLED, and the session stays open; its outcome is unknown too, so the
+    /// session remembers it (<see cref="QuerySession.CommitInDoubt"/>) for whatever finds it lost later.</summary>
     private async Task CommitAsync(string sessionId, QuerySession session, CancellationToken token)
     {
         if (!session.TryEnter()) throw new RequestException("SESSION_BUSY", "A query is running in this tab. Cancel it before committing its transaction.");
+        var committing = false;
         try
         {
             var connection = session.Connection;
-            var committing = false;
-            RequestException Lost() => this.Lost(sessionId, session, committing
-                ? "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again."
-                : "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed.");
+            RequestException Lost() => this.Lost(sessionId, session, LostMessage(session, committing, commit: true));
             if (connection.State != System.Data.ConnectionState.Open)
             {
                 if (!session.HasOpened) return;
@@ -1269,6 +1291,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // The token alone carries the deadline (see ExecuteAsync).
             async Task Run(string sql)
             {
+                if (SessionFault?.Invoke(sql) is { } fault) throw fault;
                 await using var command = connection.CreateCommand();
                 command.CommandText = sql;
                 command.CommandTimeout = 0;
@@ -1296,12 +1319,20 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             {
                 if (IsSessionLost(error, connection.State)) throw Lost();
                 if (error is not SqlException failed) throw;
+                // SQL Server answered the commit with an error, so it is known not to have committed.
+                committing = false;
                 var details = string.Join(Environment.NewLine, failed.Errors.Cast<SqlError>().Where(item => item.Class > 10)
                     .Select(item => "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + "\n" + item.Message));
                 throw new RequestException("SQL_ERROR", "The transaction was not committed, and the query stays open. " + (details.Length == 0 ? failed.Message : details));
             }
         }
-        finally { session.Exit(); }
+        finally
+        {
+            // The commit ended without an answer (the deadline or a cancel, or a failure outside SQL Server's errors) while the
+            // session stays open: a loss found later cannot say that nothing was committed.
+            if (committing) session.CommitInDoubt = true;
+            session.Exit();
+        }
     }
 
     private object CloseSession(string sessionId)
