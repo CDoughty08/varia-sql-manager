@@ -135,11 +135,11 @@ describe('toast stack', () => {
     expect([first === firstMessage, second === secondMessage, first !== second]).toEqual([true, true, true])
     const markup = described.replaceAll(first, 'm1').replaceAll(second, 'm2')
     expect(markup).toContain('<section class="toast-stack" aria-label="Notifications">')
-    expect(markup).toContain('<div class="toast" data-severity="info" role="group" aria-label="Information" aria-describedby="m1" tabindex="-1"><span class="toast-icon codicon codicon-info" aria-hidden="true"></span>'
+    expect(markup).toContain('<div class="toast" data-severity="info" role="group" aria-label="Information" aria-describedby="m1" tabindex="-1"><span class="codicon codicon-info toast-icon" data-icon="info" aria-hidden="true"></span>'
       + '<div class="toast-body"><p id="m1" class="toast-message">Saved 400 rows to w1.csv.</p><div class="toast-actions"><button type="button">Show results</button></div></div>'
-      + '<button type="button" class="icon-button toast-close" aria-label="Dismiss notification" title="Dismiss (Escape)"><span class="codicon codicon-close" aria-hidden="true"></span></button></div>')
+      + '<button type="button" class="icon-button toast-close" aria-label="Dismiss notification" title="Dismiss (Escape)"><span class="codicon codicon-close" data-icon="close" aria-hidden="true"></span></button></div>')
     // An error with a report offers Copy details, whose outcome is a status of its own.
-    expect(markup).toContain('aria-label="Error" aria-describedby="m2" tabindex="-1"><span class="toast-icon codicon codicon-error" aria-hidden="true"></span><div class="toast-body"><p id="m2" class="toast-message">The package failed.</p>'
+    expect(markup).toContain('aria-label="Error" aria-describedby="m2" tabindex="-1"><span class="codicon codicon-error toast-icon" data-icon="error" aria-hidden="true"></span><div class="toast-body"><p id="m2" class="toast-message">The package failed.</p>'
       + '<div class="toast-actions"><button type="button">Copy details</button><span class="toast-status" role="status"></span></div>')
     expect(markup).toContain('<div class="visually-hidden" role="status"></div><div class="visually-hidden" role="alert"><span>The package failed.</span></div>')
   })

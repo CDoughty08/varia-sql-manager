@@ -1,4 +1,5 @@
 import type { DocumentKind, SqlFile } from '../../shared/contracts'
+import type { IconId } from '../../shared/icons'
 
 export interface QueryDocument {
   readonly id: string
@@ -31,13 +32,16 @@ export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined):
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
 /** A document whose content is text in the editor (a query or a value), as opposed to a table designer. */
 export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) !== 'tableDesigner'
-/** Each kind's editor language, tab badge (a codicon's name for `icon`), and the sentence that names it (the query context bar, banners). */
-export const kindInfo: Readonly<Record<WorkbenchDocumentKind, { readonly language: string; readonly badge: string; readonly label: string; readonly value: string; readonly icon?: string }>> = {
-  sql: { language: 'sql', badge: 'SQL', label: 'Transact-SQL', value: 'SQL' },
-  xml: { language: 'xml', badge: 'XML', label: 'XML document', value: 'XML' },
-  json: { language: 'json', badge: 'JSON', label: 'JSON document', value: 'JSON' },
-  sqlplan: { language: 'xml', badge: 'PLAN', label: 'Execution plan', value: 'execution plan' },
-  tableDesigner: { language: '', badge: 'Table Designer', label: 'Table Designer', value: 'table', icon: 'table' }
+/**
+ * Each kind's editor language, tab icon, the sentence that names it (the tab icon's name, the query context bar,
+ * banners), what its value is called, and the file name a value of that kind gets when its column has none.
+ */
+export const kindInfo: Readonly<Record<WorkbenchDocumentKind, { readonly language: string; readonly icon: IconId; readonly label: string; readonly value: string; readonly blankName: string }>> = {
+  sql: { language: 'sql', icon: 'database', label: 'Transact-SQL', value: 'SQL', blankName: 'SQL' },
+  xml: { language: 'xml', icon: 'code', label: 'XML document', value: 'XML', blankName: 'XML' },
+  json: { language: 'json', icon: 'json', label: 'JSON document', value: 'JSON', blankName: 'JSON' },
+  sqlplan: { language: 'xml', icon: 'execution-plan', label: 'Execution plan', value: 'execution plan', blankName: 'PLAN' },
+  tableDesigner: { language: '', icon: 'table', label: 'Table Designer', value: 'table', blankName: 'Table Designer' }
 }
 
 export function afterClose<T extends { id: string }>(tabs: readonly T[], activeId: string, closingId: string): { tabs: T[]; activeId: string } {

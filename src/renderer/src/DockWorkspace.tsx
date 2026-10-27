@@ -4,6 +4,7 @@ import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type Dockview
 import { emptyLayoutState, paneIds, paneTitles, parseWorkspaceLayout, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
+import Icon from './Icon'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useMenuTarget } from './menus/useMenuTarget'
 import EmptyState from './kit/EmptyState'
@@ -304,7 +305,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   // Pane commands only read refs, so stable identities keep dockview from re-applying options on every render.
   const paneCommands = useMemo<PaneCommands>(() => ({ close, float, toggle, reveal }), [])
   return <>
-    {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}>×</button></div>}
+    {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}><Icon name="close" /></button></div>}
     <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}><RestoredContext.Provider value={restored}>
       <div hidden ref={parking} />
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
@@ -322,7 +323,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       }
     }}>
       <section ref={dialog} className="layout-dialog" role="dialog" aria-modal="true" aria-labelledby="layout-title">
-        <div className="dialog-heading"><h2 id="layout-title">Workspace layouts</h2><button aria-label="Close layout manager" disabled={busy} onClick={() => setShowManager(false)}>×</button></div>
+        <div className="dialog-heading"><h2 id="layout-title">Workspace layouts</h2><button aria-label="Close layout manager" disabled={busy} onClick={() => setShowManager(false)}><Icon name="close" /></button></div>
         <p className="field-note">Drag panel headers to dock or tab them together. Splitters and floating panels resize by dragging their edges. Your current layout is remembered automatically.</p>
         <label htmlFor="layout-name">Layout name</label>
         <div className="layout-row"><input id="layout-name" autoFocus maxLength={64} value={name} placeholder="e.g. Query analysis" disabled={busy} onChange={event => setName(event.target.value)} />

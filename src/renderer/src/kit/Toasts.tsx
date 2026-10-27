@@ -1,12 +1,14 @@
 import { useId, useRef, useState, type FocusEvent, type KeyboardEvent } from 'react'
 import type { NotificationService, NotificationSnapshot, Toast, ToastSeverity } from '../core/notifications'
+import type { IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 import { copyStatus, copyText, errorDetailsText, type CopyRecord } from './format'
 
 type Clipboard = (text: string) => Promise<{ readonly ok: boolean }>
 type Notifications = Pick<NotificationService, 'dismiss' | 'run' | 'hold'>
 
 /** The glyph and the word screen readers hear for each severity (the colour alone says nothing to them). */
-export const toastSeverities: Readonly<Record<ToastSeverity, { readonly icon: string; readonly label: string }>> = {
+export const toastSeverities: Readonly<Record<ToastSeverity, { readonly icon: IconId; readonly label: string }>> = {
   info: { icon: 'info', label: 'Information' }, warning: { icon: 'warning', label: 'Warning' }, error: { icon: 'error', label: 'Error' }
 }
 const mainClipboard: Clipboard = text => typeof window !== 'undefined' && window.varia ? window.varia.writeClipboardText(text) : Promise.resolve({ ok: false })
@@ -30,7 +32,7 @@ function ToastView({ toast, notifications, writeClipboard, leave }: { toast: Toa
   return <div ref={box} className="toast" data-severity={toast.severity} role="group" aria-label={severity.label} aria-describedby={messageId} tabIndex={-1} onKeyDown={keyDown}
     onPointerEnter={() => notifications.hold(toast.id, true)} onPointerLeave={() => { if (!box.current?.contains(document.activeElement)) notifications.hold(toast.id, false) }}
     onFocus={() => notifications.hold(toast.id, true)} onBlur={blur}>
-    <span className={`toast-icon codicon codicon-${severity.icon}`} aria-hidden="true" />
+    <Icon name={severity.icon} className="toast-icon" />
     <div className="toast-body">
       <p id={messageId} className="toast-message">{toast.message}</p>
       {(!!toast.actions?.length || details !== undefined) && <div className="toast-actions">
@@ -39,7 +41,7 @@ function ToastView({ toast, notifications, writeClipboard, leave }: { toast: Toa
         {details !== undefined && <span className="toast-status" role="status">{copyStatus(copied, details)}</span>}
       </div>}
     </div>
-    <button type="button" className="icon-button toast-close" aria-label="Dismiss notification" title="Dismiss (Escape)" onClick={dismiss}><span className="codicon codicon-close" aria-hidden="true" /></button>
+    <button type="button" className="icon-button toast-close" aria-label="Dismiss notification" title="Dismiss (Escape)" onClick={dismiss}><Icon name="close" /></button>
   </div>
 }
 
