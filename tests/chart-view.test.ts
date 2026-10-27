@@ -40,6 +40,7 @@ describe('chart text', () => {
     expect(formatChartValue(1234.5, 'perSecond')).toBe('1,235/s')
     expect(formatChartValue(12, 'ms')).toBe('12 ms')
     expect(formatChartValue(2840, 'msPerSecond')).toBe('2,840 ms/s')
+    expect(formatChartValue(5412, 'seconds')).toBe('5,412 s')
     expect(formatChartValue(13.1 * 1048576, 'bytesPerSecond')).toBe('13.1 MB/s')
     expect(formatChartValue(512, 'bytesPerSecond')).toBe('512 B/s')
     expect(formatChartValue(0.25, 'count')).toBe('0.25')
