@@ -55,13 +55,32 @@ export async function revealExplorerRow(page, ...path) {
   throw new Error(`Object Explorer row ${label} is not in the tree (scrollTop ${after.top}, height ${after.height}, scroll height ${after.scrollHeight}): ${(await explorerLines(page)).join(' | ')}`)
 }
 
-/** Expands each row of a path that is collapsed, from the server down, by its chevron. */
+/**
+ * Expands each row of a path that is collapsed, from the server down, by its chevron. A row moves whenever a folder above
+ * it finishes loading (expanding Tables, then Views below it, moves Views down by the tables that arrive), so a click aimed
+ * at a chevron can land on another row and expand nothing. The click is therefore not forced: Playwright waits for the
+ * chevron to stop moving and retries a press that another row receives. A row that still moves between the press and the
+ * release loses the click, so the step clicks again, only while the row still reads collapsed, until it is expanded.
+ */
 export async function expandExplorerPath(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}
+  const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 5000)
   for (let length = 1; length <= path.length; length++) {
     const row = await explorerRow(page, ...path.slice(0, length), options)
-    if (await row.getAttribute('aria-expanded') === 'false') await row.locator(part.explorerTwistie).click({ force: true })
-    await expect(row).toHaveAttribute('aria-expanded', 'true', options)
+    if (await row.getAttribute('aria-expanded') !== 'false') {
+      await expect(row).toHaveAttribute('aria-expanded', 'true', options)
+      continue
+    }
+    let clicks = 0
+    await expect(async () => {
+      if (await row.getAttribute('aria-expanded') === 'false') {
+        clicks++
+        await row.locator(part.explorerTwistie).click({ timeout: Math.min(timeout, 5000) })
+      }
+      // An expansion shows within a frame of the click; a lost click leaves the row collapsed for the next attempt.
+      await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 2000 })
+    }).toPass({ timeout, intervals: [100, 250, 500] })
+    if (clicks > 1) console.log(`Object Explorer row ${path.slice(0, length).join(' › ')} took ${clicks} clicks to expand: an earlier one was lost while the row moved.`)
   }
 }
 
