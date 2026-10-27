@@ -1095,6 +1095,51 @@ try {
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   await expect.poll(() => widthOf(header('id'))).toBeCloseTo(resized, 0)
+  // A press after that move and before the frame that writes the offsets back: it lands on the row drawn there before the
+  // move, rather than taking the dropped offsets for a scroll to the top and selecting a row near it.
+  await textbox().focus()
+  // The tab switch above built the grid afresh, so this tag marks the scroller to find once the pane shows again.
+  await scroller().evaluate(element => { element.dataset.moved = 'early' })
+  const early = await page.evaluate(({ parts }) => new Promise(resolve => {
+    const press = () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true, cancelable: true }))
+    // The pane shows again in a later task; a mutation observer runs right after the move, before the grid's next frame. The
+    // press waits for the second Ctrl+R, for the move (a removal of the grid's ancestor) and for the pane to show again (a
+    // hidden scroller also reads 0).
+    const scroller = document.querySelector(parts.scroller + '[data-moved="early"]')
+    let reopened = false, moved = false
+    const ready = () => reopened && moved && scroller.isConnected && scroller.clientHeight > 0
+    const observer = new MutationObserver(records => {
+      moved ||= records.some(record => [...record.removedNodes].some(node => node.contains?.(scroller)))
+      if (ready()) pressNow()
+    })
+    const timer = setTimeout(() => { observer.disconnect(); resolve({ dropped: scroller.scrollTop, inGrid: false, moved: 'never shown again, moved ' + moved }) }, 5000)
+    const pressNow = () => { try { pressAt() } catch (error) { resolve({ dropped: scroller.scrollTop, inGrid: false, moved: 'press failed: ' + error.message }) } }
+    const pressAt = () => {
+      observer.disconnect()
+      clearTimeout(timer)
+      const root = scroller.closest('[data-result-grid]'), box = scroller.getBoundingClientRect(), headHeight = root.querySelector(parts.head).offsetHeight
+      const dropped = scroller.scrollTop
+      // The second row of the view, clear of the row numbers. The dock lays the pane out again only after the frame, so the
+      // scroller can still sit outside the window here: the press goes to the scroller itself, at a point of its box.
+      const x = box.left + Math.min(box.width / 2, 200), y = box.top + headHeight + 30, target = scroller
+      const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, detail: 1 }
+      const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true }
+      target.dispatchEvent(new PointerEvent('pointerdown', { ...init, ...pointer, buttons: 1 }))
+      target.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 }))
+      target.dispatchEvent(new PointerEvent('pointerup', { ...init, ...pointer, buttons: 0 }))
+      target.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }))
+      resolve({ dropped, inGrid: root.contains(target) && headHeight > 0, moved: scroller.dataset.moved })
+    }
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+    press()
+    // Ctrl+R reads which panes show, which the dock publishes in a microtask: one runs between the presses.
+    Promise.resolve().then(() => { press(); reopened = true })
+  }), { parts: gridPart })
+  expect(early).toEqual({ dropped: 0, inGrid: true, moved: 'early' })
+  await expect.poll(scrollTop).toBe(keptTop)
+  const [earlyFirst, earlyLast] = await visibleRows()
+  const earlyRow = (await active()).row
+  expect(earlyRow >= earlyFirst - 1 && earlyRow <= earlyLast && earlyFirst > 1, `pressed row ${earlyRow}, rows ${earlyFirst} to ${earlyLast} shown`).toBe(true)
   // A press on the grid's scroll bar leaves the focus on the grid, so the arrow keys move a cell screen readers hear.
   const bar = await scroller().evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.left + element.clientWidth + (element.offsetWidth - element.clientWidth) / 2, y: box.top + element.clientHeight * 0.75, width: element.offsetWidth - element.clientWidth } })
   if (bar.width > 0) {
