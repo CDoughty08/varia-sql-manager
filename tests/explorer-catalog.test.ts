@@ -6,8 +6,8 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
-  folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
-  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type NodeKind
+  folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, maxNameOf, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
+  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
 import { iconSpec, isIconId } from '../src/shared/icons'
@@ -119,10 +119,17 @@ describe('Object Explorer catalogue', () => {
     expect([1, 2, 3, 4, 8, 5, 6, 9, 11, 12].map(engineOf)).toEqual(['box', 'box', 'box', 'box', 'box', 'cloud', 'cloud', 'cloud', 'cloud', 'cloud'])
     expect(cloudEngineEditions).toEqual([5, 6, 9, 11, 12])
   })
-  it('lists rows exactly in the folders that have a query, with filters only there', () => {
-    const lists = folderIds.flatMap(id => folderSpecs[id].list ?? [])
+  it('lists rows exactly in the folders and kinds that have a query, with filters only in folders', () => {
+    const lists = [...folderIds.flatMap(id => folderSpecs[id].list ?? []), ...nodeKinds.flatMap(kind => kindSpecs[kind].list ?? [])]
     expect(unique(lists)).toBe(true)
     expect([...lists, 'historyTable'].sort()).toEqual([...queryIds].sort())
+    for (const kind of nodeKinds) {
+      const spec = kindSpecs[kind]
+      expect(spec.rows !== undefined, kind).toBe(spec.list !== undefined)
+      for (const row of spec.rows ?? []) expect(nodeKinds, kind).toContain(row)
+    }
+    // No shipped kind lists rows yet; the SSIS catalog (S1b) is the first.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].list)).toEqual([])
     for (const id of folderIds) {
       const spec = folderSpecs[id]
       expect(spec.rows !== undefined, id).toBe(spec.list !== undefined)
@@ -136,7 +143,7 @@ describe('Object Explorer catalogue', () => {
     for (const id of ['columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters'] as const) expect(folderSpecs[id].filter, id).toBeUndefined()
   })
   it('gives every kind a scope, an icon, its subtypes, and a way to appear', () => {
-    const listed = new Set(folderIds.flatMap(id => folderSpecs[id].rows ?? []))
+    const listed = new Set([...folderIds.flatMap(id => folderSpecs[id].rows ?? []), ...nodeKinds.flatMap(kind => kindSpecs[kind].rows ?? [])])
     const usedSubtypes = new Set<string>()
     for (const kind of nodeKinds) {
       const spec = kindSpecs[kind]
@@ -187,6 +194,27 @@ describe('Object Explorer catalogue', () => {
       const { required, forbidden } = scopeFields[scope]
       expect([...required, ...forbidden].sort(), scope).toEqual([...refFields].sort())
     }
+    expect(refFields).toEqual(['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject'])
+    expect(scopeFields.ssisFolderObject.required).toEqual(['ssisFolder', 'name'])
+    expect(scopeFields.ssisProjectObject.required).toEqual(['ssisFolder', 'ssisProject', 'name'])
+    for (const scope of kindScopes.filter(scope => !scope.startsWith('ssis'))) expect(scopeFields[scope].forbidden, scope).toEqual(expect.arrayContaining(['ssisFolder', 'ssisProject']))
+  })
+  it('bounds names at sysname\'s 128 unless a kind declares a longer one within the catalogue\'s maximum', () => {
+    for (const kind of nodeKinds) {
+      const { maxName } = kindSpecs[kind]
+      if (maxName !== undefined) expect(Number.isInteger(maxName) && maxName > 128 && maxName <= explorerLimits.maxName, kind).toBe(true)
+    }
+    // Packages (260) arrive with the SSIS kinds in S1b.
+    expect(nodeKinds.filter(kind => kindSpecs[kind].maxName !== undefined)).toEqual([])
+    expect(maxNameOf(kindSpecs.table)).toBe(128)
+    expect(maxNameOf({ maxName: 260 })).toBe(260)
+  })
+  it('gives a kind with names past 128 no folders, history row or rows, which bind their owner\'s name as a sysname', () => {
+    const ownsChildren = (spec: KindSpec) => spec.folders.length > 0 || Object.keys(spec.subtypeFolders ?? {}).length > 0 || (spec.historyLookup?.length ?? 0) > 0 || spec.list !== undefined
+    for (const kind of nodeKinds) if (maxNameOf(kindSpecs[kind]) > 128) expect(ownsChildren(kindSpecs[kind]), kind).toBe(false)
+    expect(ownsChildren(kindSpecs.synonym)).toBe(false)
+    expect([{ list: 'logins' as const }, { folders: ['columns'] as const }, { historyLookup: ['history'] as const }, { subtypeFolders: { history: ['columns'] as const } }]
+      .map(change => ownsChildren({ ...kindSpecs.synonym, ...change }))).toEqual([true, true, true, true])
   })
   it('uses icons of the registry, with Varia\'s own for the objects it draws', () => {
     // tests/icons.test.ts checks that the registry's codicons exist in the bundled font.
@@ -246,7 +274,7 @@ describe('Object Explorer catalogue', () => {
       pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
       cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
       typeAheadMax: 64, rowHeight: 22, indent: 16, overscan: 10, deleteSlice: 10_000,
-      cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512
+      cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260
     })
   })
 })
@@ -257,7 +285,7 @@ describe('generated catalogue files', () => {
     await expect(explorerCatalogJson()).toMatchFileSnapshot('../backend/Varia.Backend/Explorer/explorer-catalog.json')
   })
   it('exports served folders and every kind, with sorted keys and defaults spelled out', () => {
-    const catalog = JSON.parse(explorerCatalogJson()) as { version: number; folders: { id: string; engines: string[]; filter: string[] }[]; kinds: { kind: string; parents: string[]; subtypes: string[] }[]; queries: string[]; scopes: object; cloudEngineEditions: number[] }
+    const catalog = JSON.parse(explorerCatalogJson()) as { version: number; folders: { id: string; engines: string[]; filter: string[] }[]; kinds: { kind: string; parents: string[]; subtypes: string[]; rows: string[]; maxName: number; list?: string }[]; queries: string[]; scopes: object; cloudEngineEditions: number[] }
     const sorted = (value: unknown, path: string): void => {
       if (Array.isArray(value)) { value.forEach((item, index) => sorted(item, `${path}[${index}]`)); return }
       if (!value || typeof value !== 'object') return
@@ -285,6 +313,7 @@ describe('generated catalogue files', () => {
     }
     expect(catalog.kinds.find(kind => kind.kind === 'column')?.parents).toEqual(['table', 'view', 'tableType', 'function'])
     expect(catalog.kinds.find(kind => kind.kind === 'login')?.subtypes).toEqual([])
+    for (const kind of catalog.kinds) { expect(kind.maxName, kind.kind).toBe(maxNameOf(kindSpecs[kind.kind as NodeKind])); expect(kind.rows, kind.kind).toEqual(kindSpecs[kind.kind as NodeKind].rows ?? []) }
     const json = explorerCatalogJson()
     for (const later of laterFolders) expect(json.includes(`"${later.label}"`), later.label).toBe(false)
     expect(json.endsWith('}\n')).toBe(true)

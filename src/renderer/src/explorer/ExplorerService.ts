@@ -924,7 +924,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (ref.type === 'folder') {
       const owner = ref.owner
       if (owner.kind === base.kind && owner.database === base.database && owner.schema === base.schema && owner.name === base.name && owner.parent?.name === base.parent?.name
-        && owner.parent?.schema === base.parent?.schema && owner.parent?.kind === base.parent?.kind) (ref as Mutable<typeof ref>).owner = base
+        && owner.parent?.schema === base.parent?.schema && owner.parent?.kind === base.parent?.kind && owner.ssisFolder === base.ssisFolder && owner.ssisProject === base.ssisProject) {
+        (ref as Mutable<typeof ref>).owner = base
+      }
       return ref
     }
     const object = ref.object as Mutable<ObjectRef>
