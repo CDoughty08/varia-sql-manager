@@ -156,9 +156,13 @@ describe('inline Rename in Object Explorer', () => {
     expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'AppData' }, newName: 'AppData2' })
     expect(commands.getSnapshot()).toMatchObject({ error: '' })
   })
-  it('ends the box without a request when its node leaves the tree or its server is lost', async () => {
+  it('keeps the box through a refresh that keeps its node, and ends it without a request when its node leaves the tree or its server is lost', async () => {
     const fixture = await setup(), { explorer, orders, find, setTables, api } = fixture
     explorer.beginRename(orders)
+    setTables(['Orders', 'Other'])
+    explorer.refresh(await find('Tables'))
+    await find('dbo.Other')
+    expect(explorer.renaming.getSnapshot()).toBe(orders)
     setTables([])
     explorer.refresh(await find('Tables'))
     await vi.waitFor(() => expect(explorer.renaming.getSnapshot()).toBeUndefined())

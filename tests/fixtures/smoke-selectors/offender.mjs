@@ -1,0 +1,16 @@
+// A suite as they were: '.status-bar' in a comment is not a selector.
+await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+await page.evaluate(column => document.querySelector(`.rg-c[aria-colindex="${column}"]`), 2)
+await expect(page.locator('.monaco-editor .view-lines')).toContainText('saved-query.sql')
+await expect(page.getByText(/\.toolbar · Ready/)).toBeVisible()
+await expect(cell(0, 0)).toHaveClass(/is-sel/)
+const error = item.classList.contains('error')
+await expect(findWidget).toHaveClass(/\bvisible\b/)
+await expect(grid.locator('input.designer-editor')).toHaveValue('Extra')
+await expect(tab).toHaveClass('active dirty-dot')
+await page.locator('[class~="query-tab"]').count()
+expect(await shellClasses()).toEqual(['dockview-theme-dark', 'varia-dock'])
+const shellClasses = () => shell.evaluate(element => [...element.classList].filter(name => /^(dockview-theme-|varia-dock$)/.test(name)))
+// Not Varia's classes: a table, an attribute, a file name.
+await page.getByRole('cell', { name: 'dbo.Orders saved-query.sql' }).getAttribute('aria-label')

@@ -186,7 +186,7 @@ internal static class ConnectionFailureChecks
         var missing = "FILE:/nonexistent/varia-no-ticket-" + Guid.NewGuid().ToString("N");
         var (exit, answer, errors) = await ChildAsync(ProbeArgument, missing);
         var expected = present ? nameof(KerberosState.NoTicket) : nameof(KerberosState.LibraryMissing);
-        check(exit == 0 && answer == expected, "GSSAPI's own answer for a credential cache that does not exist is " + expected + " (got '" + answer + "', exit " + exit + ", " + errors + ")");
+        check(exit == 0 && answer == expected, "GSSAPI's Kerberos mechanism reports a missing cache as " + expected + ", even when other mechanisms are available (got '" + answer + "', exit " + exit + ", " + errors + ")");
         (exit, answer, errors) = await ChildAsync(IdentityArgument, missing);
         check(exit == 0 && answer == expected + "|", "without a ticket GSSAPI names no principal (got '" + answer + "', exit " + exit + ", " + errors + ")");
         if (!OperatingSystem.IsLinux() || !present) return;

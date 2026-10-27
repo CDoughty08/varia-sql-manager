@@ -2,6 +2,7 @@
 // structure: main's zod schemas, the renderer and docs/object-explorer.md read it, and the backend embeds
 // explorerCatalogJson() as Explorer/explorer-catalog.json (a vitest file snapshot keeps that copy in sync).
 // Erasable TypeScript (no enums), so Node's type stripping can load it as well.
+import type { CodiconId, IconId } from '../icons.ts'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
@@ -92,24 +93,22 @@ export const queryIds = [
 ] as const
 export type QueryId = typeof queryIds[number]
 
-/** Stroke icons drawn by the renderer's `Icon.tsx` (`svgPaths`); every other explorer icon is a codicon. */
-export const svgIcons = ['server', 'database', 'table', 'key', 'role', 'login', 'shield'] as const
-/** Every icon a node may carry: `svg:<name>` for the stroke icons, otherwise a codicon name. */
+/** Every icon a node may carry, by its id in the icon registry (`src/shared/icons.ts`); the backend sends these ids as they are. */
 export const explorerIcons = [
-  'svg:server', 'svg:database', 'svg:table', 'svg:key', 'svg:role', 'svg:login', 'svg:shield',
-  'folder', 'folder-opened', 'device-camera', 'history', 'verified', 'type-hierarchy', 'git-compare', 'file', 'cloud', 'trash', 'eye',
+  'server', 'database', 'table', 'view', 'procedure', 'key', 'role', 'login', 'shield',
+  'folder', 'folder-opened', 'device-camera', 'history', 'verified', 'type-hierarchy', 'git-compare', 'file', 'cloud', 'trash',
   'symbol-field', 'references', 'symbol-operator', 'symbol-key', 'pass', 'symbol-constant', 'link', 'zap', 'list-ordered', 'layers', 'graph',
-  'symbol-method', 'symbol-function', 'symbol-parameter', 'arrow-left', 'package', 'symbol-structure', 'code', 'law', 'symbol-numeric', 'milestone',
+  'symbol-function', 'symbol-parameter', 'arrow-left', 'package', 'symbol-structure', 'code', 'law', 'symbol-numeric', 'milestone',
   'person', 'symbol-namespace', 'workspace-trusted', 'circuit-board', 'file-code', 'book', 'circle-slash', 'list-flat', 'split-horizontal',
   'symbol-ruler', 'archive', 'remote'
-] as const
+] as const satisfies readonly IconId[]
 export type ExplorerIcon = typeof explorerIcons[number]
 /** Folders show `folder`, or `folder-opened` while expanded. */
 export const folderIcon = 'folder', folderOpenedIcon = 'folder-opened'
 export const nodeStatuses = ['disabled', 'unavailable', 'readOnly', 'noAccess'] as const
 export type NodeStatus = typeof nodeStatuses[number]
-/** Codicons of the 8×8 status badge at a row icon's bottom right; `readOnly` has none, because the sublabel says it. */
-export const statusBadges = { disabled: 'arrow-small-down', unavailable: 'arrow-small-down', noAccess: 'circle-slash', error: 'error', loading: 'loading' } as const
+/** Codicons of the status badge at a row icon's bottom right; `readOnly` has none, because the sublabel says it. */
+export const statusBadges = { disabled: 'arrow-small-down', unavailable: 'arrow-small-down', noAccess: 'circle-slash', error: 'error', loading: 'loading' } as const satisfies Record<string, CodiconId>
 
 export const filterProperties = ['name', 'schema', 'owner', 'created'] as const
 export type FilterProperty = typeof filterProperties[number]
@@ -305,32 +304,32 @@ type KindData = Omit<KindSpec, 'kind' | 'folders' | 'scriptable'> & { readonly f
 // Most kinds are scriptable leaves; the data names only the exceptions.
 const kindData: { readonly [K in NodeKind]: KindData } = {
   server: {
-    title: 'Server', scope: 'server', icon: 'svg:server', folders: ['databases', 'serverSecurity', 'serverObjects'], smo: 'Server', scriptable: false, insert: 'none'
+    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects'], smo: 'Server', scriptable: false, insert: 'none'
   },
-  login: { title: 'Login', scope: 'serverObject', icon: 'svg:login', smo: 'Login', insert: 'onePart' },
-  serverRole: { title: 'Server Role', scope: 'serverObject', icon: 'svg:role', smo: 'ServerRole', insert: 'onePart' },
-  credential: { title: 'Credential', scope: 'serverObject', icon: 'svg:key', smo: 'Credential', insert: 'onePart' },
+  login: { title: 'Login', scope: 'serverObject', icon: 'login', smo: 'Login', insert: 'onePart' },
+  serverRole: { title: 'Server Role', scope: 'serverObject', icon: 'role', smo: 'ServerRole', insert: 'onePart' },
+  credential: { title: 'Credential', scope: 'serverObject', icon: 'key', smo: 'Credential', insert: 'onePart' },
   cryptographicProvider: { title: 'Cryptographic Provider', scope: 'serverObject', icon: 'circuit-board', smo: 'CryptographicProvider', insert: 'onePart' },
-  audit: { title: 'Audit', scope: 'serverObject', icon: 'svg:shield', smo: 'Audit', insert: 'onePart' },
-  serverAuditSpecification: { title: 'Server Audit Specification', scope: 'serverObject', icon: 'svg:shield', smo: 'ServerAuditSpecification', insert: 'onePart' },
+  audit: { title: 'Audit', scope: 'serverObject', icon: 'shield', smo: 'Audit', insert: 'onePart' },
+  serverAuditSpecification: { title: 'Server Audit Specification', scope: 'serverObject', icon: 'shield', smo: 'ServerAuditSpecification', insert: 'onePart' },
   backupDevice: { title: 'Backup Device', scope: 'serverObject', icon: 'archive', smo: 'BackupDevice', insert: 'onePart' },
   linkedServer: { title: 'Linked Server', scope: 'serverObject', icon: 'remote', smo: 'LinkedServer', insert: 'onePart' },
   serverTrigger: { title: 'Trigger', scope: 'serverObject', icon: 'zap', smo: 'ServerDdlTrigger', insert: 'onePart' },
   database: {
-    title: 'Database', scope: 'database', icon: 'svg:database', subtypes: ['system', 'snapshot'], subtypeIcons: { snapshot: 'device-camera' },
+    title: 'Database', scope: 'database', icon: 'database', subtypes: ['system', 'snapshot'], subtypeIcons: { snapshot: 'device-camera' },
     folders: ['tables', 'views', 'externalResources', 'synonyms', 'programmability', 'storage', 'databaseSecurity'], smo: 'Database', insert: 'onePart'
   },
   user: { title: 'User', scope: 'databaseObject', icon: 'person', smo: 'User', insert: 'onePart' },
-  databaseRole: { title: 'Database Role', scope: 'databaseObject', icon: 'svg:role', smo: 'DatabaseRole', insert: 'onePart' },
-  applicationRole: { title: 'Application Role', scope: 'databaseObject', icon: 'svg:role', smo: 'ApplicationRole', insert: 'onePart' },
+  databaseRole: { title: 'Database Role', scope: 'databaseObject', icon: 'role', smo: 'DatabaseRole', insert: 'onePart' },
+  applicationRole: { title: 'Application Role', scope: 'databaseObject', icon: 'role', smo: 'ApplicationRole', insert: 'onePart' },
   schema: { title: 'Schema', scope: 'databaseObject', icon: 'symbol-namespace', smo: 'Schema', insert: 'onePart' },
   assembly: { title: 'Assembly', scope: 'databaseObject', icon: 'package', smo: 'SqlAssembly', insert: 'onePart' },
-  asymmetricKey: { title: 'Asymmetric Key', scope: 'databaseObject', icon: 'svg:key', smo: 'AsymmetricKey', insert: 'onePart' },
+  asymmetricKey: { title: 'Asymmetric Key', scope: 'databaseObject', icon: 'key', smo: 'AsymmetricKey', insert: 'onePart' },
   certificate: { title: 'Certificate', scope: 'databaseObject', icon: 'workspace-trusted', smo: 'Certificate', insert: 'onePart' },
-  symmetricKey: { title: 'Symmetric Key', scope: 'databaseObject', icon: 'svg:key', smo: 'SymmetricKey', insert: 'onePart' },
-  columnMasterKey: { title: 'Column Master Key', scope: 'databaseObject', icon: 'svg:key', smo: 'ColumnMasterKey', insert: 'onePart' },
-  columnEncryptionKey: { title: 'Column Encryption Key', scope: 'databaseObject', icon: 'svg:key', smo: 'ColumnEncryptionKey', insert: 'onePart' },
-  databaseAuditSpecification: { title: 'Database Audit Specification', scope: 'databaseObject', icon: 'svg:shield', smo: 'DatabaseAuditSpecification', insert: 'onePart' },
+  symmetricKey: { title: 'Symmetric Key', scope: 'databaseObject', icon: 'key', smo: 'SymmetricKey', insert: 'onePart' },
+  columnMasterKey: { title: 'Column Master Key', scope: 'databaseObject', icon: 'key', smo: 'ColumnMasterKey', insert: 'onePart' },
+  columnEncryptionKey: { title: 'Column Encryption Key', scope: 'databaseObject', icon: 'key', smo: 'ColumnEncryptionKey', insert: 'onePart' },
+  databaseAuditSpecification: { title: 'Database Audit Specification', scope: 'databaseObject', icon: 'shield', smo: 'DatabaseAuditSpecification', insert: 'onePart' },
   databaseTrigger: { title: 'Trigger', scope: 'databaseObject', icon: 'zap', smo: 'DatabaseDdlTrigger', insert: 'onePart' },
   externalDataSource: { title: 'External Data Source', scope: 'databaseObject', icon: 'cloud', smo: 'ExternalDataSource', insert: 'onePart' },
   externalFileFormat: { title: 'External File Format', scope: 'databaseObject', icon: 'file-code', smo: 'ExternalFileFormat', insert: 'onePart' },
@@ -341,7 +340,7 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
   searchPropertyList: { title: 'Search Property List', scope: 'databaseObject', icon: 'list-flat', smo: 'SearchPropertyList', insert: 'onePart' },
   planGuide: { title: 'Plan Guide', scope: 'databaseObject', icon: 'milestone', smo: 'PlanGuide', insert: 'onePart' },
   table: {
-    title: 'Table', scope: 'schemaObject', icon: 'svg:table',
+    title: 'Table', scope: 'schemaObject', icon: 'table',
     subtypes: ['systemVersioned', 'history', 'updatableLedger', 'appendOnlyLedger', 'ledgerHistory', 'graphNode', 'graphEdge', 'fileTable', 'external', 'droppedLedger', 'system'],
     subtypeIcons: {
       history: 'history', ledgerHistory: 'history', updatableLedger: 'verified', appendOnlyLedger: 'verified', graphNode: 'type-hierarchy', graphEdge: 'git-compare',
@@ -352,12 +351,12 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
     historyLookup: ['systemVersioned', 'updatableLedger'], smo: 'Table', insert: 'twoPart'
   },
   view: {
-    title: 'View', scope: 'schemaObject', icon: 'eye', subtypes: ['system', 'ledger', 'droppedLedger'], subtypeIcons: { ledger: 'verified', droppedLedger: 'trash' },
+    title: 'View', scope: 'schemaObject', icon: 'view', subtypes: ['system', 'ledger', 'droppedLedger'], subtypeIcons: { ledger: 'verified', droppedLedger: 'trash' },
     folders: ['columns', 'tableTriggers', 'indexes', 'statistics'], smo: 'View', insert: 'twoPart'
   },
   synonym: { title: 'Synonym', scope: 'schemaObject', icon: 'link', smo: 'Synonym', insert: 'twoPart' },
   procedure: {
-    title: 'Stored Procedure', scope: 'schemaObject', icon: 'symbol-method', subtypes: ['sql', 'clr', 'extended', 'replicationFilter', 'system'], folders: ['parameters'],
+    title: 'Stored Procedure', scope: 'schemaObject', icon: 'procedure', subtypes: ['sql', 'clr', 'extended', 'replicationFilter', 'system'], folders: ['parameters'],
     smo: 'StoredProcedure', insert: 'twoPart'
   },
   function: {
@@ -369,17 +368,17 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
   type: {
     title: 'Type', scope: 'schemaObject', icon: 'symbol-structure', subtypes: ['alias', 'clr'], smo: 'UserDefinedDataType', subtypeSmo: { clr: 'UserDefinedType' }, insert: 'twoPart'
   },
-  tableType: { title: 'Table Type', scope: 'schemaObject', icon: 'svg:table', folders: ['columns', 'keys', 'constraints', 'indexes'], smo: 'UserDefinedTableType', insert: 'twoPart' },
+  tableType: { title: 'Table Type', scope: 'schemaObject', icon: 'table', folders: ['columns', 'keys', 'constraints', 'indexes'], smo: 'UserDefinedTableType', insert: 'twoPart' },
   xmlSchemaCollection: { title: 'XML Schema Collection', scope: 'schemaObject', icon: 'code', smo: 'XmlSchemaCollection', insert: 'twoPart' },
   rule: { title: 'Rule', scope: 'schemaObject', icon: 'law', smo: 'Rule', insert: 'twoPart' },
   default: { title: 'Default', scope: 'schemaObject', icon: 'symbol-constant', smo: 'Default', insert: 'twoPart' },
-  securityPolicy: { title: 'Security Policy', scope: 'schemaObject', icon: 'svg:shield', smo: 'SecurityPolicy', insert: 'twoPart' },
+  securityPolicy: { title: 'Security Policy', scope: 'schemaObject', icon: 'shield', smo: 'SecurityPolicy', insert: 'twoPart' },
   column: {
-    title: 'Column', scope: 'child', icon: 'symbol-field', variantIcons: { primaryKey: 'svg:key', foreignKey: 'references', computed: 'symbol-operator' },
+    title: 'Column', scope: 'child', icon: 'symbol-field', variantIcons: { primaryKey: 'key', foreignKey: 'references', computed: 'symbol-operator' },
     smo: 'Column', scriptable: false, insert: 'onePart'
   },
   key: {
-    title: 'Key', scope: 'child', icon: 'svg:key', subtypes: ['primary', 'unique', 'foreign'], subtypeIcons: { unique: 'symbol-key', foreign: 'references' },
+    title: 'Key', scope: 'child', icon: 'key', subtypes: ['primary', 'unique', 'foreign'], subtypeIcons: { unique: 'symbol-key', foreign: 'references' },
     smo: 'Index', subtypeSmo: { foreign: 'ForeignKey' }, insert: 'onePart'
   },
   constraint: {

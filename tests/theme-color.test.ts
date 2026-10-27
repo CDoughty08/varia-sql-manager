@@ -101,7 +101,8 @@ describe('contrast repair and window chrome', () => {
   })
   it('maps preset connection colors to theme variables and repairs custom ones', () => {
     expect(connectionPresets.map(preset => [preset.label, preset.stored])).toEqual([['Red', '#e66b73'], ['Orange', '#e6a15c'], ['Yellow', '#dec766'], ['Green', '#79bb8b'], ['Blue', '#71a7df'], ['Purple', '#ad8bd8']])
-    for (const preset of connectionPresets) expect(builtinPalettes.dark[preset.name]).toBe(preset.stored)
+    // Saved profiles hold these first Varia Dark values; they must not follow later palette changes.
+    for (const preset of connectionPresets) expect(builtinPalettes.dark[preset.name]).not.toBe(preset.stored)
     const light = resolveBuiltin('light'), dark = resolveBuiltin('dark')
     expect(connectionAccent('#E66B73', light)).toBe('var(--varia-connection-red)')
     expect(connectionAccent('#71a7df', dark)).toBe('var(--varia-connection-blue)')
@@ -113,12 +114,25 @@ describe('contrast repair and window chrome', () => {
     for (const key of connectionAccentSurfaces) expect(contrast(hexColor(repaired), hexColor(light.colors[key]))).toBeGreaterThanOrEqual(3)
     expect(connectionAccent('#e66b74', dark)).toBe('#e66b74')
   })
+  it('repairs custom colors on every status bar state the connection edge is drawn on', () => {
+    // The status bar's top border and the query status bar's edge stay while a query runs, fails or is disconnected.
+    const drawnOn = ['statusBar.background', 'statusBar.executingBackground', 'statusBar.disconnectedBackground', 'statusBar.errorBackground',
+      'queryStatusBar.background', 'queryStatusBar.executingBackground', 'queryStatusBar.errorBackground'] as const
+    for (const key of drawnOn) expect(connectionAccentSurfaces).toContain(key)
+    for (const [type, colors] of [['dark', ['#2a3460', '#202840']], ['light', ['#f0d8a0', '#9aa5ff', '#d0d4ff', '#a0a0a0']]] as const) {
+      const theme = resolveBuiltin(type)
+      for (const color of colors) {
+        const repaired = connectionAccent(color, theme)!
+        for (const key of drawnOn) expect(contrast(hexColor(repaired), hexColor(theme.colors[key])), `${type} ${color} -> ${repaired} on ${key}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  })
   it('only hands Electron opaque colors, and keeps window symbols readable', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(nativeOverlay(theme)).toEqual({ color: theme.colors['titleBar.activeBackground'], symbolColor: theme.colors['titleBar.controlsForeground'] })
     }
-    expect(nativeOverlay(resolveBuiltin('light'))).toEqual({ color: '#e9edf2', symbolColor: '#1f2733' })
+    expect(nativeOverlay(resolveBuiltin('light'))).toEqual({ color: '#f7f8fa', symbolColor: '#1c1f26' })
     const dark = resolveBuiltin('dark')
     const lowContrast = { ...dark, colors: { ...dark.colors, 'titleBar.activeBackground': '#202020', 'titleBar.controlsForeground': '#303030' } }
     expect(nativeOverlay(lowContrast)).toEqual({ color: '#202020', symbolColor: '#ffffff' })

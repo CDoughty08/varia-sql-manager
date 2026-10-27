@@ -20,12 +20,13 @@ describe('generated theme documentation', () => {
       expect(entry.markdownDescription).toMatch(/\S.*Dark `#[0-9a-f]{6,8}`.*Light `#[0-9a-f]{6,8}`/)
       expect(entry.description).not.toContain('`')
     }
-    expect(colors.properties['focusBorder'].markdownDescription).toBe('(VS Code) Focus ring around the focused control. Default `$focus` (Dark `#76acff`, Light `#005fb8`).')
+    expect(colors.properties['focusBorder'].markdownDescription).toBe('(VS Code) Focus ring around the focused control. Default `$focus` (Dark `#8f9cff`, Light `#4453d0`).')
     expect(colors.properties['statusBar.executingBackground'].markdownDescription).toContain('(Varia)')
     expect(colors.properties['notifications.background'].markdownDescription).toContain('Not used yet; reserved for notifications.')
     expect(colors.properties['resultsGrid.hoverBackground'].markdownDescription).not.toContain('Not used yet')
     const docs = renderTokenDocs()
     for (const name of [...paletteSlots, ...colorKeys, ...sqlScopes, ...scopeAliases.keys()]) expect(docs).toContain('| `' + name + '` |')
+    expect(docs).toContain('| `comment` | `comment.sql` | `$syntaxComment`, `italic` |')
   })
   it('uses the same patterns and limits as the runtime parser', () => {
     const { definitions, properties } = schema

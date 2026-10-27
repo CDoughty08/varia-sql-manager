@@ -84,11 +84,13 @@ export class RendererRequests {
 }
 
 /** The methods main registers before sending, so their cancel channel (varia:explorer-cancel, varia:scripting-cancel,
- *  varia:actions-cancel, varia:connections-cancel) can always find them; any other method is not cancellable by
- *  `requestId`. A connect or Load databases is, only when the dialog gave it one (`connectRequestId`, from its context). */
-export function cancellableRequests<T>(method: string, channels: { readonly explorer: T; readonly scripting: T; readonly actions: T; readonly connections: T }, connectRequestId?: string): T | undefined {
+ *  varia:actions-cancel, varia:activity-cancel, varia:connections-cancel) can always find them; any other method is not
+ *  cancellable by `requestId`. A connect or Load databases is, only when the dialog gave it one (`connectRequestId`, from
+ *  its context). Of the Activity Monitor's methods only Details is: Kill carries no requestId. */
+export function cancellableRequests<T>(method: string, channels: { readonly explorer: T; readonly scripting: T; readonly actions: T; readonly activity: T; readonly connections: T }, connectRequestId?: string): T | undefined {
   if (method === 'connections.connect' || method === 'connections.databases') return connectRequestId ? channels.connections : undefined
-  return method === 'explorer.children' ? channels.explorer : method === 'scripting.script' ? channels.scripting : method.startsWith('actions.') ? channels.actions : undefined
+  return method === 'explorer.children' ? channels.explorer : method === 'scripting.script' ? channels.scripting : method.startsWith('actions.') ? channels.actions
+    : method === 'activity.details' ? channels.activity : undefined
 }
 
 /** The Connect dialog's requests: few run at once (one connect and one Load databases per dialog). */

@@ -7,6 +7,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      regression-suite:
+        description: Focused regressions (none runs full CI; all runs Electron suites)
+        type: choice
+        options: [none, dialogs, results, tail, all, activity]
+        default: none
 
 concurrency:
   # A new push supersedes a pull request's earlier run; every main commit and manual run gets its own complete run.
@@ -23,6 +29,7 @@ env:
 jobs:
   linux:
     name: Linux (live SQL Server, Electron smoke)
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     runs-on: ubuntu-24.04
     timeout-minutes: 50
     services:
@@ -79,6 +86,15 @@ jobs:
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: IPC benchmarks
+        # Check exports and performance before the long smoke suite. Floors are enforced on Linux only; the table goes
+        # to the job summary.
+        timeout-minutes: 15
+        run: |
+          npm run bench
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
+          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
+          node scripts/check-bench.mjs --enforce
       - name: Electron smoke tests
         timeout-minutes: 25
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
@@ -86,15 +102,6 @@ jobs:
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
-      - name: IPC benchmarks
-        # The IPC and results grid benchmarks. Floors (tests/bench/floors.json) are enforced here only; the table goes to
-        # the job summary.
-        timeout-minutes: 15
-        run: |
-          npm run bench
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:e2e -- --live
-          xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
-          node scripts/check-bench.mjs --enforce
       - name: Results grid smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too.
         timeout-minutes: 8
@@ -119,7 +126,7 @@ jobs:
   desktop:
     name: ${{ matrix.os }}
     # Windows minutes bill at 2x and macOS at 10x, so draft pull requests run only the Linux job.
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: (github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     strategy:
       fail-fast: false
       matrix:
@@ -146,7 +153,8 @@ jobs:
         # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on
         # macOS they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
         if: runner.os != 'macOS'
-        timeout-minutes: 20
+        # Measured stage timings project the complete Windows suite past 21 minutes with live-view and lifecycle coverage.
+        timeout-minutes: 25
         run: npm run test:smoke
       - name: IPC benchmarks (report only)
         # The IPC and results grid benchmarks. Shared Windows and macOS runners vary too much for floors; the end-to-end
@@ -173,3 +181,9 @@ jobs:
           path: artifacts/bench/
           if-no-files-found: ignore
           retention-days: 30
+
+  regressions:
+    if: github.event_name == 'workflow_dispatch' && inputs.regression-suite != 'none'
+    uses: ./.github/workflows/ci-regressions.yml
+    with:
+      suite: ${{ inputs.regression-suite }}
