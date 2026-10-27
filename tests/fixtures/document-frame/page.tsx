@@ -31,6 +31,8 @@ const sections: FrameSection[] = params.get('sections') === 'many'
     { id: 'filegroups', title: 'Filegroups', content: rows(6, 'Filegroup') },
     { id: 'options', title: 'Options', collapsible: true, content: rows(40, 'Option') },
     { id: 'tracking', title: 'Change Tracking', content: rows(12, 'Setting') },
+    // Long enough to be cut where the list is narrow.
+    { id: 'shipping', title: 'Transaction Log Shipping', content: rows(4, 'Shipping') },
     { id: 'permissions', title: 'Permissions', collapsible: true, content: rows(3, 'Permission') },
     { id: 'extended', title: 'Extended Properties', content: rows(2, 'Property') }
   ]
@@ -44,6 +46,7 @@ function Page() {
   const verb = (label: string, extra: Partial<HeaderVerb>): HeaderVerb => ({ key: label, label, title: label, disabled: false, run: () => { fixture.ran.push(label) }, ...extra })
   const verbs = [
     verb('Stop', { emphasis: 'danger', icon: 'debug-stop' }),
+    verb('Refresh', { emphasis: 'outline', icon: 'refresh' }),
     verb('Split View', { pressed: split, run: () => { fixture.ran.push('Split View'); setSplit(on => !on) } }),
     verb('Save', { emphasis: 'primary', title: 'Save (Ctrl+S)' })
   ]

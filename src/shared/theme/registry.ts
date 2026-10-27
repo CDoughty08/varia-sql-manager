@@ -109,7 +109,7 @@ const groups = {
     'tab.inactiveBackground': ['V', '@editorGroupHeader.tabsBackground', 'Hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveBackground': ['V', '$canvas', 'Visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveBackground': ['V', '@tab.inactiveBackground', 'Hidden tabs of an unfocused dock group.', 'css'],
-    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group.', 'css'],
+    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group, and the title in the header of a document.', 'css'],
     'tab.inactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveForeground': ['V', '$textTertiary', 'Label of the visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of an unfocused dock group.', 'css'],

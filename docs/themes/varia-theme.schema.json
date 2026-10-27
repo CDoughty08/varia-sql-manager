@@ -798,8 +798,8 @@
         },
         "tab.activeForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Label of the visible tab of the focused dock group. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
-          "markdownDescription": "(VS Code) Label of the visible tab of the focused dock group. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
+          "description": "(VS Code) Label of the visible tab of the focused dock group, and the title in the header of a document. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
+          "markdownDescription": "(VS Code) Label of the visible tab of the focused dock group, and the title in the header of a document. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
         },
         "tab.inactiveForeground": {
           "$ref": "#/definitions/value",

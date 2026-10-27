@@ -761,25 +761,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-crumbs li { display: inline-flex; align-items: center; gap: var(--varia-space-0); min-width: 0; max-width: 32ch; color: var(--varia-breadcrumb-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
 .document-crumbs .codicon { color: var(--varia-breadcrumb-separatorForeground); font-size: var(--varia-size-sm); }
-.document-title { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); font-weight: 600; unicode-bidi: isolate; }
+.document-title { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); font-weight: 600; color: var(--varia-tab-activeForeground); unicode-bidi: isolate; }
 .document-subtitle { color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
 .document-heading > .status-pill, .document-heading > .live-pill { align-self: center; }
 .document-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
 .document-verb { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; }
-.document-verb:not(.primary) { border-color: var(--varia-button-border); }
-/* Stop execution, Kill session…: outlined in the error colour, so a verb that ends something never looks like the primary one. */
-.document-verb.danger, .document-verb.danger:hover:not(:disabled) { color: var(--varia-errorForeground); border-color: var(--varia-errorForeground); }
+/* Secondary verbs are borderless, as Calm Pro's are; an outline verb (and a danger one) has the neutral button border. */
+.document-verb.outline, .document-verb.danger { border-color: var(--varia-button-border); }
+/* Stop execution, Kill session…: words in the error colour, hovered or not, so a verb that ends something never looks like the primary one. */
+.document-verb.danger, .document-verb.danger:hover:not(:disabled) { color: var(--varia-errorForeground); }
 /* A toggle verb (Split View) that is on: the current section's colours and an accent edge, hovered or not. */
 .document-verb[aria-pressed="true"], .document-verb[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
 .document-facts { display: flex; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-4); flex: none; margin: 0; padding: 0 var(--varia-space-4) var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .document-facts > div { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
 .document-facts dt { flex: none; color: var(--varia-descriptionForeground); }
-.document-facts dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; unicode-bidi: isolate; }
+.document-facts dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-foreground); font-variant-numeric: tabular-nums; unicode-bidi: isolate; }
 .document-frame > .document-body, .document-frame > .document-content { border-top: 1px solid var(--varia-panel-border); }
 .document-body { flex: 1; min-height: 0; display: flex; }
 .document-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 /* Positioned, so each section's offsetTop is its distance from the column's top (the scroll spy reads it). */
 .document-sections { position: relative; padding: 0 var(--varia-space-4) var(--varia-space-4); }
+.document-sections:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .document-nav { flex: 0 0 clamp(150px, 22%, 220px); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) 0; border-right: 1px solid var(--varia-panel-border); }
 .document-nav-item { display: flex; align-items: center; gap: 6px; flex: none; height: var(--varia-row); padding: 0 var(--varia-space-3); border-radius: 0; text-align: left; }
 /* The current section keeps its fill under the pointer (button:hover would outrank a lone state rule). */
@@ -795,7 +797,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-section-body { padding-top: var(--varia-space-2); }
 /* The Script drawer: its bar stays when it is closed; open, it takes its share of the height (an inline flex-basis). */
 .document-script { display: flex; flex-direction: column; flex: none; min-height: 0; background: var(--varia-panel-background); border-top: 1px solid var(--varia-panel-border); }
-.document-script-splitter { flex: none; height: 4px; margin-top: -1px; cursor: row-resize; }
+.document-script-splitter { flex: none; height: 4px; margin-top: -1px; cursor: row-resize; touch-action: none; }
 .document-script-splitter:hover, .document-script-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
 .document-script-head { display: flex; align-items: center; gap: var(--varia-space-2); flex: none; height: var(--varia-bar); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); }
 .document-script-toggle { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-foreground); font-weight: 600; }

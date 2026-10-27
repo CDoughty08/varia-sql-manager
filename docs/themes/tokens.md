@@ -184,7 +184,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `tab.inactiveBackground` | VS Code | `@editorGroupHeader.tabsBackground` | `#111317` | `#f7f8fa` | Hidden tabs of the focused dock group. |
 | `tab.unfocusedActiveBackground` | VS Code | `$canvas` | `#16181d` | `#ffffff` | Visible tab of an unfocused dock group. |
 | `tab.unfocusedInactiveBackground` | VS Code | `@tab.inactiveBackground` | `#111317` | `#f7f8fa` | Hidden tabs of an unfocused dock group. |
-| `tab.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the visible tab of the focused dock group. |
+| `tab.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the visible tab of the focused dock group, and the title in the header of a document. |
 | `tab.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of the focused dock group. |
 | `tab.unfocusedActiveForeground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Label of the visible tab of an unfocused dock group. |
 | `tab.unfocusedInactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of an unfocused dock group. |
