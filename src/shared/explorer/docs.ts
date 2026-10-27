@@ -3,6 +3,7 @@ import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
   subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
+import { glyphSizes } from '../theme/metrics.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -127,7 +128,7 @@ export function renderExplorerDocs(): string {
     '',
     `## Node kinds (${nodeKinds.length})`,
     '',
-    'Icons are codicons, or `svg:` stroke icons drawn by `Icon.tsx`. Folders show `folder` (`folder-opened` while expanded).',
+    'Icons are ids of the [icon registry](icons.md): Varia\'s own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).',
     'Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.',
     '',
     table(['Kind', 'Title', 'Scope', 'Icons', 'SMO', 'Scriptable', 'Inserts'], nodeKinds.map(kind => {
@@ -149,8 +150,8 @@ export function renderExplorerDocs(): string {
     '',
     '## Status badges',
     '',
-    'An 8×8 badge at the bottom right of the row icon. Disabled, unavailable and inaccessible nodes are dimmed as well;',
-    'read-only databases are not, because their sublabel says it.',
+    `A ${glyphSizes.badge.px} px badge (\`--varia-glyph-badge\`) at the bottom right of the row icon.`,
+    'Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.',
     '',
     table(['Status', 'Badge'], Object.entries(statusBadges).map(([status, badge]) => [code(status), code(badge)])),
     '',

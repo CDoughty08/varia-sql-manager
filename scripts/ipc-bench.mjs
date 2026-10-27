@@ -2,6 +2,7 @@ import { _electron as electron } from '@playwright/test'
 import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { statusBar } from './fixtures/ui.mjs'
 
 // End-to-end IPC benchmarks (npm run bench:e2e): the built app with the Release backend and its test hooks, measured
 // from the renderer. --live adds a real query against VARIA_TEST_SQL_SERVER. Writes artifacts/bench/e2e.json, which
@@ -77,7 +78,7 @@ try {
   page.setDefaultTimeout(60000)
   // Smoke windows stay hidden, and a hidden window gets about one animation frame a second; show it without focus.
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].showInactive() })
-  await page.locator('.status-bar').getByText(/· Ready/).waitFor({ timeout: 60000 })
+  await statusBar(page).getByText(/· Ready/).waitFor({ timeout: 60000 })
   const hello = await app.evaluate(() => globalThis.__variaTest.state())
   console.log(`Backend generation ${hello.generation}, ${hello.runtime} on ${hello.platform}.`)
 
@@ -95,6 +96,29 @@ try {
   })
   record('e2e.invoke.p50Ms', percentile(invoke, 50), 'ms', '1,000 sequential window.varia.health() calls')
   record('e2e.invoke.p99Ms', percentile(invoke, 99), 'ms', '1,000 sequential window.varia.health() calls')
+
+  step = 'live tick round trip'
+  // The backend's debug.synthetic source every 10 ms, each event acknowledged 20 ms after it arrived: the next sample is
+  // overdue when its credit reaches the backend, so the time from the acknowledgement to the next event at the page is
+  // the whole loop (page → results worker → main → backend → main → worker → page), not the source's schedule.
+  const liveTick = await page.evaluate(async () => {
+    const samples = []
+    let ackedAt = 0, events = 0, finish
+    const finished = new Promise(resolve => { finish = resolve })
+    const params = { subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 10 } }
+    const stream = window.__variaResults.live(params, (event, bytes) => {
+      if (++events > 5 && ackedAt > 0) samples.push(performance.now() - ackedAt)
+      if (samples.length >= 500) return finish()
+      setTimeout(() => { ackedAt = performance.now(); stream.ack(bytes) }, 20)
+    })
+    const early = await Promise.race([finished.then(() => undefined), stream.done])
+    stream.cancel()
+    return { samples, early, end: await stream.done }
+  })
+  if (liveTick.early) throw new Error(`The live stream ended early: ${JSON.stringify(liveTick.early)}`)
+  if (!liveTick.end.ok || liveTick.end.value.ended !== 'cancelled') throw new Error(`The live stream did not end cancelled: ${JSON.stringify(liveTick.end)}`)
+  record('e2e.liveData.tickP50Ms', percentile(liveTick.samples, 50), 'ms', `${liveTick.samples.length} ticks of debug.synthetic`)
+  record('e2e.liveData.tickP99Ms', percentile(liveTick.samples, 99), 'ms', `${liveTick.samples.length} ticks of debug.synthetic`)
 
   step = 'W1 into the results worker'
   const w1 = await app.evaluate(() => globalThis.__variaTest.synthesize('W1', 500000))
