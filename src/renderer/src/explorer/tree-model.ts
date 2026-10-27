@@ -182,9 +182,15 @@ export interface FilteredRows { readonly rows: VisibleRows; readonly matches: nu
  * searches what has been loaded and opened, and never asks for more. A match keeps its ancestors (servers always show)
  * and shows its expanded rows below as usual; a node that neither matches nor has a match below is left out with its
  * loading and error rows. Positions in a set count the siblings that show. O(visible rows unfiltered).
+ *
+ * The `pinned` node (the selection) and its ancestors show too, matching or not: collapsing a node that showed only for
+ * the matches below it, or typing text the selection does not match, would otherwise leave the selection off the rows,
+ * where F5, copy and the footer would still act on it unseen.
  */
-export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filter: string, capacityHint = 256): FilteredRows {
+export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filter: string, capacityHint = 256, pinned?: number): FilteredRows {
   const out = new RowBuilder(Math.max(64, capacityHint))
+  const keep = new Set<number>()
+  for (let node = pinned === undefined ? undefined : nodes.get(pinned); node; node = node.parent ? nodes.get(node.parent) : undefined) keep.add(node.id)
   let matches = 0
   /** A node's synthetic rows around its children, as `flatten` places them; `each` emits one child. */
   const visitChildren = (node: TreeNode, each: (child: TreeNode, index: number, size: number) => void) => {
@@ -204,8 +210,8 @@ export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filt
     if (filterMatch(node, filter) >= 0) matches++
     if (node.expanded) visitChildren(node, (child, index, size) => visitAll(child, index + 1, size))
   }
-  /** Emits the node if it or a node below it matches, or `keep` (a server); true when it did. */
-  const visit = (node: TreeNode, posinset: number, setsize: number, keep: boolean): boolean => {
+  /** Emits the node if it or a node below it matches, or it is a server or pinned; true when it did. */
+  const visit = (node: TreeNode, posinset: number, setsize: number, server: boolean): boolean => {
     if (filterMatch(node, filter) >= 0) { visitAll(node, posinset, setsize); return true }
     const mark = out.count
     out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
@@ -213,13 +219,13 @@ export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filt
     if (node.expanded) {
       visitChildren(node, child => {
         const at = out.count
-        if (child.expanded ? visit(child, 0, 0, false) : filterMatch(child, filter) >= 0) {
+        if (child.expanded || keep.has(child.id) ? visit(child, 0, 0, false) : filterMatch(child, filter) >= 0) {
           if (out.count === at) { out.push(child.id, RowKind.Node, child.level, 0, 0, child); matches++ }
           shown.push(at)
         }
       })
     }
-    if (!shown.length && !keep) { out.truncate(mark); return false }
+    if (!shown.length && !server && !keep.has(node.id)) { out.truncate(mark); return false }
     for (let index = 0; index < shown.length; index++) { out.posinset[shown[index]] = index + 1; out.setsize[shown[index]] = shown.length }
     return true
   }
@@ -273,6 +279,14 @@ export function computeWindow(scrollTop: number, viewport: number, count: number
   const first = Math.min(count, Math.max(0, Math.floor(top / rowHeight) - overscan))
   const end = Math.min(count, Math.ceil((top + height) / rowHeight) + overscan)
   return [first, Math.max(first, end)]
+}
+/** The scroll offset that brings row `index` into a `viewport` px view scrolled to `scrollTop`, or undefined when it shows. */
+export function revealScroll(layout: RowLayout, index: number, scrollTop: number, viewport: number): number | undefined {
+  if (index < 0 || index >= layout.count) return undefined
+  const top = layout.top(index), bottom = top + layout.height(index)
+  if (top < scrollTop) return top
+  if (bottom > scrollTop + viewport) return bottom - viewport
+  return undefined
 }
 /** `computeWindow` over a layout whose rows differ in height. */
 export function layoutWindow(scrollTop: number, viewport: number, layout: RowLayout, overscan: number = explorerLimits.overscan): [number, number] {

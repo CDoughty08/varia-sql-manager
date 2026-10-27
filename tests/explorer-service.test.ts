@@ -10,7 +10,7 @@ import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
-import { RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
+import { rowIndex, RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -1485,8 +1485,10 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     // A folder that matches shows its expanded rows as usual; a collapsed folder is not searched.
     f.explorer.setQuickFilter('tables')
     expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        System Tables', '        dbo.T0', '        dbo.T1', '        dbo.T2', 'server-b.example'])
+    // The selection shows whatever the text, so nothing acts on a row out of sight.
     f.explorer.setQuickFilter('zzz')
-    expect(f.labels()).toEqual(['server-a.example', 'server-b.example'])
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
+    expect(f.explorer.getSnapshot().filter).toEqual({ text: 'zzz', matches: 0 })
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: no loaded items match')
     const reveal = f.explorer.getSnapshot().reveal ?? 0
     f.explorer.setQuickFilter('')
@@ -1498,6 +1500,26 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     // The text is bounded.
     f.explorer.setQuickFilter('x'.repeat(500))
     expect(f.explorer.quickFilter.getSnapshot().input).toHaveLength(128)
+  })
+  it('keeps the selected row and its ancestors while filtering, so collapsing a folder shown for its matches keeps it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables'), security = f.find('Security')
+    f.explorer.setQuickFilter('T1')
+    f.explorer.select(tables)
+    f.explorer.collapse(tables)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables'])
+    expect(rowIndex(f.rows(), f.explorer.getSnapshot().selected)).toBeGreaterThanOrEqual(0)
+    expect(f.explorer.getSnapshot().filter).toEqual({ text: 't1', matches: 0 })
+    // Expanding it again shows the match; text the selection does not match keeps the selection in view too.
+    f.explorer.expand(tables)
+    await settle()
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1'])
+    f.explorer.select(security)
+    f.explorer.setQuickFilter('zzz')
+    expect(f.labels()).toEqual(['server-a.example', '  Security'])
+    expect(rowIndex(f.rows(), f.explorer.getSnapshot().selected)).toBeGreaterThanOrEqual(0)
   })
   it('hands focus to the box once per Filter Loaded Objects, even when the box mounts later', () => {
     const f = fixture()
@@ -1513,7 +1535,11 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     const root = f.explorer.node(f.find('server-a.example'))!
     expect([root.brief, root.sublabel]).toEqual(['16.0 · sa', '(SQL Server 16.0.4135.4 - sa)'])
     expect(serverBrief({ serverVersion: '15.00.2000', productVersion: undefined, login: undefined })).toBe('15.0')
-    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'CONTOSO\dba' })).toBe('17.0 · CONTOSO\dba')
+    // A Windows login shows without its domain or machine, which the tooltip keeps.
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'CONTOSO\\dba' })).toBe('17.0 · dba')
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('17.0 · user')
+    expect(serverSublabel({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('(SQL Server 17.0.1000.7 - MACHINE\\user)')
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'dba@contoso.com' })).toBe('17.0 · dba@contoso.com')
   })
   it('stamps each listing when its first page arrives, and marks the rows a failed refresh kept stale until a load succeeds', async () => {
     const f = fixture()
@@ -1538,5 +1564,44 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded + 65_000 })
     // A collapsed folder that is not loaded yet has no listing of its own: its parent's describes it.
     expect(f.explorer.listingFreshness(f.find('Views'))).toEqual({ label: 'AppData', updatedAt: loaded })
+  })
+  it('forgets a listing\'s date when its rows are dropped, and dates the listing again when its first page arrives', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const t1 = await f.open('dbo.T1'), opened = f.wall.now
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'dbo.T1', updatedAt: opened })
+    // A new subtype drops dbo.T1's folders to list them again; until they arrive, Tables' new listing describes it.
+    f.wall.now += 60_000
+    f.state.subtypes['dbo.T1'] = 'systemVersioned'
+    f.hold(params => params.node.type === 'object' && params.node.object.kind === 'table')
+    f.explorer.reconcile(tables)
+    await settle()
+    expect(f.explorer.node(t1)).toMatchObject({ expanded: true, load: 'loading' })
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: opened + 60_000 })
+    f.wall.now += 5_000
+    f.unhold()
+    f.release()
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'dbo.T1', updatedAt: opened + 65_000 })
+  })
+  it('forgets a listing\'s date when Filter Settings replaces it, and dates the filtered one when it arrives', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const loaded = f.wall.now
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.wall.now += 120_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.setFilter(tables, { name: { op: 'contains', value: 'T' } })
+    // While the filtered list loads, and after it failed, Tables has no listing of its own: AppData's describes it.
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'AppData', updatedAt: loaded })
+    await settle()
+    expect(f.explorer.node(tables)!.load).toBe('error')
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'AppData', updatedAt: loaded })
+    f.explorer.setFilter(tables, undefined)
+    await settle()
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded + 120_000 })
   })
 })

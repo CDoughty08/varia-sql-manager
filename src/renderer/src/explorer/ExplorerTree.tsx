@@ -6,7 +6,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
-import { layoutWindow, renderedIndices, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
+import { layoutWindow, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -67,9 +67,8 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     const tree = element.current
     if (!tree || index < 0) return
     const at: RowLayout = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
-    const top = at.top(index), bottom = top + at.height(index)
-    if (top < tree.scrollTop) tree.scrollTop = top
-    else if (bottom > tree.scrollTop + tree.clientHeight) tree.scrollTop = bottom - tree.clientHeight
+    const scrollTop = revealScroll(at, index, tree.scrollTop, tree.clientHeight)
+    if (scrollTop !== undefined) tree.scrollTop = scrollTop
   }, [])
   // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them. A
   // selection made outside the tree (Filter Settings closing) asks for the same through the snapshot's `reveal`.

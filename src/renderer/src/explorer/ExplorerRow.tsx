@@ -166,8 +166,11 @@ export function Label({ text, match }: { text: string; match: string | undefined
 export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel'>): string | undefined => node.lost ? '(connection lost)' : node.brief ?? node.sublabel
 
 /**
- * The row's end, right-aligned and never shrunk: first the indicators later PRs add (`children`: E3's state chips, E2's
- * environment tag), then the item count and the connection dot, then `actions` (a lost server's buttons).
+ * The row's end, right-aligned and never shrunk for the label: first the indicators later PRs add (`children`: E3's
+ * state chips, E2's environment tag), then the item count and the connection dot, then `actions` (a lost server's
+ * buttons). It takes at most 60% of the row; an indicator shrinks within that (`flex: 0 1 auto; min-width: 0`) under an
+ * absolute cap such as `max-width: 12em`, never a percentage, which would resolve against this content-sized box
+ * (explorer-smoke 10b measures such a tag here).
  */
 export function RowEnd({ count, connection, children, actions }: { count?: number; connection?: ConnectionState; children?: ReactNode; actions?: ReactNode }) {
   return <span className="oe-end">

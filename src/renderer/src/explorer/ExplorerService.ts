@@ -128,12 +128,17 @@ const targetOf = (node: TreeNode): ExplorerTarget =>
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
 }
-/** What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). */
+/**
+ * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
+ * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
+ * server; the name and tooltip keep it.
+ */
 export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   // "16.0.4135.4" from the profile, or "16.00.4135" as SqlClient reports it.
   const [major, minor] = (connection.productVersion || connection.serverVersion).split('.').map(part => /^\d+$/.test(part) ? String(Number(part)) : part)
   const version = minor === undefined ? major : `${major}.${minor}`
-  return [version, connection.productVersion && connection.login].filter(Boolean).join(' · ')
+  const login = connection.productVersion ? connection.login?.slice(connection.login.lastIndexOf('\\') + 1) : undefined
+  return [version, login].filter(Boolean).join(' · ')
 }
 
 /**
@@ -495,7 +500,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.generation++
     this.abortWithin(new Set([node.id]), 'detach')
     this.detach(node, node.children?.filter(child => child.kind !== 'folder') ?? [])
-    Object.assign(node, { total: undefined, cursor: undefined, more: 'none', error: undefined, load: 'none', hasChildren: true, expanded: true })
+    // The listing the footer dated is gone; the filtered one is dated when its first page arrives.
+    Object.assign(node, { total: undefined, cursor: undefined, more: 'none', error: undefined, load: 'none', hasChildren: true, expanded: true, updatedAt: undefined, staleSince: undefined })
     const state = this.state(node)
     state.held = state.reconciling = state.pendingMode = state.deep = undefined
     // The filtered list is not the one a reconcile was to select a child from.
@@ -1235,7 +1241,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.dirty = false
     const previous = this.getSnapshot()
     const filter = filterText(this.quickFilterStore.getSnapshot().input)
-    const filtered = filter ? flattenFiltered(this.nodes, this.roots, filter, previous.rows.count + 64) : undefined
+    const filtered = filter ? flattenFiltered(this.nodes, this.roots, filter, previous.rows.count + 64, this.selected === undefined ? undefined : rowOwner(this.selected)) : undefined
     const rows = filtered?.rows ?? flatten(this.nodes, this.roots, previous.rows.count + 64)
     // Spoken once per change of filter, not again as later pages bring more matches.
     if (filter !== this.filtered) {

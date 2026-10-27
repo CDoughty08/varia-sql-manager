@@ -627,10 +627,14 @@ try {
   // Typing narrows the tree to loaded matches with their parents, bold where they match, without asking the backend.
   const requested = (await stubCalls()).length
   await filterBox().click()
+  // The field shows the controls' 2 px ring at 2 px, around the field rather than the input.
+  expect(await page.locator('.explorer-filter').evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset] })).toEqual(['solid', '2px', '2px'])
   await page.keyboard.type('ORD')
-  // dbo.Orders matches, so its expanded rows show as they are (an earlier step left Columns open).
-  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [true]', '5 dbo.Orders [true]', '6 Columns [true]', '7 Id', '7 CustomerName',
-    '6 Keys [false]', '6 Constraints [false]', '6 Triggers [false]', '6 Indexes [false]', '6 Statistics [false]', '1 server-b [true]'])
+  // dbo.Orders matches, so its expanded rows show as they are (an earlier step left Columns open); the selected
+  // dbo.table1 stays listed, so nothing acts on a row out of sight.
+  const ordLines = ['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [true]', '5 dbo.Orders [true]', '6 Columns [true]', '7 Id', '7 CustomerName',
+    '6 Keys [false]', '6 Constraints [false]', '6 Triggers [false]', '6 Indexes [false]', '6 Statistics [false]', '5 dbo.table1 [false]', '1 server-b [true]']
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines)
   await expect(page.locator('.explorer-tree .oe-match')).toHaveText(['Ord'])
   await expect(liveRegion()).toHaveText('Filter: 1 loaded item matches')
   expect((await stubCalls()).length).toBe(requested)
@@ -638,6 +642,34 @@ try {
   await page.keyboard.press('ArrowDown')
   await expect(tree()).toBeFocused()
   await expect.poll(async () => (await active())?.label).toBe('dbo.Orders')
+  // Collapsing Tables, shown only for the match below it, keeps it listed, selected and in view; expanding it shows the match again.
+  await press('ArrowLeft', 'dbo.Orders')
+  await press('ArrowLeft', 'Tables')
+  await press('ArrowLeft', 'Tables')
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [false]', '1 server-b [true]'])
+  expect(await activeInView()).toBe(true)
+  await press('ArrowRight', 'Tables')
+  await press('ArrowRight', 'dbo.Orders')
+  await press('ArrowRight', 'dbo.Orders')
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
+  // Text that matches nothing says so under the box, with Clear filter; the selection stays in view.
+  await filterBox().fill('zzz')
+  const noMatch = page.locator('.explorer-no-match')
+  await expect(noMatch.locator('.empty-state-detail')).toHaveText('No loaded objects match “zzz”')
+  await expect(liveRegion()).toHaveText('Filter: no loaded items match')
+  expect(await activeInView()).toBe(true)
+  // Tab passes Clear filter to the tree, whose active row is the selection the text left listed.
+  await page.keyboard.press('Tab')
+  await expect(noMatch.getByRole('button', { name: 'Clear filter', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(tree()).toBeFocused()
+  expect(await active()).toMatchObject({ label: 'dbo.Orders', selected: 'true' })
+  await noMatch.getByRole('button', { name: 'Clear filter', exact: true }).click()
+  await expect(filterBox()).toHaveValue('')
+  await expect(filterBox()).toBeFocused()
+  await expect(noMatch).toHaveCount(0)
+  await page.keyboard.type('ORD')
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
   await filterBox().focus()
   await page.keyboard.press('Escape')
   await expect(filterBox()).toHaveValue('')
@@ -663,11 +695,73 @@ try {
   await page.emulateMedia({ forcedColors: null })
   expect(dot.background).toBe(dot.border)
   expect(dot.background).not.toBe('rgba(0, 0, 0, 0)')
-  await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  // Later steps start from what they found before: AppData collapsed.
+  // A refresh that fails keeps the old rows: the footer says since when they are stale, at the height it had, and the
+  // lost connection turns the server's dot into a ring, in forced colors too. The next load clears both.
+  await select('server-a', 'Databases', 'AppData', 'Tables')
+  const footer = page.locator('.explorer-footer'), footerHeight = () => footer.evaluate(element => element.getBoundingClientRect().height)
+  const freshHeight = await footerHeight()
+  await setStub({ tablesError: 'CONNECTION_LOST' })
+  await press('F5')
+  await expect(footer.locator('.stale-badge[data-stale]')).toHaveText(/^Stale since /)
+  expect(await footerHeight()).toBe(freshHeight)
+  await expect(serverRow.locator('.oe-dot')).toHaveAttribute('data-state', 'error')
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  await page.emulateMedia({ forcedColors: 'active' })
+  const ring = await serverRow.locator('.oe-dot').evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(ring.background).not.toBe(ring.border)
+  expect(ring.border).not.toBe('rgba(0, 0, 0, 0)')
+  await setStub({ tablesError: undefined })
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
+  await expect(page.locator('.explorer-freshness')).toHaveText(/^Tables·Updated (just now|\d+ s ago)$/)
+  await expect(serverRow.locator('.oe-dot')).toHaveAttribute('data-state', 'online')
+  expect(await footerHeight()).toBe(freshHeight)
+  // Later steps start from what they found before: AppData collapsed (which also brings Server Objects into view).
   await select('server-a', 'Databases', 'AppData')
   await press('ArrowLeft', 'AppData')
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toHaveAttribute('aria-expanded', 'false')
+  // The footer never shows a fragment: the server count shows whole beside a long listing name, or not at all, at the
+  // default width and in a 200 px pane, where only the listing's name may give way.
+  const serverObjects = await explorerRow(page, 'server-a', 'Server Objects'), wasExpanded = await serverObjects.getAttribute('aria-expanded')
+  await expandExplorerPath(page, 'server-a', 'Server Objects')
+  await select('server-a', 'Server Objects')
+  await expect(page.locator('.explorer-freshness-scope')).toHaveText('Server Objects')
+  const footerFit = () => page.evaluate(() => {
+    const footer = document.querySelector('.explorer-footer'), box = footer.getBoundingClientRect(), bottom = box.bottom - parseFloat(getComputedStyle(footer).paddingBottom)
+    const servers = document.querySelector('.explorer-servers').getBoundingClientRect(), clipped = element => element.scrollWidth > element.clientWidth
+    return {
+      servers: servers.top >= bottom ? 'hidden' : servers.bottom <= bottom && servers.right <= box.right && !clipped(document.querySelector('.explorer-servers')) ? 'whole' : 'fragment',
+      clipped: [...footer.querySelectorAll('.explorer-freshness-scope, .stale-badge')].filter(clipped).map(element => element.className)
+    }
+  })
+  const pane = page.locator('.explorer-footer').locator('..')
+  for (const width of [undefined, 200]) {
+    if (width) await pane.evaluate((element, value) => { element.style.width = value }, `${width}px`)
+    const fit = await footerFit()
+    expect(fit.servers).not.toBe('fragment')
+    if (!width) expect(fit.clipped).toEqual([])
+  }
+  await pane.evaluate(element => { element.style.width = '' })
+  // RowEnd's slot for E2's environment tag and E3's chips: a tag capped at 12em shows whole where there is room, and in a
+  // 200 px pane gives way (ellipsized) while the dot stays inside the row.
+  const tagFit = text => serverRow.evaluate((row, text) => {
+    const tag = document.createElement('span')
+    tag.className = 'status-pill'
+    tag.style.cssText = 'flex: 0 1 auto; min-width: 0; max-width: 12em; text-overflow: ellipsis'
+    tag.textContent = text
+    row.querySelector('.oe-end').prepend(tag)
+    const result = { whole: tag.scrollWidth <= tag.clientWidth, dotInside: row.querySelector('.oe-dot').getBoundingClientRect().right <= row.getBoundingClientRect().right, label: row.querySelector('.oe-label').getBoundingClientRect().width }
+    tag.remove()
+    return result
+  }, text)
+  expect(await tagFit('PRODUCTION')).toMatchObject({ whole: true, dotInside: true })
+  await pane.evaluate(element => { element.style.width = '200px' })
+  const narrow = await tagFit('PRODUCTION EU WEST')
+  await pane.evaluate(element => { element.style.width = '' })
+  expect(narrow).toMatchObject({ whole: false, dotInside: true })
+  expect(narrow.label).toBeGreaterThan(0)
+  if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
+  await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
   console.log('Object Explorer checks: 30 px server rows with version, login and connection dot, muted item counts, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.

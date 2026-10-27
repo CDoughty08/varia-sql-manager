@@ -141,16 +141,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* Filter loaded objects: one field, the search glyph and the clear button inside its border. */
 .explorer-filter { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); margin: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); padding: 0 var(--varia-space-0) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
-.explorer-filter:focus-within { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+/* The field takes the controls' ring (2 px at 2 px), drawn around the field rather than the borderless input inside it. */
+.explorer-filter:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .explorer-filter input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: var(--varia-size-sm); }
 .explorer-filter input:focus-visible { outline: none; }
 .explorer-filter .icon-button { width: 20px; height: 20px; color: var(--varia-objectExplorer-actionForeground); }
-/* The footer: how fresh the selection's listing is, then the connected servers. */
-.explorer-footer { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-2); min-width: 0; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
-.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; }
+/* Filter text that matches nothing: one compact line under the box rather than a centred empty pane. */
+.explorer-no-match.empty-state { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); text-align: left; }
+.explorer-no-match .empty-state-icon { margin-bottom: 0; }
+.explorer-no-match .empty-state-detail { min-width: 0; overflow-wrap: anywhere; }
+.explorer-no-match .empty-state-actions { margin-top: 0; }
+/*
+ * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
+ * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
+ * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
+ * footer's height clips (each server row has its dot).
+ */
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
 .explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
-/* In a narrow pane the server count gives way first, so the listing's name and age stay readable. */
-.explorer-servers { flex: 0 1000 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
+/* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
+.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
@@ -184,10 +195,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
-/* The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. */
-.oe-end { display: flex; flex: none; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
+/*
+ * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes at
+ * most 60% of the row and never shrinks for the label, so the count and dot always show; a chip or tag in it gives way
+ * instead (flex: 0 1 auto; min-width: 0) under an absolute cap such as 12em. A percentage cap would resolve against this
+ * content-sized box and clamp the tag to a share of its own width.
+ */
+.oe-end { display: flex; flex: none; min-width: 0; max-width: 60%; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
 .oe-end:empty { display: none; }
-.oe-count { color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.oe-count { flex: none; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
 .oe-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 var(--varia-space-1); border: 2px solid var(--varia-objectExplorer-connectedIndicator); border-radius: 50%; background: var(--varia-objectExplorer-connectedIndicator); }
 .oe-dot[data-state="error"] { border-color: var(--varia-objectExplorer-connectionErrorIndicator); background: transparent; }
 .oe-dot[data-state="lost"] { border-color: var(--varia-objectExplorer-disconnectedIndicator); background: transparent; }

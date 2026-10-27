@@ -73,12 +73,15 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
 /**
  * Filter loaded objects: narrows the tree to the loaded rows whose name contains the text (Filter Settings, by contrast,
  * asks the server for a narrower list). ↓ or Enter moves to the tree on the first match; Escape clears the text, or,
- * when there is none, returns to the tree.
+ * when there is none, returns to the tree. Text that matches nothing says so below the box, which a tree of bare server
+ * rows would not.
  */
 function QuickFilter() {
   const { explorer } = useWorkbench()
   const { input: value, focus } = useServiceSnapshot(explorer.quickFilter)
+  const { filter: applied } = useServiceSnapshot(explorer)
   const input = useRef<HTMLInputElement>(null)
+  const clear = () => { explorer.setQuickFilter(''); input.current?.focus() }
   // Filter Loaded Objects asks for focus, perhaps before this pane was shown.
   useLayoutEffect(() => { if (explorer.takeQuickFilterFocus()) input.current?.focus() }, [explorer, focus])
   const toTree = (first: boolean) => {
@@ -98,12 +101,17 @@ function QuickFilter() {
     event.preventDefault()
     event.stopPropagation()
   }
-  return <div className="explorer-filter" role="search">
-    <Icon name="search" />
-    <input ref={input} type="text" aria-label="Filter loaded objects" placeholder="Filter loaded objects" maxLength={explorerLimits.quickFilter} spellCheck={false} autoComplete="off"
-      value={value} onChange={event => explorer.setQuickFilter(event.target.value)} onKeyDown={onKeyDown} />
-    {value && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear filter" title="Clear filter (Escape)" onClick={() => { explorer.setQuickFilter(''); input.current?.focus() }}><Icon name="close" /></button>}
-  </div>
+  return <>
+    <div className="explorer-filter" role="search">
+      <Icon name="search" />
+      <input ref={input} type="text" aria-label="Filter loaded objects" placeholder="Filter loaded objects" maxLength={explorerLimits.quickFilter} spellCheck={false} autoComplete="off"
+        value={value} onChange={event => explorer.setQuickFilter(event.target.value)} onKeyDown={onKeyDown} />
+      {value && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear filter" title="Clear filter (Escape)" onClick={clear}><Icon name="close" /></button>}
+    </div>
+    {/* The live region announces the count; this is for the eye. */}
+    {applied?.matches === 0 && value.trim() && <EmptyState className="explorer-no-match" icon="search" detail={<>No loaded objects match <bdi>“{displayText(value.trim())}”</bdi></>}
+      actions={[{ label: 'Clear filter', run: clear }]} />}
+  </>
 }
 
 /**
@@ -159,9 +167,15 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     }
     wasEmpty.current = empty
   }, [empty])
+  // The box shows while Filter Loaded Objects can run (`hasConnection`): lost servers have no rows to narrow. Focus it
+  // held when the last connection went moves to the tree.
+  const filterable = live > 0
+  useLayoutEffect(() => {
+    if (!filterable && !empty && focusLost()) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+  }, [filterable, empty])
   return <>
     <ExplorerToolbar tools={tools} />
-    {servers.length > 0 && <QuickFilter />}
+    {filterable && <QuickFilter />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>

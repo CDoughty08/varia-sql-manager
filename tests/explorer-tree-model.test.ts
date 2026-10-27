@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, filterMatch, filterText, flatten, flattenFiltered, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, filterMatch, filterText, flatten, flattenFiltered, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
 
@@ -384,6 +384,20 @@ describe('Filter loaded objects', () => {
     ])
     expect(filtered(t, 'security').rows).toEqual([['server-a', 1, 1, 1], ['Security', 2, 1, 1]])
   })
+  it('keeps the pinned node (the selection) and its ancestors, matching or not, without counting them', () => {
+    const t = sample(2)
+    // Tables, collapsed while it showed only for its matches, stays with its ancestors.
+    t.tables.expanded = false
+    const pinned = (id: number, text: string) => { const result = flattenFiltered(t.nodes, t.roots, filterText(text), 64, id); return { rows: describeRows(result.rows, t.nodes), matches: result.matches } }
+    expect(pinned(t.tables.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1]], matches: 0 })
+    expect(filtered(t, 'table1').rows).toEqual([['server-a', 1, 1, 1]])
+    // A pinned leaf beside the matches, and a pinned node that is gone or a server, change nothing else.
+    t.tables.expanded = true
+    const security = t.nodes.get(t.server.children!.find(child => child.label === 'Security')!.id)!
+    expect(pinned(security.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 2], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table1', 5, 1, 1], ['Security', 2, 2, 2]], matches: 1 })
+    expect(pinned(9999, 'table1')).toEqual(filtered(t, 'table1'))
+    expect(pinned(t.server.id, 'zzz')).toEqual({ rows: [['server-a', 1, 1, 1]], matches: 0 })
+  })
   it('matches anywhere in the label, ignoring case and surrounding spaces', () => {
     expect(filterText('  Ord ')).toBe('ord')
     expect(filterMatch({ lower: 'dbo.orders' }, 'ord')).toBe(4)
@@ -405,6 +419,17 @@ describe('row layout', () => {
     expect([layout.top(0), layout.height(0), layout.top(1), layout.height(1), layout.top(index), layout.height(index)]).toEqual([0, 30, 30, 22, 30 + (index - 1) * 22, 30])
     expect(layout.total).toBe(rows.count * 22 + 2 * 8)
     expect([layout.indexAt(0), layout.indexAt(29), layout.indexAt(30), layout.indexAt(51), layout.indexAt(52), layout.indexAt(1e9), layout.indexAt(-5)]).toEqual([0, 0, 1, 1, 2, rows.count - 1, 0])
+  })
+  it('scrolls a row into view by where the layout places it, servers above included', () => {
+    const t = sample(3)
+    for (const name of ['server-b', 'server-c', 'server-d']) t.add(0, name, { kind: 'server' })
+    const rows = t.rows(), layout = rowLayout(rows, 22, 30), last = rows.count - 1
+    // The last row, server-d, sits below 3 taller servers: its bottom is 3 · 8 px further down than index · 22 would say.
+    expect(layout.top(last) + layout.height(last)).toBe(last * 22 + 3 * 8 + 30)
+    expect(revealScroll(layout, last, 0, 100)).toBe(layout.total - 100)
+    expect(revealScroll(layout, 1, 200, 100)).toBe(30)
+    expect(revealScroll(layout, 1, 0, 100)).toBeUndefined()
+    expect([revealScroll(layout, -1, 0, 100), revealScroll(layout, rows.count, 0, 100)]).toEqual([undefined, undefined])
   })
   it('windows rows of different heights with overscan, clamped to the rows', () => {
     const t = sample(1000), layout = rowLayout(t.rows(), 22, 30)
