@@ -229,11 +229,12 @@ pages, limits, error codes, display formats, benchmarks).
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
-  every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
-  manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
-  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating. `sql-matrix.yml` (manual
-  runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) and the
+  Windows and macOS jobs run on every PR, drafts included (any base branch, so stacked PRs are tested), every push to
+  main and manual runs; the repository is public, so their minutes cost nothing. macOS skips the smoke tests until they
+  cover its window chrome. Once `npm run check` passes, the smoke suites and the benchmarks each run even when the other
+  failed first, so one run reports both (`tests/ci-workflow.test.ts`). `sql-matrix.yml` (manual runs only) repeats the
+  .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
