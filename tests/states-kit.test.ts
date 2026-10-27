@@ -150,6 +150,9 @@ describe('states kit components', () => {
     expect(markup.startsWith('<div class="inline-error">')).toBe(true)
     const quiet = html(createElement(InlineError, { message: 'Shown again.', role: 'status', copy: false }))
     expect(quiet).toBe('<div class="inline-error"><span class="codicon codicon-error" aria-hidden="true"></span><div class="inline-error-body"><p class="inline-error-message" role="status">Shown again.</p></div></div>')
+    // A note (why nothing here fixes it) is part of the live sentence, so it is read with it and lines up with it.
+    expect(html(createElement(InlineError, { message: 'Not trusted.', note: 'Install a trusted certificate.', copy: false })))
+      .toContain('<p class="inline-error-message" role="alert">Not trusted.<span class="inline-error-note">Install a trusted certificate.</span></p>')
   })
   it('draw bounded placeholder rows that say what is loading', () => {
     expect(html(createElement(Skeleton, { label: 'Loading databases' }))).toBe('<div class="skeleton" role="status"><span class="visually-hidden">Loading databases…</span>'

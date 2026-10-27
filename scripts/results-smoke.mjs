@@ -676,6 +676,9 @@ try {
   await page.keyboard.press('Escape')
   await expect(toast).toHaveCount(0)
   await expect(textbox()).toBeFocused()
+  // The dismissed toast's sentence leaves the live region, so the same sentence again (below) changes it and is read.
+  const politeRegion = page.locator('.toast-layer > [role="status"]')
+  await expect(politeRegion).toHaveText('')
   // Again, held while the second query shows a grid where the toast appears, and this time Show results, clicked with
   // the pointer (which waits until nothing covers it), goes back to the first.
   await run('-- varia-fake: sets=W1*5000')
@@ -689,6 +692,7 @@ try {
   await expect(cell(0, 0)).toBeVisible()
   await rm(join(control, 'hold', 'results.export'))
   await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(politeRegion).toHaveText('Saved 5,000 rows to background.csv.')
   expect(await onTop()).toEqual([true, true, true])
   await page.screenshot({ path: resolve('artifacts', 'results-toast-grid.png') })
   await toast.getByRole('button', { name: 'Show results', exact: true }).click({ timeout: 5000 })

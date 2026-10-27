@@ -28,10 +28,14 @@ const sections: { title: string; fields: Field[] }[] = [
   { title: 'Security', fields: [{ key: 'ipAddressPreference', label: 'IP address preference', choices: ['IPv4First', 'IPv6First', 'UsePlatformDefault'] }, { key: 'serverCertificate', label: 'Server certificate (file path)', maxLength: 1024 }] },
   { title: 'Source', fields: [{ key: 'attachDbFilename', label: 'Attach DB filename', maxLength: 1024 }, { key: 'failoverPartner', label: 'Failover partner', maxLength: 256 }, { key: 'failoverPartnerSpn', label: 'Failover partner SPN', maxLength: 512 }, { key: 'multiSubnetFailover', label: 'Multi subnet failover', boolean: true }, { key: 'serverSpn', label: 'Server SPN', maxLength: 512 }, { key: 'userInstance', label: 'User instance', boolean: true }] }
 ]
-/** SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out. */
-function FailureDetails({ details }: { details: ErrorDetails }) {
-  const rows: [string, string | number | undefined][] = [['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]]
-  return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
+/**
+ * SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out, and with
+ * none (a BACKEND_ERROR carries only its exception types, which Copy details has) there is no expander at all.
+ */
+export function FailureDetails({ details }: { details: ErrorDetails }) {
+  const rows = ([['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]] as const).filter(([, value]) => value !== undefined && value !== '')
+  if (!rows.length) return null
+  return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
 }
 const storageNotes: Record<NonNullable<SecretStorageState['reason']>, string> = {
   'no-keyring': 'Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.',
@@ -376,9 +380,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
         {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
         {notice && <p className="field-note" role="status">{notice}</p>}
         {error && <div ref={failureBox} className="connect-failure">
-          <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions} />
-          {(fix === 'strict' || fix === 'pinned') && <p className="field-note">{fix === 'strict' ? strictCertificate : pinnedCertificate}</p>}
-          {shownFailure?.details && (shownFailure.details.number !== undefined || shownFailure.details.server) && <FailureDetails details={shownFailure.details} />}
+          <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
+            note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
+          {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
         </div>}
       </div>
       <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>

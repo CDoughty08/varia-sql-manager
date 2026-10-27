@@ -503,7 +503,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A failed connect: the error with its fix and Copy details, then SQL Server's facts; next to Connect, at the form's end. */
 .connect-failure { display: flex; flex-direction: column; gap: var(--varia-space-1); scroll-margin-bottom: var(--varia-space-3); }
 .connect-failure > .inline-error { padding: var(--varia-space-2) 0; }
-.connect-failure > .field-note { margin: 0; }
 .connect-error-details { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin-top: 6px; }
 .connect-error-details summary { cursor: pointer; width: max-content; }
 .connect-error-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0 0; }
@@ -686,6 +685,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .inline-error > .codicon { flex: none; color: var(--varia-errorForeground); }
 .inline-error-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
 .inline-error-message { margin: 0; user-select: text; }
+.inline-error-note { display: block; margin-top: var(--varia-space-1); color: var(--varia-descriptionForeground); }
 .inline-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .inline-error-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
 .inline-error-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }

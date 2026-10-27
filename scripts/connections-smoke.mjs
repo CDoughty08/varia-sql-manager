@@ -247,6 +247,7 @@ try {
         if (params.server === 'slow-server') return new Promise(resolve => { globalThis.dbPending.push(resolve) })
         if (params.server === 'db-error') return { ok: false, error: 'Login failed.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'db-error' } }
         if (params.server === 'db-error-plain') return { ok: false, error: 'Discovery failed without details.' }
+        if (params.server === 'db-backend-error') return { ok: false, error: 'The backend operation failed. Verify the connection and object permissions.', code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' } }
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
@@ -347,6 +348,11 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Discovery failed without details/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
+  // A BACKEND_ERROR's details are only its exception types: no Error details expander with nothing in it.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-backend-error')
+  await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
+  await expect(dialog.getByText(/Could not load databases: The backend operation failed/)).toBeVisible()
+  await expect(databaseDetails).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connect-error')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
@@ -380,14 +386,21 @@ try {
   // Strict encryption validates the certificate whatever the box says: the dialog explains, with nothing to click.
   await dialog.getByLabel('Encrypt', { exact: true }).selectOption('strict')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog.getByText(/Strict encryption always validates/)).toBeVisible()
+  // The explanation is part of the alert, so it is read with the error, and it lines up with the error's sentence.
+  const explained = async (text) => {
+    await expect(dialog.getByRole('alert')).toContainText(text)
+    const [note, sentence] = await Promise.all([dialog.locator('.connect-failure .inline-error-note').boundingBox(), dialog.locator('.connect-failure .inline-error-message').boundingBox()])
+    expect(Math.abs(note.x - sentence.x)).toBeLessThan(1)
+  }
+  await explained(/Strict encryption always validates/)
   await expect(trust).toHaveCount(0)
+  await dialog.locator('.connect-failure').screenshot({ path: resolve('artifacts', 'connect-certificate-strict.png') })
   await dialog.getByLabel('Encrypt', { exact: true }).selectOption('mandatory')
   // A pinned Host Name in Certificate is a check the person chose: trusting would skip it, so the dialog only explains.
   await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
   await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('sql01.contoso.com')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
-  await expect(dialog.getByText(/did not match the Server Certificate or the Host Name in Certificate/)).toBeVisible()
+  await explained(/did not match the Server Certificate or the Host Name in Certificate/)
   await expect(trust).toHaveCount(0)
   await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('')
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()

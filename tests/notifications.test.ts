@@ -2,8 +2,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { autoHides, NotificationService, notificationLimits } from '../src/renderer/src/core/notifications'
-import Toasts from '../src/renderer/src/kit/Toasts'
+import Toasts, { ToastAnnouncements } from '../src/renderer/src/kit/Toasts'
 import { connectFix } from '../src/renderer/src/connect-fix'
+import { FailureDetails } from '../src/renderer/src/ConnectDialog'
 import { advancedDefaults } from '../src/shared/connections'
 import { computeContextKeys } from '../src/renderer/src/core/contextkeys'
 import { manualTimers, workbenchFixture } from './fixtures/workbench'
@@ -65,7 +66,48 @@ describe('notification service', () => {
     notifications.notify({ severity: 'error', message: 'x'.repeat(2000), actions: [action, action, action] })
     const long = notifications.getSnapshot().visible[1]
     expect([long.message.length, long.message.endsWith('…'), long.actions?.length]).toEqual([notificationLimits.message, true, notificationLimits.actions])
-    expect(notifications.getSnapshot().announcement).toMatchObject({ id: long.id, assertive: true })
+    expect(notifications.getSnapshot().announcement).toMatchObject({ toastId: long.id, assertive: true })
+  })
+  it('keeps a replaced toast\'s id, place and hold, and starts its time over', () => {
+    const { notifications, timers } = service()
+    const first = notifications.notify({ severity: 'info', message: 'Saved 1 row to a.csv.', key: 'save:t1' })
+    const other = notifications.notify({ severity: 'info', message: 'Other.' })
+    notifications.hold(first, true)
+    // The same toast (so its element, focus and pointer stay), still held while the pointer or focus is on it.
+    expect(notifications.notify({ severity: 'info', message: 'Saved 2 rows to a.csv.', key: 'save:t1' })).toBe(first)
+    expect(notifications.getSnapshot().visible.map(toast => toast.id)).toEqual([first, other])
+    timers.advance(notificationLimits.autoHideMs * 2)
+    expect(messages(notifications)).toEqual(['Saved 2 rows to a.csv.'])
+    notifications.hold(first, false)
+    timers.advance(notificationLimits.autoHideMs - 1)
+    notifications.notify({ severity: 'info', message: 'Saved 3 rows to a.csv.', key: 'save:t1' })
+    timers.advance(notificationLimits.autoHideMs - 1)
+    expect(messages(notifications)).toEqual(['Saved 3 rows to a.csv.'])
+    timers.advance(1)
+    expect(messages(notifications)).toEqual([])
+  })
+  it('announces a sentence that repeats the last one again, and stops announcing a toast once it goes', () => {
+    const { notifications } = service()
+    // The polite region's child: a node keyed by the announcement, or nothing.
+    const region = () => {
+      const tree = ToastAnnouncements({ announcement: notifications.getSnapshot().announcement })
+      const [status] = (tree.props as { children: { props: { children: { key: string | null } | null } }[] }).children
+      return status.props.children
+    }
+    const first = notifications.notify({ severity: 'info', message: 'Saved 5 rows to a.csv.', key: 'save:t1' })
+    const before = region()
+    notifications.notify({ severity: 'info', message: 'Saved 5 rows to a.csv.', key: 'save:t1' })
+    // The same toast and sentence, but a new node in the region, which screen readers read as new.
+    expect(notifications.getSnapshot().announcement).toMatchObject({ toastId: first, text: 'Saved 5 rows to a.csv.' })
+    expect([typeof before?.key, region()?.key !== before?.key]).toEqual(['string', true])
+    const other = notifications.notify({ severity: 'info', message: 'Other.' })
+    notifications.dismiss(first)
+    expect(notifications.getSnapshot().announcement?.toastId).toBe(other)
+    notifications.dismiss(other)
+    expect([notifications.getSnapshot().announcement, region()]).toEqual([undefined, null])
+    notifications.notify({ severity: 'error', message: 'Failed.' })
+    notifications.clear()
+    expect(notifications.getSnapshot().announcement).toBeUndefined()
   })
   it('dismisses a toast before running its action, and survives an action that throws', () => {
     const { notifications } = service()
@@ -99,15 +141,17 @@ describe('toast stack', () => {
     // An error with a report offers Copy details, whose outcome is a status of its own.
     expect(markup).toContain('aria-label="Error" aria-describedby="m2" tabindex="-1"><span class="toast-icon codicon codicon-error" aria-hidden="true"></span><div class="toast-body"><p id="m2" class="toast-message">The package failed.</p>'
       + '<div class="toast-actions"><button type="button">Copy details</button><span class="toast-status" role="status"></span></div>')
-    expect(markup).toContain('<div class="visually-hidden" role="status"></div><div class="visually-hidden" role="alert">The package failed.</div>')
+    expect(markup).toContain('<div class="visually-hidden" role="status"></div><div class="visually-hidden" role="alert"><span>The package failed.</span></div>')
   })
-  it('counts the toasts waiting, and keeps the live regions when nothing shows', () => {
+  it('counts the toasts waiting, and keeps the live regions, empty, when nothing shows', () => {
     const { notifications } = service()
     for (let index = 0; index < 5; index++) notifications.notify({ severity: 'warning', message: `W${index}.` })
-    expect(renderToStaticMarkup(createElement(Toasts, { snapshot: notifications.getSnapshot(), notifications: noop }))).toContain('<p class="toast-more">2 more notifications</p>')
+    const markup = renderToStaticMarkup(createElement(Toasts, { snapshot: notifications.getSnapshot(), notifications: noop }))
+    expect(markup).toContain('<p class="toast-more">2 more notifications</p>')
+    expect(markup).toContain('<div class="visually-hidden" role="status"><span>W4.</span></div>')
     notifications.clear()
     expect(renderToStaticMarkup(createElement(Toasts, { snapshot: notifications.getSnapshot(), notifications: noop })))
-      .toBe('<div class="toast-layer"><div class="visually-hidden" role="status">W4.</div><div class="visually-hidden" role="alert"></div></div>')
+      .toBe('<div class="toast-layer"><div class="visually-hidden" role="status"></div><div class="visually-hidden" role="alert"></div></div>')
   })
 })
 
@@ -117,7 +161,8 @@ describe('notifications in the workbench', () => {
   it('shows a toast for a save that ends while its query is not the active document, and none for the active one', async () => {
     const fixture = workbenchFixture()
     fixtures.push(fixture)
-    const { documents, events, notifications, commands, host } = fixture
+    const { documents, events, notifications, commands, host, panes } = fixture
+    panes.set({ explorer: true, editor: true, output: true })
     documents.newQuery()
     const first = documents.getSnapshot().activeId
     expect(commands.isEnabled('notifications.clearAll')).toBe(false)
@@ -132,6 +177,21 @@ describe('notifications in the workbench', () => {
     notifications.run(toast.id, toast.actions![0])
     await vi.waitFor(() => expect(host.reveal).toHaveBeenCalledWith('output'))
     expect(documents.getSnapshot().activeId).toBe(first)
+    expect(notifications.getSnapshot().visible).toEqual([])
+  })
+  it('shows a toast for a save that ends on the active query while its results pane is hidden', () => {
+    const fixture = workbenchFixture()
+    fixtures.push(fixture)
+    const { documents, events, notifications, panes } = fixture
+    documents.newQuery()
+    const tab = documents.getSnapshot().activeId
+    // Ctrl+R hid the results while the save wrote: the toolbar notice it would get is out of sight.
+    panes.set({ explorer: true, editor: true, output: false })
+    events.emit({ type: 'results.saved', tabId: tab, text: 'Saved 5 rows to a.csv.' })
+    expect(notifications.getSnapshot().visible).toMatchObject([{ message: 'Saved 5 rows to a.csv.', actions: [{ label: 'Show results' }] }])
+    notifications.clear()
+    panes.set({ explorer: true, editor: true, output: true })
+    events.emit({ type: 'results.saved', tabId: tab, text: 'Saved 6 rows to a.csv.' })
     expect(notifications.getSnapshot().visible).toEqual([])
   })
   it('takes Show results off a toast once its query closes, so it never reveals another query\'s output', async () => {
@@ -175,6 +235,11 @@ describe('notifications in the workbench', () => {
 })
 
 describe('Connect fixes', () => {
+  it('show Error details only with SQL Server\'s facts, never an empty expander for a BACKEND_ERROR', () => {
+    expect(renderToStaticMarkup(createElement(FailureDetails, { details: { exception: 'System.DllNotFoundException (0x80131524)' } }))).toBe('')
+    expect(renderToStaticMarkup(createElement(FailureDetails, { details: { number: 18456, server: '' } })))
+      .toBe('<details class="connect-error-details"><summary>Error details</summary><dl><div><dt>Error number</dt><dd>18456</dd></div></dl></details>')
+  })
   const certificate = { number: -2146893019, class: 20, reason: 'certificate' as const }
   it('offer to trust an untrusted certificate, explain Strict and a pinned certificate or name, and offer nothing else', () => {
     expect(connectFix({ encrypt: 'mandatory', trustServerCertificate: false }, certificate)).toBe('trust')

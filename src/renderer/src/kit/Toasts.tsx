@@ -43,6 +43,18 @@ function ToastView({ toast, notifications, writeClipboard, leave }: { toast: Toa
   </div>
 }
 
+/**
+ * The two live regions, always present so a new toast's sentence is announced as it changes. Each announcement is a node
+ * of its own (keyed by its id), so a sentence that repeats the last one still changes the region and is read again.
+ */
+export function ToastAnnouncements({ announcement }: Pick<NotificationSnapshot, 'announcement'>) {
+  const text = (assertive: boolean) => announcement && announcement.assertive === assertive ? <span key={announcement.id}>{announcement.text}</span> : null
+  return <>
+    <div className="visually-hidden" role="status">{text(false)}</div>
+    <div className="visually-hidden" role="alert">{text(true)}</div>
+  </>
+}
+
 interface Props {
   readonly snapshot: NotificationSnapshot
   readonly notifications: Notifications
@@ -69,14 +81,11 @@ export default function Toasts({ snapshot, notifications, writeClipboard = mainC
     else if (cameFrom.current?.isConnected) cameFrom.current.focus()
     else focusFallback?.()
   }
-  const { announcement } = snapshot
   return <div className="toast-layer">
     {snapshot.visible.length > 0 && <section className="toast-stack" aria-label="Notifications" onFocus={entered}>
       {snapshot.visible.map(toast => <ToastView key={toast.id} toast={toast} notifications={notifications} writeClipboard={writeClipboard} leave={leave} />)}
       {snapshot.queued > 0 && <p className="toast-more">{snapshot.queued === 1 ? '1 more notification' : `${snapshot.queued} more notifications`}</p>}
     </section>}
-    {/* Always present, so a new toast's sentence is announced as it changes. */}
-    <div className="visually-hidden" role="status">{announcement && !announcement.assertive ? announcement.text : ''}</div>
-    <div className="visually-hidden" role="alert">{announcement?.assertive ? announcement.text : ''}</div>
+    <ToastAnnouncements announcement={snapshot.announcement} />
   </div>
 }

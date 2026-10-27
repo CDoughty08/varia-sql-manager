@@ -14,7 +14,10 @@ export interface ToastInput {
   readonly actions?: readonly ToastAction[]
   /** A failure's code and details: an error toast then offers Copy details (`errorDetailsText`). */
   readonly report?: Omit<ErrorReport, 'message'>
-  /** A toast with the same key replaces the one shown, so a repeated outcome never stacks up. */
+  /**
+   * A toast with the same key replaces the one shown, so a repeated outcome never stacks up. The replacement keeps the
+   * toast's id and place, so focus and the pointer stay on it and a held toast stays held; its time starts over.
+   */
   readonly key?: string
 }
 export interface Toast extends ToastInput { readonly id: number }
@@ -23,8 +26,11 @@ export interface NotificationSnapshot {
   readonly visible: readonly Toast[]
   /** How many more wait for a place. */
   readonly queued: number
-  /** The newest toast's sentence for the live regions: errors are read at once, the rest politely. */
-  readonly announcement?: { readonly id: number; readonly text: string; readonly assertive: boolean }
+  /**
+   * The newest toast's sentence for the live regions: errors are read at once, the rest politely. Every notify gives it a
+   * new id, so a sentence that repeats the last one is read again; it goes when its toast does.
+   */
+  readonly announcement?: { readonly id: number; readonly toastId: number; readonly text: string; readonly assertive: boolean }
 }
 
 /**
@@ -46,6 +52,7 @@ export const autoHides = (toast: ToastInput) => toast.severity !== 'error' && !t
 export class NotificationService extends SnapshotStore<NotificationSnapshot> implements Disposable {
   private toasts: Toast[] = []
   private nextId = 1
+  private nextAnnouncement = 1
   private readonly timers: Timers
   private readonly hideTimers = new Map<number, unknown>()
   private readonly held = new Set<number>()
@@ -60,18 +67,19 @@ export class NotificationService extends SnapshotStore<NotificationSnapshot> imp
   /** Shows a toast (or queues it behind three), and returns its id for `dismiss`. */
   notify(input: ToastInput): number {
     if (this.disposed) return 0
-    const id = this.nextId++
-    const toast: Toast = { ...input, id, message: bounded(input.message), actions: input.actions?.slice(0, notificationLimits.actions) }
     const replaced = input.key === undefined ? -1 : this.toasts.findIndex(item => item.key === input.key)
+    const id = replaced >= 0 ? this.toasts[replaced].id : this.nextId++
+    const toast: Toast = { ...input, id, message: bounded(input.message), actions: input.actions?.slice(0, notificationLimits.actions) }
     if (replaced >= 0) {
-      this.forget(this.toasts[replaced].id)
+      // Its hold stays (the pointer or focus is still on it); only its time starts over, for the new sentence.
+      this.clearTimer(id)
       this.toasts[replaced] = toast
     } else {
       this.toasts.push(toast)
       // Over the bound, the oldest toast still waiting for a place goes; the ones on screen stay.
       if (this.toasts.length > notificationLimits.visible + notificationLimits.queued) this.toasts.splice(notificationLimits.visible, 1)
     }
-    this.announcement = { id, text: toast.message, assertive: toast.severity === 'error' }
+    this.announcement = { id: this.nextAnnouncement++, toastId: id, text: toast.message, assertive: toast.severity === 'error' }
     this.update()
     return id
   }
@@ -92,6 +100,7 @@ export class NotificationService extends SnapshotStore<NotificationSnapshot> imp
     if (index < 0) return
     this.toasts.splice(index, 1)
     this.forget(id)
+    if (this.announcement?.toastId === id) this.announcement = undefined
     this.update()
   }
 
@@ -99,6 +108,7 @@ export class NotificationService extends SnapshotStore<NotificationSnapshot> imp
   clear(): void {
     for (const toast of this.toasts) this.forget(toast.id)
     this.toasts = []
+    this.announcement = undefined
     this.update()
   }
 
