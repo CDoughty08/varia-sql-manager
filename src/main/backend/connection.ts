@@ -95,6 +95,8 @@ const knownCodes: ReadonlySet<string> = new Set(errorCodes)
 interface Pending {
   readonly id: number
   readonly method: BackendMethod
+  /** methodPolicies' drainMs for this request (0 = none). */
+  readonly drainMs: number
   readonly resolve: (value: unknown) => void
   readonly reject: (error: BackendError) => void
   readonly stream?: StreamSink
@@ -254,7 +256,8 @@ export class BackendConnection {
     let resolve!: (value: unknown) => void
     let reject!: (error: BackendError) => void
     const done = new Promise<unknown>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
-    const pending: Pending = { id, method, resolve, reject, stream: o.stream, onEvent: o.onEvent, granted: credit ?? 0, received: 0, seq: 0 }
+    const drainMs = (policy.drainMs as ((value: unknown) => number) | undefined)?.(params) ?? 0
+    const pending: Pending = { id, method, drainMs, resolve, reject, stream: o.stream, onEvent: o.onEvent, granted: credit ?? 0, received: 0, seq: 0 }
     this.pending.set(id, pending)
     const backstopMs = o.backstopMs ?? 0
     if (backstopMs > 0) pending.timer = this.clock.setTimeout(() => this.backstop(pending, backstopMs), backstopMs)
@@ -279,14 +282,15 @@ export class BackendConnection {
 
   /** Ends this generation on purpose: pending requests fail with `error` (by default BACKEND_LOST, as for any loss),
    *  stdin closes so the backend can end its sessions, and the process is killed if it has not exited within the grace
-   *  period. */
+   *  period, or within the longest drain of a pending request (a Create Catalog, which the backend finishes or undoes first). */
   async close(graceMs: number = wire.timers.stopGraceMs, error?: BackendError): Promise<void> {
+    const drainMs = this.loss ? 0 : Math.max(0, ...[...this.pending.values()].map(request => request.drainMs))
     this.lose({ reason: 'closed', detail: 'closed by main' }, error)
     if (!this.child.stdin.destroyed) this.child.stdin.end()
-    const timeout = () => new Promise<'timeout'>(resolve => this.clock.setTimeout(() => resolve('timeout'), graceMs))
-    if (await Promise.race([this.exited, timeout()]) === 'timeout') {
+    const timeout = (ms: number) => new Promise<'timeout'>(resolve => this.clock.setTimeout(() => resolve('timeout'), ms))
+    if (await Promise.race([this.exited, timeout(Math.max(graceMs, drainMs))]) === 'timeout') {
       this.kill()
-      await Promise.race([this.exited, timeout()])
+      await Promise.race([this.exited, timeout(graceMs)])
     }
   }
 

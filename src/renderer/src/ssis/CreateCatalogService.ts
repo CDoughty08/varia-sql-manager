@@ -1,6 +1,6 @@
 import type { ActionStep } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
-import type { SsisCatalogSetup, SsisError, SsisExecuteResult } from '../../../shared/ssis/schema.ts'
+import { wellFormed, type SsisCatalogSetup, type SsisError, type SsisExecuteResult } from '../../../shared/ssis/schema.ts'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import type { Disposable, ExternalStore } from '../core/types'
@@ -43,6 +43,7 @@ export const createCatalogMessages = {
   clr: 'CLR integration is not enabled. Enable CLR integration first.',
   empty: 'The password field cannot be empty. Input the password and try again.',
   mismatch: 'Passwords you have typed do not match. Retype the password.',
+  broken: 'The password holds a broken character (half of a surrogate pair), which SQL Server would not receive as typed. Retype the password.',
   disconnected: 'The server was disconnected.',
   unknown: 'The connection to the server was lost while Create Catalog ran, so whether the catalog was created is not known. Refresh Integration Services Catalogs to check.',
   stopped: 'Create Catalog was stopped before SQL Server confirmed it. Refresh Integration Services Catalogs to see whether the catalog exists.'
@@ -98,7 +99,8 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
   async create(password: string, retyped: string): Promise<void> {
     const open = this.current
     if (!open || !open.setup || !this.editable(open)) return
-    const problem = !open.enableClr ? createCatalogMessages.clr : password === '' ? createCatalogMessages.empty : password !== retyped ? createCatalogMessages.mismatch : undefined
+    const problem = !open.enableClr ? createCatalogMessages.clr : password === '' ? createCatalogMessages.empty : password !== retyped ? createCatalogMessages.mismatch
+      : !wellFormed(password) ? createCatalogMessages.broken : undefined
     if (problem) { this.update(open, { problem }); return }
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', problem: undefined, error: undefined, steps: undefined, stopping: undefined })

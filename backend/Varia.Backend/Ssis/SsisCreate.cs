@@ -106,6 +106,28 @@ internal static class SsisCreate
         return null;
     }
 
+    /// <summary>Create Catalog's agreement to enable CLR integration, read from the facts whatever else runs (a dry run too): CLR_REQUIRED
+    /// when it is off and the request did not agree, before anything changes.</summary>
+    public static SsisError? ClrRefusal(SsisCatalog catalog, CatalogFacts facts, SsisActionDto action) => !facts.ClrEnabled && action.EnableClr != true
+        ? SsisErrors.Create(catalog, "CLR_REQUIRED", "Integration Services uses CLR stored procedures. Enable CLR integration to create the catalog.")
+        : null;
+
+    /// <summary>Whether text is well-formed UTF-16: every surrogate in a pair. A lone one cannot cross the wire (UTF-8) unchanged.</summary>
+    public static bool WellFormed(string text)
+    {
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (char.IsHighSurrogate(text[index]) && index + 1 < text.Length && char.IsLowSurrogate(text[index + 1])) index++;
+            else if (char.IsSurrogate(text[index])) return false;
+        }
+        return true;
+    }
+
+    /// <summary>The removal's step: done, or failed with what failed, clipped as every SSIS message is (messageChars).</summary>
+    public static ActionStepDto CleanupStep(SsisCatalog catalog, string? failure) => failure is null
+        ? new("done", catalog.CleanupStep)
+        : new("failed", SsisErrors.Create(catalog, "SQL_ERROR", catalog.CleanupStep + ": " + failure).Message);
+
     /// <summary>sp_procoption's choice: on only when the request checked "Enable automatic execution of Integration Services stored
     /// procedure at SQL Server startup".</summary>
     public static SqlParameter StartupParameter(SsisActionDto action) => new("@startup", SqlDbType.Bit) { Value = action.StartupProcedure == true };

@@ -222,7 +222,7 @@ at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds one eithe
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
-| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it at any statement but its restore, and its reply waits (past the grace) for the restore to end and for the removal of what was created |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it at any statement but its restore, and its reply waits (past the grace, a disconnect included) for the restore to end and for the removal of what was created; while one is pending, main closes its generation with a 130 s grace instead of 2 s (`drainMs`), because the backend's shutdown waits up to 120 s for it |
 | `ssis.catalogSetup` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (10 s lock timeout: `BLOCKED`) |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
@@ -375,18 +375,22 @@ SSIS read pool (in the login's own database), refusing before it connects on SQL
 SQL Database and Managed Instance (`NOT_SUPPORTED`), then without sysadmin (`PERMISSION_DENIED`), while the catalog exists
 (`CATALOG_EXISTS`), and without the Integration Services catalog backup or a free place for its files (`NOT_SUPPORTED`).
 `ssis.execute { connectionId, requestId, action: { verb: 'createCatalog', password, enableClr, startupProcedure } }`
-(`password` 1 to 128 UTF-16 code units, no U+0000; both booleans required; no `revision`) is the same sensitive write:
+(`password` 1 to 128 UTF-16 code units, no U+0000, no lone surrogate; both booleans required; no `revision`) is the same sensitive write:
 its own connection, in `master`, a SQL Server login allowed as in SSMS. Its preflight repeats the setup read and
-`RESTORE FILELISTONLY` (within 25 s), answers `CLR_REQUIRED` when CLR integration is off and `enableClr` is false, then runs
+`RESTORE FILELISTONLY` (within 25 s), answers `CLR_REQUIRED` when CLR integration is off and `enableClr` is false (read from the facts, before anything changes), then runs
 SSMS 22's steps from `SsisCreateSql`'s constant commands (values as parameters; the password reaches SQL only through the
 server's own quoting in the master key's `EXEC`): CLR, the restore (never `WITH REPLACE`), the master key, the assembly
-trust and `sp_ssis_startup`, and the maintenance job. Stop cancels the running statement (a lock wait included), except the
+trust (the hash read before a statement of its own adds it, so an add cut short is still removed) and `sp_ssis_startup`, and the maintenance job. Stop cancels the running statement (a lock wait included), except the
 restore and its switch to read-write, which run without the request's token: Stop during them takes effect when they end.
-From the start of the restore the reply, after the usual 10 s grace, waits for the job (`RequestRegistry`'s disconnect-only
-token still answers a disconnect at once). A step after the restore that fails or is stopped adds the step "Remove the
-incomplete catalog", which ends a transaction the cancelled statement left open and drops what this request made, waiting at
+From the start of the restore the reply, after the usual 10 s grace, waits for the job, after a disconnect too. A step after
+the restore that fails or is stopped adds the step "Remove the incomplete catalog" (its message, naming what failed, clipped to
+2,048 characters), which ends a transaction the cancelled statement left open and drops what this request made, waiting at
 most 30 s for each lock (a database left restoring only while it still is and no other session holds it), as SSMS's
 DropCatalog does; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
+A backend whose stdin ends (a quit, a closed window, a renderer reload, Restart Backend) cancels everything as usual, then
+waits up to 120 s (`createDrainMs`) for a Create Catalog past its restore to finish or remove what it made before it exits, and
+main, which sees the pending request, waits 130 s (`createCatalogDrainMs`) instead of 2 s before it kills that generation. Only
+a kill or crash inside that window leaves an incomplete `SSISDB`, which Create Catalog then refuses (`CATALOG_EXISTS`).
 When CLR integration is off and other dynamic `sp_configure` changes wait for a `RECONFIGURE`, both methods answer
 `CONFIGURATION_PENDING` (naming them), because enabling CLR would apply them too.
 
@@ -908,7 +912,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   turn for frames already in the pipe. `powerMonitor` suspend pauses it and resume restarts the window.
 - **Manual restart** (**Restart SQL Backend…**, **Restart now**) asks first when servers are connected ("Restart the SQL
   backend?" / "All {n} connections close and uncommitted transactions are rolled back.", or "The connection closes…" for
-  one), closes the generation gracefully (stdin end, 2 s, then kill), starts the next at once, and resets the breaker.
+  one), closes the generation gracefully (stdin end, 2 s, then kill; 130 s while a Create Catalog is pending, which the
+  backend finishes or undoes first), starts the next at once, and resets the breaker.
   **Reload** of the workbench restarts the backend the same way, without a notice, so no session outlives the page that
   owned it.
 - **Lost renderer.** When the workbench's renderer process stops, main resets the page's state and restarts the backend
@@ -924,7 +929,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
   to 5 s for it; if Chromium still has not seen it (the holder is some other process), the workbench opens in a new
   window where the old one was, and a close or quit the lost page could not finish goes to that window's page. **Close**
   closes such a window at once: its renderer would never answer the unload a close sends it.
-- **Quitting** waits for the backend to stop (stdin end, 2 s, then kill) before the app exits, and for any generation a
+- **Quitting** waits for the backend to stop (stdin end, 2 s, then kill; up to 130 s while a Create Catalog is pending) before the app exits, and for any generation a
   restart is still closing, so a backend that cannot act on EOF never outlives the app with its sessions and locks. While
   it waits the app has no window and releases the single-instance lock, so relaunching starts a new instance at once.
   Closing the last window starts no new backend unless the app keeps running (macOS).
@@ -960,13 +965,13 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
-| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048 | zod and backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, no lone surrogate, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048 | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
-| Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
+| Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s (130 s for a generation with a pending Create Catalog, whose backend waits up to 120 s for it); backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
 | Restarts | after 0 s, 1 s, 2 s; breaker at 3 unexpected losses in 120 s; reset after 300 s ready | main |
 | Registries | 1,024 lost connection ids; 4,096 abandoned request ids; 100,000 owned results per generation; stderr 32 lines × 512 characters | main |
 

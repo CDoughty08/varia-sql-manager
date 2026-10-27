@@ -6,6 +6,7 @@ import {
   valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, createCatalog, type CodeLabel, type SsisActionSpec
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
+import { createCatalogDrainMs } from '../ipc/methods.ts'
 
 export const generatedMarker = '<!-- Generated below from src/shared/ssis/catalog.ts. Regenerate with: npx vitest run tests/ssis-catalog.test.ts -u -->'
 
@@ -41,6 +42,7 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   preflightLockTimeoutMs: 'LOCK_TIMEOUT of a write\'s preflight, in ms (`BLOCKED`)',
   preflightMs: 'A write\'s preflight budget, in ms, answered as `TIMEOUT`',
   stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)',
+  createDrainMs: 'How long a backend that is shutting down waits for a Create Catalog past its restore to finish, or to remove what it created, in ms',
   catalogPassword: 'UTF-16 code units in Create Catalog\'s encryption password (at least 1; the server\'s password policy applies too)',
   serverPath: 'Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files)'
 }
@@ -132,7 +134,7 @@ export function renderSsisDocs(): string {
     'sysadmin, whether the catalog\'s database exists, `clr enabled` in use and `scan for startup procs` (SSMS\'s default for the startup',
     'procedure), the Integration Services folder from the registry value',
     '`HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\\<major>0\\SSIS\\Setup\\DTSPath` (`xp_regread` on the server, as SSMS reads it),',
-    `the catalog backup in its \`Binn\` folder (${createCatalog.backupFiles.map(item => `${code(item.file)} from ${versions[item.since]}`).join(', ')}) and ${code(createCatalog.assemblyFile)}`,
+    `the catalog backup in its \`Binn\` folder (${createCatalog.backupFiles.map(item => `${code(item.file)} from ${versions[item.since]}`).join(', ')}: the one name SSMS 22's \`Catalog.Create\` passes for every version) and ${code(createCatalog.assemblyFile)}`,
     'beside it, whether the backup exists (`xp_fileexist`), the database files\' folder (the master database\'s, from `SERVERPROPERTY(\'MasterFile\')`,',
     'where SSMS puts them) and that `SSISDB.mdf` and `SSISDB.ldf` are not there yet, and the backup\'s logical files (`RESTORE FILELISTONLY`).',
     'It is refused before it connects on SQL Server before 2016, on Linux, and on Azure SQL Database and Managed Instance (an Azure-SSIS',
@@ -152,7 +154,8 @@ export function renderSsisDocs(): string {
     '   collation it would double U+FF07 (fullwidth apostrophe), which the literal reads as an ASCII quote, so the key\'s password would',
     '   not be the one typed. The assembly\'s path and the cleanup login\'s random password are quoted the same way.',
     '4. **Register the Integration Services assembly and startup procedure**: after 14.0.800.11 (SQL Server 2017 and later, as SSMS',
-    '   decides it) the assembly\'s SHA2_512 hash with `sys.sp_add_trusted_assembly`; before, the asymmetric key',
+    '   decides it) the assembly\'s SHA2_512 hash with `sys.sp_add_trusted_assembly`, read (and kept for the removal) in one statement',
+    '   before another adds it, so an add that Stop or a lost reply cuts short is still removed; before, the asymmetric key',
     '   `MS_SQLEnableSystemAssemblyLoadingKey`, its login and `UNSAFE ASSEMBLY`. Then `master.dbo.sp_ssis_startup` (SSMS\'s text), and',
     '   `sp_procoption` when the startup procedure was chosen.',
     '5. **Create the maintenance job**: `##MS_SSISServerCleanupJobLogin##` with a random password the server generates, disabled, its user',
@@ -168,8 +171,13 @@ export function renderSsisDocs(): string {
     'lock on it (another restore of the same name holds an exclusive one). Stop ends Create Catalog at any statement but the restore',
     'itself (and its switch to read-write), because a half-restored catalog is worse than waiting: Stop during the restore lets it end,',
     'then removes what it created; Stop at a later statement, waiting for a lock or not, has SQL Server cancel it and removes what was',
-    'created. Its reply waits for that, past the usual grace, and lists the steps (a disconnect still answers at once). The password is',
-    'a parameter only: it is never in SQL text Varia builds, in messages, in logs or on disk, and the request\'s frame is zeroed on both sides.',
+    'created. Its reply waits for that, past the usual grace, a disconnect included, and lists the steps (the removal\'s own failures',
+    `clipped to ${ssisLimits.messageChars.toLocaleString('en-US')} characters). A backend that shuts down (a quit, a closed window, a renderer reload, Restart Backend) waits up to`,
+    `${ssisLimits.createDrainMs / 1000} s for a Create Catalog past its restore to finish or remove what it made, and main lets that generation run ${createCatalogDrainMs / 1000} s after its`,
+    'stdin ends (2 s otherwise) before it kills it; only a kill or a crash in that window leaves an incomplete catalog, which Create Catalog then',
+    'refuses as `CATALOG_EXISTS` until its database is dropped. The CLR agreement is checked from the server\'s facts before any step, in a',
+    'dry run too. The password is a parameter only, well-formed UTF-16 (a lone surrogate would reach the server as U+FFFD): it is never in',
+    'SQL text Varia builds, in messages, in logs or on disk, and the request\'s frame is zeroed on both sides.',
     '',
 
     '### Code tables',

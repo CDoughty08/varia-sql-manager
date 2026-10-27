@@ -79,18 +79,23 @@ What the checks prove:
   answers `CATALOG_MISSING`; and no actions session is left behind. On CI's SQL Server authentication the internal
   `SsisOptions.IgnoreSqlAuthentication` lets them run.
 - **Create Catalog, offline** (`SsisCreateChecks`, `tests/ssis-schema.test.ts`, `tests/create-catalog-service.test.ts`): the
-  verb and the backup's file name per version come from the catalogue; every server verb runs only commands
+  verb and the backup's file name (`SSISDBBackup.bak` on every version) come from the catalogue; every server verb runs only commands
   `SsisCreateSql.ServerCommands` lists for it, and every command passes its lint, which rejects the password or a parameter
   concatenated into SQL or wrapped in anything but `QUOTENAME` or the server's quote escape (`REPLACE` in
   `Latin1_General_BIN2`), the password anywhere but once in the master key, unquoted dynamic text, a `WITH REPLACE`
   restore, a restore, drop or `ROLLBACK IMMEDIATE` outside their own commands, format placeholders, unknown variables and
   the shell (each caught case is in its mutation list); the commands keep SSMS 22's reads, restore, master key quoting, version test for the
-  assembly, startup procedure and maintenance job; the refusals come in SSMS's order and words, then `CONFIGURATION_PENDING` when enabling CLR would apply
-  other pending configuration changes, Azure, Managed Instance, Linux and servers before 2016 before connecting; the startup
-  choice reaches `sp_procoption` as chosen; the removal after a Stop or failure lists exactly what was made, in
-  DropCatalog's order; Stop's reply (`AfterStopAsync`) is the job's answer within the grace, waits past it for a job that
-  answers Stop itself, answers a disconnect at once and otherwise answers `CANCELLED`; requests validate in zod and C# alike (UTF-16 lengths);
-  the request's records never print the password; and the dialog's state never holds it.
+  assembly (whose hash is read before a statement of its own adds it), startup procedure and maintenance job; the refusals come in SSMS's
+  order and words, then `CONFIGURATION_PENDING` when enabling CLR would apply other pending configuration changes, `CLR_REQUIRED` when
+  CLR is off and the request did not agree (`SsisCreate.ClrRefusal`), Azure, Managed Instance, Linux and servers before 2016 before
+  connecting; the startup choice reaches `sp_procoption` as chosen; the removal after a Stop or failure lists exactly what was made, in
+  DropCatalog's order, and its step's message is clipped to 2,048 characters; Stop's reply (`AfterStopAsync`) is the job's answer
+  within the grace, waits past it for a job that answers Stop itself and otherwise answers `CANCELLED`; a backend that shuts down
+  waits, within `createDrainMs`, for committed jobs only (`CommittedJobs`, and `HostChecks`: stdin EOF drains before the service is
+  disposed); main lets a closing generation with a pending Create Catalog run `createCatalogDrainMs` before the kill, and others the
+  usual 2 s (`tests/backend-connection.test.ts`); requests validate in zod and C# alike (UTF-16 lengths, no lone surrogate); the
+  request's records never print the password; the dialog's state never holds it, refuses a broken password, and cancels its setup
+  read when it closes while loading; and the command is disabled on a lost node or server.
 - **Create Catalog, live** (`SsisCreateLiveChecks`): every live run reads `ssis.catalogSetup` and compares it with an
   independent read (CLR in use, scan for startup procs, the catalog backup from the registry's `DTSPath`, the files
   beside `master.mdf`, or the refusal), and checks that it left what only Create Catalog makes as it was, within the read's own budget. With `VARIA_TEST_SQL_SCRATCH=1` on Windows
@@ -98,17 +103,25 @@ What the checks prove:
   key steps into a marked `VariaScratch_…_ssiscc` database with a 128-character password made to break out of quotes,
   brackets and comments and holding U+FF07, U+2019 and U+02BC, which opens the master key exactly as typed (not with those
   made ASCII) while another password does not; a second run answers
-  `CATALOG_EXISTS`; a step that fails after the restore (the database made read-only from another session) removes the
-  database; Stop during the restore lets it end and then removes the database; Stop while the master key waits for another
-  session's lock answers within the grace with the database removed; Stop before the restore creates nothing;
-  and the server's CLR, assembly trust, `sp_ssis_startup`, SSIS jobs and logins are as before. With
+  `CATALOG_EXISTS`; on a server with CLR off, a request that did not agree to it answers `CLR_REQUIRED` and creates nothing; a
+  database another session creates between the preflight and the restore is refused by the restore's own check
+  (`CATALOG_EXISTS`, no removal step) and stays online, and the destructive check's guarded drop leaves it alone unless its
+  recorded identity matches; the removal after a failed restore drops a database still RESTORING and keeps an online one; a
+  step that fails after the restore (the database made read-only from another session) removes the database; Stop during
+  the restore lets it end and then removes the database; a shutdown during the restore (`CancelAll` then `DrainCommitted`,
+  as `ProtocolHost` does on stdin EOF) returns only after the removal, and the request still answers its steps; Stop while
+  the master key waits for another session's lock answers within the grace with the database removed; Stop before the
+  restore creates nothing; and the server's CLR, assembly trust, `sp_ssis_startup`, SSIS jobs and logins are as before. With
   `VARIA_TEST_SSIS_CREATE=1` only (never set by default; a server whose owner allows it) and only on a server without
-  `SSISDB` (it never drops a catalog it did not create, whose projects, history and master key password would be lost), the
-  destructive check creates the catalog with Varia, checks what SSMS's Create leaves (online, read-write, master key opening
-  with the password, CLR in use, `sp_ssis_startup` not at startup when not chosen, the disabled cleanup login and its user's
-  grants, the maintenance job's two steps and schedule, a readable catalog), refuses a second Create, removes the catalog,
-  then creates it again with the startup procedure chosen (checked) and its last step made to fail, and checks that the
-  removal left the server as before; CLR is restored.
+  `SSISDB`, the destructive check creates the catalog with Varia, checks what SSMS's Create leaves (online, read-write, master
+  key opening with the password, CLR in use, `sp_ssis_startup` not at startup when not chosen, the disabled cleanup login and
+  its user's grants, the maintenance job's two steps and schedule, a readable catalog), refuses a second Create, removes the
+  catalog, then creates it again with the startup procedure chosen (checked) and its last step made to fail, and checks that
+  the removal left the server as before. It never drops a catalog it did not create, whose projects, history and master key
+  password would be lost: it records the identity (`database_id`, `create_date`) of the SSISDB its own Create restored and
+  drops only that, and checks for SSISDB again before each Create, stopping when another session made one. It puts CLR back
+  off only when its own Create enabled it, and refuses to when other configuration changes wait for `RECONFIGURE`. Because
+  it skips a server that has SSISDB, it must run before the owner creates the local catalog, or on a disposable server.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -136,7 +149,7 @@ code, not its behaviour under load. "Backup" marks what the backup shows, "fake"
 | 14.9 | Create Catalog: finding the backup and assembly, and post-restore steps | The backup is in the version's `DTS\Binn` folder next to `Microsoft.SqlServer.IntegrationServices.Server.dll` (see 14.12). It holds the `ISSERVER` and `Microsoft.SqlServer.Types` assemblies (UNSAFE), the `MS_SQLISSigningCertificate` certificate, the `ssis_admin`, `ssis_logreader`, `ssis_cluster_executor`, `ssis_cluster_worker` and `ssis_failover_monitoring_agent` roles and the `ddl_cleanup_object_permissions` database trigger, but no master key or symmetric key, and its `dbo` is `sa`. Restoring it upgrades it from database version 984 to the engine's. S9a read SSMS 22's object model (`Catalog.Create` and `CatalogHelper` in its Integration Services assemblies): sysadmin; the backup from the registry's `DTSPath` (`xp_regread` on the server, so a remote server works) checked with `xp_fileexist`; `DatabaseCheck.sql`; CLR in use; the new files beside `master.mdf`, refused if they exist; `RESTORE FILELISTONLY` and `RESTORE DATABASE … WITH REPLACE, MOVE …` with parameters, then `SET READ_WRITE` if needed; `DropMasterKey.sql` and the master key; `CreateCatalog.sql` (assembly trust, `sp_ssis_startup`, `sp_procoption`); `CreateCleanupJobLogin.sql` and `CreateMaintenanceJob.sql`; and on a failure from the restore on, `DropCatalog.sql` and `DropSSISDB.sql`. The dialog enables CLR through SMO first. Varia's Create Catalog does the same, except where noted under Create Catalog below; its dry run restores the backup and creates the master key on this machine, and its destructive live check (`VARIA_TEST_SSIS_CREATE=1`) the rest | SSMS's object model; dry run on 2025; open for the full create (the owner's first Create Catalog) |
 | 14.10 | Azure: SQL authentication and Entra for writes, a stopped IR, `SCHEMA_VERSION_AZURE` | Not checked: no Azure-SSIS IR was available | Open |
 | 14.11 | Lock behaviour of the row-level security under READ UNCOMMITTED, and error 601 during cleanup | The security filter reads `internal.current_user_readable_operations` and role functions (14.2), and `IS_MEMBER` waits on an uncommitted change to its role's members even under READ UNCOMMITTED (see the role functions below). In the fake, a READ COMMITTED read waits on a writer's row until `LOCK_TIMEOUT` (1222) while READ UNCOMMITTED reads through; how the real views behave under load and how often 601 occurs during the nightly cleanup are not measured | Fake; open for a real catalog |
-| 14.12 | The default path of `SSISDBBackup.bak` | `<shared features>\<major>0\DTS\Binn\`, and on SQL Server 2025 the file `SSISDBBackup.bak` (U3's `SSISDB.bak` is the earlier versions' name). The .NET check takes the shared-features folder to be the folder above `MSSQL<n>.<instance>` in the engine's service command line (`sys.dm_server_services`), which holds only when Setup put the instance root (`INSTANCEDIR`) and the shared features (`INSTALLSHAREDDIR`, where `DTS` goes) in one folder, as the defaults do and as on this machine; with custom folders it finds no backup and skips its drift check, saying why. The authoritative location is the registry's `HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\<major>0\SSIS\Setup\DTSPath` (`C:\Program Files\Microsoft SQL Server\170\DTS\` here). Create Catalog reads `DTSPath` on the server as SSMS 22 does, so custom folders work; the path is not editable (SSMS's is not either) | Backup on 2025 with default folders; open for earlier versions' file name |
+| 14.12 | The default path of `SSISDBBackup.bak` | `<shared features>\<major>0\DTS\Binn\SSISDBBackup.bak` on every version: SSMS 22's `Catalog.Create` and `EnableSupportForAlwaysOnSecondary` pass the one literal `SSISDBBackup.bak` to `CatalogHelper.GetCatalogBackupPath`, with no version branch, and no SSMS assembly names `SSISDB.bak` (U3's name, which an earlier S9a draft and owner decision "Create Catalog moves forward" took for the files of 2016 to 2022). The .NET check takes the shared-features folder to be the folder above `MSSQL<n>.<instance>` in the engine's service command line (`sys.dm_server_services`), which holds only when Setup put the instance root (`INSTANCEDIR`) and the shared features (`INSTALLSHAREDDIR`, where `DTS` goes) in one folder, as the defaults do and as on this machine; with custom folders it finds no backup and skips its drift check, saying why. The authoritative location is the registry's `HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\<major>0\SSIS\Setup\DTSPath` (`C:\Program Files\Microsoft SQL Server\170\DTS\` here). Create Catalog reads `DTSPath` on the server as SSMS 22 does, so custom folders work; the path is not editable (SSMS's is not either) | Backup on 2025 with default folders; SSMS 22's object model for the name on 2016 to 2022 (no such server here) |
 
 Not yet done: the probe against a created catalog, the drift check against it, and the fixture project
 (`tests/fixtures/ssis/VariaFixtures/` with its `.ispac`), which needs Visual Studio's SSIS Projects extension. Each
@@ -274,7 +287,7 @@ Its dialog first reads `ssis.catalogSetup` on the SSIS read pool, and the write 
 sysadmin, whether the catalog's database exists, `clr enabled` in use and `scan for startup procs` (SSMS's default for the startup
 procedure), the Integration Services folder from the registry value
 `HKLM\SOFTWARE\Microsoft\Microsoft SQL Server\<major>0\SSIS\Setup\DTSPath` (`xp_regread` on the server, as SSMS reads it),
-the catalog backup in its `Binn` folder (`SSISDBBackup.bak` from 2025, `SSISDB.bak` from 2016) and `Microsoft.SqlServer.IntegrationServices.Server.dll`
+the catalog backup in its `Binn` folder (`SSISDBBackup.bak` from 2016: the one name SSMS 22's `Catalog.Create` passes for every version) and `Microsoft.SqlServer.IntegrationServices.Server.dll`
 beside it, whether the backup exists (`xp_fileexist`), the database files' folder (the master database's, from `SERVERPROPERTY('MasterFile')`,
 where SSMS puts them) and that `SSISDB.mdf` and `SSISDB.ldf` are not there yet, and the backup's logical files (`RESTORE FILELISTONLY`).
 It is refused before it connects on SQL Server before 2016, on Linux, and on Azure SQL Database and Managed Instance (an Azure-SSIS
@@ -294,7 +307,8 @@ shows it in use as 16): the user agreed to CLR integration, not to them. Then, i
    collation it would double U+FF07 (fullwidth apostrophe), which the literal reads as an ASCII quote, so the key's password would
    not be the one typed. The assembly's path and the cleanup login's random password are quoted the same way.
 4. **Register the Integration Services assembly and startup procedure**: after 14.0.800.11 (SQL Server 2017 and later, as SSMS
-   decides it) the assembly's SHA2_512 hash with `sys.sp_add_trusted_assembly`; before, the asymmetric key
+   decides it) the assembly's SHA2_512 hash with `sys.sp_add_trusted_assembly`, read (and kept for the removal) in one statement
+   before another adds it, so an add that Stop or a lost reply cuts short is still removed; before, the asymmetric key
    `MS_SQLEnableSystemAssemblyLoadingKey`, its login and `UNSAFE ASSEMBLY`. Then `master.dbo.sp_ssis_startup` (SSMS's text), and
    `sp_procoption` when the startup procedure was chosen.
 5. **Create the maintenance job**: `##MS_SSISServerCleanupJobLogin##` with a random password the server generates, disabled, its user
@@ -310,8 +324,13 @@ appeared meanwhile) removes nothing, and a database left restoring by a failed r
 lock on it (another restore of the same name holds an exclusive one). Stop ends Create Catalog at any statement but the restore
 itself (and its switch to read-write), because a half-restored catalog is worse than waiting: Stop during the restore lets it end,
 then removes what it created; Stop at a later statement, waiting for a lock or not, has SQL Server cancel it and removes what was
-created. Its reply waits for that, past the usual grace, and lists the steps (a disconnect still answers at once). The password is
-a parameter only: it is never in SQL text Varia builds, in messages, in logs or on disk, and the request's frame is zeroed on both sides.
+created. Its reply waits for that, past the usual grace, a disconnect included, and lists the steps (the removal's own failures
+clipped to 2,048 characters). A backend that shuts down (a quit, a closed window, a renderer reload, Restart Backend) waits up to
+120 s for a Create Catalog past its restore to finish or remove what it made, and main lets that generation run 130 s after its
+stdin ends (2 s otherwise) before it kills it; only a kill or a crash in that window leaves an incomplete catalog, which Create Catalog then
+refuses as `CATALOG_EXISTS` until its database is dropped. The CLR agreement is checked from the server's facts before any step, in a
+dry run too. The password is a parameter only, well-formed UTF-16 (a lone surrogate would reach the server as U+FFFD): it is never in
+SQL text Varia builds, in messages, in logs or on disk, and the request's frame is zeroed on both sides.
 
 ### Code tables
 
@@ -459,5 +478,6 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `preflightLockTimeoutMs` | 10,000 | LOCK_TIMEOUT of a write's preflight, in ms (`BLOCKED`) |
 | `preflightMs` | 25,000 | A write's preflight budget, in ms, answered as `TIMEOUT` |
 | `stopGraceMs` | 10,000 | How long a stopped write's reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown) |
+| `createDrainMs` | 120,000 | How long a backend that is shutting down waits for a Create Catalog past its restore to finish, or to remove what it created, in ms |
 | `catalogPassword` | 128 | UTF-16 code units in Create Catalog's encryption password (at least 1; the server's password policy applies too) |
 | `serverPath` | 1,024 | Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files) |

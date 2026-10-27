@@ -178,13 +178,15 @@ export const stoppableOperationTypes = [200, 300, 301] as const
 
 /** What Create Catalog restores and trusts, as SSMS 22 finds them: the files Integration Services installs in its
  *  `<DTSPath>Binn` folder (the registry's `SSISSetupDTSPath` for the server's version, read on the server), the catalog
- *  backup by the first band that names it so, and the step a failure after the restore adds to remove what was created. */
+ *  backup by the first band that names it so, and the step a failure after the restore adds to remove what was created.
+ *  SSMS 22's Catalog.Create passes the one literal `SSISDBBackup.bak` to CatalogHelper.GetCatalogBackupPath for every
+ *  version, and SQL Server 2016 to 2025 install that name (`SSISDB.bak` is no file Integration Services installs). */
 export const createCatalog = {
-  backupFiles: [{ since: 17, file: 'SSISDBBackup.bak' }, { since: 13, file: 'SSISDB.bak' }],
+  backupFiles: [{ since: 13, file: 'SSISDBBackup.bak' }],
   assemblyFile: 'Microsoft.SqlServer.IntegrationServices.Server.dll',
   cleanupStep: 'Remove the incomplete catalog'
 } as const
-/** The catalog backup's file name on a server of this band (2025 renamed it). */
+/** The catalog backup's file name on a server of this band. */
 export const catalogBackupFile = (band: number): string => createCatalog.backupFiles.find(item => band >= item.since)?.file ?? createCatalog.backupFiles[createCatalog.backupFiles.length - 1].file
 
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
@@ -260,6 +262,9 @@ export const ssisLimits = {
   preflightMs: 25_000,
   /** How long a stopped write's reply waits for SQL Server to end its statement, then answers CANCELLED (outcome unknown). */
   stopGraceMs: 10_000,
+  /** How long a backend that is shutting down (stdin ended: a quit, a closed window, a reload or Restart Backend) waits for a
+   *  Create Catalog past its restore to finish or remove what it created; main's grace for that generation is longer. */
+  createDrainMs: 120_000,
   /** Create Catalog's encryption password, in UTF-16 code units; the server's password policy applies too. */
   catalogPassword: 128,
   /** A path Create Catalog reads on the server (the catalog backup, the assembly, the database files). */

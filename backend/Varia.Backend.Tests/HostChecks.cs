@@ -185,9 +185,13 @@ internal static class HostChecks
 
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
+            host.Dispatcher.DrainFor = TimeSpan.FromMilliseconds(400);
+            var closing = Stopwatch.StartNew();
             host.CloseInput();
-            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && host.Dispatcher.Disposed,
-                "stdin EOF cancels everything, disposes the service and exits 0");
+            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && host.Dispatcher.Disposed
+                && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
+                "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
+                + closing.ElapsedMilliseconds + " ms)");
         }
 
         using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(200) }))
@@ -478,6 +482,16 @@ internal sealed class StubDispatcher : IRequestDispatcher
     }
 
     public void CancelAll() => Interlocked.Increment(ref CancelAllCalls);
+    /// <summary>How long DrainCommitted holds shutdown, as a Create Catalog finishing its removal would.</summary>
+    public TimeSpan DrainFor;
+    public int DrainCalls;
+    public bool DisposedBeforeDrain;
+    public void DrainCommitted()
+    {
+        if (Disposed) DisposedBeforeDrain = true;
+        Thread.Sleep(DrainFor);
+        Interlocked.Increment(ref DrainCalls);
+    }
     public void Dispose() => Disposed = true;
 }
 
@@ -501,6 +515,7 @@ internal sealed class HeldSummary(SqlService service, ManualResetEventSlim taken
     }
 
     public void CancelAll() => service.CancelAll();
+    public void DrainCommitted() => service.DrainCommitted();
     public void Dispose() => service.Dispose();
 }
 

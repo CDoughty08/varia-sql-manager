@@ -13,7 +13,7 @@ import {
 } from '../src/shared/ssis/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
 import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
-import { methodPolicies } from '../src/shared/ipc/methods'
+import { createCatalogDrainMs, methodPolicies } from '../src/shared/ipc/methods'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
 const docsPath = join('docs', 'integration-services.md')
@@ -93,12 +93,17 @@ describe('SSIS catalogue', () => {
   it('keeps the write path\'s limits: one write per connection, two in all, no deadline, and a sensitive frame', () => {
     expect(ssisLimits).toMatchObject({ writePerConnection: 1, writeTotal: 2, registeredWrites: 64, preflightLockTimeoutMs: 10_000, preflightMs: 25_000, stopGraceMs: 10_000 })
     // A write waits for locks as SSMS does, so only Stop ends it; later verbs carry sensitive values, so the frame is zeroed once written.
-    expect(methodPolicies['ssis.execute']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    const { drainMs, ...policy } = methodPolicies['ssis.execute']
+    expect(policy).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    // A closing generation runs on while Create Catalog finishes or undoes itself (createDrainMs in the backend); Stop Operation needs no drain.
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'createCatalog', password: 'x', enableClr: true, startupProcedure: false } })).toBe(createCatalogDrainMs)
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'stopOperation', operationId: 1 } })).toBe(0)
+    expect(createCatalogDrainMs).toBeGreaterThan(ssisLimits.createDrainMs)
     expect(ssisLimits.registeredWrites).toBeLessThanOrEqual(ssisLimits.registered)
   })
   it('finds the catalog backup by version, as Integration Services names it, and bounds Create Catalog inputs', () => {
-    // SQL Server 2025 installs SSISDBBackup.bak; 2016 to 2022 install SSISDB.bak (docs/integration-services.md 14.12).
-    expect([13, 14, 15, 16, 17, 18].map(catalogBackupFile)).toEqual(['SSISDB.bak', 'SSISDB.bak', 'SSISDB.bak', 'SSISDB.bak', 'SSISDBBackup.bak', 'SSISDBBackup.bak'])
+    // SSMS 22's Catalog.Create names SSISDBBackup.bak for every version (docs/integration-services.md 14.12); SSISDB.bak is no installed file.
+    expect([13, 14, 15, 16, 17, 18].map(catalogBackupFile)).toEqual(Array(6).fill('SSISDBBackup.bak'))
     expect(createCatalog.assemblyFile).toBe('Microsoft.SqlServer.IntegrationServices.Server.dll')
     expect(ssisLimits).toMatchObject({ catalogPassword: 128, serverPath: 1024 })
     // The dialog's read is a read: no secret, a describe's deadline.

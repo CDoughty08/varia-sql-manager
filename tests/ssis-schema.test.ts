@@ -91,8 +91,8 @@ describe('Create Catalog requests', () => {
     }
     expect(valid(create({ enableClr: false, startupProcedure: true }))).toBe(true)
   })
-  it('refuses an empty, long or NUL password, a missing choice, members of other verbs, and a revision', () => {
-    for (const password of ['', 'p'.repeat(129), '𝒜'.repeat(64) + 'a', 'a\u0000b', 42, null]) expect(valid(create({ password })), String(password)).toBe(false)
+  it('refuses an empty, long, NUL or lone-surrogate password, a missing choice, members of other verbs, and a revision', () => {
+    for (const password of ['', 'p'.repeat(129), '𝒜'.repeat(64) + 'a', 'a\u0000b', '\uD800abc', 'abc\uDC00', '\uDC00\uD800', 42, null]) expect(valid(create({ password })), String(password)).toBe(false)
     expect(valid(create({ enableClr: undefined }))).toBe(false)
     expect(valid(create({ startupProcedure: 'yes' }))).toBe(false)
     expect(valid(create({ operationId: 1 }))).toBe(false)

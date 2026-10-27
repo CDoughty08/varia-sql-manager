@@ -256,10 +256,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return name;
     }
 
-    /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
     public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
 
+    /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
         foreach (var name in created) await Drop(run, name, name != Offline);

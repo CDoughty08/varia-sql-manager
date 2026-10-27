@@ -59,35 +59,53 @@ internal static class SsisCreateChecks
     }
 
     /// <summary>ExecuteAsync's Stop reply against fake jobs: within the grace it is the job's answer; past it, a job that answers Stop itself
-    /// (Create Catalog from its restore on) is waited for, and a disconnect still answers at once; any other job answers CANCELLED.</summary>
+    /// (Create Catalog from its restore on) is waited for; any other job answers CANCELLED. A backend that shuts down waits, within its
+    /// bound, for committed jobs only.</summary>
     private static async Task StopAsync(Action<bool, string> check)
     {
         using var reads = new SsisService(new SsisChecks.FakeHost(), new SsisOptions { StopGrace = TimeSpan.FromMilliseconds(200) });
         using var service = new SsisActionService(new SsisChecks.FakeHost(), reads);
         var answer = new SsisExecuteResult([new("done", "x")], 0);
-        async Task<(string Outcome, long Ms)> Run(Task<SsisExecuteResult> job, bool committed, CancellationToken forgotten)
+        async Task<(string Outcome, long Ms)> Run(Task<SsisExecuteResult> job, bool committed)
         {
             var progress = new SsisActionService.JobProgress();
             if (committed) progress.Commit();
             var watch = Stopwatch.StartNew();
             try
             {
-                var result = await service.AfterStopAsync(job, progress, forgotten, new CancellationToken(true));
+                var result = await service.AfterStopAsync(job, progress, new CancellationToken(true));
                 return (result.Error?.Code ?? "answer", watch.ElapsedMilliseconds);
             }
             catch (RequestException error) { return ("request " + error.Code, watch.ElapsedMilliseconds); }
             catch (OperationCanceledException) { return ("cancelled", watch.ElapsedMilliseconds); }
         }
         async Task<SsisExecuteResult> After(int ms) { await Task.Delay(ms); return answer; }
-        var quick = await Run(After(20), false, CancellationToken.None);
-        var late = await Run(After(700), true, CancellationToken.None);
-        var abandoned = await Run(After(700), false, CancellationToken.None);
-        using var disconnect = new CancellationTokenSource(400);
-        var lost = await Run(new TaskCompletionSource<SsisExecuteResult>().Task, true, disconnect.Token);
-        var early = await Run(Task.FromException<SsisExecuteResult>(new OperationCanceledException()), false, CancellationToken.None);
-        check(quick is ("answer", < 200) && late is ("answer", >= 600) && abandoned is ("cancelled", >= 150 and < 600) && lost is ("request CANCELLED", >= 300 and < 2_000) && early.Outcome == "CANCELLED",
-            "Stop's reply is the job's answer within the grace; past it, a job that answers Stop itself is waited for until it does, a disconnect answers at once, and any other job answers "
-            + "CANCELLED; a job that ended on the Stop before a step is a CANCELLED value: " + string.Join(", ", quick, late, abandoned, lost, early));
+        var quick = await Run(After(20), false);
+        var late = await Run(After(700), true);
+        var abandoned = await Run(After(700), false);
+        var early = await Run(Task.FromException<SsisExecuteResult>(new OperationCanceledException()), false);
+        check(quick is ("answer", < 200) && late is ("answer", >= 600) && abandoned is ("cancelled", >= 150 and < 600) && early.Outcome == "CANCELLED",
+            "Stop's reply is the job's answer within the grace; past it, a job that answers Stop itself is waited for until it does, and any other job answers "
+            + "CANCELLED; a job that ended on the Stop before a step is a CANCELLED value: " + string.Join(", ", quick, late, abandoned, early));
+
+        // Shutdown's drain: committed jobs only, within the bound.
+        static SsisActionService.JobProgress Progress(bool committed) { var progress = new SsisActionService.JobProgress(); if (committed) progress.Commit(); return progress; }
+        var jobs = new SsisActionService.CommittedJobs();
+        var never = new TaskCompletionSource().Task;
+        jobs.Track(never, Progress(false));
+        var finishing = Task.Delay(300);
+        jobs.Track(finishing, Progress(true));
+        var watch = Stopwatch.StartNew();
+        var drained = jobs.Wait(TimeSpan.FromSeconds(10));
+        var drainedMs = watch.ElapsedMilliseconds;
+        var stuck = new SsisActionService.CommittedJobs();
+        stuck.Track(never, Progress(true));
+        watch.Restart();
+        var bounded = stuck.Wait(TimeSpan.FromMilliseconds(200));
+        var boundedMs = watch.ElapsedMilliseconds;
+        var empty = new SsisActionService.CommittedJobs().Wait(TimeSpan.FromSeconds(10));
+        check(drained && drainedMs is >= 250 and < 5_000 && !bounded && boundedMs is >= 150 and < 5_000 && empty && reads.Options.CreateDrain == TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("createDrainMs")),
+            "a backend that shuts down waits for a Create Catalog past its restore, not for jobs that end on their token, and no longer than its bound: " + drainedMs + " ms, " + boundedMs + " ms");
     }
 
     internal static SsisExecuteArgs Create(string password = "Pa'ss]--w0rd", bool? enableClr = true, bool? startup = false, string? connectionId = null) =>
@@ -100,10 +118,11 @@ internal static class SsisCreateChecks
         check(create is { Title: "Create Catalog", Server: true, Revision: false, WindowsAuthOnBox: false, Procedures.Count: 0 } && catalog.Action("stopOperation") is { Server: false }
             && create.Steps.SequenceEqual(["Enable CLR integration", "Restore the catalog database", "Create the master key", "Register the Integration Services assembly and startup procedure", "Create the maintenance job"]),
             "Create Catalog is a server verb of the catalogue with SSMS's five steps, any authentication, and no catalog procedure");
-        check(new[] { 13, 14, 15, 16, 17, 18 }.Select(catalog.BackupFile).SequenceEqual(["SSISDB.bak", "SSISDB.bak", "SSISDB.bak", "SSISDB.bak", "SSISDBBackup.bak", "SSISDBBackup.bak"])
+        check(new[] { 13, 14, 15, 16, 17, 18 }.Select(catalog.BackupFile).All(file => file == "SSISDBBackup.bak")
             && catalog.AssemblyFile == "Microsoft.SqlServer.IntegrationServices.Server.dll" && catalog.CleanupStep == "Remove the incomplete catalog"
-            && catalog.Limit("catalogPassword") == 128 && catalog.Limit("serverPath") == 1024 && !catalog.Retryable("CATALOG_EXISTS") && !catalog.Retryable("CLR_REQUIRED"),
-            "the catalog backup is SSISDBBackup.bak from SQL Server 2025 and SSISDB.bak before, beside the ISSERVER assembly; the password and paths are bounded; CATALOG_EXISTS and CLR_REQUIRED need the user");
+            && catalog.Limit("catalogPassword") == 128 && catalog.Limit("serverPath") == 1024 && catalog.Limit("createDrainMs") == 120_000 && !catalog.Retryable("CATALOG_EXISTS") && !catalog.Retryable("CLR_REQUIRED"),
+            "the catalog backup is SSISDBBackup.bak on every version, as SSMS 22's Catalog.Create names it, beside the ISSERVER assembly; the password and paths are bounded, and so is a shutdown's wait for a "
+            + "Create Catalog; CATALOG_EXISTS and CLR_REQUIRED need the user");
     }
 
     private static void Lint(Action<bool, string> check)
@@ -176,12 +195,17 @@ internal static class SsisCreateChecks
             "the restore refuses a database that appeared (27135) and never replaces one; the master key takes the password only through the server's quoting, in the catalog; CLR is enabled as SMO does");
         check(Has(SsisCreateSql.Assembly, "IF NOT (@major > 14 OR (@major = 14 AND (@minor > 0 OR (@minor = 0 AND (@build > 800 OR (@build = 800 AND @revision > 11))))))",
                 "CREATE ASYMMETRIC KEY [MS_SQLEnableSystemAssemblyLoadingKey] FROM EXECUTABLE FILE", "GRANT UNSAFE ASSEMBLY TO [##MS_SQLEnableSystemAssemblyLoadingUser##]",
-                "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly COLLATE Latin1_General_BIN2, N'''', N'''''');", "OPENROWSET(BULK N''' + @quoted + N''', SINGLE_BLOB)", "HASHBYTES('SHA2_512', @bin)", "EXEC sys.sp_add_trusted_assembly @hash, @assembly;", "SELECT @added, @hash;")
+                "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly COLLATE Latin1_General_BIN2, N'''', N'''''');", "OPENROWSET(BULK N''' + @quoted + N''', SINGLE_BLOB)", "HASHBYTES('SHA2_512', @bin)",
+                "SET @trusted = CASE WHEN EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) THEN 1 ELSE 0 END;", "SELECT @hash, @trusted;")
+            // The hash is read (and kept for the removal) before a statement of its own adds it: an add cut short is still removed.
+            && !SsisCreateSql.Assembly.Text.Contains("sp_add_trusted_assembly", StringComparison.Ordinal)
+            && SsisCreateSql.AddTrusted.Text == "IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) EXEC sys.sp_add_trusted_assembly @hash, @assembly;"
             && Has(SsisCreateSql.CreateStartup, "CREATE PROCEDURE [dbo].[sp_ssis_startup]", "IF DB_ID('SSISDB') IS NULL", "SET @script = N'EXEC [SSISDB].[catalog].[startup]'", "EXECUTE sp_executesql @script")
             && SsisCreateSql.StartupOn.Text == "IF @startup = 1 EXEC sys.sp_procoption N'sp_ssis_startup', 'startup', 'on';"
             && SsisCreate.UsesAsymmetricKey("13.0.7000.253") && SsisCreate.UsesAsymmetricKey("14.0.800.11") && !SsisCreate.UsesAsymmetricKey("14.0.800.12")
             && !SsisCreate.UsesAsymmetricKey("14.0.1000.169") && !SsisCreate.UsesAsymmetricKey("14.1.0.0") && !SsisCreate.UsesAsymmetricKey("17.0.1000.7"),
-            "the assembly is trusted by hash after 14.0.800.11 and through the asymmetric key before, as SSMS decides it; sp_ssis_startup is SSMS's, and the startup option follows the choice");
+            "the assembly is trusted by hash after 14.0.800.11, read before a statement of its own adds it, and through the asymmetric key before, as SSMS decides it; sp_ssis_startup is SSMS's, "
+            + "and the startup option follows the choice");
         check(Has(SsisCreateSql.CleanupLogin, "REPLACE(CONVERT(nvarchar(256), CRYPT_GEN_RANDOM(64)) COLLATE Latin1_General_BIN2, N'''', N'''''')", "CHECK_POLICY = OFF", "ALTER LOGIN [##MS_SSISServerCleanupJobLogin##] DISABLE;",
                 "@job_name = N'SSIS Failover Monitor Job'")
             && Has(SsisCreateSql.CleanupUser, "GRANT EXECUTE ON [internal].[cleanup_server_retention_window]", "GRANT EXECUTE ON [internal].[cleanup_server_project_version]")
@@ -230,6 +254,22 @@ internal static class SsisCreateChecks
             + "when its files are there already, and past the path bound; then, when CLR must be enabled, while other configuration changes wait for the RECONFIGURE that would apply them too; "
             + "CLR itself is not a refusal of the facts: " + string.Join("; ", wrong));
         check(!catalog.Retryable("CONFIGURATION_PENDING"), "CONFIGURATION_PENDING needs the user, so retrying alone does not help");
+        // CLR: the request's agreement decides, whatever else runs; it is never a refusal when CLR is in use.
+        static SsisActionDto Agree(bool? enable) => new("createCatalog", Password: "x", EnableClr: enable, StartupProcedure: false);
+        var clr = new[]
+        {
+            SsisCreate.ClrRefusal(catalog, ok, Agree(false))?.Code, SsisCreate.ClrRefusal(catalog, ok, Agree(null))?.Code, SsisCreate.ClrRefusal(catalog, ok, Agree(true))?.Code,
+            SsisCreate.ClrRefusal(catalog, ok with { ClrEnabled = true }, Agree(false))?.Code
+        };
+        check(clr.SequenceEqual(["CLR_REQUIRED", "CLR_REQUIRED", null, null]), "Create Catalog refuses CLR_REQUIRED when CLR integration is off and the request did not agree, and only then: " + string.Join(",", clr));
+        var words = new[] { "Pa'ss", "\U0001D49Cx", "\uD835\uDC9C", "", "\uD800abc", "abc\uDC00", "\uDC00\uD800", "x\uD800" }.Select(SsisCreate.WellFormed).ToArray();
+        check(words.SequenceEqual([true, true, true, true, false, false, false, false]), "a password must be well-formed UTF-16: a lone surrogate would cross the wire as U+FFFD");
+        var longFailure = string.Join(" ", Enumerable.Range(0, 6).Select(index => "Lock request time out period exceeded " + index + new string('x', 900)));
+        var failedStep = SsisCreate.CleanupStep(catalog, longFailure);
+        var doneStep = SsisCreate.CleanupStep(catalog, null);
+        check(failedStep.Status == "failed" && failedStep.Message!.Length <= catalog.Limit("messageChars") && failedStep.Message.StartsWith(catalog.CleanupStep + ": Lock request", StringComparison.Ordinal)
+            && doneStep is { Status: "done", Message: "Remove the incomplete catalog" },
+            "the removal's step names what failed, clipped to " + catalog.Limit("messageChars") + " characters as every SSIS message is (" + failedStep.Message?.Length + ")");
         var setup = SsisCreate.Setup("SSISDB", ok with { ScanForStartup = true });
         check(setup is { Catalog: "SSISDB", ClrEnabled: false, StartupDefault: true, DataFile: @"C:\Data\SSISDB.mdf", LogFile: @"C:\Data\SSISDB.ldf" } && setup.BackupFile.EndsWith("SSISDBBackup.bak", StringComparison.Ordinal),
             "the dialog's setup shows the catalog, CLR in use, SSMS's startup default (scan for startup procs), the backup and the files' places");
@@ -262,13 +302,14 @@ internal static class SsisCreateChecks
         {
             (create, "ok"), (Create(new string('p', 128)), "ok"), (Create("x", enableClr: false, startup: true), "ok"), (Create(string.Concat(Enumerable.Repeat("\U0001D49C", 64))), "ok"),
             (Create(""), "INVALID_PARAMS"), (Create(new string('p', 129)), "INVALID_PARAMS"), (Create("a\0b"), "INVALID_PARAMS"), (Create(string.Concat(Enumerable.Repeat("\U0001D49C", 64)) + "a"), "INVALID_PARAMS"),
+            (Create("\uD800abc"), "INVALID_PARAMS"), (Create("abc\uDC00"), "INVALID_PARAMS"),
             (Create(enableClr: null), "INVALID_PARAMS"), (Create(startup: null), "INVALID_PARAMS"), (create with { Action = create.Action with { Password = null } }, "INVALID_PARAMS"),
             (create with { Action = create.Action with { OperationId = 1 } }, "INVALID_PARAMS"), (create with { Revision = new string('a', 64) }, "INVALID_PARAMS"),
             (new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new SsisActionDto("stopOperation", 42, Password: "x")), "INVALID_PARAMS"),
             (new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new SsisActionDto("stopOperation", 42, EnableClr: true)), "INVALID_PARAMS")
         };
         var wrong = cases.Where(item => Code(item.Args) != item.Expected).Select(item => item.Args.Action + " " + Code(item.Args)).ToList();
-        check(wrong.Count == 0, "ssis.execute accepts Create Catalog with a password of 1 to 128 UTF-16 code units and both choices, and refuses an empty, long or NUL password, "
+        check(wrong.Count == 0, "ssis.execute accepts Create Catalog with a password of 1 to 128 UTF-16 code units and both choices, and refuses an empty, long, NUL or lone-surrogate password, "
             + "a missing choice, an operation id, a revision, and Create Catalog's members on Stop Operation: " + string.Join("; ", wrong));
         var printed = create.ToString() + create.Action;
         check(!printed.Contains("Pa'ss", StringComparison.Ordinal) && printed.Contains("Password = <redacted>", StringComparison.Ordinal),

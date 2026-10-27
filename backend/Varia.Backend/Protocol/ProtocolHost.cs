@@ -20,6 +20,9 @@ internal interface IRequestDispatcher : IDisposable
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
+    /// <summary>On shutdown, after CancelAll: waits, within the dispatcher's own bound, for work that must not end half done
+    /// (SqlService: a Create Catalog past its restore, which then finishes or removes what it created).</summary>
+    void DrainCommitted() { }
 }
 
 internal sealed record HostOptions
@@ -400,14 +403,16 @@ internal sealed class ProtocolHost
         return Terminate(exit);
     }
 
-    /// <summary>stdin ended: main closed the pipe or exited. Cancel everything, give work a moment to stop, and end
-    /// every session (open transactions roll back when their connections close).</summary>
+    /// <summary>stdin ended: main closed the pipe or exited. Cancel everything, give work a moment to stop, wait (bounded) for work
+    /// that must not end half done, and end every session (open transactions roll back when their connections close).</summary>
     private int Shutdown()
     {
         if (Volatile.Read(ref exitCode) >= 0) return exitCode;
         foreach (var context in contexts.Values) context.Cancel(CancelReason.Shutdown);
         try { dispatcher?.CancelAll(); } catch (Exception) { /* Best effort while exiting. */ }
         try { Task.WaitAll([.. work.Keys], options.DrainTimeout); } catch (AggregateException) { }
+        // Main gives a generation with such work a longer grace (methodPolicies' drainMs) before it kills the process.
+        try { dispatcher?.DrainCommitted(); } catch (Exception) { /* Best effort while exiting. */ }
         // Closing a session can wait on the network; main may already be gone, so never let that keep the process alive.
         var disposed = Task.Run(() => dispatcher?.Dispose());
         try { disposed.Wait(options.DrainTimeout); } catch (AggregateException) { /* Best effort while exiting. */ }

@@ -54,6 +54,8 @@ internal sealed class SsisOptions
     public TimeSpan PreflightBudget { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("preflightMs"));
     /// <summary>How long Stop on a write waits for SQL Server to end the statement before the request answers CANCELLED.</summary>
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("stopGraceMs"));
+    /// <summary>How long a backend that is shutting down waits for a Create Catalog past its restore (see SsisActionService.DrainCommitted).</summary>
+    public TimeSpan CreateDrain { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("createDrainMs"));
     /// <summary>Writes for SQL Server logins too, which a box server's SSISDB refuses (27123) but the fake catalog need not, so its
     /// checks run on CI, which connects with SQL Server authentication.</summary>
     public bool IgnoreSqlAuthentication { get; set; }

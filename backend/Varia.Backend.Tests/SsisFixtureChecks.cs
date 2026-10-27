@@ -72,14 +72,14 @@ internal static partial class SsisFixtureChecks
             && !defaults.ContainsKey("@d") && !defaults.ContainsKey("@f"),
             "a parameter's default is read from its first declaration in the module's text outside comments, NULL in capitals, quoted strings whole (" + string.Join(", ", defaults.Select(pair => pair.Key + "=" + pair.Value)) + ")");
 
-        // The catalog backup: <shared features>\<major>0\DTS\Binn, under 2025's own file name. The shared-features folder is
+        // The catalog backup: <shared features>\<major>0\DTS\Binn\SSISDBBackup.bak on every version. The shared-features folder is
         // taken to be the folder above MSSQL<n>.<instance>, which holds only when Setup put the instance and the shared features
         // under one root (the defaults do); docs/integration-services.md 14.12.
         const string Engine = "\"C:\\Program Files\\Microsoft SQL Server\\MSSQL17.MSSQLSERVER\\MSSQL\\Binn\\sqlservr.exe\" -sMSSQLSERVER";
         check(SsisManifest.BackupPath(Engine, 17) == @"C:\Program Files\Microsoft SQL Server\170\DTS\Binn\SSISDBBackup.bak"
-            && SsisManifest.BackupPath("\"C:\\Program Files\\Microsoft SQL Server\\MSSQL16.SQL2022\\MSSQL\\Binn\\sqlservr.exe\" -sSQL2022", 16) == @"C:\Program Files\Microsoft SQL Server\160\DTS\Binn\SSISDB.bak"
+            && SsisManifest.BackupPath("\"C:\\Program Files\\Microsoft SQL Server\\MSSQL16.SQL2022\\MSSQL\\Binn\\sqlservr.exe\" -sSQL2022", 16) == @"C:\Program Files\Microsoft SQL Server\160\DTS\Binn\SSISDBBackup.bak"
             && SsisManifest.BackupPath("/opt/mssql/bin/sqlservr", 16) is null && SsisManifest.BackupPath(null, 17) is null && SsisManifest.BackupPath("\"C:\\Tools\\sqlservr.exe\"", 17) is null,
-            "with the default install folders the catalog backup's path follows the engine's service path (SSISDBBackup.bak on SQL Server 2025, SSISDB.bak before), and there is none for a Linux engine");
+            "with the default install folders the catalog backup's path follows the engine's service path (SSISDBBackup.bak on every version), and there is none for a Linux engine");
 
         // The fake's procedures: the four stubs and the fake's own helpers, nothing that reaches the real catalog or the server.
         var procedures = File.ReadAllText(Path.Combine(folder, "procedures.sql"));

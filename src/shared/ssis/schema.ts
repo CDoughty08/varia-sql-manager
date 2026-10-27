@@ -26,9 +26,13 @@ export type SsisAction = SsisStopOperation | SsisCreateCatalog
 export interface SsisExecuteRequest { readonly connectionId: string; readonly requestId: string; readonly action: SsisAction; readonly revision?: string }
 
 const operationId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+/** Whether text is well-formed UTF-16 (every surrogate in a pair). The wire encodes UTF-8, which turns a lone surrogate into
+ *  U+FFFD, so a password holding one would create a master key whose password is not the one typed. */
+export const wellFormed = (value: string): boolean => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
 // UTF-16 code units, as C# counts them (zod's max() counts code points). A NUL would end the password early in some client
 // libraries; SQL Server's own policy decides the rest.
 const catalogPassword = z.string().min(1).refine(value => value.length <= ssisLimits.catalogPassword, `At most ${ssisLimits.catalogPassword} UTF-16 code units.`).refine(value => !value.includes('\0'), 'The password cannot contain a NUL character.')
+  .refine(wellFormed, 'The password holds a broken character (half of a surrogate pair).')
 export const ssisActionSchema = z.discriminatedUnion('verb', [
   z.object({ verb: z.literal('stopOperation'), operationId }).strict(),
   z.object({ verb: z.literal('createCatalog'), password: catalogPassword, enableClr: z.boolean(), startupProcedure: z.boolean() }).strict()

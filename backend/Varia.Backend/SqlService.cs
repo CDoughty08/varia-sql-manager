@@ -1343,6 +1343,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssis.CancelAll();
         ssisActions.CancelAll();
     }
+    public void DrainCommitted() => ssisActions.DrainCommitted();
     public void Dispose()
     {
         memoryTimer?.Dispose();

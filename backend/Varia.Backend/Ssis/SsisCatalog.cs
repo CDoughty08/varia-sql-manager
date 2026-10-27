@@ -64,7 +64,7 @@ internal sealed class SsisCatalog
     /// <summary>Create Catalog's assembly beside the catalog backup, and the step a failure after its restore adds.</summary>
     public string AssemblyFile { get; }
     public string CleanupStep { get; }
-    /// <summary>The catalog backup Integration Services installs for a band (SSISDBBackup.bak from 2025, SSISDB.bak before).</summary>
+    /// <summary>The catalog backup Integration Services installs for a band (SSISDBBackup.bak, which SSMS 22 names for every version).</summary>
     public string BackupFile(int band) => backupFiles.FirstOrDefault(row => band >= row.Since).File ?? backupFiles[^1].File;
     public IReadOnlyDictionary<string, long> Limits { get; }
     public IReadOnlyDictionary<int, string> LoggingLevels { get; }

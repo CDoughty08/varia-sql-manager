@@ -106,15 +106,16 @@ internal static partial class SsisCreateSql
         ["@password"], SsisCreateContext.Catalog);
 
     /// <summary>CreateCatalog.sql's first batch: before 14.0.800.11, the asymmetric key from the assembly, its login and UNSAFE
-    /// ASSEMBLY; from then, the assembly's SHA2_512 hash as a trusted assembly. Answers whether it added the hash, and the hash,
-    /// so a failure after it removes only what it added.</summary>
+    /// ASSEMBLY; from then, the assembly's SHA2_512 hash and whether it is trusted already, which <see cref="AddTrusted"/> then adds
+    /// in a statement of its own: Create Catalog knows the hash before the add can commit, so a Stop or a failure after it removes
+    /// the hash this request added, and only that.</summary>
     public static readonly SsisCreateCommand Assembly = new("assembly",
         "SET NOCOUNT ON;\n"
         + "DECLARE @version nvarchar(128) = CONVERT(nvarchar(128), SERVERPROPERTY('ProductVersion'));\n"
         + "DECLARE @major int = CONVERT(int, PARSENAME(@version, 4)), @minor int = CONVERT(int, PARSENAME(@version, 3)), @build int = CONVERT(int, PARSENAME(@version, 2)), "
         + "@revision int = CONVERT(int, PARSENAME(@version, 1));\n"
         + "DECLARE @quoted nvarchar(2100) = REPLACE(@assembly COLLATE Latin1_General_BIN2, N'''', N'''''');\n"
-        + "DECLARE @statement nvarchar(max), @bin varbinary(max), @hash varbinary(64), @added bit = 0;\n"
+        + "DECLARE @statement nvarchar(max), @bin varbinary(max), @hash varbinary(64), @trusted bit;\n"
         + "IF NOT (@major > 14 OR (@major = 14 AND (@minor > 0 OR (@minor = 0 AND (@build > 800 OR (@build = 800 AND @revision > 11))))))\n"
         + "BEGIN\n"
         + "    IF EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = N'##MS_SQLEnableSystemAssemblyLoadingUser##') DROP LOGIN [##MS_SQLEnableSystemAssemblyLoadingUser##];\n"
@@ -129,14 +130,15 @@ internal static partial class SsisCreateSql
         + "    SET @statement = N'SELECT @bin = d.BulkColumn FROM OPENROWSET(BULK N''' + @quoted + N''', SINGLE_BLOB) AS d;';\n"
         + "    EXEC sys.sp_executesql @statement, N'@bin varbinary(max) OUTPUT', @bin = @bin OUTPUT;\n"
         + "    SET @hash = HASHBYTES('SHA2_512', @bin);\n"
-        + "    IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash)\n"
-        + "    BEGIN\n"
-        + "        EXEC sys.sp_add_trusted_assembly @hash, @assembly;\n"
-        + "        SET @added = 1;\n"
-        + "    END\n"
+        + "    SET @trusted = CASE WHEN EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) THEN 1 ELSE 0 END;\n"
         + "END\n"
-        + "SELECT @added, @hash;",
+        + "SELECT @hash, @trusted;",
         ["@assembly"]);
+
+    /// <summary>The trust CreateCatalog.sql's first batch adds after 14.0.800.11: the hash <see cref="Assembly"/> read, described by the
+    /// assembly's path as SSMS describes it.</summary>
+    public static readonly SsisCreateCommand AddTrusted = new("addTrusted",
+        "IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) EXEC sys.sp_add_trusted_assembly @hash, @assembly;", ["@hash", "@assembly"]);
 
     /// <summary>CreateCatalog.sql's second batch: an earlier sp_ssis_startup goes, startup flag first.</summary>
     public static readonly SsisCreateCommand DropStartup = new("dropStartup",
@@ -269,7 +271,7 @@ internal static partial class SsisCreateSql
     /// <summary>Every command, for the lint and the docs.</summary>
     public static IEnumerable<SsisCreateCommand> All =>
     [
-        Setup, FileList, EnableClr, Restore, ReadWrite, MasterKey, Assembly, DropStartup, CreateStartup, StartupOn, CleanupLogin, CleanupUser, CleanupGrant, MaintenanceJob,
+        Setup, FileList, EnableClr, Restore, ReadWrite, MasterKey, Assembly, AddTrusted, DropStartup, CreateStartup, StartupOn, CleanupLogin, CleanupUser, CleanupGrant, MaintenanceJob,
         CleanupPrologue, DropTrusted, DropLoadingLogin, DropJobs, DropDatabase
     ];
 
