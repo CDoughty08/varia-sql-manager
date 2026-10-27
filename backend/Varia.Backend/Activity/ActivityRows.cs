@@ -37,8 +37,8 @@ internal sealed record ActivityCapabilities(int Spid, bool ServerState, bool Alt
 /// machine (host_name, the workstation id its connections send) under one of its connections' program names plus a known
 /// suffix. Those values are the client's own claims at login, so a pool session (Object Explorer, Scripting, Object Actions,
 /// the Activity Monitor, the SSIS pools), which the default filter hides, must also be a session id Varia's own connections
-/// were given when they opened (SqlConnection.ServerProcessId): a client that claims Varia's process, machine and program
-/// name under any other session id is shown as itself. Plain-name sessions are labelled "Query tab", a plain-name session of
+/// were given when they opened (SqlConnection.ServerProcessId) and may still hold (OwnSessionLedger): a client that claims
+/// Varia's process, machine and program name under any other session id is shown as itself. Plain-name sessions are labelled "Query tab", a plain-name session of
 /// this process (a query tab, or a pooled connection of the Connect dialog's database list), which the renderer names by the
 /// tab that holds the session id; they are never hidden. The monitor's own session is always one of its pool's.</summary>
 internal sealed class VariaSessions
@@ -92,7 +92,8 @@ internal static class ActivityOverview
     public static (long? MsTicks, long? StartTicks) Clock(IReadOnlyDictionary<string, ActivityResult> results) =>
         results.TryGetValue("clock", out var clock) && clock.Rows is [var row, ..] ? (clock.Long(row, "ms_ticks"), clock.Long(row, "sqlserver_start_time_ms_ticks")) : (null, null);
 
-    public static LiveRawSample Raw(IReadOnlyList<string> series, IReadOnlyDictionary<string, ActivityResult> results, ActivityCatalog catalog)
+    /// <param name="io">The I/O totals the probe keeps across samples (a fresh one for a single sample).</param>
+    public static LiveRawSample Raw(IReadOnlyList<string> series, IReadOnlyDictionary<string, ActivityResult> results, ActivityCatalog catalog, ActivityIoTotals io)
     {
         var values = new Dictionary<string, (double? Value, double? Base)>(StringComparer.Ordinal);
         if (results.TryGetValue("cpu", out var cpu) && cpu.Rows is [var c, ..])
@@ -107,11 +108,12 @@ internal static class ActivityOverview
             foreach (var row in counters.Rows)
                 if (counters.Text(row, "counter_name") is { } name && Counters.TryGetValue(name, out var id) && counters.Double(row, "cntr_value") is { } value)
                     values[id] = ((values.GetValueOrDefault(id).Value ?? 0) + value, null);
-        if (results.TryGetValue("io", out var io) && io.Rows is [var i, ..])
+        if (results.TryGetValue("io", out var files))
         {
-            values["ioMegabytes"] = (io.Double(i, "bytes_read") + io.Double(i, "bytes_written"), null);
-            values["readLatency"] = (io.Double(i, "read_stall_ms"), io.Double(i, "reads"));
-            values["writeLatency"] = (io.Double(i, "write_stall_ms"), io.Double(i, "writes"));
+            var total = io.Apply(files);
+            values["ioMegabytes"] = (total.BytesRead + total.BytesWritten, null);
+            values["readLatency"] = (total.ReadStallMs, total.Reads);
+            values["writeLatency"] = (total.WriteStallMs, total.Writes);
         }
         if (results.TryGetValue("waits", out var waits))
         {
@@ -128,13 +130,53 @@ internal static class ActivityOverview
             values["blockedSessions"] = (count, null);
             values["longestBlock"] = (count > 0 ? blocked.Double(b, "longest_wait_ms") ?? 0 : 0, null);
         }
+        // With server state the sums always have rows to add (SQL Server's own sessions at least); without it SQL Server
+        // shows only the monitor's own session, which the statement leaves out, so the sums are NULL: unknown, not none.
         if (results.TryGetValue("requests", out var requests) && requests.Rows is [var r, ..])
         {
-            values["activeRequests"] = (requests.Double(r, "active_requests") ?? 0, null);
-            values["userSessions"] = (requests.Double(r, "user_sessions") ?? 0, null);
+            values["activeRequests"] = (requests.Double(r, "active_requests"), null);
+            values["userSessions"] = (requests.Double(r, "user_sessions"), null);
         }
         var (ms, start) = Clock(results);
         return new(ms, start, [.. series.Select(id => values.GetValueOrDefault(id).Value)], [.. series.Select(id => values.GetValueOrDefault(id).Base)]);
+    }
+}
+
+/// <summary>The overview's I/O counters (bytes, reads, writes and their stalls, from sys.dm_io_virtual_file_stats per database)
+/// as totals that only databases read in both samples move. A database dropped, detached, taken offline or closed (AUTO_CLOSE)
+/// leaves the view with its counts, which a plain sum would show as the server's I/O falling (a reset gap) or as less I/O than
+/// ran; one that appears starts from its first reading, and so does one whose counts went down (its files reopened, or a new
+/// database under a dropped one's id). The first sample's totals are the sums SQL Server reports.</summary>
+internal sealed class ActivityIoTotals
+{
+    internal readonly record struct Totals(double BytesRead, double BytesWritten, double Reads, double Writes, double ReadStallMs, double WriteStallMs);
+    private static readonly string[] Columns = ["bytes_read", "bytes_written", "reads", "writes", "read_stall_ms", "write_stall_ms"];
+    private Dictionary<int, double[]> previous = [];
+    private double[]? totals;
+
+    public Totals Apply(ActivityResult io)
+    {
+        var current = new Dictionary<int, double[]>(io.Rows.Count);
+        var moved = new double[Columns.Length];
+        foreach (var row in io.Rows)
+        {
+            if (io.Int(row, "database_id") is not { } database) continue;
+            var values = Columns.Select(column => io.Double(row, column) ?? 0).ToArray();
+            if (!current.TryAdd(database, values)) continue;
+            double[]? before = null;
+            if (totals is not null && !(previous.TryGetValue(database, out before) && values.Zip(before).All(pair => pair.First >= pair.Second))) continue;
+            for (var at = 0; at < moved.Length; at++) moved[at] += values[at] - (before?[at] ?? 0);
+        }
+        previous = current;
+        totals = totals is null ? moved : [.. totals.Zip(moved, (total, change) => total + change)];
+        return new(totals[0], totals[1], totals[2], totals[3], totals[4], totals[5]);
+    }
+
+    /// <summary>After a lost connection, which may have reached another server, the totals start again.</summary>
+    public void Reset()
+    {
+        previous = [];
+        totals = null;
     }
 }
 

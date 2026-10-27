@@ -939,6 +939,8 @@ the session id and whether the login reads server state, may end sessions (ALTER
 values `serverState` and `canKill` with its first sample on each new connection. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
 from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
 `NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
+When the session probe did not run as the source opened (every probe paused, the gates full, the connect failed), such a
+probe opens `ok` and stops at its first tick with a terminal `PERMISSION_DENIED`, running nothing.
 A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
 its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
 the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
@@ -947,7 +949,8 @@ more than `LOCK_TIMEOUT`. A source with several statements per probe (`ILiveSqlR
 rows in C#; its statements are `ActivitySql`'s constant text, checked by their own lint and the live lint, each read checked
 against the columns it declares (a mismatch is a bug: `BACKEND_ERROR`). A statement the login may not run (`PERMISSION_DENIED`)
 or the server lacks (`NOT_SUPPORTED`) fails alone: the sample goes on, an error beside it names the tables and series that
-statement feeds, and it is not run again for the subscription, only reported each sample. A lock wait or another statement
+statement feeds, and it is not run again on that connection, only reported each sample (each new connection's capability
+probe runs it again: the login may since hold the permission, or the connection reach another server). A lock wait or another statement
 error stops the probe's statements: what was read arrives and the error names the rest; a probe that read nothing reports
 its first error and backs off; a lost connection or the budget fails the probe as below. Without server state the sessions
 probe reads one statement (the caller's own session: SQL Server shows such a login nothing else) and reports Blocking and

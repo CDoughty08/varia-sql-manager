@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Microsoft.SqlServer.Management.Smo;
 using Varia.Backend.Actions;
+using Varia.Backend.Activity;
 using Varia.Backend.Entra;
 using Varia.Backend.Explorer;
 using Varia.Backend.Live;
@@ -49,10 +50,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
     /// <summary>The connection id each pooled or Object Actions connection was made for, so opening it records its session.</summary>
-    private readonly ConditionalWeakTable<SqlConnection, string> owners = [];
-    /// <summary>Per connection id, the session ids its pooled and Object Actions connections were given when they opened (at
-    /// most one per session id, so bounded by the server's), until it disconnects.</summary>
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, byte>> ownSessions = new();
+    private readonly ConditionalWeakTable<SqlConnection, Owner> owners = [];
+    private readonly OwnSessionLedger ownSessions = new();
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
@@ -127,7 +126,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
-        Open = (connection, token) => entra.OpenPooledAsync(connection, token, OpenConnection);
+        Open = async (connection, token) =>
+        {
+            await entra.OpenPooledAsync(connection, token, OpenConnection);
+            Record(connection);
+        };
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
@@ -165,35 +168,45 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>The live views' pools: idle connection resiliency is off, so a session that was killed or dropped is a
     /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
     SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
-    Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
+    Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     IReadOnlyCollection<VariaClient> ILiveHost.Clients => [.. connections.Values.Select(text => new SqlConnectionStringBuilder(text)).Select(builder => new VariaClient(builder.ApplicationName, Workstation(builder))).Distinct()];
 
     /// <summary>The host name SqlClient sends at login: the Workstation ID when one is set, else this machine's name.</summary>
     internal static string Workstation(SqlConnectionStringBuilder builder) => builder.WorkstationID is { Length: > 0 } id ? id : Environment.MachineName;
 
-    IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId)
-    {
-        var own = new HashSet<int>();
-        if (ServerOf(connectionId) is not { } server) return own;
-        foreach (var (id, held) in ownSessions)
-            if (ServerOf(id) == server) own.UnionWith(held.Keys);
-        return own;
-    }
+    IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId) => ownSessions.Sessions(connectionId, ServerOf);
+    /// <summary>Varia's own session ids (the checks record and read them).</summary>
+    internal OwnSessionLedger OwnSessions => ownSessions;
 
+    private sealed record Owner(string ConnectionId, bool Pooled);
+
+    /// <summary>Marks a connection made for a connection id under one of Varia's own program names (a pool's, Object
+    /// Actions'), so <see cref="Open"/> records the session it is given. Every such connection must be made through here.</summary>
     private SqlConnection Owned(SqlConnection connection, string connectionId)
     {
-        owners.AddOrUpdate(connection, connectionId);
+        owners.AddOrUpdate(connection, new(connectionId, new SqlConnectionStringBuilder(connection.ConnectionString).Pooling));
         return connection;
     }
 
-    /// <summary>Opens a pooled or Object Actions connection and records the session id the server gave it (a pooled connection
-    /// keeps its physical session's), so the Activity Monitor knows Varia's own sessions by what Varia holds, not by what a
-    /// client may claim at login.</summary>
-    private async Task OpenOwnedAsync(SqlConnection connection, CancellationToken token)
+    /// <summary>Records the session id an owned connection was given as it opened (a pooled connection keeps its physical
+    /// session's), and lets it go as the connection closes, so the Activity Monitor knows Varia's own sessions by what Varia
+    /// holds, not by what a client may claim at login. Done in <see cref="Open"/>, so every host that opens an owned connection
+    /// records it.</summary>
+    private void Record(SqlConnection connection)
     {
-        await Open(connection, token);
-        if (owners.TryGetValue(connection, out var id) && connection.State == System.Data.ConnectionState.Open && connections.ContainsKey(id))
-            ownSessions.GetOrAdd(id, _ => new())[connection.ServerProcessId] = 0;
+        if (!owners.TryGetValue(connection, out var owner) || connection.State != System.Data.ConnectionState.Open || !connections.ContainsKey(owner.ConnectionId)) return;
+        var session = connection.ServerProcessId;
+        ownSessions.Opened(owner.ConnectionId, session, owner.Pooled);
+        System.Data.StateChangeEventHandler? closed = null;
+        closed = (_, change) =>
+        {
+            if (change.CurrentState == System.Data.ConnectionState.Open) return;
+            connection.StateChange -= closed;
+            ownSessions.Closed(owner.ConnectionId, session);
+        };
+        connection.StateChange += closed;
+        // A connection that closed before the handler was in place said so to nobody.
+        if (connection.State != System.Data.ConnectionState.Open) closed(connection, new(System.Data.ConnectionState.Open, connection.State));
     }
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
@@ -308,8 +321,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     }
 
     /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, object actions,
-    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser). The
-    /// live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser), and
+    /// records the session of a connection made through <see cref="Owned"/>. The live checks replace it to fail as an
+    /// expired Kerberos ticket does.</summary>
     internal Func<SqlConnection, CancellationToken, Task> Open { get; set; }
     /// <summary>The open inside <see cref="Open"/>; the live checks replace it to fail as a revoked Entra sign-in does, so the
     /// mapping around it is the production one.</summary>
@@ -437,7 +451,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
-        ownSessions.TryRemove(args.ConnectionId, out _);
+        ownSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
@@ -490,7 +504,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
-    Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
+    Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
     /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
     /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
@@ -535,8 +549,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
     SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
 
-    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
-    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => OpenOwnedAsync(connection, token);
+    Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    Task IScriptingHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
     private SqlConnection PoolConnection(string connectionId, string? database, string suffix, bool reconnect = true)
     {

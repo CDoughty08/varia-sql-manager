@@ -11,9 +11,10 @@ namespace Varia.Backend.Activity;
 /// live session probe, so each new connection reads what the login may do; without server state the sessions probe reads only
 /// what SQL Server shows of the monitor's own session. A statement the login may not run (PERMISSION_DENIED) or the server
 /// lacks (NOT_SUPPORTED) fails alone: its tables and series are named in an error beside the sample, and it is not run again
-/// for the subscription (no retry storm), only reported. Any other statement error stops the probe's batch: what was read
-/// arrives, the error names the rest, and a probe that read nothing fails and backs off. A lost connection or the budget
-/// is thrown for SqlSampler to handle. Nothing is logged.</summary>
+/// on that connection (no retry storm), only reported; each new connection's capability probe tries them again, since its
+/// login may now hold the permission or its server have the view. Any other statement error stops the probe's batch: what
+/// was read arrives, the error names the rest, and a probe that read nothing fails and backs off. A probe that needs server
+/// state runs nothing without it. A lost connection or the budget is thrown for SqlSampler to handle. Nothing is logged.</summary>
 internal sealed class ActivityReader : ILiveSqlReader
 {
     public const string OverviewProbe = "activity.overview";
@@ -24,12 +25,14 @@ internal sealed class ActivityReader : ILiveSqlReader
     private readonly Lock gate = new();
     private readonly Dictionary<string, ActivityFilter> filters = new(StringComparer.Ordinal);
     private readonly ActivitySessionRows sessions;
-    /// <summary>Statements that failed for good on this subscription: reported each sample, never run again.</summary>
+    /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
+    /// run again until a new connection's capability probe.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
     private readonly HashSet<string> statusSent = new(StringComparer.Ordinal);
     /// <summary>Per probe: the server's ms_ticks and start time at its last sample (null when not read), the schedule's time it
     /// was taken at, and the probe's sample clock then.</summary>
     private readonly Dictionary<string, (long? Ticks, long? Start, long TakenAt, long Clock)> clocks = new(StringComparer.Ordinal);
+    private readonly ActivityIoTotals io = new();
     private int focus;
     private ServerProfile? profile;
 
@@ -44,6 +47,15 @@ internal sealed class ActivityReader : ILiveSqlReader
 
     /// <summary>What the capability probe found on the current connection (null before it ran).</summary>
     public ActivityCapabilities? Capabilities { get; private set; }
+
+    /// <summary>Runs a statement in place of the server, with its parameter values (offline checks only).</summary>
+    internal Func<ActivityStatement, IReadOnlyDictionary<string, object>, Task<ActivityResult>>? TestRun { get; init; }
+
+    /// <summary>The filters and focus session the args set (the checks read them).</summary>
+    internal (IReadOnlyDictionary<string, ActivityFilter> Filters, int Focus) Current
+    {
+        get { lock (gate) return (new Dictionary<string, ActivityFilter>(filters, StringComparer.Ordinal), focus); }
+    }
 
     /// <summary>Checks args as main's schema does: at least one member, one filter per table, each a valid filter, and a session
     /// id within the catalogue's bound (0 follows none).</summary>
@@ -77,6 +89,9 @@ internal sealed class ActivityReader : ILiveSqlReader
     {
         sessions.Reset();
         clocks.Clear();
+        io.Reset();
+        // The next connection may reach another server (a failover), with other views and permissions.
+        skipped.Clear();
     }
 
     public (string Reason, string Note)? Unavailable(LiveProbeJson spec, ServerProfile profile)
@@ -89,7 +104,7 @@ internal sealed class ActivityReader : ILiveSqlReader
 
     public async Task<(int Spid, bool ServerState)> SessionAsync(SqlConnection connection, string prologue, string permission, CancellationToken token)
     {
-        var result = await RunAsync(connection, prologue, ActivitySql.Capabilities, null, _ => permission, token).ConfigureAwait(false);
+        var result = await Run(connection, prologue, ActivitySql.Capabilities, null, _ => permission, token).ConfigureAwait(false);
         if (result.Rows is not [var row, ..]) throw new InvalidOperationException("The capability probe returned no row.");
         var found = new ActivityCapabilities(result.Int(row, "spid") ?? 0, result.Int(row, "server_state") == 1, result.Int(row, "alter_any_connection") == 1,
             result.Int(row, "view_any_definition") == 1, result.Int(row, "spills") == 1);
@@ -99,6 +114,8 @@ internal sealed class ActivityReader : ILiveSqlReader
             // Each new connection reports what its login may do again.
             statusSent.Clear();
         }
+        // What failed on the last connection runs again: the login may since hold the permission, or this be another server.
+        skipped.Clear();
         return (found.Spid, found.ServerState);
     }
 
@@ -107,6 +124,10 @@ internal sealed class ActivityReader : ILiveSqlReader
         var spec = item.Probe.Spec;
         var server = profile ?? throw new InvalidOperationException("The probe ran before the source opened.");
         var capabilities = Capabilities ?? throw new InvalidOperationException("The probe ran before the capability probe.");
+        // The opened frame says so when the capability probe ran as the source opened; when it did not (every probe started
+        // paused, the gates were full, the connect failed), the probe learns it here and stops, as it would have opened.
+        if (spec.Permission == "serverState" && !capabilities.ServerState)
+            return new(null, [], [LiveErrors.Create(spec.Id, "PERMISSION_DENIED", LiveErrors.PermissionMessage)], Sampled: false);
         var band = ActivitySql.BandOf(server.Major, server.EngineEdition, server.CatalogBand) ?? throw new InvalidOperationException("The probe ran on a server the monitor does not serve.");
         var render = new ActivityRender(band, catalog.EditionOf(server.EngineEdition)!, capabilities.TotalSpills, capabilities.ServerState);
         var statements = ActivitySql.Statements(spec.Id, render);
@@ -115,13 +136,15 @@ internal sealed class ActivityReader : ILiveSqlReader
         for (var at = 0; at < statements.Count; at++)
         {
             var statement = statements[at];
-            var key = spec.Id + " " + statement.Id;
+            // The render is part of the key: the limited sessions statement shares its id with the full one, which may have
+            // failed on a connection whose login read server state.
+            var key = spec.Id + " " + statement.Id + (render.ServerState ? "" : " limited");
             if (skipped.TryGetValue(key, out var known))
             {
                 errors.Add(known);
                 continue;
             }
-            try { results[statement.Id] = await RunAsync(connection, prologue, statement, testText, parameter => Value(statement, parameter), token).ConfigureAwait(false); }
+            try { results[statement.Id] = await Run(connection, prologue, statement, testText, parameter => Value(statement, parameter), token).ConfigureAwait(false); }
             catch (SqlException error) when (!token.IsCancellationRequested)
             {
                 var value = LiveErrors.From(spec.Id, error);
@@ -141,7 +164,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (results.Count == 0)
             return new(null, [], [errors.Count > 0 ? errors[0] with { Tables = null, Series = null } : LiveErrors.Create(spec.Id, "SQL_ERROR", "The probe read nothing.")], Sampled: false);
 
-        if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog), [], errors);
+        if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
         if (spec.Id != SessionsProbe) throw new InvalidOperationException("No reader for this Activity Monitor probe.");
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
@@ -221,6 +244,10 @@ internal sealed class ActivityReader : ILiveSqlReader
         ("activeQueries", "@take") => (int)catalog.Limit("activeQueries") + 1,
         _ => throw new RequestException("BACKEND_ERROR", "An Activity Monitor statement has a parameter the source does not fill.")
     };
+
+    private Task<ActivityResult> Run(SqlConnection connection, string prologue, ActivityStatement statement, Func<string, string, string>? testText,
+        Func<ActivityParameter, object> values, CancellationToken token) =>
+        TestRun is { } run ? run(statement, statement.Parameters.ToDictionary(parameter => parameter.Name, values, StringComparer.Ordinal)) : RunAsync(connection, prologue, statement, testText, values, token);
 
     /// <summary>Runs one statement with the live prologue and reads its rows, checking its columns against the declaration (a
     /// mismatch is a bug, which ends the view failed, never a sample).</summary>

@@ -10,10 +10,12 @@ using Varia.Backend.Protocol;
 namespace Varia.Backend.Tests;
 
 /// <summary>Live checks of the Activity Monitor's live source (VARIA_TEST_SQL_SERVER), through LiveService as main drives it:
-/// the overview's series and the sessions probe's three tables, the capability statuses and Varia's own sessions; a real
+/// the overview's series and the sessions probe's three tables, the capability statuses and Varia's own sessions (an Object
+/// Explorer pool, an SSIS pool opened through SqlService.Open, a query tab, an Object Actions session that ends); a real
 /// blocking chain of application locks in Processes, Blocking and Active Expensive Queries, and the Blocked view chip applied
 /// by an update; whether a session's CPU stays continuous when its requests end (the per-session rate's assumption, D-am
-/// §6.1); and (VARIA_TEST_SQL_SCRATCH=1) a login without server state, which sees only its own session. Only this run's
+/// §6.1); and (VARIA_TEST_SQL_SCRATCH=1) a login without server state, which sees only its own session, and whose overview
+/// stops without a sample when the monitor opened paused. Only this run's
 /// sessions are asserted, so other runs' sessions do not matter; the only objects created are application locks, released in
 /// finally, and the scratch login.</summary>
 internal static class ActivitySourceLiveChecks
@@ -105,6 +107,24 @@ internal static class ActivitySourceLiveChecks
         await using var pool = explorer.Connection(info.Id, null);
         await explorer.OpenAsync(pool, CancellationToken.None);
         var poolSpid = pool.ServerProcessId.ToString(CultureInfo.InvariantCulture);
+        // A pool another host opens through the shared opener, as the SSIS hosts do (their OpenAsync is SqlService.Open
+        // itself): its session is recorded like every pool's, so Processes marks it Varia's.
+        var host = (ILiveHost)service;
+        await using var ssis = host.PoolConnection(info.Id, null, " - Integration Services");
+        await service.Open(ssis, CancellationToken.None);
+        var ssisSpid = ssis.ServerProcessId.ToString(CultureInfo.InvariantCulture);
+        // An Object Actions connection is unpooled: its session ends as it closes, and SQL Server may give its id to anyone.
+        var actions = (IActionHost)service;
+        int actionSpid;
+        bool whileOpen;
+        await using (var action = actions.Connection(info.Id))
+        {
+            await actions.OpenAsync(action, CancellationToken.None);
+            actionSpid = action.ServerProcessId;
+            whileOpen = host.OwnSessions(info.Id).Contains(actionSpid);
+        }
+        check(whileOpen && !host.OwnSessions(info.Id).Contains(actionSpid) && host.OwnSessions(info.Id).Contains(ssis.ServerProcessId),
+            "an Object Actions session counts as Varia's own while its connection is open and no longer once it closes, and an SSIS pool opened through SqlService.Open counts");
         var tab = Guid.NewGuid().ToString();
         var tabSpid = (await Sql(service, info, json, "SELECT @@SPID;", tab)).Scalar;
         var view = Subscribe(service, info.Id, json, new { filters = new[] { new { table = "sessions", showVaria = true } } }, ActivityReader.OverviewProbe, ActivityReader.SessionsProbe);
@@ -127,9 +147,9 @@ internal static class ActivitySourceLiveChecks
             check(rows.Count >= 2 && monitor is { } own && own["varia"] == "Varia Activity Monitor" && own["application"]!.EndsWith(" - Activity Monitor", StringComparison.Ordinal) && own["login"] is { Length: > 0 },
                 "Processes holds the server's sessions, the monitor's own marked as Varia's Activity Monitor when Varia's own sessions are shown");
             string? Varia(List<Dictionary<string, string?>> table, string? spid) => table.FirstOrDefault(row => row["sessionId"] == spid) is { } row ? row["varia"] ?? "(none)" : null;
-            check(Varia(rows, poolSpid) == "Varia Object Explorer" && Varia(rows, tabSpid) == "Query tab",
-                "Processes labels this backend's Object Explorer pool session and its query tab as SQL Server shows them (process id, machine, program name), the pool also by the session id it was given: "
-                + Varia(rows, poolSpid) + ", " + Varia(rows, tabSpid));
+            check(Varia(rows, poolSpid) == "Varia Object Explorer" && Varia(rows, tabSpid) == "Query tab" && Varia(rows, ssisSpid) == "Varia Integration Services",
+                "Processes labels this backend's Object Explorer and Integration Services pool sessions and its query tab as SQL Server shows them (process id, machine, program name), the pools also by the session id they were given: "
+                + Varia(rows, poolSpid) + ", " + Varia(rows, tabSpid) + ", " + Varia(rows, ssisSpid));
             // The catalogue's defaults hide Varia's pools again, the monitor's own included, and keep its query tabs.
             var before = sessions.Count;
             service.Live.Update(new LiveUpdateArgs(view.Id, "activity", Args: JsonSerializer.SerializeToElement(new { filters = new[] { new { table = "sessions" } } }, json)), json);
@@ -137,8 +157,8 @@ internal static class ActivitySourceLiveChecks
             var after = await Freeze(view, _ => SamplesOf(view.Recorder, ActivityReader.SessionsProbe).Count > before + 1);
             var hidden = after is null ? [] : Rows(service, after.Tables!.Single(table => table.Table == 0));
             check(after is not null && hidden.Count > 0 && hidden.All(row => row["varia"] is null or "Query tab") && hidden.All(row => row["sessionId"] != opened?.Spid?.ToString(CultureInfo.InvariantCulture))
-                && Varia(hidden, poolSpid) is null && Varia(hidden, tabSpid) == "Query tab",
-                "an update back to the default filter hides Varia's pool sessions (the Object Explorer pool's and the monitor's own) from the next sample, and keeps its query tab");
+                && Varia(hidden, poolSpid) is null && Varia(hidden, ssisSpid) is null && Varia(hidden, tabSpid) == "Query tab",
+                "an update back to the default filter hides Varia's pool sessions (the Object Explorer and Integration Services pools' and the monitor's own) from the next sample, and keeps its query tab");
         }
         finally
         {
@@ -432,6 +452,28 @@ internal static class ActivitySourceLiveChecks
                     + string.Join(", ", rows.Select(row => row["sessionId"] + " " + row["varia"])) + " | " + string.Join(", ", denied.Take(2).Select(error => error.Code + " " + string.Join("/", error.Tables ?? []))));
             }
             finally { await Stop(view); }
+
+            // Subscribed hidden (every probe paused, as a monitor restored in the background), the source opens without the
+            // capability probe, so the overview opens "ok"; once resumed it learns the login lacks server state and stops,
+            // reading nothing, rather than sample the one statement such a login may run (whose sums are NULL).
+            var recorder = new LiveRecorder(Interlocked.Increment(ref next));
+            var hiddenId = Guid.NewGuid().ToString();
+            var hidden = new View(service.Live.SubscribeAsync(new LiveSubscribeArgs(hiddenId, connected.Id, "activity",
+                [new LiveProbeArgs(ActivityReader.OverviewProbe, 2000, Paused: true), new LiveProbeArgs(ActivityReader.SessionsProbe, 2000, Paused: true)]), recorder.Context, json), recorder, hiddenId);
+            try
+            {
+                var paused = await recorder.WaitAsync(item => item.Opened is not null);
+                var opened = recorder.Opened;
+                service.Live.Update(new LiveUpdateArgs(hiddenId, "activity", Probes: [new LiveProbeArgs(ActivityReader.OverviewProbe, Paused: false), new LiveProbeArgs(ActivityReader.SessionsProbe, Paused: false)]), json);
+                LiveProbeError? Stopped(LiveRecorder item) => item.Ticks.SelectMany(tick => tick.Errors ?? []).FirstOrDefault(error => error.Probe == ActivityReader.OverviewProbe && error.Terminal);
+                var stopped = await recorder.WaitAsync(item => Stopped(item) is not null && SamplesOf(item, ActivityReader.SessionsProbe).Count >= 2, 20_000);
+                var overviewErrors = recorder.Ticks.SelectMany(tick => tick.Errors ?? []).Where(error => error.Probe == ActivityReader.OverviewProbe).ToList();
+                check(paused && opened is { Probes: [{ State: "ok" }, { State: "ok" }] } && stopped && SamplesOf(recorder, ActivityReader.OverviewProbe).Count == 0
+                    && overviewErrors is [{ Code: "PERMISSION_DENIED", Terminal: true, Tables: null, Series: null }] && !hidden.Task.IsCompleted,
+                    "a login without server state whose monitor opened paused gets no overview sample once it resumes: the overview stops with one PERMISSION_DENIED, while the sessions probe samples: "
+                    + SamplesOf(recorder, ActivityReader.OverviewProbe).Count + " overview samples, " + string.Join(", ", overviewErrors.Select(error => error.Code + " " + error.Terminal + " " + string.Join("/", error.Series ?? []))));
+            }
+            finally { await Stop(hidden); }
         }
         finally
         {

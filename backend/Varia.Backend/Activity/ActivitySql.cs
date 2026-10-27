@@ -75,10 +75,13 @@ internal static partial class ActivitySql
             + "   OR (p.object_name LIKE N'%:General Statistics%' AND p.counter_name = N'Logins/sec');",
             ["object_name", "counter_name", "instance_name", "cntr_value", "cntr_type"], [],
             ["batchRequests", "compilations", "recompilations", "grantsPending", "grantsOutstanding", "lockWaits", "deadlocks", "pageLifeExpectancy", "logins"], CounterLiterals),
+        // Per database, so a database that leaves the view (dropped, offline, closed) takes only its own counts with it
+        // (ActivityIoTotals), never a step down in the server's.
         new("activity.overview", "io",
-            "SELECT SUM(f.num_of_bytes_read) AS bytes_read, SUM(f.num_of_bytes_written) AS bytes_written, SUM(f.num_of_reads) AS reads, SUM(f.num_of_writes) AS writes,\n"
-            + "       SUM(f.io_stall_read_ms) AS read_stall_ms, SUM(f.io_stall_write_ms) AS write_stall_ms\nFROM sys.dm_io_virtual_file_stats(NULL, NULL) AS f;",
-            ["bytes_read", "bytes_written", "reads", "writes", "read_stall_ms", "write_stall_ms"], [], ["ioMegabytes", "readLatency", "writeLatency"], NoLiterals),
+            "SELECT f.database_id, SUM(f.num_of_bytes_read) AS bytes_read, SUM(f.num_of_bytes_written) AS bytes_written, SUM(f.num_of_reads) AS reads,\n"
+            + "       SUM(f.num_of_writes) AS writes, SUM(f.io_stall_read_ms) AS read_stall_ms, SUM(f.io_stall_write_ms) AS write_stall_ms\n"
+            + "FROM sys.dm_io_virtual_file_stats(NULL, NULL) AS f GROUP BY f.database_id;",
+            ["database_id", "bytes_read", "bytes_written", "reads", "writes", "read_stall_ms", "write_stall_ms"], [], ["ioMegabytes", "readLatency", "writeLatency"], NoLiterals),
         // Classified in C# by the catalogue's map; only rows with time.
         new("activity.overview", "waits",
             "SELECT w.wait_type, w.wait_time_ms, w.signal_wait_time_ms FROM sys.dm_os_wait_stats AS w WHERE w.wait_time_ms > 0;",

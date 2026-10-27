@@ -1,12 +1,16 @@
+using System.Text.Json;
+using Microsoft.Data.SqlClient;
 using Varia.Backend.Activity;
+using Varia.Backend.Explorer;
 using Varia.Backend.Live;
 
 namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of the Activity Monitor's live source: the capability probe and the statement without server state,
-/// the overview's raw series from statement results, the sessions probe's rows (Processes, the blocking chains, Active
-/// Expensive Queries) with their rates, statuses, blocked-by and head-blocker marks, Varia's own sessions, the filters and
-/// focus series, and the args the live layer checks as zod does. Results are built by hand, as the statements return them.</summary>
+/// the overview's raw series from statement results and its I/O totals, the sessions probe's rows (Processes, the blocking
+/// chains, Active Expensive Queries) with their rates, statuses, blocked-by and head-blocker marks, Varia's own sessions and
+/// the ledger of their ids, the filters and focus series, the args the live layer checks as zod does and applies, and the
+/// reader's permission and refused-statement rules. Results are built by hand, as the statements return them.</summary>
 internal static class ActivitySourceChecks
 {
     private static readonly ActivityCatalog Catalog = ActivityCatalog.Current;
@@ -22,6 +26,7 @@ internal static class ActivitySourceChecks
     {
         Statements(check);
         Overview(check);
+        IoTotals(check);
         Sessions(check);
         Mars(check);
         SampleTimes(check);
@@ -30,6 +35,8 @@ internal static class ActivitySourceChecks
         Filters(check);
         Args(check);
         Errors(check);
+        Reader(check);
+        Ledger(check);
     }
 
     /// <summary>A statement's result with these rows; columns a row leaves out are NULL.</summary>
@@ -67,14 +74,14 @@ internal static class ActivitySourceChecks
             ["counters"] = Result(Statement("activity.overview", "counters"),
                 new Dictionary<string, object?> { ["counter_name"] = "Batch Requests/sec", ["cntr_value"] = 700L }, new Dictionary<string, object?> { ["counter_name"] = "Page life expectancy", ["cntr_value"] = 5_412L },
                 new Dictionary<string, object?> { ["counter_name"] = "Lock Waits/sec", ["cntr_value"] = 3L }, new Dictionary<string, object?> { ["counter_name"] = "Lock Waits/sec", ["cntr_value"] = 4L }, new Dictionary<string, object?> { ["counter_name"] = "Something else", ["cntr_value"] = 9L }),
-            ["io"] = Result(Statement("activity.overview", "io"), new Dictionary<string, object?> { ["bytes_read"] = 1_000L, ["bytes_written"] = 500L, ["reads"] = 10L, ["writes"] = 5L, ["read_stall_ms"] = 40L, ["write_stall_ms"] = 15L }),
+            ["io"] = Result(Statement("activity.overview", "io"), new Dictionary<string, object?> { ["database_id"] = 1, ["bytes_read"] = 1_000L, ["bytes_written"] = 500L, ["reads"] = 10L, ["writes"] = 5L, ["read_stall_ms"] = 40L, ["write_stall_ms"] = 15L }),
             ["waits"] = Result(Statement("activity.overview", "waits"),
                 new Dictionary<string, object?> { ["wait_type"] = "LCK_M_X", ["wait_time_ms"] = 100L, ["signal_wait_time_ms"] = 10L }, new Dictionary<string, object?> { ["wait_type"] = "LAZYWRITER_SLEEP", ["wait_time_ms"] = 9_000L, ["signal_wait_time_ms"] = 0L },
                 new Dictionary<string, object?> { ["wait_type"] = "NEW_WAIT_2030", ["wait_time_ms"] = 50L, ["signal_wait_time_ms"] = 5L }, new Dictionary<string, object?> { ["wait_type"] = "SOS_WORK_DISPATCHER", ["wait_time_ms"] = 7_000L, ["signal_wait_time_ms"] = 0L }),
             ["blocked"] = Result(Statement("activity.overview", "blocked"), new Dictionary<string, object?> { ["blocked_sessions"] = 0, ["longest_wait_ms"] = null }),
             ["requests"] = Result(Statement("activity.overview", "requests"), new Dictionary<string, object?> { ["user_sessions"] = 12, ["active_requests"] = 3 })
         };
-        var raw = ActivityOverview.Raw(series, results, Catalog);
+        var raw = ActivityOverview.Raw(series, results, Catalog, new());
         check(raw is { MsTicks: 5_000, StartTicks: 100 } && At(raw, "cpuPercent") == 900 && At(raw, "cpuPercent", true) == 4 && At(raw, "runnablePerScheduler") == 1.5 && At(raw, "workQueue") == 1
             && At(raw, "schedulerDelay") == 12 && At(raw, "batchRequests") == 700 && At(raw, "pageLifeExpectancy") == 5_412 && At(raw, "lockWaits") == 7 && At(raw, "ioMegabytes") == 1_500
             && At(raw, "readLatency") == 40 && At(raw, "readLatency", true) == 10 && At(raw, "writeLatency", true) == 5 && At(raw, "blockedSessions") == 0 && At(raw, "longestBlock") == 0
@@ -83,9 +90,41 @@ internal static class ActivitySourceChecks
         check(At(raw, "waitingTasks") == 90 + 45, "Waiting Tasks sums wait less signal wait of every type that counts as waiting: Unknown types count, Idle and Varia's benign waits never do");
         results.Remove("counters");
         results.Remove("clock");
-        var partial = ActivityOverview.Raw(series, results, Catalog);
+        var partial = ActivityOverview.Raw(series, results, Catalog, new());
         check(partial is { MsTicks: null, StartTicks: null } && At(partial, "batchRequests") is null && At(partial, "pageLifeExpectancy") is null && At(partial, "cpuPercent") == 900,
             "a statement that did not run (no permission) leaves only its own series empty, and without the clock rates fall back to the backend's");
+        // Without server state SQL Server shows the login only its own session, which the statement leaves out: no rows to sum.
+        results["requests"] = Result(Statement("activity.overview", "requests"), new Dictionary<string, object?> { ["user_sessions"] = null, ["active_requests"] = null });
+        var unknown = ActivityOverview.Raw(series, results, Catalog, new());
+        check(At(unknown, "userSessions") is null && At(unknown, "activeRequests") is null, "sessions and requests the statement had no rows to count are unknown, never 0");
+    }
+
+    private static void IoTotals(Action<bool, string> check)
+    {
+        var spec = LiveCatalog.Current.Probes[ActivityReader.OverviewProbe];
+        var series = spec.Series.Select(item => item.Id).ToList();
+        var statement = Statement("activity.overview", "io");
+        Dictionary<string, object?> Database(int id, long read, long written, long reads, long writes, long readStall, long writeStall) => new()
+        {
+            ["database_id"] = id, ["bytes_read"] = read, ["bytes_written"] = written, ["reads"] = reads, ["writes"] = writes, ["read_stall_ms"] = readStall, ["write_stall_ms"] = writeStall
+        };
+        var totals = new ActivityIoTotals();
+        var deltas = new LiveDeltas([.. spec.Series.Select(item => item.Counter)]);
+        LiveDeltaResult Sample(long ticks, string? gap, params Dictionary<string, object?>[] databases) => deltas.Apply(ActivityOverview.Raw(series, new Dictionary<string, ActivityResult>
+        {
+            ["clock"] = Result(Statement("activity.overview", "clock"), new Dictionary<string, object?> { ["ms_ticks"] = ticks, ["sqlserver_start_time_ms_ticks"] = 1L }),
+            ["io"] = Result(statement, databases)
+        }, Catalog, totals), null, 1_000, gap);
+        double? At(LiveDeltaResult result, string id) => result.Values[series.IndexOf(id)];
+        Sample(10_000, "baseline", Database(1, 1_000, 500, 10, 5, 40, 15), Database(5, 38_817_792, 1_000_000, 900, 300, 9_000, 2_000));
+        // Database 5 is dropped (its counts leave the view) and database 7 appears; database 1 read 2 MB in 4 reads, 20 ms of stall.
+        var next = Sample(11_000, null, Database(1, 2_001_000, 500, 14, 5, 60, 15), Database(7, 50_000, 0, 3, 0, 9, 0));
+        // Database 7 reads 1 MB in 2 reads, and database 1's counts go down (its files reopened): it starts again from there.
+        var after = Sample(12_000, null, Database(1, 100, 0, 1, 0, 1, 0), Database(7, 1_050_000, 0, 5, 0, 19, 0));
+        check(next.Gap is null && At(next, "ioMegabytes") == 2_000_000 && At(next, "readLatency") == 5 && At(next, "writeLatency") is null
+            && after.Gap is null && At(after, "ioMegabytes") == 1_000_000 && At(after, "readLatency") == 5,
+            "the overview's I/O moves only by databases read in both samples: one dropped takes its counts with it (no reset gap, no less I/O than ran), and one that appears or whose counts went down starts from its reading: "
+            + At(next, "ioMegabytes") + " " + next.Gap + ", " + At(after, "ioMegabytes") + " " + after.Gap);
     }
 
     private static Dictionary<string, object?> Session(int id, string program = "App", int? pid = 4242, bool user = true, string status = "sleeping", int openTransactions = 0, long cpu = 0, long reads = 0,
@@ -379,5 +418,184 @@ internal static class ActivitySourceChecks
         check(edges is { Tables: [0, 1], Series: null } && active is { Tables: [2], Series: null } && clock is { Tables: null, Series: null }
             && counters.Tables is null && counters.Series!.Select(at => names[at]).Order(StringComparer.Ordinal).SequenceEqual(["batchRequests", "compilations", "deadlocks", "grantsOutstanding", "grantsPending", "lockWaits", "logins", "pageLifeExpectancy", "recompilations"]),
             "a statement's error names the tables and series it feeds by their place in the probe's catalogue entry, and the clock's names none");
+    }
+
+    private static readonly ServerProfile Box = new(17, "17.0.1000.0", 3, "app_user", false, true, false);
+
+    private static bool IsLimited(ActivityStatement statement) => statement.Id == "sessions" && !statement.Text.Contains("dm_exec_connections", StringComparison.Ordinal);
+
+    /// <summary>A reader whose statements the check answers, on a connection that never opens: Ran lists each statement run
+    /// (the limited sessions statement marked), and Fails says which SQL Server refuses with Msg 300.</summary>
+    private sealed class Scripted
+    {
+        public readonly List<string> Ran = [];
+        public bool ServerState = true;
+        public Func<ActivityStatement, bool> Fails = _ => false;
+        public long Ticks = 10_000;
+        public List<Dictionary<string, object?>> SessionRows = [];
+        public List<Dictionary<string, object?>> Edges = [];
+        public List<Dictionary<string, object?>> Active = [];
+        public readonly ActivityReader Reader;
+        private readonly SqlConnection connection = new();
+
+        public Scripted()
+        {
+            Reader = new ActivityReader(new NoHost(), "c") { TestRun = Run };
+            Reader.Unavailable(LiveCatalog.Current.Probes[ActivityReader.OverviewProbe], Box);
+            Reader.Unavailable(LiveCatalog.Current.Probes[ActivityReader.SessionsProbe], Box);
+        }
+
+        private Task<ActivityResult> Run(ActivityStatement statement, IReadOnlyDictionary<string, object> values)
+        {
+            Ran.Add(statement.Probe + " " + statement.Id + (IsLimited(statement) ? " limited" : ""));
+            if (Fails(statement)) throw ConnectionFailureChecks.Sql(300, 1, 14, "server", "VIEW SERVER PERFORMANCE STATE permission was denied on object 'server', database 'master'.");
+            Dictionary<string, object?>[] rows = statement.Id switch
+            {
+                "capabilities" => [new() { ["spid"] = 99, ["server_state"] = ServerState ? 1 : 0, ["alter_any_connection"] = 0, ["view_any_definition"] = 0, ["spills"] = 1 }],
+                "clock" => [new() { ["ms_ticks"] = Ticks, ["sqlserver_start_time_ms_ticks"] = 1L }],
+                "sessions" => [.. SessionRows],
+                "edges" => [.. Edges],
+                "activeQueries" => [.. Active],
+                "requests" => [new() { ["user_sessions"] = null, ["active_requests"] = null }],
+                _ => []
+            };
+            return Task.FromResult(Result(statement, rows));
+        }
+
+        /// <summary>A new connection's capability probe.</summary>
+        public void Connect() => Reader.SessionAsync(connection, "", "VIEW SERVER PERFORMANCE STATE", CancellationToken.None).GetAwaiter().GetResult();
+
+        public LiveReaderSample Read(string probe, string? gap = null)
+        {
+            var due = new LiveDue(new LiveProbeState(LiveCatalog.Current.Probes[probe], 2_000), gap, null, null, null, new Dictionary<int, LiveTrackArgs>(), TakenAt: Ticks);
+            return Reader.ReadAsync(connection, "", due, null, CancellationToken.None).GetAwaiter().GetResult();
+        }
+    }
+
+    private static void Reader(Action<bool, string> check)
+    {
+        // A login without server state whose capability probe ran only at the first tick (the source opened paused): SQL
+        // Server refuses every overview statement but one, whose sums are then NULL.
+        var denied = new Scripted { ServerState = false };
+        denied.Fails = statement => statement.Probe == ActivityReader.OverviewProbe && statement.Id != "requests";
+        denied.Connect();
+        var overview = denied.Read(ActivityReader.OverviewProbe, "baseline");
+        var sessions = denied.Read(ActivityReader.SessionsProbe, "baseline");
+        check(overview is { Sampled: false, Raw: null, Errors: [{ Code: "PERMISSION_DENIED", Terminal: true, Tables: null, Series: null }] }
+            && !denied.Ran.Any(entry => entry.StartsWith(ActivityReader.OverviewProbe, StringComparison.Ordinal)) && sessions.Sampled && denied.Ran.Contains("activity.sessions sessions limited"),
+            "without server state the overview runs nothing and stops (PERMISSION_DENIED, terminal) even when the capability probe ran after it opened, while the sessions probe reads its limited statement: "
+            + string.Join(", ", denied.Ran));
+
+        // Server state lost mid-run: every full statement is refused, and skipped on that connection.
+        var lost = new Scripted();
+        lost.Connect();
+        lost.Fails = statement => statement.Probe == ActivityReader.SessionsProbe && !IsLimited(statement);
+        var refused = lost.Read(ActivityReader.SessionsProbe, "baseline");
+        lost.Ran.Clear();
+        var again = lost.Read(ActivityReader.SessionsProbe);
+        check(!refused.Sampled && !again.Sampled && lost.Ran.Count == 0, "statements refused for good are not run again on that connection: " + string.Join(", ", lost.Ran));
+        // A new connection's capability probe finds it gone: the limited statement, under the full one's id, runs.
+        lost.ServerState = false;
+        lost.Connect();
+        var limited = lost.Read(ActivityReader.SessionsProbe);
+        check(limited.Sampled && lost.Ran.Contains("activity.sessions sessions limited"),
+            "after server state is lost, the next connection runs the limited sessions statement, though the full one under its id was refused: " + string.Join(", ", lost.Ran));
+        // A new connection runs again what the last refused: its login may since hold the permission.
+        var granted = new Scripted();
+        granted.Connect();
+        granted.Fails = statement => statement.Id == "edges";
+        granted.Read(ActivityReader.SessionsProbe, "baseline");
+        granted.Fails = _ => false;
+        granted.Connect();
+        granted.Ran.Clear();
+        var regained = granted.Read(ActivityReader.SessionsProbe);
+        check(granted.Ran.Contains("activity.sessions edges") && regained.Errors.Count == 0, "a statement refused on one connection runs again on the next: " + string.Join(", ", granted.Ran));
+
+        // Args: an update replaces only the filters of the tables it names, and the focus session stays until one names another.
+        var args = new Scripted
+        {
+            SessionRows = [WithRequest(Session(51, cpu: 1_000)), WithRequest(Session(53), status: "suspended", blocker: 51, waitType: "LCK_M_S", waitTime: 50)],
+            Edges = [new() { ["session_id"] = 53, ["exec_context_id"] = 0, ["blocking_session_id"] = 51, ["blocking_exec_context_id"] = 0, ["wait_type"] = "LCK_M_S", ["wait_duration_ms"] = 50L, ["resource_description"] = "x" }],
+            Active =
+            [
+                new() { ["session_id"] = 51, ["request_id"] = 0, ["start_time"] = Login, ["status"] = "running", ["cpu_time"] = 5, ["statement_text"] = "SELECT * FROM dbo.orders", ["blocking_session_id"] = (short)0 },
+                new() { ["session_id"] = 53, ["request_id"] = 0, ["start_time"] = Login, ["status"] = "suspended", ["cpu_time"] = 5, ["statement_text"] = "SELECT * FROM dbo.lines", ["blocking_session_id"] = (short)51 }
+            ]
+        };
+        args.Connect();
+        var reader = args.Reader;
+        reader.Apply(ActivityReader.Check(new(Filters: [new("sessions", "blocked")]), Catalog));
+        reader.Apply(ActivityReader.Check(new(Filters: [new("activeQueries", Text: "orders")]), Catalog));
+        reader.Apply(ActivityReader.Check(new(FocusSession: 51), Catalog));
+        var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];
+        string Shown(LiveReaderSample sample, string table, string column)
+        {
+            var at = spec.Tables.FindIndex(entry => entry.Id == table);
+            var cell = spec.Tables[at].Columns.FindIndex(entry => entry.Id == column);
+            var read = sample.Tables.Single(entry => entry.Table == at);
+            return string.Join(",", read.Rows.Where(row => read.View?.Invoke(row) ?? true).Select(row => row.Cells[cell].Text));
+        }
+        double? Focus(LiveReaderSample sample) => sample.Raw!.Values[0];
+        LiveReaderSample Next(long cpu)
+        {
+            args.Ticks += 1_000;
+            args.SessionRows[0] = WithRequest(Session(51, cpu: cpu));
+            return args.Read(ActivityReader.SessionsProbe);
+        }
+        var first = args.Read(ActivityReader.SessionsProbe, "baseline");
+        var second = Next(1_500);
+        reader.Apply(ActivityReader.Check(new(Filters: [new("blocking")]), Catalog));
+        var third = Next(2_000);
+        var filtersAfter = reader.Current.Filters.Keys.Order(StringComparer.Ordinal).ToList();
+        reader.Apply(ActivityReader.Check(new(FocusSession: 0), Catalog));
+        var fourth = Next(2_500);
+        check(Shown(first, "sessions", "sessionId") == "53" && Shown(first, "activeQueries", "activeSessionId") == "51" && Shown(third, "sessions", "sessionId") == "53"
+            && filtersAfter.SequenceEqual(["activeQueries", "blocking", "sessions"]),
+            "an args update replaces the filters of the tables it names and keeps the others' (Processes stays on Blocked while Active Expensive Queries takes a text): "
+            + Shown(first, "sessions", "sessionId") + " | " + Shown(first, "activeQueries", "activeSessionId") + " | " + string.Join(",", filtersAfter));
+        check(Focus(first) is null && Focus(second) == 500 && Focus(third) == 500 && Focus(fourth) is null && reader.Current.Focus == 0,
+            "the focus series follow the session focusSession names, through updates that name only filters, until one names another (0: none): "
+            + string.Join(",", new[] { first, second, third, fourth }.Select(sample => Focus(sample)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-")));
+    }
+
+    private static void Ledger(Action<bool, string> check)
+    {
+        var time = 0L;
+        var ledger = new OwnSessionLedger(() => time);
+        var servers = new Dictionary<string, string> { ["a1"] = "server:A", ["a2"] = "server:A", ["b"] = "server:B" };
+        string? ServerOf(string id) => servers.GetValueOrDefault(id);
+        string Own(string id) => string.Join(",", ledger.Sessions(id, ServerOf).Order());
+        ledger.Opened("a1", 63, pooled: true);
+        ledger.Opened("a2", 64, pooled: true);
+        ledger.Opened("b", 70, pooled: true);
+        check(Own("a1") == "63,64" && Own("a2") == "63,64" && Own("b") == "70" && Own("nope") == "",
+            "Varia's own sessions are those of every connection to the monitor's server, never another server's: " + Own("a1") + " | " + Own("b"));
+        // An unpooled Object Actions connection's session ends as it closes; SQL Server may hand its id to anyone after.
+        ledger.Opened("a1", 87, pooled: false);
+        var held = Own("a1");
+        ledger.Closed("a1", 87);
+        // A pooled session stays while its connection waits in the pool, and goes once SqlClient would have pruned it.
+        ledger.Closed("a1", 63);
+        ledger.Closed("a2", 64);
+        time += OwnSessionLedger.IdleMs - 1;
+        var pooled = Own("a1");
+        ledger.Opened("a2", 64, pooled: true);
+        ledger.Closed("a2", 64);
+        time += 2;
+        var pruned = Own("a1");
+        check(held == "63,64,87" && pooled == "63,64" && pruned == "64",
+            "an id counts as Varia's only while it can be: an unpooled session until it closes, a pooled one until its idle connection would have been pruned, each open refreshing it: "
+            + held + " | " + pooled + " | " + pruned);
+        // So a client that takes a freed id and claims Varia's process, machine and program name is not a pool session.
+        var varia = new VariaSessions(Catalog, 4242, [new VariaClient("Varia SQL Manager", Host)], ledger.Sessions("a1", ServerOf));
+        check(varia.Classify(87, 4242, Host, "Varia SQL Manager - Object Actions", 99) == (null, false) && varia.Classify(63, 4242, Host, "Varia SQL Manager - Object Explorer", 99) == (null, false)
+            && varia.Classify(64, 4242, Host, "Varia SQL Manager - Object Explorer", 99) == ("Varia Object Explorer", true),
+            "a session under the id of a closed Object Actions connection or a pruned pool session, claiming Varia's process, machine and program name, shows as itself");
+        // Disconnecting a connection id forgets its sessions.
+        using var service = new SqlService();
+        service.OwnSessions.Opened("gone", 63, pooled: true);
+        var before = service.OwnSessions.Sessions("gone", _ => "server:A").Count;
+        service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new { connectionId = "gone" }, HostChecks.Json), HostChecks.Json).GetAwaiter().GetResult();
+        check(before == 1 && service.OwnSessions.Sessions("gone", _ => "server:A").Count == 0, "connections.disconnect forgets the session ids its pooled and Object Actions connections were given");
     }
 }
