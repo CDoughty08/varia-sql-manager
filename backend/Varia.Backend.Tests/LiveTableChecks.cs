@@ -166,6 +166,11 @@ internal static class LiveTableChecks
         check(descendingRows.Select(row => row[0]).SequenceEqual(["4", "3", "5", "6"]) && ascendingRows.Select(row => row[0]).SequenceEqual(["6", "3", "5", "4"])
             && byTextRows.Select(row => row[0]).SequenceEqual(["3", "2", "1"]),
             "a sort orders by the user's columns, then the key; numbers as numbers, NULL first ascending, text case-insensitively and then exactly");
+        // A key for another table leaves this one in the source's order; one for this table, or for every table, sorts it.
+        var otherTable = table.Write(tied, new([new LiveSortArgs("amount", true, 1)])).Sample!;
+        var thisTable = table.Write(tied, new([new LiveSortArgs("amount", true, 1), new LiveSortArgs("id", false, 0)])).Sample!;
+        check(Rows(store, otherTable.Descriptor).Select(row => row[0]).SequenceEqual(["5", "3", "4", "6"]) && Rows(store, thisTable.Descriptor).Select(row => row[0]).SequenceEqual(["3", "4", "5", "6"]),
+            "a sort key that names a table sorts only that table, so a grid's sort leaves the probe's other tables in their own order");
 
         // Filter (case-insensitive, on the named columns of this table only), view, row cap.
         var rows = new List<LiveRow> { Item(1, "Blue", 1), Item(2, "red", 2), Item(3, "BLUE", 3), Item(4, "green", 4) };
@@ -204,6 +209,14 @@ internal static class LiveTableChecks
             && hidden.Departed is null && hiddenRows.Count == 0
             && plainGone.Departed is null && plainGoneRows.Select(row => row[0]).SequenceEqual(["3", "4", "5"]),
             "a tracked row that left the source stays exactly one more revision, where it was and listed as departed; untracked, filtered-out rows and tables without departed rows never linger");
+
+        // Only the list's first Linger keys (the grid's selected rows) stay; the rest are followed to place the selection.
+        var lingering = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Snapshot(Probe(ItemsTable(departed: true)), 0);
+        var some = new LiveTrackArgs("test.tables", 0, 1, ["2", "1"], 1);
+        lingering.Write(Items(1, 2, 3), new(Track: some));
+        var someGone = lingering.Write(Items(3, 4), new(Track: some)).Sample!;
+        check(someGone is { Departed: [1], Tracked.Rows: [1, -1] } && Rows(store, someGone.Descriptor).Select(row => row[0]).SequenceEqual(["3", "2", "4"]),
+            "a track list lingers only its first Linger keys when they leave; the keys after them are answered gone at once");
 
         // The renderer tracks a key after the revision that showed it: the next revision still keeps the row once it leaves.
         var late = new LiveTableSet(store, Guid.NewGuid().ToString(), Limits).Snapshot(Probe(ItemsTable(departed: true)), 0);

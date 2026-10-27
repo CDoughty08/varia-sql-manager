@@ -6,25 +6,28 @@ import type { Cell, GridSelection, SelectionBlock } from './selection'
 // the same rows: the selection stays index-based (selection.ts), and only a swap moves it, through where each old row
 // went in the new revision.
 
-/** Where a row of the old revision is in the new one: its index, or -1 when it is gone. */
-export type RowMap = (oldRow: number) => number
+/** Where a row of the old revision is in the new one: its index, or -1 when it is gone. `known`, when the map has it, tells
+ *  a row whose place it knows from one it only keeps at its index, not knowing where it went. */
+export type RowMap = ((oldRow: number) => number) & { readonly known?: (oldRow: number) => boolean }
 
 const clampRow = (row: number, rows: number) => Math.max(0, Math.min(row, rows - 1))
 
 /**
  * The active row's place after a swap: where it went; when it is gone, where the nearest old row that survived went
  * (below first, then above, at most 64 rows away), so the selection stays among the rows the user was looking at; else
- * its old index, within the new rows.
+ * its old index, within the new rows. Rows whose place the map does not know (`known`) are passed over: kept at their old
+ * index, they would land the selection on whatever row now sits there.
  */
 export function survivingRow(oldRow: number, mapRow: RowMap, rows: number): number {
   if (rows <= 0) return 0
   const direct = mapRow(oldRow)
   if (direct >= 0) return clampRow(direct, rows)
+  const place = (row: number) => mapRow.known && !mapRow.known(row) ? -1 : mapRow(row)
   for (let step = 1; step <= g.swapSearchRows; step++) {
-    const below = mapRow(oldRow + step)
+    const below = place(oldRow + step)
     if (below >= 0) return clampRow(below, rows)
     if (oldRow - step < 0) continue
-    const above = mapRow(oldRow - step)
+    const above = place(oldRow - step)
     if (above >= 0) return clampRow(above, rows)
   }
   return clampRow(oldRow, rows)

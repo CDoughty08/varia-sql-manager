@@ -528,6 +528,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     throw Invalid("Only keyed snapshot tables are tracked.");
                 if (track.Seq < 1 || track.Keys is null || track.Keys.Length > Limits.TrackedKeys || track.Keys.Any(key => key is null || key.Length > Limits.KeyCharacters))
                     throw Invalid("A track list has up to 64 keys of up to 512 characters.");
+                if (track.Linger is { } linger && (linger < 0 || linger > track.Keys.Length)) throw Invalid("A track list lingers at most its own keys.");
             }
         }
         var sourceArgs = args.Args is null ? null : ArgsOf(source, args.Args, json);
@@ -716,8 +717,10 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
         if (settings.Sort is { } sort)
         {
             var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
-            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !sortable.Contains(key.Column))
-                || sort.Select(key => key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
+            bool Sorts(LiveSortArgs key) => key.Table is not { } table ? sortable.Contains(key.Column)
+                : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column);
+            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !Sorts(key))
+                || sort.Select(key => key.Table + "/" + key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
                 throw Invalid("Sort names a column the probe does not sort by.");
         }
         if (settings.View is { } view && !spec.Views.Contains(view, StringComparer.Ordinal)) throw Invalid("Unknown view.");

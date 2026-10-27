@@ -41,6 +41,9 @@ export interface TabResults {
 export interface GridViewState {
   topRow: number; virtualTop: number; scrollLeft: number; widths?: Float64Array
   userSized?: Set<number>; sized: boolean; selection?: GridSelection
+  /** A follow-tail grid (a live log): whether its last frame showed the last row. A grid built over a state with false
+   *  opens where it was rather than at the tail. */
+  following?: boolean
 }
 export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState> }
 /** A mounted grid, for the commands that act on it. */

@@ -6,8 +6,8 @@ import { toneColumnOf, type GridViewport } from '../src/renderer/src/grid/GridVi
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import { remapSelection, remapTop, sameSelection, survivingRow, type RowMap } from '../src/renderer/src/grid/swap'
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
-import { keyOfRow, LiveGrid, prepareMs, readSpans, trackedRowMap, wantedRows, type LiveGridHooks, type LiveGridView } from '../src/renderer/src/live/LiveGrid'
-import type { AppliedTick, LiveTable } from '../src/renderer/src/live/LiveService'
+import { keyOfRow, LiveGrid, liveGridText, prepareMs, readSpans, selectedRows, trackedRowMap, wantedRows, type LiveGridHooks, type LiveGridState, type LiveGridView } from '../src/renderer/src/live/LiveGrid'
+import type { AppliedTick, LiveProbeOptions, LiveStatus, LiveTable } from '../src/renderer/src/live/LiveService'
 import type { LiveTick } from '../src/shared/live/schema'
 import type { ResultHandle, RowWindow, WindowOptions } from '../src/renderer/src/results/ResultClient'
 import { FLAG_CAPPED, FLAG_NULL } from '../src/renderer/src/results/worker-protocol'
@@ -33,6 +33,12 @@ describe('grid swap', () => {
     // Nothing survived: the old index, within the new rows.
     expect(survivingRow(30, () => -1, 10)).toBe(9)
     expect(survivingRow(3, () => -1, 0)).toBe(0)
+    // A row whose place the map does not know is passed over, not taken at its old index: here row 6 left too, row 7 is
+    // unknown (kept at 7, where another row now is), and row 4 survived at 2.
+    const partly = Object.assign((row: number) => ({ 5: -1, 6: -1, 4: 2 } as Record<number, number>)[row] ?? row, { known: (row: number) => row >= 4 && row <= 6 })
+    expect(survivingRow(5, partly, 20)).toBe(2)
+    // Nothing known survived: the old index.
+    expect(survivingRow(5, Object.assign((row: number) => row === 5 || row === 6 ? -1 : row, { known: (row: number) => row === 5 || row === 6 }), 20)).toBe(5)
   })
   it('remaps blocks by their rows, collapses a block whose row is gone to the active cell, and keeps whole columns whole', () => {
     const before: GridSelection = {
@@ -105,19 +111,26 @@ describe('LiveGrid helpers', () => {
     const known = new Map([[0, 'a'], [3, 'b'], [5, 'c']])
     const mapRow = trackedRowMap(known, { seq: 4, rows: [7, -1], keys: ['a', 'b'] })
     expect([0, 3, 5, 9].map(mapRow)).toEqual([7, -1, 5, 9])
+    // Rows 5 (its key was not answered) and 9 (its key unknown) stay at their index, and the map says it does not know them.
+    expect([0, 3, 5, 9].map(row => mapRow.known?.(row))).toEqual([true, true, false, false])
     // Without the keys of the answered list, nothing can be mapped.
     expect(trackedRowMap(known, { seq: 4, rows: [7, -1] })(0)).toBe(0)
     expect(trackedRowMap(known, undefined)(3)).toBe(3)
   })
-  it('follows the active row and its neighbours, the first row shown and the blocks\' corners, each once, within the rows', () => {
+  it('follows the selected rows first (they linger), then the active row\'s neighbours and the first row shown, each once, within the rows', () => {
     const viewport: GridViewport = { firstRow: 10, lastRow: 40, rows: 100, atEnd: false }
     const chosen: GridSelection = { resultIndex: 0, active: cell(12), blocks: [{ kind: 'cells', anchor: cell(12), focus: cell(15) }, { kind: 'all', anchor: cell(50), focus: cell(60) }, { kind: 'rows', anchor: cell(200), focus: cell(12) }] }
-    expect(wantedRows(chosen, viewport)).toEqual([12, 13, 11, 10, 15])
-    expect(wantedRows(selection({ active: cell(0) }), viewport)).toEqual([0, 1, 10])
-    expect(wantedRows(undefined, viewport)).toEqual([10])
-    expect(wantedRows(undefined, { ...viewport, rows: 0 })).toEqual([])
+    expect(selectedRows(chosen)).toEqual([12, 15, 200])
+    // 200 is past the rows: the active row and one corner are selected, then the neighbours and the first row shown.
+    expect(wantedRows(chosen, viewport)).toEqual({ rows: [12, 15, 13, 11, 10], selected: 2 })
+    expect(wantedRows(selection({ active: cell(0) }), viewport)).toEqual({ rows: [0, 1, 10], selected: 1 })
+    expect(wantedRows(undefined, viewport)).toEqual({ rows: [10], selected: 0 })
+    expect(wantedRows(undefined, { ...viewport, rows: 0 })).toEqual({ rows: [], selected: 0 })
+    // A view at the top stays at the top whatever moves there: its first row is not followed (nor kept when it leaves).
+    expect(wantedRows(selection({ active: cell(5) }), { ...viewport, firstRow: 0 })).toEqual({ rows: [5, 6, 4], selected: 1 })
+    expect(wantedRows(undefined, { ...viewport, firstRow: 0 })).toEqual({ rows: [], selected: 0 })
     const many: GridSelection = { resultIndex: 0, active: cell(0), blocks: Array.from({ length: 64 }, (_, index) => ({ kind: 'cells' as const, anchor: cell(index * 2), focus: cell(index * 2 + 1) })) }
-    expect(wantedRows(many, { ...viewport, rows: 1000 })).toHaveLength(64)
+    expect(wantedRows(many, { ...viewport, rows: 1000 })).toEqual({ rows: Array.from({ length: 64 }, (_, index) => index), selected: 64 })
   })
   it('builds a key from the key columns\' stored text as the backend does: NULL as empty, joined with U+001F, never a cut cell', () => {
     const window = windowOf(10, [['1', 'x', '2020'], ['2', null, null]], 3)
@@ -137,7 +150,7 @@ describe('LiveGrid helpers', () => {
 const keySpec: LiveTableSpec = { id: 'items', mode: 'snapshot', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'int' }, { id: 'name', name: 'name', dataType: 'nvarchar' }, { id: 'tone', name: 'tone', dataType: 'nvarchar', role: 'tone' }] }
 const logSpec: LiveTableSpec = { id: 'log', mode: 'append', key: ['id'], columns: [{ id: 'id', name: 'id', dataType: 'bigint' }, { id: 'text', name: 'text', dataType: 'nvarchar' }] }
 let nextId = 1
-function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[]; lose(): void; listeners: Set<() => void> } {
+function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number; resultId?: number; tracked?: LiveTable['tracked']; departed?: number[]; rolledFrom?: number; restarted?: boolean } = {}): LiveTable & { reads: number[]; lose(): void; release(): void; listeners: Set<() => void> } {
   const ids = o.ids ?? [], reads: number[] = [], listeners = new Set<() => void>()
   let state = 'complete'
   const descriptor = { generation: 1, resultId: o.resultId ?? nextId++, columns: o.mode === 'append' ? logSpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true })) : keySpec.columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true, ...column.role ? { role: column.role } : {} })) } as unknown as ResultDescriptor
@@ -152,16 +165,26 @@ function table(o: { ids?: string[]; mode?: 'snapshot' | 'append'; rows?: number;
     }
   } as unknown as ResultHandle
   const lose = () => { state = 'lost'; for (const listener of [...listeners]) listener() }
-  return { probe: 'debug.synthetic.grid', index: 0, mode: o.mode ?? 'snapshot', descriptor, handle, reads, lose, listeners, ...o.tracked ? { tracked: o.tracked } : {}, ...o.departed ? { departed: o.departed } : {}, ...o.rolledFrom !== undefined ? { rolledFrom: o.rolledFrom } : {}, ...o.restarted ? { restarted: true } : {} }
+  const release = () => { state = 'released'; for (const listener of [...listeners]) listener() }
+  return { probe: 'debug.synthetic.grid', index: 0, mode: o.mode ?? 'snapshot', descriptor, handle, reads, lose, release, listeners, ...o.tracked ? { tracked: o.tracked } : {}, ...o.departed ? { departed: o.departed } : {}, ...o.rolledFrom !== undefined ? { rolledFrom: o.rolledFrom } : {}, ...o.restarted ? { restarted: true } : {} }
 }
-function harness(spec: LiveTableSpec = keySpec) {
+function harness(spec: LiveTableSpec = keySpec, o: { index?: number; state?: LiveGridState; options?: LiveProbeOptions; selection?: GridSelection } = {}) {
   let current: LiveTable | undefined
   const timers = manualTimers()
   const ticks = new Set<(tick: AppliedTick) => void>()
-  const live = { table: () => current, onTick: (listener: (tick: AppliedTick) => void) => { ticks.add(listener); return { dispose: () => { ticks.delete(listener) } } }, track: vi.fn(), setProbe: vi.fn() }
+  // The view: its status (why a released result is gone) and the probe's settings, which setProbe changes as LiveService does.
+  let status: LiveStatus = 'live', options: LiveProbeOptions = { ...o.options }
+  const statusListeners = new Set<() => void>()
+  const live = {
+    table: () => current, onTick: (listener: (tick: AppliedTick) => void) => { ticks.add(listener); return { dispose: () => { ticks.delete(listener) } } }, track: vi.fn(),
+    setProbe: vi.fn((_probe: string, patch: LiveProbeOptions) => { options = { ...options, ...patch } }), probeOptions: () => options,
+    getSnapshot: () => ({ status, probes: {}, connectionId: 'c' }), subscribe: (listener: () => void) => { statusListeners.add(listener); return () => { statusListeners.delete(listener) } }
+  }
+  const setStatus = (next: LiveStatus) => { status = next; for (const listener of [...statusListeners]) listener() }
   const view = {
     swaps: [] as { handle: ResultHandle; mapRow: RowMap; muted?: readonly number[]; top?: number }[], ends: 0, disposed: false,
-    selection: undefined as GridSelection | undefined, viewport: undefined as GridViewport | undefined, hooks: undefined as LiveGridHooks | undefined, created: undefined as LiveTable | undefined,
+    // As GridView restores a kept state's selection, silently.
+    selection: o.selection, viewport: undefined as GridViewport | undefined, hooks: undefined as LiveGridHooks | undefined, created: undefined as LiveTable | undefined,
     /** Each prepare's first row and signal; it finishes at once unless the test holds it. */
     prepares: [] as { handle: ResultHandle; firstRow: number; signal?: AbortSignal; finish(): void }[], hold: false
   }
@@ -182,14 +205,17 @@ function harness(spec: LiveTableSpec = keySpec) {
   }
   const copies: unknown[] = []
   const api = { copyResults: vi.fn(async (request: unknown) => { copies.push(request); return { ok: true as const, value: { rows: 1, bytes: 1, truncatedCells: 0, partial: false } } }), saveResults: vi.fn(async () => ({ ok: true as const, value: null })) }
-  const grid = new LiveGrid({ live, probe: 'debug.synthetic.grid', spec, api, newId: () => 'job', timers: timers.timers, createView: (first, hooks) => { view.created = first; view.hooks = hooks; return fake } })
+  const grid = new LiveGrid({
+    live, probe: 'debug.synthetic.grid', spec, api, newId: () => 'job', timers: timers.timers, ...o.index !== undefined ? { table: o.index } : {}, ...o.state ? { state: o.state } : {},
+    createView: (first, hooks) => { view.created = first; view.hooks = hooks; return fake }
+  })
   const emit = (next: LiveTable) => { current = next; for (const listener of [...ticks]) listener({ subscriptionId: 's', tick: {} as LiveTick }) }
   /** The user scrolled or selected: the grid reports a frame. */
   const frame = (o: { selection?: GridSelection; viewport?: GridViewport }) => {
     if (o.selection) { view.selection = o.selection; view.hooks!.onSelection(o.selection) }
     if (o.viewport) { view.viewport = o.viewport; view.hooks!.onViewport(o.viewport) }
   }
-  return { grid, live, view, emit, frame, api, copies, ticks, timers }
+  return { grid, live, view, emit, frame, api, copies, ticks, timers, setStatus, statusListeners }
 }
 const settle = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
 
@@ -205,7 +231,8 @@ describe('LiveGrid', () => {
     await settle()
     // One read covers the rows; the keys go once, in order: the active row, its neighbours, then the first row shown.
     expect(first.reads).toEqual([1])
-    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', ['13', '14', '12', '11'], 0)
+    // Only the active row lingers when it leaves.
+    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', ['13', '14', '12', '11'], 0, 1)
     // The same rows again: nothing new is read or sent.
     frame({ viewport: { firstRow: 1, lastRow: 4, rows: 5, atEnd: false } })
     await settle()
@@ -261,8 +288,9 @@ describe('LiveGrid', () => {
     await settle()
     release()
     await settle()
-    // The old revision's keys never went; the new revision's rows were read and sent instead.
-    expect(live.track.mock.calls.map(call => call[1])).toEqual([['7', '8', '9']])
+    // The old revision's keys never went; the new revision's rows were read and sent instead (a view at the top does
+    // not follow its first row).
+    expect(live.track.mock.calls.map(call => call[1])).toEqual([['7', '8']])
   })
 
   it('reads a revision\'s first rows before it swaps in, at most a moment, and swaps a newer one in at once', async () => {
@@ -365,6 +393,19 @@ describe('LiveGrid', () => {
     expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(2, 1) }, activeKey: '14' })
   })
 
+  it('moves a selection whose row and tracked neighbours all left to its old index, not to a row it only guessed', async () => {
+    // As the synthetic grid does: each revision drops the lowest ids and adds new ones at the bottom.
+    const { grid, live, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12', '13', '14'] }))
+    frame({ selection: selection({ active: cell(0, 1) }), viewport: { firstRow: 0, lastRow: 4, rows: 5, atEnd: true } })
+    await settle()
+    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', ['10', '11'], 0, 1)
+    // 10 and its neighbour 11 left; row 2 (12) was never tracked, and its old index now holds 14.
+    emit(table({ ids: ['12', '13', '14', '15', '16'], tracked: { seq: 1, rows: [-1, -1], keys: ['10', '11'] } }))
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(0, 1) }, activeKey: '12' })
+  })
+
   it('says when the result it shows is lost, and listens only to the result it shows', async () => {
     const { grid, emit } = harness()
     const shown = table({ ids: ['1'] })
@@ -396,14 +437,14 @@ describe('LiveGrid', () => {
     expect(published).not.toHaveBeenCalled()
   })
 
-  it('sorts a snapshot by catalogue column id, never by the tone, and clears the sort', () => {
+  it('sorts a snapshot by catalogue column id for its own table, never by the tone, and clears the sort', () => {
     const { grid, live, emit } = harness()
     emit(table({ ids: ['1'] }))
     grid.sortBy(1, true)
-    expect(live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'name', descending: true }] })
+    expect(live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'name', descending: true, table: 0 }] })
     expect(grid.getSnapshot().sort).toEqual([{ column: 'name', descending: true }])
     grid.sortBy('id')
-    expect(live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: false }] })
+    expect(live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: false, table: 0 }] })
     grid.sortBy(2)
     grid.sortBy('nope')
     expect(live.setProbe).toHaveBeenCalledTimes(2)
@@ -427,11 +468,121 @@ describe('LiveGrid', () => {
     expect(api.saveResults).toHaveBeenCalledWith({ jobId: 'job', generation: 1, resultId: shown.descriptor.resultId, suggestedName: 'Processes.csv', format: 'csv' })
   })
 
+  it('sorts only its own table of a probe, keeps the other tables\' keys, and shows a sort the probe already had', () => {
+    // Table 1 of a probe whose table 0 is sorted by cpu: its grid sorts by id without touching table 0's key.
+    const second = harness(keySpec, { index: 1, options: { sort: [{ column: 'id', descending: true, table: 0 }] } })
+    second.emit(table({ ids: ['1'] }))
+    expect(second.grid.getSnapshot().sort).toBeUndefined()
+    second.grid.sortBy('name', true)
+    expect(second.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'name', descending: true, table: 1 }, { column: 'id', descending: true, table: 0 }] })
+    second.grid.sortBy(undefined)
+    expect(second.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: true, table: 0 }] })
+    // A grid built again over a sorted probe shows its sort from the start, as does a probe-wide key on a column it has.
+    const remounted = harness(keySpec, { options: { sort: [{ column: 'id', descending: true, table: 0 }, { column: 'name', descending: false, table: 1 }] } })
+    expect(remounted.grid.getSnapshot().sort).toEqual([{ column: 'id', descending: true }])
+    expect(harness(keySpec, { index: 1, options: { sort: [{ column: 'name', descending: false }] } }).grid.getSnapshot().sort).toEqual([{ column: 'name', descending: false }])
+  })
+
+  it('keeps following the selected row\'s key while the next revision has not answered it, and moves there once one does', async () => {
+    const { grid, live, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12', '13', '14'] }))
+    frame({ selection: selection({ active: cell(3, 1) }), viewport: { firstRow: 0, lastRow: 4, rows: 5, atEnd: true } })
+    await settle()
+    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', ['13', '14', '12'], 0, 1)
+    // Sampled under an older list (10, 11): 13 is now at row 0 and row 3 holds 11, but this revision cannot say so.
+    emit(table({ ids: ['13', '12', '14', '11', '10'], tracked: { seq: 1, rows: [4, 3], keys: ['10', '11'] } }))
+    await settle()
+    // The selection stays at row 3 for now, but the grid still means 13: it says so, and goes on sending 13, not 11.
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(3, 1) }, activeKey: '13' })
+    expect(live.track.mock.lastCall![1][0]).toBe('13')
+    // The next revision answers 13's list: the selection moves to it.
+    emit(table({ ids: ['13', '12', '14', '11', '10'], tracked: { seq: 2, rows: [0, 4, 2], keys: ['13', '10', '14'] } }))
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(0, 1) }, activeKey: '13' })
+  })
+
+  it('takes a click on a row whose key it still waits for as the row the user sees', async () => {
+    const { grid, live, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12', '13', '14'] }))
+    frame({ selection: selection({ active: cell(3, 1) }), viewport: { firstRow: 0, lastRow: 4, rows: 5, atEnd: true } })
+    await settle()
+    emit(table({ ids: ['13', '12', '14', '11', '10'], tracked: { seq: 1, rows: [4, 3], keys: ['10', '11'] } }))
+    await settle()
+    expect(grid.getSnapshot().activeKey).toBe('13')
+    // The user clicks row 3 again: they chose 11, which the revision placed there.
+    frame({ selection: selection({ active: cell(3, 0) }) })
+    await settle()
+    expect(grid.getSnapshot().activeKey).toBe('11')
+    expect(live.track.mock.lastCall![1][0]).toBe('11')
+  })
+
+  it('says when the view stopped and its result was released, dormant or for good, and copies nothing then', async () => {
+    const { grid, view, emit, setStatus, api } = harness()
+    const shown = table({ ids: ['1', '2'] })
+    emit(shown)
+    view.selection = selection({ active: cell(0) })
+    // Hidden long enough: the view went dormant, and its end released the rows.
+    setStatus('dormant')
+    shown.release()
+    expect(grid.getSnapshot()).toMatchObject({ released: 'dormant', lost: false })
+    setStatus('ended')
+    expect(grid.getSnapshot().released).toBe('stopped')
+    await expect(grid.copy(false)).resolves.toEqual({ ok: false, error: liveGridText.stopped, code: 'RESULT_UNAVAILABLE' })
+    await expect(grid.save('Processes.csv')).resolves.toMatchObject({ ok: false, error: liveGridText.stopped })
+    expect(api.copyResults).not.toHaveBeenCalled()
+    // A copy whose result is released while it runs answers in the same words.
+    const next = table({ ids: ['1', '2'] })
+    emit(next)
+    await settle()
+    expect(grid.getSnapshot().released).toBeUndefined()
+    api.copyResults.mockImplementationOnce((async () => { next.release(); return { ok: false as const, error: 'These results were closed. Execute the query again to see them.', code: 'NOT_FOUND' as const } }) as never)
+    await expect(grid.copy(false)).resolves.toMatchObject({ ok: false, error: liveGridText.stopped })
+  })
+
+  it('reports the selection a grid built over kept state shows, and follows its rows by the kept keys', async () => {
+    const shown = table({ ids: ['10', '11', '12', '13'] })
+    const key = `1:${shown.descriptor.resultId}`
+    // The same result: the kept keys are its rows' keys, so nothing is read again.
+    const same = harness(keySpec, { selection: selection({ active: cell(2, 1) }), state: { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, keys: [[2, '12']], keysIn: key } })
+    same.emit(shown)
+    expect(same.grid.getSnapshot()).toMatchObject({ selection: { active: cell(2, 1) }, activeKey: '12' })
+    // A newer revision than the kept keys: they are pinned until a revision places them, and sent as they are.
+    const newer = harness(keySpec, { selection: selection({ active: cell(2, 1) }), state: { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, keys: [[2, '99']], keysIn: '1:12345' } })
+    newer.emit(table({ ids: ['10', '11', '12', '13'] }))
+    newer.frame({ viewport: { firstRow: 0, lastRow: 3, rows: 4, atEnd: true } })
+    await settle()
+    expect(newer.grid.getSnapshot().activeKey).toBe('99')
+    expect(newer.live.track.mock.lastCall![1][0]).toBe('99')
+    // The grid writes where it is into the state it was given.
+    const state: LiveGridState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false }
+    const fresh = harness(keySpec, { state })
+    const first = table({ ids: ['10', '11', '12'] })
+    fresh.emit(first)
+    fresh.frame({ selection: selection({ active: cell(1) }), viewport: { firstRow: 0, lastRow: 2, rows: 3, atEnd: true } })
+    await settle()
+    expect(state).toMatchObject({ keys: [[1, '11']], keysIn: `1:${first.descriptor.resultId}` })
+  })
+
+  it('opens a kept append grid where it was: not following, counting the rows that came since', () => {
+    const segment = table({ mode: 'append', rows: 130 })
+    const state: LiveGridState = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: true, following: false, seenRows: 100, seenIn: `1:${segment.descriptor.resultId}` }
+    const { grid, emit, frame } = harness(logSpec, { state })
+    emit(segment)
+    frame({ viewport: { firstRow: 20, lastRow: 39, rows: 130, atEnd: false } })
+    expect(grid.getSnapshot()).toMatchObject({ following: false, newRows: 30 })
+    // Another segment than the one counted: every row in it is new.
+    const other = harness(logSpec, { state: { ...state, seenIn: '1:1' } })
+    other.emit(table({ mode: 'append', rows: 40 }))
+    other.frame({ viewport: { firstRow: 0, lastRow: 19, rows: 40, atEnd: false } })
+    expect(other.grid.getSnapshot()).toMatchObject({ following: false, newRows: 40 })
+  })
+
   it('stops listening and disposes its grid', () => {
-    const { grid, view, emit, ticks } = harness()
+    const { grid, view, emit, ticks, statusListeners } = harness()
     emit(table({ ids: ['1'] }))
     grid.dispose()
     expect(view.disposed).toBe(true)
     expect(ticks.size).toBe(0)
+    expect(statusListeners.size).toBe(0)
   })
 })

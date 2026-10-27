@@ -4,13 +4,13 @@ import { createRoot } from 'react-dom/client'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { Workbench } from '../core/workbench'
 import { WorkbenchProvider } from '../core/WorkbenchContext'
-import type { LiveGrid } from './LiveGrid'
+import type { LiveGrid, LiveGridState } from './LiveGrid'
 import { LiveGridPane } from './LiveGridPane'
 import type { LiveHandle } from './LiveService'
 
 export interface TestGrid { grid(): LiveGrid | undefined; dispose(): void }
 
-export function mountTestGrid(workbench: Workbench, handle: LiveHandle, probe: LiveProbeId, table: number): TestGrid {
+export function mountTestGrid(workbench: Workbench, handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState): TestGrid {
   const host = document.createElement('div')
   host.className = 'live-grid-test'
   host.style.cssText = 'position: fixed; left: 48px; top: 96px; width: 720px; height: 360px; z-index: 20; display: flex;'
@@ -18,7 +18,7 @@ export function mountTestGrid(workbench: Workbench, handle: LiveHandle, probe: L
   let grid: LiveGrid | undefined
   const root = createRoot(host)
   root.render(<WorkbenchProvider workbench={workbench}>
-    <LiveGridPane live={handle} probe={probe} table={table} label="Live grid" toneLabel={tone => tone === 'muted' ? 'ended' : tone} onGrid={value => { grid = value }} />
+    <LiveGridPane live={handle} probe={probe} table={table} {...state ? { state } : {}} label="Live grid" toneLabel={tone => tone === 'muted' ? 'ended' : tone} onGrid={value => { grid = value }} />
   </WorkbenchProvider>)
   return { grid: () => grid, dispose: () => { root.unmount(); host.remove() } }
 }

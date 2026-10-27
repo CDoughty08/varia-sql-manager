@@ -183,6 +183,8 @@ export class GridView {
     this.tone = toneColumnOf(o.descriptor)
     this.columns = o.descriptor.columns.length - (this.tone >= 0 ? 1 : 0)
     this.resultCount = o.resultCount
+    // A follow-tail grid built over a kept state that had left the tail opens where it was, not at the newest rows.
+    this.atEnd = o.state.following ?? true
     this.links = this.linksOf(o.descriptor)
     const measure = fontMeasure()
     this.charWidth = measure.charWidth
@@ -909,6 +911,7 @@ export class GridView {
   /** Tells the shell what the frame showed, when that changed. */
   private report(model: ScrollModel, virtualTop: number, rows: number, height: number): void {
     this.atEnd = virtualTop >= model.maxVirtual - 0.5
+    if (this.o.followTail) this.o.state.following = this.atEnd
     const firstRow = rows > 0 ? Math.min(topRowOf(virtualTop), rows - 1) : 0
     const lastRow = Math.max(0, Math.min(rows - 1, Math.ceil((virtualTop + Math.max(0, height - g.headerHeight)) / g.rowHeight) - 1))
     const last = this.viewport

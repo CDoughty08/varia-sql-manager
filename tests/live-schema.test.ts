@@ -96,11 +96,17 @@ describe('live request schemas', () => {
   it('allows sort, views and filters only where the probe declares them', () => {
     const settings = (probe: Record<string, unknown>) => ({ ...subscribe(), source: 'one', probes: [{ probe: 'one.all', intervalMs: 1000, ...probe }] })
     expect(ok(fixture.subscribe, settings({ sort: [{ column: 'v0', descending: true }, { column: 'k1', descending: false }], view: 'blocked', filter: { text: 'x', columns: ['m0', 'k0'] } }))).toBe(true)
+    // A key for one table names a column of that snapshot table; the same column may go once per table and once for all.
+    expect(ok(fixture.subscribe, settings({ sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k1', descending: false, table: 1 }, { column: 'k0', descending: false }] }))).toBe(true)
     for (const [name, probe] of Object.entries({
       appendSort: { sort: [{ column: 'm0', descending: true }] },
       unknownSort: { sort: [{ column: 'nope', descending: true }] },
       repeatedSort: { sort: [{ column: 'k0', descending: true }, { column: 'k0', descending: false }] },
       fiveSorts: { sort: ['k0', 'v0', 'k1', 'k2', 'k3'].map(column => ({ column, descending: false })) },
+      otherTablesSort: { sort: [{ column: 'k1', descending: true, table: 0 }] },
+      appendTableSort: { sort: [{ column: 'm0', descending: true, table: 4 }] },
+      missingTableSort: { sort: [{ column: 'k0', descending: true, table: 8 }] },
+      repeatedTableSort: { sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k0', descending: false, table: 0 }] },
       view: { view: 'other' },
       filterColumn: { filter: { text: 'x', columns: ['nope'] } },
       filterText: { filter: { text: 'x'.repeat(401) } },
@@ -119,6 +125,8 @@ describe('live request schemas', () => {
     expect(ok(schema, update({ paused: false }))).toBe(true)
     expect(ok(schema, update({ probes: [{ probe: 'debug.synthetic.table', paused: true, sort: [{ column: 'value', descending: true }] }], refresh: true, args: { tickMs: 50 } }))).toBe(true)
     expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 64 }, () => 'k'.repeat(512)) }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a', 'b'], linger: 2 }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: [], linger: 0 }] }))).toBe(true)
     for (const [name, patch] of Object.entries({
       nothing: {},
       refreshFalse: { refresh: false },
@@ -131,6 +139,9 @@ describe('live request schemas', () => {
       trackKeys: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 65 }, () => 'k') }] },
       trackKeyLength: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['k'.repeat(513)] }] },
       trackSeq: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 0, keys: [] }] },
+      trackLinger: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 2 }] },
+      trackLingerSign: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: -1 }] },
+      trackLingerType: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 0.5 }] },
       args: { args: { rows: -1 } }
     })) expect(ok(schema, update(patch)), name).toBe(false)
     // An unkeyed snapshot table and an append table are never tracked.

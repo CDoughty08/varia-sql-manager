@@ -398,6 +398,17 @@ describe('LiveService', () => {
     handle.track('debug.synthetic.table', ['9'])
     await settle()
     expect(fake.updates.slice(-2)).toEqual([{ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['5', '7'] }] }, { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 3, keys: ['9'] }] }])
+    // How many of the first keys linger goes with the list, counting only the keys that are sent.
+    handle.track('debug.synthetic.table', ['1', 'x'.repeat(513), '2', '3'], 0, 3)
+    await settle()
+    expect(fake.updates.at(-1)).toEqual({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 4, keys: ['1', '2', '3'], linger: 2 }] })
+    // The settings as the view wants them, a copy the caller cannot change them through.
+    handle.setProbe('debug.synthetic.table', { sort: [{ column: 'value', descending: true, table: 0 }] })
+    const options = handle.probeOptions('debug.synthetic.table')!
+    expect(options.sort).toEqual([{ column: 'value', descending: true, table: 0 }])
+    options.sort![0].descending = false
+    expect(handle.probeOptions('debug.synthetic.table')?.sort?.[0].descending).toBe(true)
+    expect(handle.probeOptions('debug.synthetic.log')).toBeUndefined()
   })
 
   it('gives a table the keys its tracked rows answer, its departed rows, and an append segment\'s roll and restart', async () => {
@@ -454,6 +465,25 @@ describe('LiveService', () => {
     expect(handle.table('debug.synthetic.table')?.tracked?.keys).toBeUndefined()
     deliver(fake, sample({ seq: 6, rows: [1] }))
     expect(handle.table('debug.synthetic.table')?.tracked?.keys).toEqual(['15'])
+  })
+
+  it('keeps at most 64 track lists a table while no sample answers, dropping the oldest', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.table']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    // A probe that keeps failing answers no list, while every selection change sends one.
+    for (let id = 1; id <= 70; id++) { handle.track('debug.synthetic.table', [String(id)]); await settle() }
+    expect(fake.updates).toHaveLength(70)
+    const sample = (tracked: { seq: number; rows: number[] }) => ({
+      type: 'live.tick', seq: ++seq, sampledAt: Date.now(),
+      samples: [{ probe: 'debug.synthetic.table', costMs: 1, effectiveIntervalMs: 1000, tables: [{ table: 0, descriptor: descriptor(), revision: seq, tracked }] }]
+    }) as unknown as LiveTick
+    // The six oldest went: a sample answering one has rows but no keys; the oldest kept still has its keys.
+    deliver(fake, sample({ seq: 6, rows: [0] }))
+    expect(handle.table('debug.synthetic.table')?.tracked).toEqual({ seq: 6, rows: [0] })
+    deliver(fake, sample({ seq: 7, rows: [0] }))
+    expect(handle.table('debug.synthetic.table')?.tracked?.keys).toEqual(['7'])
   })
 
   it('holds every update until live.opened, so a pause or tracked keys sent at once are never refused NOT_FOUND', async () => {

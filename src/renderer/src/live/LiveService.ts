@@ -133,8 +133,11 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   setUserPaused(paused: boolean): void
   /** Refresh now: every running probe samples at once (a dormant view subscribes again). */
   refresh(): void
-  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F). */
-  track(probe: LiveProbeId, keys: readonly string[], table?: number): void
+  /** A probe's settings as the view wants them (what setProbe last set), read only; undefined for a probe it does not run. */
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined
+  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F).
+   *  `linger`: how many of the first keys (the selected rows) stay one revision when they leave; all of them by default. */
+  track(probe: LiveProbeId, keys: readonly string[], table?: number, linger?: number): void
   /** A metrics probe's history, for charts; read only. */
   ring(probe: LiveProbeId): MetricRing | undefined
   table(probe: LiveProbeId, index?: number): LiveTable | undefined
@@ -172,7 +175,7 @@ export function documentPage(target: Pick<Document, 'visibilityState' | 'addEven
 
 const tooMany = 'Too many live views are open in this window. Close one and retry.'
 const invalidSpec = 'This live view names probes its source does not have.'
-const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending)
+export const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending && key.table === right![at].table)
 const sameFilter = (left?: LiveFilter, right?: LiveFilter) => left === right || (!!left && !!right && left.text === right.text && (left.columns ?? []).join('\u001f') === (right.columns ?? []).join('\u001f') && !!left.columns === !!right.columns)
 const lostCodes: ReadonlySet<ErrorCode> = new Set(['BACKEND_LOST', 'RESULT_UNAVAILABLE', 'BACKEND_UNAVAILABLE'])
 /** Errors of an update to a stream that is ending: its end reports what happened. Updates wait for live.opened, so a
@@ -370,7 +373,7 @@ class Handle implements LiveHandle {
   private readonly runtime = new Map<LiveProbeId, ProbeRuntime>()
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
-  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
+  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number; linger?: number }>()
   /** The track lists sent per table since the newest one a sample answered, by seq: a sample names the list it answers by
    *  seq alone, and while one sample runs the grid may send many (each active row of a held Down arrow). */
   private readonly trackHistory = new Map<string, { seq: number; keys: readonly string[] }[]>()
@@ -819,7 +822,7 @@ class Handle implements LiveHandle {
         const wanted = this.desired()
         const patch = this.patchFor(record.sent, wanted)
         const tracks = [...this.tracks].filter(([key, track]) => record.tracked.get(key) !== track.seq).slice(0, limits.live.probes)
-        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys] })) } : patch
+        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys], ...track.linger !== undefined ? { linger: track.linger } : {} })) } : patch
         for (const [key, track] of tracks) this.remember(key, track.seq, track.keys)
         if (!update) {
           // The view came back to what the backend runs: a refusal no longer matters.
@@ -937,10 +940,18 @@ class Handle implements LiveHandle {
     })
   }
 
-  track(probe: LiveProbeId, keys: readonly string[], table = 0): void {
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined {
+    const settings = this.settings.get(probe)
+    return settings && { ...settings, ...settings.sort ? { sort: settings.sort.map(key => ({ ...key })) } : {} }
+  }
+
+  track(probe: LiveProbeId, keys: readonly string[], table = 0, linger?: number): void {
     if (this.disposed || !this.settings.has(probe)) return
-    const list = keys.filter(key => key.length <= limits.live.keyCharacters).slice(0, limits.live.trackedKeys)
-    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq })
+    // A key too long to send is left out, and so is its place among the lingering ones.
+    const fits = (key: string) => key.length <= limits.live.keyCharacters
+    const list = keys.filter(fits).slice(0, limits.live.trackedKeys)
+    const lingering = linger === undefined ? undefined : Math.min(list.length, keys.slice(0, Math.max(0, linger)).filter(fits).length)
+    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq, ...lingering !== undefined ? { linger: lingering } : {} })
     this.queueSync()
   }
 

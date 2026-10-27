@@ -317,17 +317,21 @@ internal sealed class LiveSnapshotTable
         foreach (var row in source) if ((settings.View?.Invoke(row) ?? true) && filter(row)) rows.Add((row, false, rows.Count));
         if (lingers)
         {
-            // A tracked row that left the source (not one the view or filter hides) stays one revision, at the row it had.
-            foreach (var tracked in settings.Track!.Keys.Distinct(StringComparer.Ordinal))
+            // A tracked row that left the source (not one the view or filter hides) stays one revision, at the row it had: the
+            // list's first Linger keys (the grid's selected rows), not the rows it follows only to place the selection.
+            var track = settings.Track!;
+            foreach (var tracked in track.Keys.Take(Math.Clamp(track.Linger ?? track.Keys.Length, 0, track.Keys.Length)).Distinct(StringComparer.Ordinal))
             {
                 if (present.Contains(tracked) || previousDeparted.Contains(tracked) || !previousRows.TryGetValue(tracked, out var at) || at.Index >= previousList.Count) continue;
                 rows.Insert(Math.Min(at.Index, rows.Count), (previousList[at.Index], true, 0));
             }
             for (var i = 0; i < rows.Count; i++) rows[i] = rows[i] with { At = i };
         }
-        if (settings.Sort is { Length: > 0 } sort)
+        // The sort keys for this table: a key naming another table, or a column this table lacks, leaves its order alone.
+        var columns = (settings.Sort ?? []).Where(item => item.Table is null || item.Table == index)
+            .Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0).ToArray();
+        if (columns.Length > 0)
         {
-            var columns = sort.Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0).ToArray();
             rows.Sort((a, b) =>
             {
                 foreach (var (column, descending) in columns)

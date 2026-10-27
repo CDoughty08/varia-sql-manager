@@ -52,7 +52,7 @@ export async function start(root: Root): Promise<void> {
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },
       // Live views on the synthetic source, and the window's visibility (live-smoke.mjs).
-      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table) => mountTestGrid(workbench, handle, probe, table))
+      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table, state) => mountTestGrid(workbench, handle, probe, table, state))
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

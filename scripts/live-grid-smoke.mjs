@@ -3,7 +3,8 @@
 // its key as revisions swap in, stays one revision muted once it leaves, and then the selection moves to a neighbour,
 // which the grid reports to its owner with the row's key; Copy leaves the tone out; a Save whose dialog stays open across
 // samples saves the newest revision; the sort hook reorders the next revision; an append log follows its tail, counts the
-// rows that arrive while it is scrolled up, and jumps back to the tail; a killed backend's grid says it lost its rows.
+// rows that arrive while it is scrolled up, opens where it was when mounted again over its kept state, and jumps back to
+// the tail; a view that stops says its rows are gone, as Copy does; a killed backend's grid says it lost its rows.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -72,8 +73,9 @@ try {
   await page.screenshot({ path: 'artifacts/live-grid-departed.png' })
   await expect.poll(async () => (await rows()).some(row => row.cells[0] === chosen.cells[0]), { timeout: 10000 }).toBe(false)
   const moved = await active()
-  // The next item down, the neighbour the grid tracked with it, or the one after it if that one left too since (each
-  // sample moves the items on by one); still at the top, where the user was.
+  // The next item down, the neighbour the grid tracked with it; or, when that one left too (each sample moves the items
+  // on by one, and only the selected item lingers), the row now at the old index, the one after it: at the top, where
+  // the user was, never a row the grid only guessed the place of.
   expect(Number(moved.id) - Number(chosen.cells[0])).toBeGreaterThanOrEqual(1)
   expect(Number(moved.id) - Number(chosen.cells[0])).toBeLessThanOrEqual(2)
   expect(moved.index).toBeLessThanOrEqual(1)
@@ -118,7 +120,8 @@ try {
 
   step = 'follow tail'
   const log = await live('subscribeSynthetic', { probes: ['debug.synthetic.log'], tickMs: 300, logRows: 25 })
-  expect(await live('mountGrid', log, 'debug.synthetic.log', 0)).toBe(true)
+  // Mounted as an owner document mounts it, with a state it keeps across remounts (a tab switch).
+  expect(await live('mountGrid', log, 'debug.synthetic.log', 0, { keepState: true })).toBe(true)
   await expect.poll(async () => (await live('grid'))?.rows ?? 0).toBeGreaterThan(100)
   // At the tail, the last row stays in view as rows arrive.
   await expect.poll(async () => { const state = await live('grid'), shown = await rows(); return state.following && shown.at(-1)?.index === state.rows - 1 }).toBe(true)
@@ -132,6 +135,21 @@ try {
   await expect(button).toHaveText(/^[\d,]+ new rows · Jump to latest$/)
   expect((await rows())[0].index).toBe(0)
   await page.screenshot({ path: 'artifacts/live-grid-new-rows.png' })
+  // Mounted again over the kept state: the view opens where the user was, not at the tail, still counting what arrived
+  // since it left the tail, and its owner hears the selection it restored.
+  const left = await live('grid')
+  expect(left.activeRow).toBe(0)
+  await live('unmountGrid')
+  expect(await live('mountGrid', log, 'debug.synthetic.log', 0, { keepState: true })).toBe(true)
+  await expect.poll(async () => (await rows())[0]?.index).toBe(0)
+  const back = await live('grid')
+  expect(back).toMatchObject({ following: false, activeRow: 0 })
+  expect(back.newRows).toBeGreaterThanOrEqual(left.newRows)
+  await expect(button).toHaveText(/^[\d,]+ new rows · Jump to latest$/)
+  // It stays there as rows keep arriving.
+  await expect.poll(async () => (await live('grid')).newRows).toBeGreaterThan(back.newRows)
+  expect((await rows())[0].index).toBe(0)
+  expect((await live('grid')).following).toBe(false)
   await button.click()
   await expect.poll(async () => (await live('grid')).following).toBe(true)
   await expect(button).toHaveCount(0)
@@ -140,6 +158,21 @@ try {
   await live('dispose', log)
   await expect.poll(() => page.evaluate(() => window.__variaResults.liveStreams)).toBe(0)
   console.log('Follow tail passed: the log followed its tail, counted new rows while scrolled up, and jumped back.')
+
+  step = 'stopped'
+  // The view ends while its grid is shown (its owner closed it): the rows are released, and the grid says so rather than
+  // leave cells that read as loading; Copy says it in the live view's words.
+  const stopped = await live('subscribeSynthetic', { probes: ['debug.synthetic.grid'], tickMs: 1200, rows: 12 })
+  expect(await live('mountGrid', stopped, 'debug.synthetic.grid', 0)).toBe(true)
+  await expect.poll(async () => (await rows()).length).toBe(12)
+  await live('dispose', stopped)
+  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveText('This live view stopped; its rows are no longer available.')
+  expect((await live('grid')).released).toBe('stopped')
+  await grid.press(`${mod}+C`)
+  await expect(page.locator('.live-grid-test .rg-strip')).toHaveText('Could not copy the rows: This live view stopped; its rows are no longer available.')
+  await page.screenshot({ path: 'artifacts/live-grid-stopped.png' })
+  await live('unmountGrid')
+  console.log('Stopped passed: a view that ended says its rows are gone, and so does Copy.')
 
   step = 'lost'
   // The backend restarts: the grid can no longer read its rows, and says so over them.

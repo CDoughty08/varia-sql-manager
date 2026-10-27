@@ -5,7 +5,7 @@
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
-import type { LiveGridSnapshot } from './LiveGrid'
+import type { LiveGridSnapshot, LiveGridState } from './LiveGrid'
 import { documentOwner, type LiveHandle, type LiveService } from './LiveService'
 import type { TestGrid } from './test-grid'
 
@@ -26,12 +26,14 @@ export interface SyntheticOptions {
 
 const defaultProbes: readonly LiveProbeId[] = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
 
-export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number) => TestGrid) {
+export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState) => TestGrid) {
   const handles = new Map<string, LiveHandle>()
   let mounted: TestGrid | undefined
+  /** Grid states an owner keeps across remounts (mountGrid's keepState), by view, probe and table. */
+  const kept = new Map<string, LiveGridState>()
   const gridState = (snapshot: LiveGridSnapshot | undefined) => snapshot && {
     newRows: snapshot.newRows, following: snapshot.following, sort: snapshot.sort, revision: snapshot.table?.revision, resultId: snapshot.table?.descriptor.resultId,
-    rows: snapshot.table?.handle.getSnapshot().rowsAvailable, lost: snapshot.lost, activeRow: snapshot.selection?.active.row, activeKey: snapshot.activeKey
+    rows: snapshot.table?.handle.getSnapshot().rowsAvailable, lost: snapshot.lost, released: snapshot.released, activeRow: snapshot.selection?.active.row, activeKey: snapshot.activeKey
   }
   const handle = (id: string) => handles.get(id)
   return {
@@ -57,11 +59,15 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     dispose: (id: string) => { handle(id)?.dispose(); handles.delete(id) },
     ring: (id: string, probe: LiveProbeId) => { const ring = handle(id)?.ring(probe); return ring && { length: ring.length, capacity: ring.capacity, lastTime: ring.lastTime, gaps: Array.from({ length: ring.length }, (_, index) => ring.flags(index)).filter(flags => flags & 1).length } },
     /** Mounts a grid of the view's table (one at a time); false without the view or a mount. */
-    mountGrid: (id: string, probe: LiveProbeId, table = 0): boolean => {
+    /** `keepState`: the grid's state is kept across mounts of the same table, as an owner document keeps it. */
+    mountGrid: (id: string, probe: LiveProbeId, table = 0, o: { keepState?: boolean } = {}): boolean => {
       const view = handle(id)
       if (!view || !mount) return false
       mounted?.dispose()
-      mounted = mount(view, probe, table)
+      const key = `${id}/${probe}/${table}`
+      let state = o.keepState ? kept.get(key) : undefined
+      if (o.keepState && !state) kept.set(key, state = { topRow: 0, virtualTop: 0, scrollLeft: 0, sized: false })
+      mounted = mount(view, probe, table, state)
       return true
     },
     unmountGrid: () => { mounted?.dispose(); mounted = undefined },
