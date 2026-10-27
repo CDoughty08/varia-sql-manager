@@ -71,7 +71,7 @@ Colors come from the color theme (View › Theme).
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 14 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
+| `environment.fonts.editorFontSize` | Size | Integer 8–72 px | 13 px | 10 pt Consolas (SSMS 18–20; SSMS 22 not verified) | All | At once | The query editor's font size, in CSS pixels. |
 
 ### Environment › Keyboard
 

@@ -1,4 +1,5 @@
-import { commandDescriptor, type Codicon, type CommandId } from '../../../shared/commands/catalog'
+import { commandDescriptor, type CommandId } from '../../../shared/commands/catalog'
+import type { IconId } from '../../../shared/icons'
 import { contextRecord, type ContextKeys, type TargetKeys } from '../../../shared/commands/context-keys'
 import type { KeybindingLabel, Platform } from '../../../shared/commands/keybindings'
 import { assignMnemonics, buildMenuModel, pruneMenu, submenuTitle, trimSeparators, type DynamicSubmenu, type MenuEntry, type MenuId, type SubmenuId } from '../../../shared/commands/menus'
@@ -18,7 +19,7 @@ import type { CommandArgs } from '../core/types'
 export type ResolvedMenuItem =
   | {
     readonly kind: 'command'; readonly key: string; readonly id: CommandId; readonly args?: CommandArgs; readonly title: string; readonly mnemonic: number
-    readonly icon?: Codicon; readonly keybinding?: KeybindingLabel; readonly enabled: boolean; readonly checked?: boolean; readonly radio?: true
+    readonly icon?: IconId; readonly keybinding?: KeybindingLabel; readonly enabled: boolean; readonly checked?: boolean; readonly radio?: true
   }
   | {
     readonly kind: 'submenu'; readonly key: string; readonly title: string; readonly mnemonic: number; readonly items: readonly ResolvedMenuItem[]; readonly enabled: boolean

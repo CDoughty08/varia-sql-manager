@@ -1,4 +1,4 @@
-import type { Codicon } from '../../../shared/commands/catalog'
+import type { IconId } from '../../../shared/icons'
 import type { KeybindingLabel } from '../../../shared/commands/keybindings'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -15,7 +15,7 @@ export interface QuickPickItem {
   readonly description?: string
   /** The row's tooltip, such as a file path. */
   readonly tooltip?: string
-  readonly icon?: Codicon
+  readonly icon?: IconId
   readonly keybinding?: KeybindingLabel
   readonly group?: string
   readonly keywords?: readonly string[]

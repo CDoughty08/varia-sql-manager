@@ -1,6 +1,6 @@
-:root { --varia-font-ui: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: Consolas, 'Cascadia Mono', 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
+:root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -19,8 +19,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 button:disabled { opacity: .4; cursor: default; }
 button.primary { color: var(--varia-button-foreground); background: var(--varia-button-background); font-weight: 600; }
 button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackground); }
-.icon { display: block; width: 16px; height: 16px; flex: 0 0 16px; }
-.icon.expanded { transform: rotate(90deg); }
+/* Varia's SVG icons are 1em square, so font-size sizes them as it sizes codicons (src/shared/icons.ts). */
+.icon { display: block; width: 1em; height: 1em; flex: 0 0 1em; font-size: var(--varia-glyph-md); }
+/* Chromium gives svg preserve-parent-color, which keeps a colour set on the svg itself (a tab's kind icon) under forced
+   colours, and its stroke's currentColor ignores forced-color-adjust: auto. An inherited colour is the parent's forced
+   one, so the stroke follows the system colour of the text around it. :root outranks every rule that colours an icon. */
+@media (forced-colors: active) { :root svg.icon { color: inherit; } }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 4px; }
 .app { display: flex; flex-direction: column; height: 100vh; min-width: 900px; }
 .title-bar { height: 34px; flex-shrink: 0; background: var(--varia-titleBar-activeBackground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; }
@@ -30,7 +34,6 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar[data-platform="darwin"] .title-bar-content { padding-left: 80px; }
 .title-bar-left { display: flex; align-items: center; flex-shrink: 0; }
 .title-bar-brand { display: grid; place-items: center; width: 26px; color: var(--varia-titleBar-iconForeground); }
-.title-bar-brand .icon { width: 15px; height: 15px; }
 .title-bar-menus { display: flex; align-items: center; height: 100%; -webkit-app-region: no-drag; }
 .title-bar-menus button { height: 28px; padding: 0 9px; border: 0; border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); outline: 1px solid transparent; outline-offset: -1px; }
 .title-bar-menus button:hover, .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { background: var(--varia-menubar-selectionBackground); color: var(--varia-menubar-selectionForeground); outline: 1px solid var(--varia-menubar-selectionBorder); outline-offset: -1px; }
@@ -150,9 +153,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-twistie { flex: none; width: 16px; height: 16px; display: grid; place-items: center; margin-left: 4px; color: var(--varia-objectExplorer-chevronForeground); }
 .oe-icon { position: relative; flex: none; width: 16px; height: 16px; display: grid; place-items: center; color: var(--varia-objectExplorer-objectIconForeground); }
 .oe-icon.folder { color: var(--varia-objectExplorer-folderIconForeground); }
-.oe-icon .icon { width: 15px; height: 15px; flex-basis: 15px; }
-.oe-icon .codicon { font-size: 15px; }
-.oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: 9px; line-height: 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--varia-sideBar-background); }
+.oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: var(--varia-glyph-badge); line-height: var(--varia-glyph-badge); width: var(--varia-glyph-badge); height: var(--varia-glyph-badge); border-radius: 50%; background: var(--varia-sideBar-background); }
 .oe-badge[data-badge="disabled"], .oe-badge[data-badge="error"] { color: var(--varia-errorForeground); }
 .oe-badge[data-badge="unavailable"], .oe-badge[data-badge="lost"] { color: var(--varia-disabledForeground); }
 .oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
@@ -171,7 +172,6 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
 .oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
-.oe-actions .codicon { font-size: 14px; }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
 /* A bookmark in the indicator (glyph) margin: Edit › Bookmarks. */
@@ -222,7 +222,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .options-pages [role="treeitem"]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .options-pages [aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
 .options-twisty { flex: none; width: 16px; height: 16px; display: grid; place-items: center; }
-.options-pages [aria-expanded="true"] .options-twisty .icon { transform: rotate(90deg); }
+.options-pages [aria-expanded="true"] .options-twisty .codicon { transform: rotate(90deg); }
 .options-empty { margin: 4px 10px; color: var(--varia-descriptionForeground); }
 .options-dialog mark { background: transparent; color: var(--varia-list-highlightForeground); font-weight: 600; }
 .options-page { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; }
@@ -283,11 +283,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .tab-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
-.tab-readonly { font-size: var(--varia-size-sm); margin-left: -4px; }
+.tab-select .tab-readonly { font-size: var(--varia-glyph-sm); margin-left: -4px; }
 .tab-close { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; margin-right: 6px; color: var(--varia-documentTabs-closeForeground); }
-.tab-close .icon { width: 12px; height: 12px; flex-basis: 12px; }
+.tab-close .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close:focus-visible { outline-offset: -2px; }
-.sql-icon { font-size: var(--varia-size-xs); line-height: 16px; color: var(--varia-documentTabs-iconForeground); font-weight: 700; }
+.tab-icon { color: var(--varia-documentTabs-iconForeground); }
 /* SSMS's query window status bar: the run's state, then server (version), login (SPID), database, time and rows. The
    server gives way first when the bar is narrow; the tooltip holds the whole text. A value's document names its kind. */
 .query-status-bar { display: flex; align-items: center; gap: 16px; height: var(--varia-status); padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
@@ -295,7 +295,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-bar[data-tone="executing"] { background: var(--varia-queryStatusBar-executingBackground); color: var(--varia-queryStatusBar-executingForeground); }
 .query-status-bar[data-tone="error"] { background: var(--varia-queryStatusBar-errorBackground); color: var(--varia-queryStatusBar-errorForeground); }
 .query-status-state { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.query-status-state .codicon { font-size: 12px; }
+.query-status-state .codicon { font-size: var(--varia-glyph-sm); }
 .query-status-segments { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-left: auto; }
 .query-status-segment { flex-shrink: 0; }
 .query-status-segment + .query-status-segment::before { content: '|'; margin: 0 10px; opacity: 0.55; }
@@ -396,7 +396,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
-.memory-indicator .codicon { font-size: 12px; }
+.memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 
 .layout-dialog { width: 560px; max-width: 90vw; max-height: 90vh; overflow: auto; padding: 24px; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-dialog) var(--varia-widget-shadow); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
 .layout-dialog .dialog-heading { display: flex; align-items: start; justify-content: space-between; }
@@ -423,7 +423,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-status-position { display: flex; gap: 10px; }
 .editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
-.editor-status .codicon { font-size: 12px; }
+.editor-status .codicon { font-size: var(--varia-glyph-sm); }
 .status-scripting { display: flex; align-items: center; align-self: stretch; justify-content: safe center; gap: 8px; flex: 1 1 0; min-width: 0; overflow: hidden; margin: 0 8px; padding: 0 4px; }
 .status-scripting:not(:empty) { min-width: 20em; }
 /* Its own left gap: the status bar's second child otherwise loses it to the auto margin above. */
@@ -466,7 +466,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .connection-choice strong, .connection-choice small { display: block; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-choice small { color: var(--varia-dialog-descriptionForeground); font-size: var(--varia-size-xs); margin-top: 2px; }
 .connection-swatch { width: 3px; height: 26px; border-radius: 1px; flex-shrink: 0; }
-.favorite-button { font-size: 18px; color: var(--varia-connection-favoriteForeground); }
+.favorite-button { color: var(--varia-connection-favoriteForeground); }
 .browse-toolbar { display: flex; align-items: center; gap: 9px; margin: 4px 0 8px; }
 .browse-toolbar select { flex: 1; }
 .discovered-server { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
@@ -482,7 +482,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-row input:disabled, .property-row select:disabled { opacity: .5; }
 .property-input-action { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .property-input-action > input:not([type="color"]), .property-input-action > select { flex: 1; }
-.property-input-action > button { padding: 4px 8px; border: 1px solid var(--varia-button-border); }
+.property-input-action > button { display: inline-flex; align-items: center; padding: 4px 8px; border: 1px solid var(--varia-button-border); }
 .property-input-action input[type="color"] { width: 36px; height: 28px; padding: 2px; flex-shrink: 0; cursor: pointer; }
 .property-row .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .advanced-action { display: flex; justify-content: flex-end; }
@@ -490,7 +490,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-section { border: 0; border-top: 1px solid var(--varia-dialog-separatorBackground); padding: 9px 0 0; margin: 12px 0 0; min-width: 0; }
 .property-section legend { padding: 0 7px 0 0; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); }
 .connection-save-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 10px; }
-.connection-save-actions button { font-size: var(--varia-size-xs); padding: 4px 7px; }
+.connection-save-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: var(--varia-size-xs); padding: 4px 7px; }
+.connection-save-actions .codicon { font-size: var(--varia-glyph-sm); }
 .connection-preview textarea { width: 100%; height: 285px; resize: vertical; background: var(--varia-input-background); color: var(--varia-input-foreground); border: 1px solid var(--varia-input-border); padding: 10px; font: var(--varia-size-sm)/1.6 var(--varia-font-mono); overflow-wrap: anywhere; }
 .advanced-backdrop { z-index: 20010; }
 .advanced-dialog { width: min(640px, calc(100vw - 40px)); }
@@ -695,7 +696,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill.small { height: 18px; padding: 0 6px; }
 /* An environment tag (PROD): squarer than a state pill, so the two read apart side by side. */
 .status-pill.tag { border-radius: var(--varia-radius-sm); letter-spacing: 0.04em; }
-.status-pill > .codicon, .chip > .codicon, .live-pill > .codicon, .stale-badge > .codicon, .tile-caption > .codicon { font-size: var(--varia-size-sm); }
+/* Pills and chips take any registry icon: a codicon, or one of Varia's svg icons, sized as the glyph it replaces. */
+.status-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill > .icon { font-size: var(--varia-glyph-sm); }
+.chip > .codicon { font-size: var(--varia-glyph-sm); }
+.chip > .icon { font-size: var(--varia-glyph-sm); }
+.live-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
+.tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
 .status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
 .status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
