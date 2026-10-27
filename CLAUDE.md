@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 563 offline
-  checks; how many depends on the server version and authentication (958 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 721 offline
+  checks; how many depends on the server version and authentication (1142 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -100,7 +100,11 @@ pages, limits, error codes, display formats, benchmarks).
   stream's `ack` (`ResultClient.live`), never more than the stream's events took. Sources and
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
-  (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks.
+  (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
+  constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
+  writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
+  Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
+  the live gates and a per-statement budget, and its failures are values that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
@@ -181,6 +185,11 @@ pages, limits, error codes, display formats, benchmarks).
   keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
   spinners included; regenerate `docs/themes/metrics.md` with
   `npx vitest run tests/theme-metrics.test.ts -u`.
+- Icons live only in `src/shared/icons.ts` (codicons and Varia's own SVGs, by id); catalogues name icons by those ids and
+  the renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
+  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs in the renderer). Fonts are fixed in
+  `src/renderer/src/fonts.ts`. After changing the registry, regenerate `docs/icons.md` with
+  `npx vitest run tests/icons.test.ts -u`.
 
 ## Testing expectations
 
@@ -191,7 +200,10 @@ pages, limits, error codes, display formats, benchmarks).
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
   scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
   script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
-- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
+- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API. Suites and the Electron benches
+  find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
+  classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
+  the roles and names stable.
 - Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.

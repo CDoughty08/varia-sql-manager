@@ -4,7 +4,8 @@ import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { codicons, commandDescriptor, isCommandId } from '../src/shared/commands/catalog'
+import { commandDescriptor, isCommandId } from '../src/shared/commands/catalog'
+import { isIconId } from '../src/shared/icons'
 import { whenProblems } from '../src/shared/commands/context-keys'
 import { findConflicts } from '../src/shared/commands/conflicts'
 import { defaultRules, platforms } from '../src/shared/commands/keybindings'
@@ -67,7 +68,7 @@ describe('table designer catalogue', () => {
       expect(whenProblems(entry.precondition, ['static', 'state']), id).toEqual([])
       for (const menu of entry.menus ?? []) if (menu.when) expect(whenProblems(menu.when, ['static', 'state', 'target']), id).toEqual([])
       for (const binding of entry.keybindings ?? []) expect(whenProblems(binding.when, ['static', 'state', 'focus']), id).toEqual([])
-      if (entry.icon) expect(codicons).toContain(entry.icon)
+      if (entry.icon) expect(isIconId(entry.icon), id).toBe(true)
     }
     expect(entries['tableDesigner.properties'].keybindings).toEqual([{ key: 'f4', when: 'designerFocus' }])
     expect(entries['tableDesigner.stop'].precondition).toBe('designerSaving')

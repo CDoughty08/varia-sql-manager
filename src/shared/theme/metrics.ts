@@ -1,6 +1,6 @@
-// The non-colour half of the design language: type scale, spacing, radii, shadows, motion and bar heights. They are not
-// theme keys, so theme files stay colour-only and a theme cannot resize the workbench (fonts are fixed for the same
-// reason, in fonts.ts). styles.css's :root mirrors `metricVariables()` and tests/theme-css.test.ts compares the two;
+// The non-colour half of the design language: type scale, spacing, radii, shadows, motion, icon sizes and bar heights.
+// They are not theme keys, so theme files stay colour-only and a theme cannot resize the workbench (fonts are fixed for
+// the same reason, in fonts.ts). styles.css's :root mirrors `metricVariables()` and tests/theme-css.test.ts compares the two;
 // docs/themes/metrics.md is generated from this file (npx vitest run tests/theme-metrics.test.ts -u).
 
 /** No UI text is smaller than this; chart axis ticks, drawn on a canvas, are the only exception. */
@@ -53,17 +53,41 @@ export const shadows = {
  * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
  * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
  * `prefers-reduced-motion: reduce` sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live
- * dot) have their own periods and stop under reduced motion through `animation: none`.
+ * dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
+ * placeholder back (as an animation delay) and is not motion, so reduced motion leaves it alone.
  */
 export const motion = {
   fast: { ms: 80, use: 'Hover and pressed fills.' },
   base: { ms: 120, use: 'Menus, popovers and dialogs appearing.' },
   spin: { ms: 1500, use: 'One turn of a loading spinner (a loop).' },
-  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' }
+  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' },
+  delay: { ms: 300, use: 'The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it.' }
 } as const
 export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
 export const reducedMotion = ['fast', 'base'] as const satisfies readonly (keyof typeof motion)[]
+
+/**
+ * `--varia-glyph-<name>`, in px: icon sizes (src/shared/icons.ts). Icons are drawn on the 16 px grid, md, which is also
+ * the codicon font's own size. Varia's SVG icons are 1em square, so the font size sizes both kinds.
+ */
+export const glyphSizes = {
+  badge: { px: 9, use: 'The status mark at a tree icon\'s corner.' },
+  sm: { px: 12, use: 'Glyphs in status bars and tab strips, beside xs and sm text.' },
+  md: { px: 16, use: 'Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs.' },
+  lg: { px: 24, use: 'Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies).' }
+} as const
+export type GlyphSizeName = keyof typeof glyphSizes
+/** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
+export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
+  badge: ['.oe-icon .oe-badge'],
+  sm: [
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon',
+    '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.tile-caption > .codicon'
+  ],
+  md: ['.icon'],
+  lg: []
+}
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
 export interface DensityMetrics {
@@ -87,7 +111,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
+  header: [], bar: ['.query-tabs'], control: ['.icon-button'], row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
@@ -109,6 +133,7 @@ export function metricVariables(density: Density = defaultDensity): Readonly<Rec
     ...Object.fromEntries(Object.entries(shadows).map(([name, shadow]) => [`--varia-shadow-${name}`, `0 ${px(shadow.y)} ${px(shadow.blur)}`])),
     ...Object.fromEntries(Object.entries(motion).map(([name, entry]) => [`--varia-motion-${name}`, ms(entry.ms)])),
     '--varia-motion-ease': motionEasing,
+    ...Object.fromEntries(Object.entries(glyphSizes).map(([name, glyph]) => [`--varia-glyph-${name}`, px(glyph.px)])),
     ...densityVariables(density)
   }
 }
@@ -135,7 +160,7 @@ export function renderMetricDocs(): string {
     '',
     'Generated from `src/shared/theme/metrics.ts` by `npx vitest run tests/theme-metrics.test.ts -u`; do not edit by hand.',
     '',
-    'Sizes, spacing, radii, shadows, motion and bar heights are CSS custom properties on `:root` in',
+    'Sizes, spacing, radii, shadows, motion, icon sizes and bar heights are CSS custom properties on `:root` in',
     '`src/renderer/src/styles.css`. They are not theme keys: theme files hold colours only, so no theme can resize the',
     `workbench. No UI text is smaller than ${minimumFontSize} px; chart axis ticks, drawn on a canvas, are the only exception.`,
     '',
@@ -168,6 +193,13 @@ export function renderMetricDocs(): string {
     'Only `:hover` rules carry the fast transition, and rules that mark a state (a selected row, the current page or tab, a menu moved to with the keys) set `transition: none`, so state changes are instant.',
     '',
     table(['Token', 'ms', 'Use'], Object.entries(motion).map(([name, entry]) => [`\`--varia-motion-${name}\``, entry.ms, entry.use])),
+    '',
+    '## Icon sizes',
+    '',
+    'Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font\'s own size. Varia\'s SVG icons are 1em square, so a rule sizes either kind with `font-size`.',
+    '',
+    table(['Token', 'px', 'Use', 'Sized with it'], (Object.keys(glyphSizes) as GlyphSizeName[]).map(name => [`\`--varia-glyph-${name}\``, glyphSizes[name].px, glyphSizes[name].use,
+      glyphUse[name].map(selector => `\`${selector}\``).join(', ')])),
     '',
     '## Bars and rows',
     '',

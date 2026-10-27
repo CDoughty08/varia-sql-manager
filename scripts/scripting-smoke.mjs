@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
+import { activeDocument, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -48,7 +49,7 @@ const option = label => dialog().getByLabel(label, { exact: true })
 const stored = () => readFile(settingsFile, 'utf8').then(JSON.parse, () => null)
 const scriptingKey = key => 'objectExplorer.scripting.' + key
 const weight = label => option(label).evaluate(element => getComputedStyle(element).fontWeight)
-const disabledRows = () => dialog().locator('.options-row select:disabled').evaluateAll(selects => selects.map(select => select.labels[0]?.textContent))
+const disabledRows = () => dialog().locator(part.optionsRow + ' select:disabled').evaluateAll(selects => selects.map(select => select.labels[0]?.textContent))
 /**
  * Opens Tools › Options… on its Scripting page: Alt+T, O on Windows and Linux (⌘, on macOS is a manual check), or the
  * menu item; the dialog opens on the page last shown, else Environment › General, so the tree goes there.
@@ -62,7 +63,7 @@ async function openOptions({ keyboard = !mac } = {}) {
     await page.keyboard.press('o')
   } else await menu('preferences.options')
   await expect(dialog()).toBeVisible()
-  const heading = dialog().locator('.options-heading')
+  const heading = optionsHeading(dialog())
   if (await heading.textContent() !== 'SQL Server Object Explorer › Scripting') {
     await dialog().getByRole('treeitem', { name: 'SQL Server Object Explorer', exact: true }).click()
     await dialog().getByRole('treeitem', { name: 'Scripting', exact: true }).click()
@@ -71,33 +72,33 @@ async function openOptions({ keyboard = !mac } = {}) {
   await option('Delimit individual statements').focus()
 }
 /** Where the dialog lies in the window, and whether the page itself overflows. */
-const layout = () => page.evaluate(() => {
-  const box = document.querySelector('[role="dialog"]').getBoundingClientRect(), list = document.querySelector('.options-page')
+const layout = () => page.evaluate(pageList => {
+  const box = document.querySelector('[role="dialog"]').getBoundingClientRect(), list = document.querySelector(pageList)
   return { inside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight,
     width: Math.round(box.width), height: Math.round(box.height), innerWidth, innerHeight, listScrolls: list.scrollHeight > list.clientHeight }
-})
+}, part.optionsPage)
 
 const stubCalls = method => application.evaluate((_electron, name) => globalThis.variaStub.calls.filter(call => call.method === name).map(call => call.params), method)
 const stubCancels = () => application.evaluate(() => globalThis.variaStub.cancels)
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
-const openMenus = () => page.locator('.menu')
-const tabs = () => page.locator('.query-tabs').getByRole('tab')
+const openMenus = () => openMenusOf(page)
+const tabs = () => documentTabs(page).getByRole('tab')
 const nbsp = String.fromCharCode(160)
-const editorText = async () => (await page.locator('.monaco-editor .view-lines').innerText()).replaceAll(nbsp, ' ')
-const scriptStatus = () => page.locator('.status-scripting')
-const commandBanner = () => page.locator('.global-error[role="alert"]')
-const warningBanner = () => page.locator('.global-error.warning[role="status"]')
+const editorText = async () => (await editorTextOf(page)).replaceAll(nbsp, ' ')
+const scriptStatus = () => statusSegment(page)
+const commandBanner = () => errorBanner(page)
+const warningBanner = () => warningBannerOf(page)
 const focusInDialog = () => dialog().evaluate(element => element.contains(document.activeElement))
-const quickInput = () => page.locator('.quick-input')
+const quickInput = () => quickInputOf(page)
 // The smoke window is hidden, so animation frames come once a second; nothing in the menus animates, so presses skip
 // Playwright's stability wait, and assertions still wait for each result.
 const fast = { force: true }
 const ordersPath = ['server-a', 'Databases', 'AppData', 'Tables', 'dbo.Orders']
 /** Connects from the main toolbar: Windows authentication for the stub, the test login for a real server. */
 async function connect(server) {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
@@ -122,24 +123,24 @@ async function scriptFrom(path, ...items) {
 }
 /** Whether every status bar segment lies within the bar (none wraps to a second line), whether the page overflows, and
  *  whether the scripting text is cut with an ellipsis. */
-const statusLayout = () => page.evaluate(() => {
-  const bar = document.querySelector('.status-bar'), box = bar.getBoundingClientRect(), text = bar.querySelector('.status-scripting-text')
+const statusLayout = () => page.evaluate(part => {
+  const bar = document.querySelector(part.statusBar), box = bar.getBoundingClientRect(), text = bar.querySelector(part.statusSegmentText)
   return {
-    fits: [...bar.children].every(child => { const part = child.getBoundingClientRect(); return part.top >= box.top - 0.5 && part.bottom <= box.bottom + 0.5 && part.left >= box.left - 0.5 && part.right <= box.right + 0.5 }),
+    fits: [...bar.children].every(child => { const rect = child.getBoundingClientRect(); return rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 && rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 }),
     overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: !!text && text.scrollWidth > text.clientWidth
   }
-})
+}, part)
 /** Whether every open menu lies inside the window, and whether the page itself overflows. */
 const menusInside = () => page.evaluate(() => ({
-  inside: [...document.querySelectorAll('.menu')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
-  count: document.querySelectorAll('.menu').length, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight
+  inside: [...document.querySelectorAll('[role="menu"]')].every(menu => { const box = menu.getBoundingClientRect(); return box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight }),
+  count: document.querySelectorAll('[role="menu"]').length, overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight
 }))
 /** Whether the query tab strip scrolls, and whether the active tab lies wholly inside its visible part. */
-const activeTabInView = () => page.evaluate(() => {
-  const strip = document.querySelector('.query-tabs'), tab = strip.querySelector('.query-tab.active')
+const activeTabInView = () => page.evaluate(documentTabs => {
+  const strip = document.querySelector(documentTabs), tab = strip.querySelector('[data-tab-id]:has([role="tab"][aria-selected="true"])')
   const box = tab.getBoundingClientRect(), view = strip.getBoundingClientRect()
   return { overflows: strip.scrollWidth > strip.clientWidth, inView: box.left >= view.left - 1 && box.right <= view.right + 1 }
-})
+}, part.documentTabs)
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {
   await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
@@ -154,10 +155,10 @@ try {
   // 1. Tools › Options… from the keyboard, on the Scripting page: the first row's description shows below it.
   await openOptions()
   await expect(option('Delimit individual statements')).toBeFocused()
-  await expect(dialog().locator('.options-description')).toContainText('Delimit individual statements')
+  await expect(optionsDescription(dialog())).toContainText('Delimit individual statements')
   await expect(dialog().getByRole('tree', { name: 'Options pages' }).locator('[aria-selected="true"]')).toHaveText('Scripting')
   for (const name of ['General scripting options', 'Object scripting options', 'Table/View options', 'Version options']) await expect(dialog().getByRole('group', { name, exact: true })).toBeVisible()
-  expect(await dialog().locator('.options-row').count()).toBe(36)
+  expect(await dialog().locator(part.optionsRow).count()).toBe(36)
   // The version rows are greyed while Match script settings to source is True.
   expect(await disabledRows()).toEqual(['Script for database engine edition', 'Script for database engine type', 'Script for server version'])
   await expect(option('Script for server version')).toHaveValue('160')
@@ -165,12 +166,12 @@ try {
   // A greyed row cannot take focus; pressing its label still shows its description (Playwright counts a disabled
   // control's label as disabled, so the press is forced).
   await dialog().locator('label', { hasText: 'Script for server version' }).click({ force: true })
-  await expect(dialog().locator('.options-description strong')).toHaveText('Script for server version')
+  await expect(optionsDescription(dialog()).locator('strong')).toHaveText('Script for server version')
   // The press leaves focus in the dialog, so Escape still cancels it; so does a press on the greyed list itself.
   expect(await focusInDialog()).toBe(true)
   await option('Delimit individual statements').focus()
   await option('Script for database engine type').click({ force: true })
-  await expect(dialog().locator('.options-description strong')).toHaveText('Script for database engine type')
+  await expect(optionsDescription(dialog()).locator('strong')).toHaveText('Script for database engine type')
   expect(await focusInDialog()).toBe(true)
   await page.keyboard.press('Escape')
   await expect(dialog()).toHaveCount(0)
@@ -181,7 +182,7 @@ try {
   // 2. A changed value is bold and its description shows; Reset to Defaults restores the draft only, and Escape discards it.
   await option('Script USE <database>').selectOption('false')
   await option('Script USE <database>').focus()
-  await expect(dialog().locator('.options-description')).toContainText('Starts the script with a USE statement')
+  await expect(optionsDescription(dialog())).toContainText('Starts the script with a USE statement')
   await expect.poll(() => weight('Script USE <database>')).toBe('700')
   await option('Match script settings to source').selectOption('false')
   expect(await disabledRows()).toEqual([])
@@ -231,12 +232,12 @@ try {
   await expandExplorerPath(page, ...ordersPath.slice(0, -1))
   const orders = await explorerRow(page, ...ordersPath)
   await orders.click({ button: 'right', force: true })
-  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuItemNames(explorerMenu())).toEqual(['Select Top 1000 Rows', 'Script Table as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
   const scriptMenu = menuNamed('Script Table as')
-  expect(await scriptMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To', 'EXECUTE To'])
-  await expect(scriptMenu.locator('.menu-separator')).toHaveCount(2)
-  expect(await scriptMenu.locator('.menu-item[aria-disabled="true"] .menu-label').allTextContents()).toEqual(['ALTER To', 'CREATE OR ALTER To', 'EXECUTE To'])
+  expect(await menuItemNames(scriptMenu)).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To', 'EXECUTE To'])
+  await expect(scriptMenu.getByRole('separator')).toHaveCount(2)
+  expect(await menuItemNames(scriptMenu, { disabled: true })).toEqual(['ALTER To', 'CREATE OR ALTER To', 'EXECUTE To'])
   const alter = scriptMenu.getByRole('menuitem', { name: 'ALTER To', exact: true })
   await expect(alter).toHaveAttribute('aria-haspopup', 'menu')
   await alter.hover(fast)
@@ -257,7 +258,7 @@ try {
   await expect(tabs()).toHaveCount(before + 1)
   await expect.poll(editorText).toBe('-- create dbo.Orders')
   await expect(page.locator('#query-database')).toHaveValue('AppData')
-  await expect(page.locator('.query-tabs [aria-selected="true"] .dirty-dot')).toHaveCount(0)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   expect((await stubCalls('scripting.script')).at(-1)).toMatchObject({ targets: [{ kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }], verb: 'create', options: { scriptUseDatabase: false } })
   console.log('Scripting checks: Script Table as greys ALTER, CREATE OR ALTER and EXECUTE, and the keyboard opens CREATE in an unmarked query on AppData with the saved options.')
 
@@ -286,9 +287,9 @@ try {
   const procedurePath = ['server-a', 'Databases', 'AppData', 'Programmability', 'Stored Procedures', 'dbo.ShipOrder']
   await expandExplorerPath(page, ...procedurePath.slice(0, -1))
   await (await explorerRow(page, ...procedurePath)).click({ button: 'right', force: true })
-  expect(await explorerMenu().locator('.menu-item .menu-label').allTextContents()).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
+  expect(await menuItemNames(explorerMenu())).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await explorerMenu().getByRole('menuitem', { name: 'Script Stored Procedure as', exact: true }).click(fast)
-  expect(await menuNamed('Script Stored Procedure as').locator('.menu-item .menu-label').allTextContents()).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'EXECUTE To'])
+  expect(await menuItemNames(menuNamed('Script Stored Procedure as'))).toEqual(['CREATE To', 'ALTER To', 'CREATE OR ALTER To', 'DROP To', 'DROP And CREATE To', 'EXECUTE To'])
   await page.keyboard.press('ArrowLeft')
   await explorerMenu().getByRole('menuitem', { name: 'Modify', exact: true }).click(fast)
   await expect.poll(editorText).toBe('-- alter dbo.ShipOrder')
@@ -296,16 +297,16 @@ try {
   console.log('Scripting checks: Script View as, Script Stored Procedure as with EXECUTE and without SELECT, and Modify opening ALTER.')
 
   // 7. The palette's Script As… lists only what the selection can be scripted with, by verb; SELECT to Clipboard runs.
-  await (await explorerRow(page, ...ordersPath)).locator('.oe-label').click()
+  await explorerLabel(await explorerRow(page, ...ordersPath)).click()
   await expect(explorerTree(page)).toBeFocused()
   await page.keyboard.press('F1')
   await page.keyboard.insertText('script as')
   await quickInput().getByRole('option', { name: /^Object Explorer: Script As…/ }).click()
-  await expect(quickInput().locator('.quick-input-title')).toHaveText('Script Table as')
-  expect(await quickInput().locator('.quick-input-group').allTextContents()).toEqual(['CREATE To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To'])
+  await expect(quickInput().locator(part.quickInputTitle)).toHaveText('Script Table as')
+  expect(await quickInput().locator(part.quickInputGroup).allTextContents()).toEqual(['CREATE To', 'DROP To', 'DROP And CREATE To', 'SELECT To', 'INSERT To', 'UPDATE To', 'DELETE To'])
   await expect(quickInput().getByRole('option')).toHaveCount(21)
   await page.keyboard.insertText('SELECT to Clipboard')
-  await expect(quickInput().locator('.quick-input-row.active .quick-input-label')).toHaveText('SELECT to Clipboard')
+  await expect(quickInputActive(page).locator(part.quickInputLabel)).toHaveText('SELECT to Clipboard')
   await page.keyboard.press('Enter')
   await expect.poll(clipboard).toBe('-- select dbo.Orders')
   await expect(quickInput()).toHaveCount(0)
@@ -445,14 +446,14 @@ try {
       await page.keyboard.press('Control+A')
       await page.keyboard.insertText(`${sql}\nPRINT '${marker}';`)
       await page.keyboard.press('F5')
-      await page.locator('.output-toolbar').getByRole('tab', { name: /^Messages/ }).click()
-      await expect(page.locator('.messages')).toContainText(marker, wait)
-      await expect(page.locator('.messages .msg.error')).toHaveCount(0)
+      await outputView(page, /^Messages/).click()
+      await expect(messages(page)).toContainText(marker, wait)
+      await expect(errorMessages(page)).toHaveCount(0)
     }
     await connect(process.env.VARIA_TEST_SQL_SERVER)
-    const live = page.locator('.explorer-row.server').first()
+    const live = serverRows(page).first()
     await expect(live).toBeVisible(wait)
-    const server = await live.locator('.oe-label').textContent()
+    const server = await explorerLabel(live).textContent()
     // Each database is marked in the batch that creates it, so ScratchDatabase's sweep can drop it if this run cannot.
     const created = []
     try {

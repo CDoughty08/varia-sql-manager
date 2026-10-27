@@ -2,7 +2,7 @@
 
 Generated from `src/shared/theme/metrics.ts` by `npx vitest run tests/theme-metrics.test.ts -u`; do not edit by hand.
 
-Sizes, spacing, radii, shadows, motion and bar heights are CSS custom properties on `:root` in
+Sizes, spacing, radii, shadows, motion, icon sizes and bar heights are CSS custom properties on `:root` in
 `src/renderer/src/styles.css`. They are not theme keys: theme files hold colours only, so no theme can resize the
 workbench. No UI text is smaller than 11 px; chart axis ticks, drawn on a canvas, are the only exception.
 
@@ -66,6 +66,18 @@ Only `:hover` rules carry the fast transition, and rules that mark a state (a se
 | `--varia-motion-base` | 120 | Menus, popovers and dialogs appearing. |
 | `--varia-motion-spin` | 1500 | One turn of a loading spinner (a loop). |
 | `--varia-motion-pulse` | 2000 | One beat of the live dot, 0.5 Hz (a loop). |
+| `--varia-motion-delay` | 300 | The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it. |
+
+## Icon sizes
+
+Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font's own size. Varia's SVG icons are 1em square, so a rule sizes either kind with `font-size`.
+
+| Token | px | Use | Sized with it |
+| --- | --- | --- | --- |
+| `--varia-glyph-badge` | 9 | The status mark at a tree icon's corner. | `.oe-icon .oe-badge` |
+| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.editor-status .codicon`, `.status-pill > .codicon`, `.status-pill > .icon`, `.chip > .codicon`, `.chip > .icon`, `.live-pill > .codicon`, `.stale-badge > .codicon`, `.tile-caption > .codicon` |
+| `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
+| `--varia-glyph-lg` | 24 | Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies). |  |
 
 ## Bars and rows
 
@@ -76,5 +88,5 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | `--varia-header` | 40 | 44 | The title bar. | Not yet |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs` |
 | `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button` |
-| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row` |
+| `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

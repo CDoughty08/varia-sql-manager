@@ -2,7 +2,7 @@
 // debug.synthetic source, owned by a tab, charts of them in a box over the workbench, and the window's visibility, which
 // smoke runs cannot change for real (their windows keep background throttling off, so the page always counts as visible).
 // Main enables test mode only in unpackaged smoke runs, and only its test schemas accept the synthetic source.
-import { liveProbes, liveSources, type LiveProbeId, type LiveUnit } from '../../../shared/live/catalog'
+import { liveProbes, type LiveProbeId, type LiveUnit } from '../../../shared/live/catalog'
 import type { ChartSeriesColor } from '../../../shared/theme/charts'
 import { cssVariable } from '../../../shared/theme/registry'
 import type { DocumentService } from '../services/documents'
@@ -10,6 +10,11 @@ import type { PaneService } from '../services/panes'
 import { chartColor, type ChartLabels, type ChartStyle, type ChartView } from './ChartView'
 import type { LiveChartProps } from './LiveChart'
 import { documentOwner, type LiveHandle, type LiveService } from './LiveService'
+
+/** A view's probes when the test names none: the metrics, rows and status probes the smoke suite checks, which the fake
+ *  backend's workbench mode implements. The source's grid, log and wide probes serve their own tests and the benchmarks, so
+ *  a test opens them by name; the fake backend refuses them, and a default of every catalogued probe would end the view. */
+export const defaultSyntheticProbes: readonly LiveProbeId[] = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
 
 export interface SyntheticOptions {
   /** The owner tab; the active one by default. */
@@ -84,7 +89,7 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {
       const tabId = o.tabId ?? documents.getSnapshot().activeId
       const connectionId = o.connectionId ?? documents.get(tabId)?.connectionId ?? crypto.randomUUID()
-      const probes = o.probes ?? liveSources['debug.synthetic'].probes as readonly LiveProbeId[]
+      const probes = o.probes ?? defaultSyntheticProbes
       const created = live.open({
         connectionId, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, ...o.intervalMs ? { intervalMs: o.intervalMs } : {} })),
         args: { ...o.rows !== undefined ? { rows: o.rows } : {}, ...o.tickMs !== undefined ? { tickMs: o.tickMs } : {}, ...o.endAfterTicks !== undefined ? { endAfterTicks: o.endAfterTicks } : {} }

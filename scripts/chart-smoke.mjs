@@ -7,6 +7,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { chartLegend, chartSwatchLines, chartTooltip, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
@@ -33,7 +34,7 @@ async function menu(id) {
 }
 async function connect() {
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  if (!await dialog.isVisible()) await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill('chart-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -45,7 +46,7 @@ async function connect() {
 }
 
 try {
-  await expect(page.locator('.status-bar')).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
   await connect()
   const id = await live('subscribeSynthetic', { tickMs: 100 })
   await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics'))?.length ?? 0).toBeGreaterThanOrEqual(5)
@@ -82,7 +83,7 @@ try {
   console.log('Hidden window passed: no draws while hidden, though ticks still arrived; drawing resumed when shown.')
 
   step = 'keyboard crosshair'
-  const tip = box.locator('.live-chart-tip')
+  const tip = chartTooltip(box)
   const status = box.locator('[role="status"]')
   await canvas.focus()
   await page.keyboard.press('ArrowLeft')
@@ -134,10 +135,10 @@ try {
   expect(await table.locator('thead th').first().evaluate(element => getComputedStyle(element).textAlign)).toBe('left')
   const boxBounds = await box.boundingBox()
   for (let sample = 0; sample < 10; sample++) {
-    const seen = await box.evaluate(element => {
-      const wrap = element.querySelector('.live-chart-table-wrap').getBoundingClientRect()
-      return { rows: element.querySelectorAll('.live-chart-table tbody tr').length, caption: element.querySelector('.live-chart-table caption').textContent, bottom: wrap.bottom }
-    })
+    const seen = await box.evaluate((element, wrapSelector) => {
+      const wrap = element.querySelector(wrapSelector).getBoundingClientRect()
+      return { rows: element.querySelectorAll('table tbody tr').length, caption: element.querySelector('table caption').textContent, bottom: wrap.bottom }
+    }, part.chartTableWrap)
     expect(seen.caption).toMatch(/^Synthetic metrics: (\d+ of )?\d+ samples, newest first$/)
     expect(seen.rows).toBeGreaterThan(5)
     expect(seen.rows).toBeLessThanOrEqual(120)
@@ -165,8 +166,8 @@ try {
   step = 'props'
   // Changing a mounted chart's series, window and title redraws it and renames it.
   await live('updateChart', driven, { series: [1, 2], unit: 'count', max: undefined, spanMs: 20_000, title: 'Renamed metrics' })
-  await expect(drivenBox.locator('.live-chart-legend')).toHaveAttribute('aria-label', 'Renamed metrics series')
-  await expect(drivenBox.locator('.live-chart-legend').getByRole('listitem')).toHaveText(['Wave', 'Rate'])
+  await expect(chartLegend(drivenBox)).toHaveAttribute('aria-label', 'Renamed metrics series')
+  await expect(chartLegend(drivenBox).getByRole('listitem')).toHaveText(['Wave', 'Rate'])
   await expect.poll(async () => (await chart(driven)).label).toMatch(/^Renamed metrics: Wave .*; Rate .* over the last 20 seconds$/)
   await expect.poll(async () => (await chart(driven)).pixels.colors['charts.orange']).toBeGreaterThan(10)
   await live('unmountChart', driven)
@@ -174,7 +175,7 @@ try {
 
   step = 'legend'
   const both = await live('mountChart', id, { series: [1, 2], unit: 'count', spanMs: 10_000, width: 360, height: 160 })
-  const legend = page.locator(`[data-chart-test="${both}"] .live-chart-legend`)
+  const legend = chartLegend(page.locator(`[data-chart-test="${both}"]`))
   await expect(legend.getByRole('listitem')).toHaveText(['Wave', 'Rate'])
   await expect.poll(async () => { const pixels = (await chart(both)).pixels.colors; return pixels['charts.blue'] > 10 && pixels['charts.orange'] > 10 }).toBe(true)
   await live('unmountChart', both)
@@ -209,7 +210,7 @@ try {
   expect((await chart(key)).pixels.drawn).toBeGreaterThan(100)
   // The legend shows each series' dash in the order the canvas gives them.
   const pair = await live('mountChart', id, { series: [1, 2], unit: 'count', spanMs: 10_000, width: 360, height: 160 })
-  const swatches = page.locator(`[data-chart-test="${pair}"] .live-chart-swatch line`)
+  const swatches = chartSwatchLines(page.locator(`[data-chart-test="${pair}"]`))
   await expect(swatches).toHaveCount(2)
   expect(await swatches.nth(0).getAttribute('stroke-dasharray')).toBeNull()
   await expect(swatches.nth(1)).toHaveAttribute('stroke-dasharray', '6 3')

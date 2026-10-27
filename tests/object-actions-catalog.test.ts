@@ -10,7 +10,8 @@ import {
 } from '../src/shared/actions/catalog'
 import { maxScriptCharacters } from '../src/main/validation'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
-import { codicons, commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
+import { commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
+import { isIconId } from '../src/shared/icons'
 import { whenProblems } from '../src/shared/commands/context-keys'
 import { findConflicts } from '../src/shared/commands/conflicts'
 import { defaultRules, platforms, reservedReason } from '../src/shared/commands/keybindings'
@@ -64,7 +65,7 @@ describe('object action catalogue', () => {
     for (const [id, entry] of Object.entries(entries)) {
       expect(isCommandId(id), id).toBe(true)
       expect(commandDescriptor(id as never)).toEqual(entry)
-      expect(codicons, id).toContain(entry.icon)
+      expect(isIconId(entry.icon), id).toBe(true)
       expect(whenProblems(entry.precondition, ['static', 'state']), id).toEqual([])
       for (const placement of entry.menus) expect(whenProblems(placement.when, ['static', 'state', 'target']), id).toEqual([])
       for (const binding of entry.keybindings ?? []) expect(whenProblems(binding.when, ['static', 'state', 'focus']), id).toEqual([])

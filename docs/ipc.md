@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs`, `LiveCatalog.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -193,7 +193,10 @@ backend schedules it: `control` runs at once, `metadata` waits for one of 8 slot
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot.
+for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot. `live` takes no slot either: a
+live subscription samples on its own task, and its statements, like those of any unary method on lane `live` (none yet;
+`LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
+statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names never pile up).
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -724,8 +727,8 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 (series values), up to 4 snapshot tables (replaced by each sample) and 4 append tables (that grow), and status values.
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
-`src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only, and none
-is shipped yet; the test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+`src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
+Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -744,8 +747,11 @@ Every probe belongs to the source and is named once; the interval is then clampe
 Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties), a view must
 be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
 (`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
-errorEvery?: 1..1,000 }`, a sampling period below the 1 s minimum so tests run fast (samples still report the requested
-interval), a sample count after which the source ends, and an error value every n-th table sample. Tracking names a keyed
+errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }`, a sampling period below the 1 s
+minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
+error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. A source
+whose append tables can start elsewhere than their first row takes `start` (`liveStartSchema`): `'beginning'`,
+`{ tail: 1..200,000 }` (the last rows) or `{ before: 1..2^53−1 }` (the rows before an id, ending there). Tracking names a keyed
 snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F. A source without append
 tables has nothing to resume from and refuses `resume`; a token is base64url characters only (the backend matches the whole
 string, so a trailing newline is refused on both sides). An update must change something, and repeats the subscription's
@@ -758,20 +764,77 @@ probe, intervalMs, minIntervalMs, maxIntervalMs, state: ok | limited | unavailab
 `live.tick` per scheduler wake that sampled something (seq 1, 2, …): `{ sampledAt: Unix ms (monotonic), spid?, resume?,
 samples: { probe, costMs, effectiveIntervalMs, elapsedMs? (absent for the first), gap?: baseline | reset | resumed | late,
 skipped?, metrics?: (number | null)[], tables?: { table, descriptor, revision, retired?: u32[≤ 2], diff?: { added,
-removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] } }[≤ 4], append?: { table, descriptor, segment, rolledFrom?,
-retired?: u32[1] }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
+removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] }, departed?: row[1..64], facets?: { column, values: { text ≤ 128,
+count }[≤ 100], more?: true }[1..7] }[≤ 4], append?: { table, descriptor, segment, rolledFrom?, retired?: u32[1..8], restarted?: true
+}[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
-probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
-DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING or NOT_FOUND.
+probe's batch would have filled; a probe can report more than one error in a tick, such as `BUDGET` for one table and
+the failed statement of another, and `terminal` is true only when the probe stopped, never beside its sample), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
+DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
+LOGIN_FAILED.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
-tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, status ids the
-probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
+tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, departed rows
+only for a table that keeps them, facets only for its facet columns and at most 32 KiB of facet text (UTF-8) in a tick, status
+ids the probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
 subscription it arrived on (`liveEventFits`, in the supervisor): `live.opened` names the subscription's source and reports
 each subscribed probe once, and a tick samples or fails only subscribed probes, so another source's or an unsubscribed
 probe's tables are never owned. It stamps the generation on every descriptor. The catalogue's worst-case tick (every list at its maximum, every string in
 three-byte characters) encodes to at most 192 KiB (`tests/live-schema.test.ts`); a tick over 256 KiB is never sent: the
 backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a silent drop.
+
+**Tables** (`Live/LiveTables.cs`; each table's own settings are in docs/live.md). Every table is a stored result the worker
+reads with `results.read`, as a query's is: its cells are the text a query of the same value shows (CellFormat), every column
+`text` on the wire, so Copy and Save treat it as any result. A source gives a table's rows from a SQL Server result set or
+from its own state; the writers do the rest.
+- **Snapshot tables.** Each sample writes a new result (a revision). Two stay readable: the newest, and the one before, which
+  the renderer may still show until it applies the newest; stop and wait means it has, so writing revision k+1 first releases
+  k−1 and names it in `retired` (a revision that could not be stored names it in the next one that is). A revision applies the
+  probe's view (a predicate the source gives for each view id it declares), then its filter (`filterMode: 'memory'`: the
+  stored text contains the filter text, case-insensitively, in the named columns of that table, or in all of them; columns
+  of another of the probe's tables leave this one whole), sorts by the probe's sort (numbers as numbers, NULL first ascending,
+  text case-insensitively and then exactly), then by the key, so equal values never trade places, and stores at most the
+  table's row cap (`rowLimit` past it, the rows the source left out counted in `rowsRead`). `diff` counts keys added and
+  removed and kept keys whose cells changed (a 64-bit hash of their texts); `tracked` gives each key of the latest track list
+  its new row or −1. A key is its key cells' stored texts joined with U+001F, NULL as empty text, so it equals what the worker
+  decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
+  revision, at the row it had, and lists it in `departed`; the next revision drops it. Facet columns carry their distinct
+  values over every row the source gave (before the view and filter; NULL left out), most frequent first, at most 100 of at
+  most 128 characters (values that differ only past them count together), and only when they changed since the table's last
+  facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
+  not fit is left out (`more`) for a later tick to send.
+- **Append tables.** One result (a segment) grows by the rows a source reads above the table's settled id, ordered by its one
+  key, an integer id. Ids are assigned at insert, not commit, so a lower id can become visible after a higher one (under READ
+  COMMITTED, or for an instant under READ UNCOMMITTED): each read covers every unsettled id again (the source reads `@top` =
+  the table's rows per tick plus its unsettled ids above `@after` = its settled id), and rows already appended are skipped by
+  id, so a late row is appended once, in arrival order. An id settles once first seen the table's settle ticks and
+  milliseconds ago (2 and 5 s by default); unsettled ids stay within twice the rows a tick reads, the lowest settling early past
+  that. Each write seals what it appended, so the rows are readable at once, and a sample carries the table only when it
+  changed. At 200,000 rows or 32 MiB a segment completes and a new one starts (`rolledFrom`). Two segments' worth are kept: on
+  a roll, the oldest completed segments are released and named retired while the completed ones hold more than one
+  segment's 200,000 rows or 32 MiB, and two or more are left; a segment that stopped early for memory counts only what it
+  holds, so the rolls after a budget stop cost no segment while the table stays under its caps. A table holds at most 8
+  stored results (the current segment included); past that the oldest goes whatever it holds. A read opens at most one segment, since a sample describes only the newest: rows past a
+  second one wait for the next read. A probe whose filter mode is `restart` passes its filter to SQL Server as a LIKE pattern
+  (`@filter`, wildcards escaped, `ESCAPE N'\'`); a new filter, or args that change what a source reads, start the table
+  again: every segment is retired (`retired` up to 8) and the next sample says `restarted`. The old segments stay
+  readable until the restarted table's first read arrives, so a read that fails after a restart leaves the view whole;
+  they are released only together with the new segment's open, so the sample that names them is always sent: when the
+  budget refuses that open, they go first and their bytes pay for its metadata, which nothing else can take in between. A start at the last rows, or
+  before an id, begins with a note row ("n earlier rows are not shown.", in the table's first text column, the other cells
+  NULL); a start before an id also ends the table there (`@before`). Rows that were not stored (out of budget, or past a
+  second segment) are never counted as seen, and no id at or above the lowest of them settles, so a later read stores them,
+  once.
+- **Memory.** Each revision and segment has its own budget, so one that does not fit never stops later ones, and a
+  subscription's tables share 64 MiB; all live tables together stay within a quarter of the result budget (a revision past
+  the subscription's limit says `queryBudget`, past the live share `globalBudget`), so queries keep the rest. A table that
+  ran out stores what fits and the probe reports `BUDGET` naming it; one that stored nothing reports `BUDGET` alone; either
+  stores again once memory is free, without giving up what it holds: an append table whose segment ran out keeps it
+  (complete) and opens the next only once a row fits, never retiring a segment to make room. Live results seal 64 KiB pages, under the large object heap's threshold, and their
+  releases do not count toward the store's forced gen2 collection (after every 64 MiB released), which a 1 s snapshot of a
+  large table would otherwise run every few seconds; the snapshot churn benchmark measures the collections that remain.
+- **Ends.** A source that ends keeps each snapshot table's newest revision and each append table's segments (the newest
+  first), complete and readable, within the 64 kept results; every other end releases them all.
 
 **Credit: stop and wait.** This is the one place EVENTs are credited, flagged by `creditedEvents` in `methodPolicies`.
 - The REQUEST carries `credit: 65,536`.
@@ -791,12 +854,14 @@ backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a
   acknowledges an event (hung, or applying it failed) stops the source after that event.
 - **Schedule.** Fixed rate per probe: a probe due while a frame is unacknowledged, or late for any reason, is sampled once
   when it can be, with `gap: 'late'` and the slots it missed in `skipped`, never replayed in a burst. The first sample is
-  `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now.
+  `baseline`, the first after a pause `resumed`; `refresh` makes every unpaused probe due now (see the scheduler, below).
 
 **End** (the RESPONSE): `{ ended: cancelled | disconnected | sourceEnded | failed | shutdown, code?, message? (failed
 only), kept?: u32[≤ 64] (sourceEnded only), resume?, ticks, elapsedMs }`. CANCEL with reason 1 or 3 ends it
 `cancelled`, reason 4 or the backend's shutdown `shutdown`, and `connections.disconnect` of its connection id
-`disconnected`. Every end but `sourceEnded` releases the subscription's results first; `sourceEnded` keeps `kept`
+`disconnected`. When every probe has stopped for good (each terminal, or opened unavailable) it ends `failed` with the
+first probe's own error code (a live code such as `PERMISSION_DENIED`, which `liveEndSchema` accepts beside the request
+codes) and message, since nothing would ever be sampled. Every end but `sourceEnded` releases the subscription's results first; `sourceEnded` keeps `kept`
 readable until the renderer closes them with `results.close`.
 
 **Update answer:** `{ applied: true, probes: { probe, intervalMs, effectiveIntervalMs, paused }[] }` for every probe of the
@@ -817,14 +882,106 @@ its 8; a source that reaches no server (`debug.synthetic`) counts by connection 
 sampler is built, and a sampler acquires nothing (store, pools, connections) until the subscription runs, so a refused
 request never touches what a running subscription holds. Each subscription is one task with its own schedule, so it never
 overlaps itself; a source runs its due probes through an `ILiveSampler`. `debug.synthetic` (`SyntheticSampler.cs`) runs
-no SQL: its metrics probe counts samples and draws a wave (the rate is null until a second sample), its table probe stores
-one snapshot result per sample whose rows move on by one id each time (two revisions alive: the oldest is released before
-the next is stored, since the renderer has applied the newest by then, and the next stored revision names it as retired),
-sorted as asked, with diff counts and tracked rows, and its status probe reports the phase and the sample count. Each
-revision has its own query budget, so a revision that did not fit (a `BUDGET` error value) never stops later ones: the
-probe stores again once memory is free. The per-subscription cap (64 MiB, all live views within 25 % of the result budget)
-comes with the SQL sources' snapshot writers. Its scope is `none`, so any connection id is accepted;
+no SQL, and its tables go through the same writers as the SQL sources' (Tables, above): its metrics probe counts samples and
+draws a wave (the rate is null until a second sample); its table probe stores one snapshot per sample whose rows move on by
+one id each time, so rows leave at the top and arrive at the bottom; its status probe reports the phase and the sample
+count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows) and their groups,
+which come from the source's own state rather than a query, and with `errorEvery` fails the groups alone, as one failed
+statement of a batch would; its log probe grows an append table from an in-memory log, with late messages, a start, and a
+restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
+reporting the backend's gen2 collections. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
+
+**Scheduler** (`LiveSubscription` in `Live/LiveService.cs`; every rule below runs on times passed in, and the offline
+checks drive it on a fake clock):
+- **Phase.** A subscription starts, and resumes after a pause, at a random point within a quarter of its first second,
+  one phase for all its probes, so views opened together never wake together while a view's probes share ticks (one round
+  of SQL and one frame).
+- **Quick second sample.** After a sample the source marks `baseline` or `resumed` the next is due within a second (rates
+  need two), then the probe settles on its interval. The sample decides, not the schedule: a source also starts again from
+  a baseline after a failed first attempt or a lost connection. A `baseline` sample never carries `skipped`.
+- **Refresh** makes every unpaused probe due now, but never within its catalogue `minGapMs`, nor its minimum interval, of
+  its last attempt, so refreshes in a loop never run a probe more often than its fastest interval would. A probe that is
+  backing off keeps its delay and its failure count (a refresh never hammers a failing server or sign-in); one a terminal
+  error stopped starts again from a clean count (not one the source opened unavailable).
+- **Error back-off.** The first failure retries at the interval; after f failures in a row the next try is
+  min(interval × 2^(f−1), cap) × U(0.9, 1.1), where the cap is 60 s or the asked interval when that is longer. A sample
+  resets the count. `BUDGET` retries at the interval without backing off (memory may free at any time); a terminal error
+  (`PERMISSION_DENIED`, `NOT_SUPPORTED`, `LOGIN_FAILED`) stops its probe (`retryInMs` 0). Every error in a tick carries `retryInMs`.
+- **Load guard.** An EWMA (α 0.3) of each probe's `costMs`: over its catalogue `maxDutyCycle` (0.25 by default, 0.2 for
+  `activity.*`) of the interval in force for 3 samples in a row doubles that interval, up to the cap; under 10 % for 10
+  samples halves it back toward the asked one. Samples report the interval in force as `effectiveIntervalMs` (so the UI
+  can say "slowed to 4 s"), and so does the update answer. A new interval from `live.update` starts the guard again.
+- **Idle.** While every probe is paused, when the next sample is at least 30 s away, and between the samples of probes
+  whose intervals in force are all 30 s or longer (the wait after a sample is a little under the interval; never before a
+  quick second sample), the source gives back its connection (to the pool, healthy), and opens one again when a probe comes
+  due. A subscription whose probes all start paused opens none until one resumes.
+
+**SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source): one pooled connection per subscription
+from the connection's own **" - Activity Monitor"** pool (registered with the connection's pools, so a disconnect clears
+it), held while it samples so its session id is known (`live.opened`'s `spid`; a tick carries `spid` when it reopened).
+SSISDB sources (later) use the **" - Integration Services"** pool in `SSISDB` with their own prologue
+(`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
+state: `SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;`
+for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Connecting takes
+no live gate (a server that stopped answering a login never holds one that views on other servers need) and has its own
+15 s bound, a `TIMEOUT` value past it, since a profile's Connect Timeout may be 0 (none); a connect that failed in a tick
+is reported for that tick's other due probes rather than tried again at once. Opening connects and runs one session
+probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
+SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
+a parameter. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
+from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
+`NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
+A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
+its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
+the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
+more than `LOCK_TIMEOUT`. Probe SQL is constant text per probe and band in `Live/LiveSql.cs`: one batch per probe, its metrics
+row (when it has series) with the columns it declares, mapped to the catalogue's series, then one result set per table, in
+catalogue order, whose column names and types must be the table's (the types live tables store: integers, text, bit, float,
+real, decimal, the date and time types and uniqueidentifier; a column of another type, or a query that does not read each of
+its probe's tables once, in order, fails the open as a bug). An append table's read takes `@after{i}`, `@top{i}` and
+`@before{i}` (i its index) and may name a tail statement that returns `(after_id, earlier)` for `@tail{i}` rows, for a
+start at the last rows. A snapshot result set is read up to 10,000 rows. When one statement of the batch fails after earlier
+ones returned, the tables already read arrive and the error names the rest (`tables`), so the tick goes on; values only as
+parameters; no metadata built-ins (they ignore
+`LOCK_TIMEOUT` and the isolation level), temporary tables, `SELECT … INTO`, writes, DDL, transactions, `WAITFOR`,
+`EXEC` or `sp_executesql`, remote reads (`OPENQUERY`, `OPENROWSET`, `OPENDATASOURCE`), comments (they belong in C#), and
+no `TOP`, with or without parentheses, without an `ORDER BY` at its own level (one inside `OVER (…)` or another statement
+orders nothing it takes). An offline lint renders every probe at every band and refuses all of those, reading literals,
+comments and bracketed or quoted names as SQL Server does, so a quote in one hides no code from it and a built-in spaced
+from its parenthesis still counts. Values are read by the column's declared position, so every read first checks the
+result's columns against the declaration (names, order, count, numeric types); a mismatch is a bug, which ends the view
+`failed` with `BACKEND_ERROR` rather than put one series' value in another's. The live checks also run every query at the
+server's band and compare its columns.
+
+**Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
+`PERMISSION_DENIED` and 207 and 208 `NOT_SUPPORTED` (both terminal; so are an SSIS source's `CATALOG_MISSING` and `NOT_FOUND`); 4060, 911, 942, 952 and the other offline,
+restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above and transport errors
+`CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
+advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
+must change, 18452 untrusted domain) `LOGIN_FAILED`, terminal, since retrying alone would only count more failures against
+the login and could lock it out; anything else `SQL_ERROR` with SQL Server's text. Messages are sentences that name no object or value. A lost
+connection or a budget cancel drops the connection without returning it to the pool (its pool is cleared), and the next
+due tick reopens it under the back-off, for as long as the view runs; only `NOT_CONNECTED` (the connection id is gone)
+ends the view `disconnected`. Nothing is logged.
+
+**Deltas** (`Live/LiveDeltas.cs`): the backend keeps baselines only; history is the renderer's. Each series has a counter
+kind in the catalogue: `gauge` (as read), `rate` and `msPerSecond` (change per second), `ratio` (change over a base
+counter's change; none when the base did not move) and `cpuPercent` (100 × Δ CPU ms / (elapsed × schedulers), 0 to 100).
+Elapsed time is the server's own (Δ`ms_ticks` of `sys.dm_os_sys_info`) when the probe reads it, so a slow round trip never
+skews a rate, and the backend's clock otherwise; `elapsedMs` reports it. A changed start time (a restart) drops every
+baseline (`gap: 'reset'`); a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
+pause and the first after a lost connection (which may have reached another server) have no rates (`baseline`,
+`resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
+while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines for snapshot rates (L2b's tables): keyed by an
+identity column (a session's login time), bounded by the row cap, dropped after two samples absent.
+
+**Resume tokens** (`Live/LiveResume.cs`): base64url of `{"v":1,"source":…,"cursors":[[probe,table,settledId],…]}`, at
+most 256 characters (a set of cursors that would not fit makes no token), parsed strictly against the subscription's
+source and its append tables (`INVALID_PARAMS` on any other shape, a repeat or an unsafe id). A tick carries `resume` only
+when a cursor moved, the end carries the last one, and a subscription resumed with one hands its source the cursors: each
+append table starts after the id its cursor settled. A source without append tables (the Activity Monitor) refuses
+`resume`.
 
 **Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
 and results worker](#results-port-and-results-worker)). Views never call it themselves: they open a `LiveHandle` from
@@ -846,8 +1003,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
   is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
   continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
-  `hidden: 'statusOnly'` (none does yet; the catalogue field is the renderer's alone and stays out of the backend's JSON):
-  a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
+  `hidden: 'statusOnly'` (none does yet; the backend's JSON carries the field, but only the renderer acts on it):
+  a view that asks for it with `whileHidden` keeps its probes without tables at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never
   goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause. A view that ends, is lost,
   closes or shows gives its slot to the oldest hidden view that paused only because none was free.
 - **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
@@ -868,7 +1025,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
   server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
   view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
-  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  readable until the view closes, which releases every result it kept (an append table's older segments too, which the
+  view does not show yet); if the source finished while the view's cancel was on its way,
   `ResultClient` closes what it kept at once.
 - **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
@@ -912,7 +1070,7 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
 
-Later: the SQL sources' scheduler with its back-off, pools and prologues, deltas, append tables, resume tokens and facets.
+Later: `ChartView` (L4) and `LiveGrid` (L5) on these views.
 
 ## Results port and results worker
 
@@ -1115,6 +1273,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
+| Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
@@ -1122,7 +1281,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
-| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results | zod, main and backend |
+| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; snapshot revisions ≤ 10,000 rows, append segments 200,000 rows or 32 MiB (2 segments' worth kept, at most 8 results a table), ≤ 10,000 new append rows a tick; 64 MiB of tables per subscription, all live tables ≤ 25 % of the result budget; facets 7 columns × 100 values × 128 characters, ≤ 32 KiB of facet text a tick; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
@@ -1371,6 +1530,16 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   backend's `debug.synthetic` source every 10 ms and has the bench's thread (the page) acknowledge each event 20 ms after
   it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
   next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
+- **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
+  backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
+  rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
+  It reports revisions a second and the backend's gen2 collections per revision, times 60: what a 1 s snapshot of that
+  size runs a minute. The collections follow the revisions, not the clock (0.32 a revision at 10 ms and at 1 s alike), and
+  none is induced or set off by the large object heap: a GC event listener counted every collection as an allocation
+  budget one (reason AllocSmall), about 60 % of the gen2 ones blocking, and only the reused key dictionary allocating
+  large objects. Each revision's source rows and pages live across a collection or two and are promoted (about 6 MB a
+  revision out of gen0), so gen2 fills with revisions already released. The forced collection never runs for live tables.
+  On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
   planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
@@ -1397,6 +1566,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | `decodePage` and the text of every cell, W1 page | ≥ 300 MB/s | ≥ 75 MB/s | 370 – 385 MB/s | 395 MB/s |
 | main ↔ backend `system.health`, p50 / p99 | ≤ 0.3 / 2 ms | p50 ≤ 2 ms | 0.12 – 0.14 / 0.4 – 0.5 ms | 0.09 / 0.8 ms |
 | 256 concurrent `system.health` | ≤ 150 ms | ≤ 1 s | 4 – 7 ms | 7 ms |
+| Live snapshot revisions, 5,000 × 23, stored, sent, acknowledged and released | ≥ 50 swaps/s | ≥ 10 swaps/s | – | – |
+| Backend gen2 collections a minute of a 1 s snapshot of them (per revision × 60) | ≤ 60 | ≤ 120 | – | – |
 | W1, 500,000 rows, store → main → port → worker | ≥ 1,000,000 rows/s, ≥ 200 MB/s | ≥ 250,000 rows/s, ≥ 50 MB/s | 710,000 – 935,000 rows/s, 150 – 203 MB/s | 514,000 – 612,000 rows/s, 112 – 133 MB/s |
 | B1 through the same path | ≥ 400 MB/s | ≥ 100 MB/s | 250 – 410 MB/s | 249 MB/s |
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |

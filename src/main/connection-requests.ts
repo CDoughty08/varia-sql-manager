@@ -56,8 +56,9 @@ export async function prepare(method: string, validated: unknown, value: unknown
 
 /**
  * After the backend answered. A connection enters history, and its password is remembered under that entry when the
- * dialog asked for it (or forgotten when it did not). A remembered password SQL Server rejected is forgotten, so the
- * next attempt cannot repeat it into a lockout policy.
+ * dialog asked for it (or forgotten when it did not). Unless the dialog says the user set its Environment, a connect
+ * without one keeps the entry's label, and the answer carries it so the connection shows it. A remembered password SQL
+ * Server rejected is forgotten, so the next attempt cannot repeat it into a lockout policy.
  */
 export async function settle(prepared: PreparedRequest, outcome: Settled, deps: ConnectionRequestDeps): Promise<Settled> {
   if (!connectMethods.has(prepared.method)) return outcome
@@ -72,9 +73,13 @@ export async function settle(prepared: PreparedRequest, outcome: Settled, deps: 
   }
   if (prepared.method !== 'connections.connect') return outcome
   const info = outcome.value as ConnectionInfo
+  const validated = prepared.validated as ConnectionOptions
   let id: string
-  try { id = (await deps.connections.rememberEntry(prepared.validated as ConnectionOptions)).id }
-  catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.'; return outcome }
+  try {
+    const entry = await deps.connections.rememberEntry(validated, !context?.setsEnvironment)
+    id = entry.id
+    if (entry.environment && !validated.environment) info.environment = entry.environment
+  } catch { info.historyWarning = 'Connected successfully, but recent connections could not be saved.'; return outcome }
   if (context?.remember && canRememberPassword(params.authentication) && params.password) {
     // set() gives every other entry with these credentials (the one used among them) this password, so none keeps an
     // older one to replay.

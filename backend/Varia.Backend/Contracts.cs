@@ -2,8 +2,10 @@ using System.Text.Json;
 
 namespace Varia.Backend;
 
+/// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
+/// bounds it, since the workbench shows it and SQL Server never sees it.</summary>
 internal sealed record ConnectOptions(string Server, string Database, string Authentication, string? Username, string? Password, bool TrustServerCertificate,
-    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, AdvancedConnectionOptions? Advanced = null);
+    string Encrypt = "mandatory", string? HostNameInCertificate = null, string? DisplayName = null, string? Color = null, string? Environment = null, AdvancedConnectionOptions? Advanced = null);
 internal sealed record AdvancedConnectionOptions(
     int CommandTimeout = 0, int ConnectTimeout = 15, bool ColumnEncryption = false, bool SecureEnclaves = false,
     string AttestationProtocol = "None", string EnclaveAttestationUrl = "", bool MultipleActiveResultSets = false,
@@ -96,8 +98,9 @@ internal sealed record LiveUpdateArgs(string SubscriptionId, string Source, bool
     JsonElement? Args = null);
 /// <summary>The rows to follow across revisions of one keyed snapshot table: key texts joined with U+001F.</summary>
 internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] Keys);
-/// <summary>debug.synthetic's args (test hooks only).</summary>
-internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null);
+/// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
+internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
+    int? LateEvery = null, JsonElement? Start = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,

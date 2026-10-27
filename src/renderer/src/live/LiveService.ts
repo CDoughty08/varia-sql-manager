@@ -24,7 +24,8 @@ export const liveServiceLimits = {
   handles: limits.live.portStreams,
   /** Hidden views that keep their status probes running (a source's `hidden: 'statusOnly'`). */
   statusOnly: 4,
-  statusOnlyIntervalMs: 30_000,
+  /** A status-only view samples at most this often: the catalogue's hidden interval, which docs/live.md states. */
+  statusOnlyIntervalMs: limits.live.hiddenIntervalMs,
   ringBytesPerHandle: 4 * MiB,
   ringBytes: 32 * MiB,
   settingsDebounceMs: 150,
@@ -91,7 +92,7 @@ export interface LiveSnapshot {
   /** How the last subscription ended (status ended). */
   readonly ended?: LiveEnd
   /** Why the view cannot run (status ended or lost), or why its last settings change failed. */
-  readonly error?: { readonly code: ErrorCode; readonly message: string }
+  readonly error?: { readonly code: ErrorCode | LiveErrorCode; readonly message: string }
 }
 /** A table of a probe's latest sample: an ordinary stored result. */
 export interface LiveTable {
@@ -192,6 +193,9 @@ interface StreamRecord {
   settled: boolean
   /** The backend refused the last update and has not accepted one since: the view shows what still runs. */
   refused?: { code: ErrorCode; message: string }
+  /** Every result this stream delivered that no later sample retired, by result id: an append table's older segments are
+   *  not the table the view shows, but a finished source may keep them too, and closing the view must release them. */
+  readonly results: Map<number, ResultKey>
 }
 interface ProbeRuntime {
   opened?: { state: 'ok' | 'limited' | 'unavailable'; reason?: LiveErrorCode; note?: string; minIntervalMs: number; maxIntervalMs: number }
@@ -381,7 +385,7 @@ class Handle implements LiveHandle {
   private kept: ResultKey[] = []
   private resume: string | undefined
   private ended: LiveEnd | undefined
-  private error: { code: ErrorCode; message: string } | undefined
+  private error: { code: ErrorCode | LiveErrorCode; message: string } | undefined
   /** The error is a refused update's (a later accepted one clears it), not the stream's end. */
   private updateError = false
   private spid: number | undefined
@@ -458,7 +462,7 @@ class Handle implements LiveHandle {
     const ready = new Promise<boolean>(resolve => { becameReady = resolve })
     let record!: StreamRecord
     const live = this.service.client.live(params, (event, bytes) => this.applyEvent(record, event, bytes))
-    record = { live, subscriptionId, connectionId: this.connectionId, sent, tracked: new Map(), opened: false, ready, becameReady, settled: false }
+    record = { live, subscriptionId, connectionId: this.connectionId, sent, tracked: new Map(), opened: false, ready, becameReady, settled: false, results: new Map() }
     this.stream = record
     this.ended = undefined
     this.error = undefined
@@ -555,6 +559,10 @@ class Handle implements LiveHandle {
       runtime.error = undefined
       const ring = this.rings.get(sample.probe)
       if (ring && sample.metrics) ring.push(tick.sampledAt, sample.metrics, sample.gap === 'reset' ? ringGap | ringReset : sample.gap ? ringGap : 0)
+      for (const entry of [...sample.tables ?? [], ...sample.append ?? []]) {
+        for (const retired of entry.retired ?? []) record.results.delete(retired)
+        record.results.set(entry.descriptor.resultId, { generation: entry.descriptor.generation, resultId: entry.descriptor.resultId })
+      }
       for (const entry of sample.tables ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision, ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: entry.tracked } : {} })
       for (const entry of sample.append ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment })
     }
@@ -584,7 +592,7 @@ class Handle implements LiveHandle {
       if (end.resume !== undefined) this.resume = end.resume
       if (end.ended === 'sourceEnded') {
         const kept = new Set(end.kept ?? [])
-        this.kept = [...this.tables.values()].flatMap(tables => [...tables.values()]).filter(table => kept.has(table.descriptor.resultId)).map(table => ({ generation: table.descriptor.generation, resultId: table.descriptor.resultId }))
+        this.kept = [...kept].flatMap(resultId => record.results.get(resultId) ?? [])
       }
       this.ended = end
       this.error = end.ended === 'failed' && end.code && end.message ? { code: end.code, message: end.message } : undefined
