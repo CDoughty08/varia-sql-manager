@@ -136,6 +136,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   // The results head's selected view, and the facts in set captions, the Messages strip and the Execution plan list.
   ...text(['panelTitle.activeForeground'], ['panelTitle.background', 'list.inactiveSelectionBackground']),
   ...text(['descriptionForeground', 'warningForeground', 'successForeground'], panel, panelTitle),
+  // The results head's icon for a run that failed, timed out or was lost.
+  ...text(['errorForeground'], panelTitle),
   // Hovered column and row headers.
   ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], headerHover),
   // Dialogs: the Filter dialog's problems, the layout notice, and Tools › Options' selected page and focused row.

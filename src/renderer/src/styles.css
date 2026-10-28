@@ -397,8 +397,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-caption-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .rs-caption-batch { flex-shrink: 0; }
 .rs-caption-save { flex-shrink: 0; }
+/* Captions and the Messages strip sit against the stack's and the pane's clipping edges: their rings go inside. */
+.rs-caption-toggle:focus-visible, .rs-caption-save:focus-visible, .messages-strip-toggle:focus-visible { outline-offset: -2px; }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
+/* Beside a collapsed set a splitter only divides. */
+.rs-splitter[data-inert], .rs-splitter[data-inert]:hover { cursor: default; background: var(--varia-resultsGrid-splitterBackground); }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
 .rg-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); }
 /* The results grid (GridView): pooled rows and cells, positioned absolutely; one class string per cell. */
@@ -413,8 +417,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-corner { position: sticky; left: 0; z-index: 3; width: var(--rg-rhw); }
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
-/* The column's SQL type after its name (gridLimits.typeGap), muted and smaller. */
-.rg-ct { margin-left: 6px; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
+/* The column's SQL type after its name (gridLimits.typeGap), muted and smaller. Name and type are each isolated, so bidi
+   controls in a name stay inside it. */
+.rg-cn { unicode-bidi: isolate; }
+.rg-ct { margin-left: 6px; unicode-bidi: isolate; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
 .rg-ch.sel .rg-ct { color: inherit; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
@@ -441,8 +447,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
-.rg-strip { flex-shrink: 0; padding: 4px 8px; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
-.rg-strip.error { color: var(--varia-errorForeground); }
+/* One line (gridLimits.stripHeight), cut short with the sentence in its tooltip, so a set sized to its rows counts it exactly. An
+   error strip wraps instead, keeping Retry in view; it comes after the set was sized. */
+.rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
+.rg-strip.error { white-space: normal; color: var(--varia-errorForeground); }
 .rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .rg-overlay { position: absolute; inset: 22px 0 0; z-index: 4; display: grid; place-items: center; padding: 16px; text-align: center; font: var(--varia-size-sm) var(--varia-font-ui); color: var(--varia-emptyState-foreground); background: var(--varia-resultsGrid-background); }
 @media (forced-colors: active) {
@@ -463,13 +471,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
-/* The Messages strip under the results: one line, opening to the messages (at most 40 % of the pane, then they scroll). */
+/* The Messages strip under the results: one line (gridLimits.stripLine), opening to the messages. OutputPane caps it at what
+   the stack leaves (at most 40 % of the pane), and never below a few lines; then they scroll. */
 .messages-strip { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 0; max-height: 40%; border-top: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
-.messages-strip-toggle { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 2px; border-radius: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-align: left; white-space: nowrap; }
+.messages-strip-toggle { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 26px; box-sizing: border-box; padding: 0 8px 0 2px; border-radius: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-align: left; white-space: nowrap; }
+/* A closed strip shows the first error, so it can be read whatever the pane's height. */
+.messages-strip-error { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; color: var(--varia-errorForeground); }
 .messages-strip-name { color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
 .messages-strip-facts { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .messages-strip-facts[data-errors] { color: var(--varia-errorForeground); }
-.messages-strip .messages { flex: 0 1 auto; padding: 2px 20px 8px; }
+.messages-strip .messages { flex: 1 1 auto; padding: 2px 20px 8px; }
 /* The Execution plan view: the run's plans, each opened as a .sqlplan document. */
 .plan-list { flex: 1; min-height: 0; margin: 0; padding: 4px 12px; overflow: auto; list-style: none; }
 .plan-item { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
@@ -479,9 +490,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .plan-actions button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
 .plan-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 @media (forced-colors: active) {
-  /* The selected view's fill is dropped; an outline marks it. */
+  /* The selected view's fill is dropped; an outline inside marks it, and focus a ring outside it in another colour. */
   .output-views { border-color: CanvasText; }
   .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
 }
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }

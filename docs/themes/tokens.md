@@ -162,7 +162,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.hoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#29314f` | `#d9e0fb` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of a focused list. |
-| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#21273b` | `#e7ebfc` | Selected row of an unfocused list, and the selected result set. |
+| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#21273b` | `#e7ebfc` | Selected row of an unfocused list, the selected result set, and the selected view (Results, Messages, Execution plan) in the results head. |
 | `list.inactiveSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of an unfocused list. |
 | `list.focusOutline` | VS Code | `@focusBorder` | `#8f9cff` | `#4453d0` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
 | `list.highlightForeground` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Characters that match a filter, such as in the command palette. |
@@ -254,10 +254,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `panel.background` | VS Code | `$panel` | `#16181d` | `#ffffff` | Output panel. |
 | `panel.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Lines inside the output panel. |
-| `panelTitle.background` | Varia | `$panel` | `#16181d` | `#ffffff` | Output panel tab bar. |
-| `panelTitle.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Active output tab, and the selected tab of the connection dialog. |
-| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Inactive output tabs. |
-| `panelTitle.activeBorder` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Underline of the active output tab. |
+| `panelTitle.background` | Varia | `$panel` | `#16181d` | `#ffffff` | The results head: the bar with the Results, Messages and Execution plan views and the run summary. |
+| `panelTitle.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Text of the selected Results, Messages or Execution plan view, and of the selected tab of the connection dialog. |
+| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Text of the views not selected in the results head. |
+| `panelTitle.activeBorder` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Underline of the selected tab of the connection dialog (History or Browse, Connection Properties or Connection String). The results head marks its selected view with list.inactiveSelectionBackground instead. |
 | `badge.background` | VS Code | `$active` | `#30343e` | `#d6dae0` | Count badges on output tabs. |
 | `badge.foreground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Count badge text. |
 | `resultsGrid.background` | Varia | `@panel.background` | `#16181d` | `#ffffff` | Results grid. |

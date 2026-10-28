@@ -1,9 +1,10 @@
-import { memo, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
+import { memo, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent } from 'react'
 import PaneMenuButton from '../PaneMenuButton'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
-import ResultsStack, { batchText } from '../grid/ResultsStack'
+import { gridLimits as g } from '../grid/constants'
+import ResultsStack, { batchText, stackNeed } from '../grid/ResultsStack'
 import MessagesView from './MessagesView'
 import { setKey, type OutputViewName, type ResultJob, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount, messagesSummary, plural, runSummary } from './status'
@@ -20,11 +21,12 @@ function jobText(job: ResultJob): string {
   return job.kind === 'save' ? `Saving${job.fileName ? ' ' + job.fileName : ''}… ${done}` : `Copying… ${done}`
 }
 
-/** The run summary, from the run's state; elapsed time ticks while it runs. SSMS's sentence is its tooltip. */
+/** The run summary, from the run's state; elapsed time ticks while it runs. SSMS's sentence is its tooltip. A run that ended
+ *  without a summary took until it ended, not until now. */
 function RunSummaryView({ tab, now }: { tab: TabResults; now: number }) {
-  const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? Math.max(0, now - tab.startedAt)
+  const elapsedMs = tab.status === 'running' ? now - tab.startedAt : tab.summary?.elapsedMs ?? Math.max(0, (tab.endedAt ?? tab.startedAt) - tab.startedAt)
   const summary = runSummary({
-    status: tab.status, closedStatus: tab.summary?.status, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt
+    status: tab.status, closedFrom: tab.closedFrom, elapsedMs, rows: tab.rowsRead, completedBatches: tab.completedBatches, totalBatches: tab.totalBatches, completedAt: tab.summary?.completedAt
   })
   return <span className="output-status" data-status={tab.status} data-tone={summary.tone} title={summary.sentence}>
     <Icon name={summary.icon} spin={summary.icon === 'loading'} /><strong>{summary.outcome}</strong>{summary.facts.map((fact, index) => <span key={index}> · {fact}</span>)}
@@ -41,21 +43,41 @@ function Announcer({ text, announced }: { text: string; announced: number }) {
 }
 
 /**
- * The Messages strip under the results: one line ("Messages · 2 · no errors") that opens to the messages themselves. It
- * opens itself when an error or one of SQL Server's own messages (PRINT, RAISERROR, STATISTICS) arrives, so results and
- * messages show together; the user's open or close holds for the run.
+ * The Messages strip under the results: one line ("Messages · 2 · no errors", and the first error while it is closed) that
+ * opens to the messages themselves, showing the first error. It opens itself when an error, PRINT or RAISERROR output
+ * arrives, so results and messages show together, but only where the pane has room for the stack's sets at their floors and
+ * a few lines of messages (`fits`); the user's open or close holds for the run. Open, it takes at most what the stack leaves
+ * (and 40 % of the pane), never less than a few lines.
  */
-function MessagesStrip({ tabId, tab }: { tabId: string; tab: TabResults }) {
+function MessagesStrip({ tabId, tab, fits, maxHeight }: { tabId: string; tab: TabResults; fits: boolean; maxHeight?: number }) {
   const { results } = useWorkbench()
-  const id = useId()
+  const id = useId(), errorId = id + 'error'
   const summary = messagesSummary(tab.messages)
-  return <div className="messages-strip" data-open={tab.strip || undefined}>
-    <button type="button" className="messages-strip-toggle" aria-expanded={tab.strip} aria-controls={tab.strip ? id : undefined} onClick={() => results.setStrip(tabId, !tab.strip)}>
-      <Icon name={tab.strip ? 'chevron-down' : 'chevron-right'} /><span className="messages-strip-name">Messages</span>
+  const open = tab.strip && (tab.stripChosen || fits)
+  const style: CSSProperties | undefined = open && maxHeight !== undefined ? { maxHeight, minHeight: g.messagesStripOpen } : undefined
+  return <div className="messages-strip" data-open={open || undefined} style={style}>
+    <button type="button" className="messages-strip-toggle" aria-label={summary.label} aria-describedby={!open && summary.firstError ? errorId : undefined} aria-expanded={open} aria-controls={open ? id : undefined}
+      title={!open && summary.firstError ? summary.firstError : undefined} onClick={() => results.setStrip(tabId, !open)}>
+      <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span className="messages-strip-name">Messages</span>
       <span className="messages-strip-facts" data-errors={summary.errors > 0 || undefined}> · {summary.text}</span>
+      {!open && summary.firstError && <span id={errorId} className="messages-strip-error">{summary.firstError}</span>}
     </button>
-    {tab.strip && <MessagesView id={id} tabId={tabId} tab={tab} />}
+    {open && <MessagesView id={id} tabId={tabId} tab={tab} firstError />}
   </div>
+}
+
+/** The output view's height, followed while it is mounted. */
+function useHeight(): [(element: HTMLDivElement | null) => void, number] {
+  const [element, setElement] = useState<HTMLDivElement | null>(null)
+  const [height, setHeight] = useState(0)
+  useLayoutEffect(() => {
+    if (!element) return
+    const observer = new ResizeObserver(() => setHeight(element.clientHeight))
+    observer.observe(element)
+    setHeight(element.clientHeight)
+    return () => observer.disconnect()
+  }, [element])
+  return [setElement, height]
 }
 
 /** One plan set in the Execution plan view: where it came from, and Open for each plan it holds (its rows). */
@@ -104,6 +126,14 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
   const jobs = tab?.jobs.filter(job => job.visible) ?? []
   const id = useId(), panelId = id + 'panel', tabIds: Record<OutputViewName, string> = { results: id + 'results', messages: id + 'messages', plan: id + 'plan' }
   const tabRefs = useRef<Record<OutputViewName, HTMLButtonElement | null>>({ results: null, messages: null, plan: null })
+  const [viewRef, viewHeight] = useHeight()
+  // The strip line shows once there is something to read beyond row counts (or the user opened the strip); it opens itself
+  // only when the stack keeps room for its sets at their floors.
+  const stripSummary = tab ? messagesSummary(tab.messages) : undefined
+  const showStrip = !!tab && view === 'results' && messages > 0 && (stripSummary!.readable || tab.strip)
+  const need = tab && showStrip && tab.status !== 'closed' ? stackNeed(tab, results.viewState(tabId).collapsed) : 0
+  const stripFits = viewHeight > 0 && viewHeight >= need + g.messagesStripOpen
+  const stripMax = viewHeight > 0 ? Math.max(g.messagesStripOpen, Math.min(Math.floor(viewHeight * 0.4), viewHeight - need)) : undefined
   const views: OutputViewName[] = [...hasSets ? ['results' as const] : [], 'messages', ...plans.length > 0 ? ['plan' as const] : []]
   const tabKey = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!view || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
@@ -135,10 +165,10 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
       <PaneMenuButton pane="output" />
     </div>
     {!tab ? <div className="output-empty"><strong>Query results</strong><p>{!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
-      : <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>
+      : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>
         {view === 'results' ? <>
           {tab.status === 'closed' ? <div className="output-empty"><p>Results were closed to free memory. Execute the query again to see them.</p></div> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />}
-          {messages > 0 && <MessagesStrip tabId={tabId} tab={tab} />}
+          {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : view === 'plan' ? <PlanView tabId={tabId} tab={tab} plans={plans} /> : <MessagesView tabId={tabId} tab={tab} />}
       </div>}
     <Announcer key={tabId} text={tab?.announcement ?? ''} announced={tab?.announced ?? 0} />

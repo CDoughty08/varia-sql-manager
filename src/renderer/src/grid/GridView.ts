@@ -37,7 +37,8 @@ interface RowSlot {
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
 }
-/** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). */
+/** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
+ *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
 interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
 interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: number; x: number; y: number; dragging: boolean; readonly hit: GridHit; readonly modifiers: boolean }
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
@@ -65,6 +66,8 @@ export interface GridViewOptions {
   /** Escape outside a drag or resize: cancels the tab's copy or save; false when there was none. */
   onEscape(): boolean
   onStatus(status: GridStatus): void
+  /** Whether the columns are wider than the grid, so it shows a horizontal scroll bar when it has no vertical one; reported on change. */
+  onWide?(wide: boolean): void
   onError(error: unknown): void
   /** Opens an XML, JSON or plan value; without it no cell is a link. */
   onOpenValue?(row: number, column: number): void
@@ -131,6 +134,9 @@ export class GridView {
   private lastTop = 0
   private lastLeft = 0
   private viewportWidth = 0
+  /** The scroller's width with its vertical scroll bar: a grid sized to its rows has none. */
+  private outerWidth = 0
+  private wide: boolean | undefined
   private viewportHeight = 0
   private lastTopRow = 0
   private cancelFrame: (() => void) | undefined
@@ -202,6 +208,7 @@ export class GridView {
     this.cleanup.push(o.handle.subscribe(() => this.schedule()), registerGridAnchor(this.root, () => this.menuAnchor()))
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
+    this.outerWidth = this.scroller.offsetWidth
     this.viewportHeight = this.scroller.clientHeight
     // The first frame is drawn now, not a frame later: the rows of a tile already cached show at once, and the others are
     // requested a frame sooner.
@@ -382,6 +389,7 @@ export class GridView {
     const resize = new ResizeObserver(() => {
       try {
         this.viewportWidth = this.scroller.clientWidth
+        this.outerWidth = this.scroller.offsetWidth
         this.viewportHeight = this.scroller.clientHeight
         this.updateCap()
         this.schedule()
@@ -691,14 +699,16 @@ export class GridView {
     const headers = cellsPerRow
     if (headers > this.headerSlots.length || headers < this.headerSlots.length * (1 - g.poolSlack)) {
       while (this.headerSlots.length < headers) {
-        const doc = this.head.ownerDocument, el = doc.createElement('div'), text = doc.createTextNode(''), typeEl = doc.createElement('span'), type = doc.createTextNode('')
+        const doc = this.head.ownerDocument, el = doc.createElement('div'), nameEl = doc.createElement('span'), text = doc.createTextNode(''), typeEl = doc.createElement('span'), type = doc.createTextNode('')
         el.className = 'rg-ch'
         el.setAttribute('role', 'columnheader')
         el.style.display = 'none'
+        nameEl.className = 'rg-cn'
+        nameEl.append(text)
         typeEl.className = 'rg-ct'
         typeEl.setAttribute('aria-hidden', 'true')
         typeEl.append(type)
-        el.append(text, typeEl)
+        el.append(nameEl, typeEl)
         this.head.append(el)
         const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1 }
         this.slots.set(el, { header })
@@ -775,6 +785,8 @@ export class GridView {
       this.head.style.width = total + 'px'
       columnsMoved = true
     }
+    const wide = total > this.outerWidth
+    if (wide !== this.wide && this.outerWidth > 0) { this.wide = wide; this.o.onWide?.(wide) }
     if (model.spacerHeight !== this.spacerHeight) { this.spacerHeight = model.spacerHeight; this.spacer.style.height = model.spacerHeight + 'px' }
     if ((model.mode === 'virtual') !== this.wheelAttached) {
       this.wheelAttached = model.mode === 'virtual'

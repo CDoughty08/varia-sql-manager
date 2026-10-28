@@ -2,7 +2,6 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { anyResultGrid, backendBanner, backendReady, errorMessages, explorerLabel, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
@@ -280,11 +279,14 @@ try {
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
   await expect(queryStatus(page)).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
-  // At 1024x700 under the banner, the output pane is too short for a set's caption, its header and a row.
-  await enlargeOutput(page)
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
+  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
+  // whole inside the pane.
+  const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
+  await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => shown(gridCell(0, 1))).toBe(true)
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])

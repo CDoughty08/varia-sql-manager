@@ -263,8 +263,9 @@ export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
 /** A set's caption Collapse button, named by the set ("Result 2"). */
 export const resultToggle = (page, index = 0) => outputPane(page).getByRole('button', { name: `Result ${index + 1}`, exact: true })
-/** The Messages strip's line under the results ("Messages · 2 · no errors"), a button that opens and closes it. */
-export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages · / })
+/** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
+ *  a button that opens and closes it. */
+export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages, [\d,]+ messages?, / })
 /** The Execution plan view's list of the run's plans. */
 export const planList = page => outputPane(page).getByRole('list', { name: 'Execution plans', exact: true })
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })

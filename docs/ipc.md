@@ -509,7 +509,7 @@ when no port is open).
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'server' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 | `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
@@ -615,7 +615,7 @@ messages get "Column ‘{name}’ ({type}): some values could not be read and ar
 
 ## Messages
 
-The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'server' | 'error' }`, in order, under
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' | 'error' }`, in order, under
 the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped. Past the caps,
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
@@ -623,10 +623,13 @@ after a flood of PRINT output or row counts. An event carries at most 1,000 entr
 stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
-- **Server:** SQL Server's own informational messages: PRINT, RAISERROR and other severity 0 – 10 messages, and SET
-  STATISTICS IO and TIME output. They read like info entries; the renderer opens the Messages strip under the results when
-  one arrives, as it does for an error. As in SSMS, "Changed database context to …" (5701) and "Changed language setting
-  to …" (5703) are left out, whether from USE, a session's login, or the toolbar's database.
+- **Print:** what the script printed: PRINT (message number 0) and RAISERROR with severity 0 – 10 (number 50000, or a
+  user message's number above it). They read like info entries; the renderer opens the Messages strip under the results
+  when one arrives, as it does for an error.
+- **Server:** SQL Server's other severity 0 – 10 messages: warnings such as 8153 ("Null value is eliminated by an
+  aggregate…"), SET STATISTICS IO and TIME output, and the messages of DBCC and sp_rename. They read like info entries and
+  show in the Messages strip without opening it. As in SSMS, "Changed database context to …" (5701) and "Changed language
+  setting to …" (5703) are left out, whether from USE, a session's login, or the toolbar's database.
 - **Info:** Varia's own lines: row counts as SSMS writes them ("(1 row affected)", "({n} rows
   affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
   after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session

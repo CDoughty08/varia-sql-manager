@@ -21,8 +21,9 @@ interface Props {
 
 /**
  * The query's state sentence and its facts (server, login and SPID, database, time, rows), as SSMS's query window status
- * bar shows them; a value opened from the results names its kind only. Elapsed time and rows change while a query runs,
- * so only the state sentence is announced.
+ * bar shows them; in the window's status bar, only the connection's (the results head says how the run went). A value
+ * opened from the results names its kind only. Elapsed time and rows change while a query runs, so only the state
+ * sentence is announced.
  */
 export default function QueryStatusBar({ tab, connection, versions, variant = 'segment' }: Props) {
   const { settings, queries, results } = useWorkbench()
@@ -30,7 +31,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const query = useServiceSnapshot(queries)[tab.id]
   const run = useServiceSnapshot(results)[tab.id]
   const running = !!query?.running
-  const now = useTicker(running)
+  const now = useTicker(running && variant === 'bar')
   const accent = useConnectionAccent(connection?.color)
   const bar = variant === 'bar', top = values['textEditor.statusBar.location'] === 'top'
   const className = bar ? 'query-context query-status-bar' : 'query-status'
@@ -39,7 +40,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const kind = documentKind(tab)
   if (kind !== 'sql') return <div className={className} role="status" aria-label="Query status" data-tone="value" data-location={location}><span>{kindInfo[kind].label}</span></div>
   const session = query?.session && connection && !connection.lost && query.session.connectionId === connection.id && query.session.spid !== undefined ? { login: query.session.login, spid: query.session.spid } : undefined
-  const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values })
+  const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values, variant })
   return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
     <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
     <span className="query-status-segments">{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>

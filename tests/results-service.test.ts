@@ -21,12 +21,13 @@ function fixture() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
-  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => 1000, newId: () => `job-${++ids}` })
+  const clock = { now: 1000 }
+  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => clock.now, newId: () => `job-${++ids}` })
   const published = { count: 0 }
   service.subscribe(() => { published.count++ })
   const flush = () => { for (const callback of frames.splice(0)) callback() }
   const tab = (id = 't1') => service.getSnapshot()[id]
-  return { client, events, timers, api, service, published, flush, tab, progress, documents }
+  return { client, events, timers, api, service, published, flush, tab, progress, documents, clock }
 }
 
 describe('results service', () => {
@@ -146,18 +147,23 @@ describe('results service', () => {
     service.finish('t1', 'q3', { summary: summaryOf([], { messages: [{ text: 'mine', kind: 'info' }] }), notice: 'New session.' })
     expect(tab().messages).toEqual([{ text: 'New session.', kind: 'info' }, { text: 'mine', kind: 'info' }])
   })
-  it('opens the Messages strip for an error or SQL Server\'s own messages, not for row counts, until the user opens or closes it', () => {
+  it('opens the Messages strip for an error, PRINT or RAISERROR, not for row counts or SQL Server\'s warnings, until the user opens or closes it', () => {
     const { client, service, flush, tab } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
     client.emit('q1', { type: 'messages', messages: [{ text: '(5 rows affected)', kind: 'info' }] })
     flush()
-    expect(tab()).toMatchObject({ view: 'results', strip: false })
-    client.emit('q1', { type: 'messages', messages: [{ text: 'printed', kind: 'server' }] })
+    expect(tab()).toMatchObject({ view: 'results', strip: false, stripChosen: false })
+    // An aggregate's NULL warning (8153) and STATISTICS output show in the strip without opening it.
+    client.emit('q1', { type: 'messages', messages: [{ text: 'Warning: Null value is eliminated by an aggregate or other SET operation.', kind: 'server' }, { text: 'Table \'t\'. Scan count 1, logical reads 2.', kind: 'server' }] })
     flush()
-    expect(tab().strip).toBe(true)
+    expect(tab().strip).toBe(false)
+    client.emit('q1', { type: 'messages', messages: [{ text: 'printed', kind: 'print' }] })
+    flush()
+    expect(tab()).toMatchObject({ strip: true, stripChosen: false })
     // Closed by the user, it stays closed for the run, whatever arrives, and starts closed next time.
     service.setStrip('t1', false)
+    expect(tab()).toMatchObject({ strip: false, stripChosen: true })
     client.emit('q1', { type: 'messages', messages: [{ text: 'Msg 50000, Level 16, State 1, Line 1\nNo.', kind: 'error' }] })
     flush()
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)], { status: 'completedWithErrors', messages: [{ text: 'Msg 50000, Level 16, State 1, Line 1\nNo.', kind: 'error' }] }) })
@@ -165,7 +171,7 @@ describe('results service', () => {
     service.begin('t1', 'q2')
     expect(tab().strip).toBe(false)
     // A summary is enough when its messages' events were dropped; an error that ended the run without one opens it too.
-    service.finish('t1', 'q2', { summary: summaryOf([descriptor(2)], { messages: [{ text: 'Table \'t\'. Scan count 1, logical reads 2.', kind: 'server' }] }) })
+    service.finish('t1', 'q2', { summary: summaryOf([descriptor(2)], { messages: [{ text: 'Table \'t\'. Scan count 1, logical reads 2.', kind: 'server' }, { text: 'printed', kind: 'print' }] }) })
     expect(tab().strip).toBe(true)
     service.begin('t1', 'q3')
     service.finish('t1', 'q3', { error: 'The SQL backend stopped while this script was running. It was not re-run.', code: 'BACKEND_LOST' })
@@ -181,6 +187,32 @@ describe('results service', () => {
     service.release('t1')
     service.begin('t1', 'q7')
     expect(tab().strip).toBe(false)
+  })
+  it('keeps how a run ended, and when, after its results are closed, also without a summary', () => {
+    const { client, service, flush, tab, clock } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
+    flush()
+    clock.now = 4500
+    service.finish('t1', 'q1', { error: 'The SQL backend stopped while this script was running. It was not re-run.', code: 'BACKEND_LOST' })
+    clock.now = 90_000
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'lost', endedAt: 4500, startedAt: 1000 })
+    expect(tab().summary).toBeUndefined()
+    // Closing again keeps it.
+    service.closeResults('t1')
+    expect(tab().closedFrom).toBe('lost')
+    // Main failed the run (no summary): closed, it still failed.
+    service.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(2, { state: 'open' }) })
+    flush()
+    service.finish('t1', 'q2', { error: 'The request timed out.', code: 'TIMEOUT' })
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'failed' })
+    service.begin('t1', 'q3')
+    service.finish('t1', 'q3', { summary: summaryOf([descriptor(3)], { status: 'cancelled' }) })
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'cancelled' })
   })
   it('records each set once it has all its rows, for sizing the stack, without changing a published map', () => {
     const { client, service, flush, tab } = fixture()

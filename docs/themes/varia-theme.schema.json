@@ -713,8 +713,8 @@
         },
         "list.inactiveSelectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Selected row of an unfocused list, and the selected result set. Default $selection (Dark #21273b, Light #e7ebfc).",
-          "markdownDescription": "(VS Code) Selected row of an unfocused list, and the selected result set. Default `$selection` (Dark `#21273b`, Light `#e7ebfc`)."
+          "description": "(VS Code) Selected row of an unfocused list, the selected result set, and the selected view (Results, Messages, Execution plan) in the results head. Default $selection (Dark #21273b, Light #e7ebfc).",
+          "markdownDescription": "(VS Code) Selected row of an unfocused list, the selected result set, and the selected view (Results, Messages, Execution plan) in the results head. Default `$selection` (Dark `#21273b`, Light `#e7ebfc`)."
         },
         "list.inactiveSelectionForeground": {
           "$ref": "#/definitions/value",
@@ -1073,23 +1073,23 @@
         },
         "panelTitle.background": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Output panel tab bar. Default $panel (Dark #16181d, Light #ffffff).",
-          "markdownDescription": "(Varia) Output panel tab bar. Default `$panel` (Dark `#16181d`, Light `#ffffff`)."
+          "description": "(Varia) The results head: the bar with the Results, Messages and Execution plan views and the run summary. Default $panel (Dark #16181d, Light #ffffff).",
+          "markdownDescription": "(Varia) The results head: the bar with the Results, Messages and Execution plan views and the run summary. Default `$panel` (Dark `#16181d`, Light `#ffffff`)."
         },
         "panelTitle.activeForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Active output tab, and the selected tab of the connection dialog. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
-          "markdownDescription": "(VS Code) Active output tab, and the selected tab of the connection dialog. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
+          "description": "(VS Code) Text of the selected Results, Messages or Execution plan view, and of the selected tab of the connection dialog. Default $textStrong (Dark #f5f6f8, Light #0a0c10).",
+          "markdownDescription": "(VS Code) Text of the selected Results, Messages or Execution plan view, and of the selected tab of the connection dialog. Default `$textStrong` (Dark `#f5f6f8`, Light `#0a0c10`)."
         },
         "panelTitle.inactiveForeground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Inactive output tabs. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(VS Code) Inactive output tabs. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(VS Code) Text of the views not selected in the results head. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(VS Code) Text of the views not selected in the results head. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "panelTitle.activeBorder": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Underline of the active output tab. Default $accent (Dark #8f9cff, Light #4453d0).",
-          "markdownDescription": "(VS Code) Underline of the active output tab. Default `$accent` (Dark `#8f9cff`, Light `#4453d0`)."
+          "description": "(VS Code) Underline of the selected tab of the connection dialog (History or Browse, Connection Properties or Connection String). The results head marks its selected view with list.inactiveSelectionBackground instead. Default $accent (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(VS Code) Underline of the selected tab of the connection dialog (History or Browse, Connection Properties or Connection String). The results head marks its selected view with list.inactiveSelectionBackground instead. Default `$accent` (Dark `#8f9cff`, Light `#4453d0`)."
         },
         "badge.background": {
           "$ref": "#/definitions/value",

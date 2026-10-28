@@ -37,9 +37,14 @@ export interface TabResults {
   readonly notices: number
   readonly completedBatches: number; readonly totalBatches: number; readonly summary?: QueryResult; readonly error?: string
   readonly view: OutputViewName; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
-  /** Whether the Messages strip under the results is open: it opens itself when an error or one of SQL Server's own messages
-   *  (PRINT, RAISERROR, STATISTICS) arrives, until the user opens or closes it in this run. */
+  /** Whether the Messages strip under the results is open: it opens itself when an error, PRINT or RAISERROR output arrives,
+   *  until the user opens or closes it in this run (`stripChosen`). Only the user's choice opens it in a pane too short to show it. */
   readonly strip: boolean
+  readonly stripChosen: boolean
+  /** When the run ended, for its duration when it has no summary (main failed it, or the backend was lost). */
+  readonly endedAt?: number
+  /** How a run whose results were closed had ended. */
+  readonly closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
   /** The sets that have all their rows, by `setKey`. */
   readonly settled: ReadonlyMap<string, SettledSet>
   /** When `announcement` was set, on a counter that only grows (0 before the run's first), so the live region reads out
@@ -91,6 +96,8 @@ interface Run {
   announced: number
   jobNotice: string
   subscription?: Disposable
+  endedAt?: number
+  closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
 
@@ -237,6 +244,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
     }
     if (end.notice) run.notices = [{ text: end.notice, kind: 'info' }]
+    run.endedAt = this.now()
     this.openStripFor(run, run.messages)
     // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
     if (!run.manualView) run.view = run.sets.length === 0 ? 'messages' : 'results'
@@ -263,10 +271,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Close Results: the memory is freed now; Messages stay. */
   closeResults(tabId: string): void {
     const run = this.runs.get(tabId)
-    if (!run || run.status === 'running') return
+    if (!run || run.status === 'running' || run.status === 'closed') return
     this.closeHandles(run)
     run.sets = []
     run.setKeys.clear()
+    run.closedFrom = run.status
     run.status = 'closed'
     run.view = 'results'
     run.settled = new Map()
@@ -525,10 +534,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     run.settled.set(key, { rows: descriptor.rowsStored, strip: descriptor.incomplete || descriptor.truncated !== undefined })
   }
 
-  /** An error or one of SQL Server's own messages opens the strip, unless the user opened or closed it in this run. */
+  /** An error, PRINT or RAISERROR output opens the strip, unless the user opened or closed it in this run. SQL Server's other
+   *  messages (warnings, SET STATISTICS output) show in it without opening it. */
   private openStripFor(run: Run, entries: readonly MessageEntry[]): void {
     if (run.strip || run.stripManual) return
-    if (entries.some(entry => entry.kind === 'error' || entry.kind === 'server')) run.strip = true
+    if (entries.some(entry => entry.kind === 'error' || entry.kind === 'print')) run.strip = true
   }
 
   private totalRows(run: Run): number {
@@ -657,7 +667,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return {
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
-      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, settled: run.settled, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
+      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
+      ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
       jobNotice: run.jobNotice
     }
   }

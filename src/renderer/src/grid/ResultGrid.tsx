@@ -16,9 +16,12 @@ export interface ResultGridProps {
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
   onFocus(index: number): void
+  /** Whether the set's columns are wider than its grid (it needs a horizontal scroll bar), for sizing the stack to its rows. */
+  onWide?(index: number, wide: boolean): void
 }
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
+const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
 function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
@@ -33,7 +36,7 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 }
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
-function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: ResultGridProps) {
+function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide }: ResultGridProps) {
   const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
   const showTypes = useServiceSnapshot(settings).values['queryResults.grid.showColumnTypes']
   const showTypesRef = useRef(showTypes)
@@ -44,6 +47,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
   const index = entry.index
   const countRef = useRef(count)
   countRef.current = count
+  const onWideRef = useRef(onWide)
+  onWideRef.current = onWide
   // Before the shell paints: the view draws its first frame as it is built, so the grid never paints empty first.
   useLayoutEffect(() => {
     const view = new GridView({
@@ -56,6 +61,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
       onStatus: setStatus,
+      onWide: wide => onWideRef.current?.(index, wide),
       onError: onUnexpectedError,
       onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
     })
@@ -89,8 +95,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
     {lost && <div className="rg-overlay" role="status">{lostText}</div>}
     {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
       : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : !lost && snapshot.incomplete ? <div className="rg-strip" role="status">This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.</div>
-          : !lost && truncation ? <div className="rg-strip" role="status">{truncation}</div> : null}
+        : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
+          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div> : null}
   </div>
 }
 

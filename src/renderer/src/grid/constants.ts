@@ -27,6 +27,9 @@ export const gridLimits = {
   /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing
    *  stacked sets to their rows. */
   captionHeight: 26, stripHeight: 25,
+  /** The Messages strip's line (.messages-strip-toggle), and the least it takes open: the line, the log's padding and three
+   *  lines of messages (.messages .msg, 12 px at 1.7), so an open strip always shows some. */
+  messagesStripLine: 26, messagesStripOpen: 26 + 10 + 62 + 1,
   /** The space between a header's name and its SQL type (.rg-ct's margin). */
   typeGap: 6,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,

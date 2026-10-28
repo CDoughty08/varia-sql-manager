@@ -402,14 +402,16 @@ try {
   console.log('Results checks: stacked grids split the pane equally, resize by mouse and keys, and a thousand sets mount at most 12 grids.')
 
   // 4b. The results head and captions: one run summary; a small set sized to its rows and the rest to the large one,
-  // with no outer scroll bar; a caption names its set and collapses it; headers show SQL types; the Messages strip
-  // opens for SQL Server's own messages; the Execution plan view lists a run's plans.
+  // with no outer scroll bar; a caption names its set and collapses it; splitters keep to each set's floor; headers show
+  // SQL types; the Messages strip opens for PRINT and errors; the Execution plan view lists a run's plans.
   await run('-- varia-fake: sets=N1*3,W1*2000 messages=2')
   await expect(status()).toHaveText(/^Completed · 2,003 rows · \d+\.\d{3} s · \d\d:\d\d:\d\d$/)
   await expect(status()).toHaveAttribute('title', 'Query executed successfully. · 00:00:00 · 2,003 rows')
   await expect(status().locator('[data-icon="pass"]')).toHaveCount(1)
   // PRINT-like messages opened the strip under the grids, with its one line.
   await expect(messagesStrip(page)).toHaveText('Messages · 2 · no errors')
+  // Its name says what the Messages tab's does, without the drawn dots.
+  await expect(messagesStrip(page)).toHaveAccessibleName('Messages, 2 messages, no errors')
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(outputPane(page).getByRole('tabpanel').getByRole('log', { name: 'Messages', exact: true })).toContainText('Message 2')
   const captions = page.locator(part.resultCaption)
@@ -433,9 +435,35 @@ try {
   await expect(page.locator('[data-result-grid]')).toHaveCount(1)
   await expect.poll(async () => (await heights())[0]).toBe(await captions.nth(0).evaluate(element => element.getBoundingClientRect().height))
   await expect.poll(async () => (await heights())[1]).toBeGreaterThan(before)
+  // Beside a collapsed set the splitter only divides: it has no value, takes no focus, and a drag moves nothing.
+  await expect(resultSplitters(page)).toHaveCount(0)
+  const divider = outputPane(page).getByRole('separator')
+  await expect(divider).toHaveCount(1)
+  await expect(divider).not.toHaveAttribute('tabindex', /./)
+  const collapsedHeights = await heights(), line = await divider.boundingBox()
+  await page.mouse.move(line.x + 40, line.y + line.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(line.x + 40, line.y + line.height / 2 + 30, { steps: 3 })
+  await page.mouse.up()
+  expect(await heights()).toEqual(collapsedHeights)
   await resultToggle(page, 0).click()
   await expect(page.locator('[data-result-grid]')).toHaveCount(2)
   await expect.poll(fitted).toEqual({ smaller: true, shown: true, stack: true })
+  // The 3-row set is shorter than four rows: ArrowUp on the splitter below it keeps it at its rows (it never grows), and
+  // the splitter's value lies within its range.
+  const sized = await heights()
+  await resultSplitters(page).first().focus()
+  await page.keyboard.press('ArrowUp')
+  await page.waitForTimeout(100)
+  expect((await heights())[0]).toBe(sized[0])
+  const bounds = (await resultSplitters(page).first().evaluate(element => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map(name => Number(element.getAttribute(name)))))
+  expect(bounds[0]).toBeGreaterThanOrEqual(bounds[1])
+  expect(bounds[0]).toBeLessThanOrEqual(bounds[2])
+  // ArrowDown grows it by a row, and Enter goes back to sizing by rows.
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(async () => Math.round((await heights())[0] - sized[0])).toBe(20)
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await heights())[0]).toBe(sized[0])
   // Headers show each column's SQL type, drawn after the name and kept out of its accessible name.
   await expect(header('id', grid(1))).toHaveCount(1)
   await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('int')
@@ -456,15 +484,26 @@ try {
   await messagesStrip(page).click()
   await run('-- varia-fake: sets=N1*3 errors=1')
   await expect(messagesStrip(page)).toHaveText('Messages · 1 · 1 error')
+  await expect(messagesStrip(page)).toHaveAccessibleName('Messages, 1 message, 1 error')
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
   await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
   await expect(errorMessages(page)).toContainText('Fake error 1.')
+  // Closed, its line shows the first error's message, which describes it.
+  await messagesStrip(page).click()
+  await expect(messagesStrip(page)).toContainText('Fake error 1.')
+  await expect(messagesStrip(page)).toHaveAccessibleDescription('Fake error 1.')
+  await messagesStrip(page).click()
   // A run without messages has no strip.
   await run('-- varia-fake: sets=N1*3')
   await expect(messagesStrip(page)).toHaveCount(0)
   // The Execution plan view: only for a run that returned plans, each opened as a .sqlplan document.
   await expect(outputTab(/^Execution plan/)).toHaveCount(0)
   await run('SELECT 1 -- XML_PLAN_FIXTURE')
+  // Two one-row sets that fit keep their rows, the second right under the first: what is left stays below the last one.
+  await expect(page.locator('[data-result-grid]')).toHaveCount(2)
+  await expect.poll(async () => { const [first, second] = await heights(); return Math.abs(first - second) <= 1 }).toBe(true)
+  expect(await page.locator(part.resultItem).evaluateAll(items => { const [first, second] = items.map(item => item.getBoundingClientRect()); return second.top - first.bottom })).toBeLessThanOrEqual(6)
+  expect(await page.locator(part.resultStack).evaluate((stack, item) => stack.getBoundingClientRect().bottom - [...stack.querySelectorAll(item)].at(-1).getBoundingClientRect().bottom, part.resultItem)).toBeGreaterThan(40)
   await expect(outputTab(/^Execution plan/)).toHaveAccessibleName('Execution plan, 1 plan')
   await outputTab(/^Execution plan/).click()
   await expect(planList(page).getByRole('listitem')).toHaveCount(1)
@@ -481,6 +520,46 @@ try {
   await expect(queryTabs()).toHaveCount(1)
   await page.screenshot({ path: resolve('artifacts', 'results-head.png') })
   console.log('Results checks: one run summary, captions that collapse, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
+
+  // 4c. At the default split of a 1280x800 window the Messages strip yields to the results: an error does not open it over
+  // the grids, its line shows the error's message, and a data row stays in view. Opened by hand, it shows the error.
+  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
+  const resize = async (width, height) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+  }
+  await resize(1280, 800)
+  await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
+  /** Whether an element lies inside the output view, and how many of a grid's data rows show whole in the stack. */
+  const inView = locator => locator.evaluate((element, view) => { const box = element.getBoundingClientRect(), outer = element.closest(view).getBoundingClientRect(); return box.height > 0 && box.top >= outer.top - 0.5 && box.bottom <= outer.bottom + 0.5 }, '[role="tabpanel"]')
+  const rowsShown = (index = 0) => grid(index).evaluate((root, stack) => {
+    const scroller = root.querySelector('[tabindex="-1"]').getBoundingClientRect(), view = root.closest(stack).getBoundingClientRect()
+    const top = Math.max(scroller.top, view.top) + 22, bottom = Math.min(scroller.bottom, view.bottom)
+    return [...root.querySelectorAll('[role="row"]')].filter(row => { const box = row.getBoundingClientRect(); return box.height > 0 && row.querySelector('[role="gridcell"]') && box.top >= top - 0.5 && box.bottom <= bottom + 0.5 }).length
+  }, part.resultStack)
+  for (const sql of ['-- varia-fake: sets=N1*50,N1*50,N1*50,N1*50,N1*50 messages=1 errors=1', '-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1']) {
+    await run(sql)
+    await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'false')
+    await expect(messagesStrip(page)).toContainText(/ · 1 error/)
+    await expect(messagesStrip(page)).toContainText('Fake error 1.')
+    expect(await inView(messagesStrip(page))).toBe(true)
+    await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+  }
+  await page.screenshot({ path: resolve('artifacts', 'results-default-split.png') })
+  // Opened by hand it takes at least a few lines and shows the first error, not the tail.
+  await messagesStrip(page).click()
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(() => inView(errorMessages(page).first())).toBe(true)
+  await messagesStrip(page).click()
+  // One set in a pane too short for a caption, a header and four rows shows its grid without the caption.
+  await resize(1024, 700)
+  await run('-- varia-fake: sets=N1*3')
+  await expect.poll(() => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)).toBeLessThan(26 + 22 + 4 * 20 + 2)
+  await expect(page.locator(part.resultCaption)).toHaveCount(0)
+  await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+  await resize(...fullSize)
+  await enlargeOutput(page)
+  console.log('Results checks: at the default split the Messages strip yields to the grids and shows the first error in its line.')
 
   // 5. ARIA: after each grid key the active descendant is a selected gridcell at the active row and column, labelled
   // with its text and what it is.
@@ -874,8 +953,10 @@ try {
   await outputTab(/^Messages/).click()
   await expect(messages(page)).toContainText('Message 3')
   await expect(status()).toContainText(/^Executing · /)
-  // The query status bar's executing icon turns (Icon's spin), and stops under the smoke runs' reduced motion.
-  const spinner = queryStatus(page).locator(part.queryState).locator('[data-icon="loading"]')
+  // The results head's executing icon turns (Icon's spin), and stops under the smoke runs' reduced motion. The run's state
+  // shows there only: the status bar keeps the connection's facts.
+  await expect(queryStatus(page).locator('[data-icon="loading"]')).toHaveCount(0)
+  const spinner = status().locator('[data-icon="loading"]')
   await expect(spinner).toHaveClass(/\bcodicon-modifier-spin\b/)
   const turning = () => spinner.evaluate(element => getComputedStyle(element).animationName)
   expect(await turning()).toBe('none')
@@ -1255,12 +1336,12 @@ try {
     const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const rect = child.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 }) }
     const server = document.querySelector(facts.server), database = document.querySelector(facts.database)
     return {
-      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: document.querySelector(facts.rows)?.textContent,
+      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: !!document.querySelector(facts.rows),
       overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth,
       // The server gives way before the database, which stays whole while the server can shrink.
       database: database.scrollWidth <= database.clientWidth
     }
-  }, [part, queryFacts])).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
+  }, [part, queryFacts])).toEqual({ fits: true, rows: false, overflow: false, cut: true, database: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two

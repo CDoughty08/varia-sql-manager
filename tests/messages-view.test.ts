@@ -63,13 +63,22 @@ describe('Messages and the status line', () => {
     expect(runSummary({ ...base, status: 'cancelled' })).toMatchObject({ outcome: 'Cancelled', tone: 'warning', icon: 'debug-stop' })
     expect(runSummary({ ...base, status: 'timedOut' })).toMatchObject({ outcome: 'Timed out', tone: 'error', icon: 'watch' })
     // Results closed to free memory keep how the run ended; a run the backend lost says only that.
-    expect(text(runSummary({ ...base, status: 'closed', closedStatus: 'completedWithErrors' }))).toBe('Completed with errors · 204 rows · 0.184 s · 22:44:51')
-    expect(runSummary({ ...base, status: 'lost' })).toEqual({ tone: 'error', icon: 'error', outcome: 'The SQL backend stopped while this query was running.', facts: [], sentence: 'The SQL backend stopped while this query was running.' })
+    expect(text(runSummary({ ...base, status: 'closed', closedFrom: 'completedWithErrors' }))).toBe('Completed with errors · 204 rows · 0.184 s · 22:44:51')
+    const lost = { tone: 'error', icon: 'error', outcome: 'The SQL backend stopped while this query was running.', facts: [], sentence: 'The SQL backend stopped while this query was running.' }
+    expect(runSummary({ ...base, status: 'lost' })).toEqual(lost)
+    // A lost run, or one main failed without a summary, keeps saying so after Close Results, never "Completed".
+    expect(runSummary({ ...base, status: 'closed', closedFrom: 'lost', completedAt: undefined })).toEqual(lost)
+    expect(runSummary({ ...base, status: 'closed', closedFrom: 'failed', completedAt: undefined })).toMatchObject({ outcome: 'Failed', tone: 'error', icon: 'error', facts: ['204 rows', '0.184 s'] })
   })
-  it('sum Messages up in the strip line', () => {
-    expect(messagesSummary([]).text).toBe('0 · no errors')
-    expect(messagesSummary([info('(1 row affected)'), { text: 'printed', kind: 'server' }])).toEqual({ count: 2, errors: 0, text: '2 · no errors' })
-    expect(messagesSummary([info('a'), { text: 'Msg 1', kind: 'error' }, { text: 'Msg 2', kind: 'error' }]).text).toBe('3 · 2 errors')
-    expect(messagesSummary([{ text: 'Msg 1', kind: 'error' }]).text).toBe('1 · 1 error')
+  it('sum Messages up in the strip line, with a spoken name like the Messages tab\'s and the first error', () => {
+    expect(messagesSummary([])).toEqual({ count: 0, errors: 0, text: '0 · no errors', label: 'Messages, 0 messages, no errors', readable: false })
+    // Row counts alone are nothing to read; what the script printed and SQL Server's warnings are.
+    expect(messagesSummary([info('(1 row affected)'), { text: 'printed', kind: 'print' }])).toEqual({ count: 2, errors: 0, text: '2 · no errors', label: 'Messages, 2 messages, no errors', readable: true })
+    expect(messagesSummary([info('(1 row affected)')]).readable).toBe(false)
+    expect(messagesSummary([{ text: 'Warning: Null value is eliminated by an aggregate or other SET operation.', kind: 'server' }]).readable).toBe(true)
+    // The first error's message without SSMS's "Msg …" line; one Varia wrote (lost, cancelled) whole.
+    expect(messagesSummary([info('a'), { text: 'Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.', kind: 'error' }, { text: 'Msg 2', kind: 'error' }]))
+      .toMatchObject({ text: '3 · 2 errors', label: 'Messages, 3 messages, 2 errors', firstError: 'Divide by zero error encountered.', readable: true })
+    expect(messagesSummary([{ text: 'The query was cancelled.', kind: 'error' }])).toMatchObject({ text: '1 · 1 error', label: 'Messages, 1 message, 1 error', firstError: 'The query was cancelled.' })
   })
 })

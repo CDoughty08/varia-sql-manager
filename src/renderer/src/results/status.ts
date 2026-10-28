@@ -63,15 +63,18 @@ const tones: Readonly<Record<Exclude<StatusKind, 'lost' | 'closed'>, readonly [R
 /** The results head's one run summary: an outcome, its facts, and SSMS's sentence for the tooltip and screen readers. */
 export interface RunSummary { readonly tone: RunTone; readonly icon: RunIcon; readonly outcome: string; readonly facts: readonly string[]; readonly sentence: string }
 
+/** How a run ended, for a run whose results were closed: what it was before (`closedFrom`), completed when unknown. */
+export const endedStatus = (status: StatusKind, closedFrom?: Exclude<StatusKind, 'running' | 'closed'>): Exclude<StatusKind, 'closed'> => status === 'closed' ? closedFrom ?? 'completed' : status
+
 /**
  * "Completed · 204 rows · 0.184 s · 22:44:51" (and "· 2/3 batches" for a script of several): how the run went, its rows,
  * how long it took (hh:mm:ss, ticking, while it runs) and when it ended. Results closed to free memory keep how the run
- * ended; a run the backend lost says only that.
+ * ended (`closedFrom`); a run the backend lost says only that, closed or not.
  */
-export function runSummary(o: { status: StatusKind; closedStatus?: QueryStatus; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number; completedAt?: string }): RunSummary {
-  const sentence = statusSentence({ status: o.status === 'closed' ? o.closedStatus ?? 'completed' : o.status, elapsedMs: o.elapsedMs, rows: o.rows, completedBatches: o.completedBatches, totalBatches: o.totalBatches })
-  if (o.status === 'lost') return { tone: 'error', icon: 'error', outcome: sentence, facts: [], sentence }
-  const status = o.status === 'closed' ? o.closedStatus ?? 'completed' : o.status
+export function runSummary(o: { status: StatusKind; closedFrom?: Exclude<StatusKind, 'running' | 'closed'>; elapsedMs: number; rows: number; completedBatches: number; totalBatches: number; completedAt?: string }): RunSummary {
+  const status = endedStatus(o.status, o.closedFrom)
+  const sentence = statusSentence({ status, elapsedMs: o.elapsedMs, rows: o.rows, completedBatches: o.completedBatches, totalBatches: o.totalBatches })
+  if (status === 'lost') return { tone: 'error', icon: 'error', outcome: sentence, facts: [], sentence }
   const running = status === 'running', [tone, icon] = tones[status]
   const facts = [`${formatCount(o.rows)} ${plural(o.rows, 'row')}`, running ? formatElapsed(o.elapsedMs) : formatDuration(o.elapsedMs)]
   const time = running ? '' : timeOfDay(o.completedAt)
@@ -80,9 +83,25 @@ export function runSummary(o: { status: StatusKind; closedStatus?: QueryStatus; 
   return { tone, icon, outcome: outcomes[status], facts, sentence }
 }
 
-/** The Messages strip's line: "Messages · 2 · no errors", or "· 1 error". */
-export function messagesSummary(messages: readonly MessageEntry[]): { readonly count: number; readonly errors: number; readonly text: string } {
-  let errors = 0
-  for (const entry of messages) if (entry.kind === 'error') errors++
-  return { count: messages.length, errors, text: `${formatCount(messages.length)} · ${errors === 0 ? 'no errors' : `${formatCount(errors)} ${plural(errors, 'error')}`}` }
+/**
+ * The Messages strip's line: "Messages · 2 · no errors", or "· 1 error", with its spoken name ("Messages, 2 messages, no
+ * errors", as the Messages view's tab names its count), the first error's message (its second line, after SSMS's "Msg …"
+ * line) for a closed strip, and whether there is anything but Varia's own row counts and notes to read (`readable`).
+ */
+export function messagesSummary(messages: readonly MessageEntry[]): { readonly count: number; readonly errors: number; readonly text: string; readonly label: string; readonly firstError?: string; readonly readable: boolean } {
+  let errors = 0, firstError: string | undefined, readable = false
+  for (const entry of messages) {
+    if (entry.kind !== 'info') readable = true
+    if (entry.kind !== 'error') continue
+    errors++
+    if (firstError === undefined) {
+      const lines = entry.text.split(/\r?\n/)
+      firstError = (/^Msg \d+, Level \d+/.test(lines[0]) && lines.length > 1 ? lines.slice(1) : lines).join(' ').trim().slice(0, 500)
+    }
+  }
+  const errorText = errors === 0 ? 'no errors' : `${formatCount(errors)} ${plural(errors, 'error')}`
+  return {
+    count: messages.length, errors, text: `${formatCount(messages.length)} · ${errorText}`, label: `Messages, ${formatCount(messages.length)} ${plural(messages.length, 'message')}, ${errorText}`,
+    ...firstError ? { firstError } : {}, readable
+  }
 }
