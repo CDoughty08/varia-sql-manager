@@ -54,7 +54,7 @@ internal static class ActionLiveChecks
         }
 
         // SQL Server's own objects: refused before any DDL, and nothing changes.
-        var databases = (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar;
+        var databases = ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql));
         var sysjobs = new ObjectRefDto("table", "msdb", "dbo", "sysjobs");
         var refusals = new[]
         {
@@ -64,7 +64,7 @@ internal static class ActionLiveChecks
             await client.Refused(async () => await client.Delete(sysjobs))
         };
         check(refusals.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", "NOT_SUPPORTED", "NOT_SUPPORTED"])
-            && (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar == databases && (await Sql("SELECT COUNT(*) FROM msdb.sys.tables WHERE name = N'sysjobs';")).Scalar == "1",
+            && ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql)) == databases && (await Sql("SELECT COUNT(*) FROM msdb.sys.tables WHERE name = N'sysjobs';")).Scalar == "1",
             "rename and delete of master and msdb.dbo.sysjobs are refused and the server is unchanged: " + string.Join(", ", refusals));
         var described = await client.Describe(sysjobs);
         check(described is { Error: null, DeleteTarget: { Name: "dbo.sysjobs", Type: "Table", Owner: "dbo", DependentsTruncated: false } } && described.ElapsedMs >= 0,
@@ -92,7 +92,7 @@ internal static class ActionLiveChecks
                 if (!selected.SequenceEqual(expected)) mismatches.Add(template + " " + fragment[..1]);
             }
         }
-        check(mismatches.Count == 0 && (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar == databases,
+        check(mismatches.Count == 0 && ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql)) == databases,
             "SQL Server's QUOTENAME builds exactly the statement Script Action shows for every template and hostile name, and the dry run changes nothing: " + string.Join(", ", mismatches));
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")

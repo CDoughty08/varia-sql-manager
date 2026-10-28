@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using Microsoft.Data.SqlClient;
+using Varia.Backend.Protocol;
 
 namespace Varia.Backend.Tests;
 
@@ -164,6 +166,60 @@ internal static class TransactionLiveChecks
                 finally { service.CommitSql = SqlService.DefaultCommitSql; }
             }
             else Console.WriteLine("Killed-session and input buffer checks skipped: the login is neither sysadmin nor granted ALTER ANY CONNECTION.");
+
+            // Managed SNI can raise the fatal transport error before Connection.State changes, which a KILL shows only when
+            // the race happens. The session hook raises it on demand while the connection still reads Open, so each call site
+            // that must take it for a lost session is checked on every run.
+            var fatal = () => ConnectionFailureChecks.Sql(0, 0, 20, "", "Varia live check: a transport-level error has occurred.");
+            async Task<string> StateError(string sessionId)
+            {
+                try { await Call("query.session.state", new SessionStateArgs(sessionId)); return "read"; }
+                catch (RequestException error) { return error.Code + ": " + error.Message; }
+                catch (SqlException error) { return "SqlException: " + error.Message; }
+            }
+            try
+            {
+                var stateTab = await Run("BEGIN TRANSACTION; INSERT " + table + " VALUES (9);", tab);
+                service.SessionFault = sql => sql == SqlService.TransactionCountSql ? fatal() : null;
+                var stateLost = await StateError(tab);
+                service.SessionFault = null;
+                check(stateTab.Status == "completed" && stateLost == "SESSION_LOST: " + SqlService.LostRolledBack && await State(tab) == "SESSION_CLOSED" && await Rows() == "2",
+                    "a state read that meets a fatal error while the connection still reads open closes the session as lost: " + stateLost);
+
+                await Run("BEGIN TRANSACTION; INSERT " + table + " VALUES (9);", tab);
+                service.SessionFault = sql => sql == service.CommitSql ? fatal() : null;
+                var commitLost = await Close(tab, "commit");
+                service.SessionFault = null;
+                check(commitLost == "SESSION_LOST: " + SqlService.LostWhileCommitting && await State(tab) == "SESSION_CLOSED" && await Rows() == "2",
+                    "a commit that meets a fatal error while the connection still reads open says the outcome is unknown and closes the session: " + commitLost);
+
+                // A commit its deadline interrupts leaves the session open, with an outcome nobody knows: a loss found later,
+                // by the next commit or by a state read, must not say that nothing was committed.
+                service.CommitSql = "WAITFOR DELAY '00:00:10'; " + SqlService.DefaultCommitSql;
+                foreach (var next in new[] { "commit", "state" })
+                {
+                    await Run("BEGIN TRANSACTION; INSERT " + table + " VALUES (10);", tab);
+                    var interrupted = "";
+                    var started = Stopwatch.StartNew();
+                    using (var context = new RequestContext(9, "query.session.close", RequestLane.Control, 700))
+                    {
+                        try { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab, "commit"), json), json, context); interrupted = "answered"; }
+                        catch (Exception error) when (context.Token.IsCancellationRequested) { interrupted = error.GetType().Name; }
+                    }
+                    var open = await State(tab);
+                    service.SessionFault = sql => sql == SqlService.TransactionCountSql ? fatal() : null;
+                    var later = next == "commit" ? await Close(tab, "commit") : await StateError(tab);
+                    service.SessionFault = null;
+                    check(interrupted is not ("" or "answered") && started.ElapsedMilliseconds < 9_000 && open == "1" && later == "SESSION_LOST: " + SqlService.LostAfterUnfinishedCommit
+                        && await State(tab) == "SESSION_CLOSED" && await Rows() == "2",
+                        "after a commit its deadline interrupted (" + interrupted + ", then " + open + " open), the " + next + " that finds the session lost says the commit's outcome is unknown: " + later);
+                }
+            }
+            finally
+            {
+                service.SessionFault = null;
+                service.CommitSql = SqlService.DefaultCommitSql;
+            }
             await Run("BEGIN TRANSACTION; INSERT " + table + " VALUES (6);", tab);
             check(await Close(tab, "rollback") is null && await Rows() == "2", "closing with rollback after a lost session opens a new one and rolls it back");
 
