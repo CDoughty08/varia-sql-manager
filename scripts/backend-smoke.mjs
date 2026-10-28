@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
+import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { anyResultGrid, backendBanner, backendReady, errorMessages, explorerLabel, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
@@ -69,7 +70,7 @@ async function messages() {
 }
 /** A data cell of the first results grid, by row and column. */
 const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).first()
-const running = () => expect(outputStatus(page)).toContainText('Executing query…')
+const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
   await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -279,6 +280,8 @@ try {
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
   await expect(queryStatus(page)).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
+  // At 1024x700 under the banner, the output pane is too short for a set's caption, its header and a row.
+  await enlargeOutput(page)
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')

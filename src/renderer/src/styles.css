@@ -359,20 +359,25 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .workspace-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-md); }
 .workspace-empty button { border-color: var(--varia-button-border); margin: 0 5px; }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
-.output-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; height: 42px; border-bottom: 1px solid var(--varia-panel-border); padding-right: 18px; background: var(--varia-panelTitle-background); }
-.output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
-.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); transition: none; }
-.output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
-.output-toolbar small { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+/* The results head: the segmented views, the run summary, the copy and save strips and the panel menu. */
+.output-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: var(--varia-bar); box-sizing: border-box; padding: 0 6px 0 8px; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+/* Results, Messages and Execution plan as one segmented control: the selected view is a raised pill. */
+.output-views { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.output-views button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-sm); }
+.output-views button.active { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
+.output-views .badge { min-width: 16px; box-sizing: border-box; padding: 0 5px; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font: 600 var(--varia-size-xs)/16px var(--varia-font-ui); text-align: center; }
+/* One run summary: how it went, rows, time and when it ended; the icon carries the outcome's colour. */
+.output-status { flex: 1; min-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.output-status strong { font-weight: 600; color: var(--varia-foreground); }
+.output-status .codicon { margin-right: 5px; vertical-align: -2px; font-size: var(--varia-glyph-sm); }
+.output-status[data-tone="success"] .codicon { color: var(--varia-successForeground); }
+.output-status[data-tone="warning"] .codicon { color: var(--varia-warningForeground); }
+.output-status[data-tone="error"] .codicon { color: var(--varia-errorForeground); }
+.output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .output-empty { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; color: var(--varia-emptyState-foreground); font-size: var(--varia-size-sm); }
 .output-empty strong { font-weight: 500; color: var(--varia-emptyState-titleForeground); }
 .output-empty p { font-size: var(--varia-size-xs); margin-top: 8px; }
-.output-toolbar { gap: 8px; padding-right: 10px; }
-.output-toolbar > div { display: flex; flex-shrink: 0; }
-.output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.output-toolbar button { padding: 12px; }
-.output-toolbar .output-status { flex: 1; min-width: 96px; text-align: right; }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -385,7 +390,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-stack { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .rs-content { position: relative; width: 100%; }
 .rs-item { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; min-height: 0; }
-.rs-placeholder { height: 22px; padding: 0 8px; font: var(--varia-size-sm)/22px var(--varia-font-ui); color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
+/* A set's caption (gridLimits.captionHeight): Collapse and its name, rows and columns, its batch, and Save Results As. */
+.rs-caption { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 26px; box-sizing: border-box; padding: 0 2px; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.rs-item[data-collapsed] .rs-caption { border-bottom-color: transparent; }
+.rs-caption-toggle { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; height: 22px; padding: 0 6px 0 0; border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
+.rs-caption-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.rs-caption-batch { flex-shrink: 0; }
+.rs-caption-save { flex-shrink: 0; }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
@@ -402,6 +413,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-corner { position: sticky; left: 0; z-index: 3; width: var(--rg-rhw); }
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
+/* The column's SQL type after its name (gridLimits.typeGap), muted and smaller. */
+.rg-ct { margin-left: 6px; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
+.rg-ch.sel .rg-ct { color: inherit; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
 .rg-rows { position: absolute; top: 0; left: 0; }
@@ -449,6 +463,26 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
+/* The Messages strip under the results: one line, opening to the messages (at most 40 % of the pane, then they scroll). */
+.messages-strip { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 0; max-height: 40%; border-top: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
+.messages-strip-toggle { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 26px; padding: 0 8px 0 2px; border-radius: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-align: left; white-space: nowrap; }
+.messages-strip-name { color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
+.messages-strip-facts { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.messages-strip-facts[data-errors] { color: var(--varia-errorForeground); }
+.messages-strip .messages { flex: 0 1 auto; padding: 2px 20px 8px; }
+/* The Execution plan view: the run's plans, each opened as a .sqlplan document. */
+.plan-list { flex: 1; min-height: 0; margin: 0; padding: 4px 12px; overflow: auto; list-style: none; }
+.plan-item { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.plan-name { font-weight: 600; }
+.plan-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
+.plan-actions button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+.plan-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+@media (forced-colors: active) {
+  /* The selected view's fill is dropped; an outline marks it. */
+  .output-views { border-color: CanvasText; }
+  .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
+}
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 

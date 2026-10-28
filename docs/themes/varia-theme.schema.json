@@ -418,8 +418,8 @@
         },
         "warningForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Warning text. Default $warning (Dark #e4bb6a, Light #875800).",
-          "markdownDescription": "(Varia) Warning text. Default `$warning` (Dark `#e4bb6a`, Light `#875800`)."
+          "description": "(Varia) Warning text, and the results head's icon for a run that completed with errors or was cancelled. Default $warning (Dark #e4bb6a, Light #875800).",
+          "markdownDescription": "(Varia) Warning text, and the results head's icon for a run that completed with errors or was cancelled. Default `$warning` (Dark `#e4bb6a`, Light `#875800`)."
         },
         "successForeground": {
           "$ref": "#/definitions/value",

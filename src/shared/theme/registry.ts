@@ -26,7 +26,7 @@ const groups = {
     'descriptionForeground': ['V', '$textMuted', 'Secondary text: hints, captions, and explanations.', 'css'],
     'disabledForeground': ['V', '$textMuted', 'Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels.', 'css monaco'],
     'errorForeground': ['V', '$error', 'Error text.', 'css monaco'],
-    'warningForeground': ['X', '$warning', 'Warning text.', ''],
+    'warningForeground': ['X', '$warning', 'Warning text, and the results head\'s icon for a run that completed with errors or was cancelled.', 'css'],
     'successForeground': ['X', '$success', 'Success text, such as the Execute button and confirmations.', 'css'],
     'infoForeground': ['X', '$info', 'Information text.', '', { reserved: toasts }],
     'focusBorder': ['V', '$focus', 'Focus ring around the focused control.', 'css monaco'],

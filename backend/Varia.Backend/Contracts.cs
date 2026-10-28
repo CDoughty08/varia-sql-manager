@@ -48,7 +48,9 @@ internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncat
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
 /// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.</summary>
 internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq);
-/// <summary>One line of the Messages tab: kind is "info" or "error" (SQL errors, cancellation and timeout, shown in red).</summary>
+/// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "server" (SQL Server's informational
+/// messages: PRINT, RAISERROR with severity 10 or less, SET STATISTICS output) or "error" (SQL errors, cancellation and timeout,
+/// shown in red).</summary>
 internal sealed record MessageEntry(string Text, string Kind);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors

@@ -1,11 +1,17 @@
 import { gridLimits as g } from './constants'
 
-// Stacked result sets, as SSMS shows them: the pane is split between the grids by weight (equal by default), no grid
-// is shorter than a header and four rows, and when they do not fit the stack itself scrolls. Rows streaming into one
-// grid never move another: heights depend only on the pane, the number of sets and the weights.
+// Stacked result sets: each has a caption above its grid. A set that has all its rows and needs less than its share of the
+// pane is sized to them, and the rest is split between the others by weight (equal by default); when every set fits, the
+// largest takes what is left. No grid is shorter than a header and four rows (or its rows, when fewer), a collapsed set
+// is its caption alone, and when they do not fit the stack itself scrolls. Rows streaming into one set never move
+// another: a set is sized to its rows only once it has them all, and heights otherwise depend only on the pane, the
+// number of sets, the weights and what was collapsed.
 
-/** The shortest grid: the header, four rows, a horizontal scrollbar and the border. */
-export const minGridHeight = (scrollbar: number): number => g.headerHeight + g.stackMinRows * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
+/** The shortest set: its caption, the header, four rows, a horizontal scrollbar and the border. */
+export const minGridHeight = (scrollbar: number): number => g.captionHeight + g.headerHeight + g.stackMinRows * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder
+/** A set sized to its rows: its caption, the header, every row, a horizontal scrollbar, the border, and its strip when it shows one. */
+export const contentHeight = (rows: number, scrollbar: number, strip: boolean): number =>
+  g.captionHeight + g.headerHeight + Math.max(0, rows) * g.rowHeight + Math.max(0, scrollbar) + g.stackBorder + (strip ? g.stripHeight : 0)
 
 export interface StackLayout {
   readonly heights: readonly number[]
@@ -14,28 +20,61 @@ export interface StackLayout {
   /** The stack's height: the pane's, or more when the minimum heights overflow it. */
   readonly total: number
 }
+export interface StackSizing {
+  /** Each set's `contentHeight` once it has all its rows; undefined while it streams. Weights from a splitter drag replace it. */
+  readonly content?: readonly (number | undefined)[]
+  /** The sets shown as their caption alone. */
+  readonly collapsed?: ReadonlySet<number>
+}
 
 /**
- * Whole-pixel heights: h_i = max(minHeight, (pane − splitters) × w_i / Σw), with the rounding remainder handed out one
- * pixel at a time from the top, so equal weights give heights within 1 px of each other. One set fills the pane.
+ * Whole-pixel heights. Without weights, a set whose content fits in its share takes its content, repeatedly, and the
+ * others share the rest: h_i = max(minHeight, rest × w_i / Σw), with the rounding remainder handed out one pixel at a time
+ * from the top, so equal weights give heights within 1 px of each other. One set fills the pane.
  */
-export function stackLayout(paneHeight: number, count: number, weights: readonly number[] | undefined, minHeight: number): StackLayout {
+export function stackLayout(paneHeight: number, count: number, weights: readonly number[] | undefined, minHeight: number, sizing: StackSizing = {}): StackLayout {
   const pane = Math.max(0, Math.floor(paneHeight))
   if (count <= 0) return { heights: [], offsets: [], total: 0 }
-  if (count === 1) return { heights: [pane], offsets: [0], total: pane }
-  const usable = Math.max(0, pane - (count - 1) * g.splitter)
+  const collapsed = sizing.collapsed
+  if (count === 1) { const height = collapsed?.has(0) ? g.captionHeight : pane; return { heights: [height], offsets: [0], total: pane } }
   const valid = weights?.length === count && weights.every(weight => Number.isFinite(weight) && weight > 0) ? weights : undefined
   const weightOf = (index: number) => valid ? valid[index] : 1
-  let sum = 0
-  for (let index = 0; index < count; index++) sum += weightOf(index)
-  const heights = new Array<number>(count)
-  let assigned = 0
-  for (let index = 0; index < count; index++) { heights[index] = Math.floor(usable * weightOf(index) / sum); assigned += heights[index] }
-  for (let index = 0, remainder = usable - assigned; index < count && remainder > 0; index++, remainder--) heights[index]++
+  const content = valid ? undefined : sizing.content
+  const heights = new Array<number>(count).fill(0)
+  let rest = Math.max(0, pane - (count - 1) * g.splitter)
+  const open: number[] = []
+  for (let index = 0; index < count; index++) {
+    if (collapsed?.has(index)) { heights[index] = g.captionHeight; rest -= g.captionHeight } else open.push(index)
+  }
+  rest = Math.max(0, rest)
+  // Sets whose content fits in their share keep it; their room goes to the others, whose shares only grow.
+  let flexible = open
+  for (let changed = true; changed && flexible.length > 0;) {
+    changed = false
+    let sum = 0
+    for (const index of flexible) sum += weightOf(index)
+    const next: number[] = []
+    const room = rest
+    for (const index of flexible) {
+      const fit = content?.[index]
+      if (fit !== undefined && fit <= room * weightOf(index) / sum) { heights[index] = fit; rest -= fit; changed = true } else next.push(index)
+    }
+    flexible = next
+  }
+  if (flexible.length === 0 && open.length > 0) {
+    let largest = open[0]
+    for (const index of open) if ((content?.[index] ?? 0) > (content?.[largest] ?? 0)) largest = index
+    heights[largest] += rest
+  } else if (flexible.length > 0) {
+    let sum = 0, assigned = 0
+    for (const index of flexible) sum += weightOf(index)
+    for (const index of flexible) { heights[index] = Math.floor(rest * weightOf(index) / sum); assigned += heights[index] }
+    for (let at = 0, remainder = rest - assigned; at < flexible.length && remainder > 0; at++, remainder--) heights[flexible[at]]++
+  }
   const offsets = new Array<number>(count)
   let top = 0
   for (let index = 0; index < count; index++) {
-    heights[index] = Math.max(minHeight, heights[index])
+    if (!collapsed?.has(index)) heights[index] = Math.max(Math.min(minHeight, content?.[index] ?? minHeight), heights[index])
     offsets[index] = top
     top += heights[index] + (index < count - 1 ? g.splitter : 0)
   }

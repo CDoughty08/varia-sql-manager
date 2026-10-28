@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 import { nextFrame } from '../core/frame'
 import { useWorkbench } from '../core/WorkbenchContext'
-import type { TabResults } from '../results/ResultsService'
+import Icon from '../Icon'
+import { setKey, type ResultSetEntry, type TabResults } from '../results/ResultsService'
+import { formatCount, plural } from '../results/status'
 import { gridLimits as g } from './constants'
-import ResultGrid, { GridPlaceholder } from './ResultGrid'
-import { dragSplitter, minGridHeight, mountedRange, stackLayout } from './stack'
+import ResultGrid from './ResultGrid'
+import { contentHeight, dragSplitter, minGridHeight, mountedRange, stackLayout } from './stack'
 
 let scrollbar: number | undefined
 /** The platform's scroll bar thickness (classic scroll bars take room; overlay ones take none). */
@@ -18,11 +20,45 @@ function scrollbarSize(): number {
   return scrollbar
 }
 
+/** "Batch 2 of 3", with the repetition of a batch run with GO n; '' for a script of one batch run once. */
+export function batchText(batchNumber: number, iteration: number, totalBatches: number): string {
+  const batch = totalBatches > 1 ? `Batch ${batchNumber} of ${totalBatches}` : ''
+  return iteration > 1 ? batch ? `${batch}, repetition ${iteration}` : `Repetition ${iteration}` : batch
+}
+
 /**
- * A run's result sets stacked as SSMS stacks them: the pane is split equally (or by the weights a splitter drag left),
- * no grid is shorter than a header and four rows, and when they do not fit the stack scrolls. Only the grids within a
- * view above and below are rendered, at most 12, mounting at most 2 a frame; the rest show a one-line placeholder or
- * nothing. Scroll position, weights and the focused grid live in the tab's view state.
+ * A set's caption: Collapse, its name, rows (counting while they stream) and columns, the batch it came from, and Save
+ * Results As for it. It renders for each set in view, so a set's facts show before its grid mounts.
+ */
+const ResultCaption = memo(function ResultCaption({ tabId, entry, collapsed, totalBatches, onToggle }: { tabId: string; entry: ResultSetEntry; collapsed: boolean; totalBatches: number; onToggle(index: number): void }) {
+  const { commands } = useWorkbench()
+  const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
+  const { descriptor } = entry, rows = snapshot.rowsAvailable, columns = descriptor.columns.length, name = `Result ${entry.index + 1}`
+  const facts = [`${formatCount(rows)} ${plural(rows, 'row')}`, `${formatCount(columns)} ${plural(columns, 'column')}`]
+  if (descriptor.kind === 'executionPlan') facts.push('execution plan')
+  const batch = batchText(descriptor.batchNumber, descriptor.iteration, totalBatches)
+  const held = snapshot.state !== 'lost' && snapshot.state !== 'released'
+  const save = (event: MouseEvent<HTMLButtonElement>) => {
+    void commands.execute('output.saveResultsAs', { target: { kind: 'output', tabId, view: 'grid', resultIndex: entry.index, selectedText: '', element: event.currentTarget } }, 'toolbar')
+  }
+  return <div className="rs-caption">
+    <button type="button" className="rs-caption-toggle" aria-expanded={!collapsed} onClick={() => onToggle(entry.index)}>
+      <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} /><span className="rs-caption-name">{name}</span>
+    </button>
+    {/* Rows change while the set streams; the grid's own label announces its counts. */}
+    <span className="rs-caption-facts" aria-live="off">{facts.join(' · ')}</span>
+    {batch && <span className="rs-caption-batch">{batch}</span>}
+    {held && <button type="button" className="icon-button rs-caption-save" aria-label={`Save ${name} As…`} title={`Save ${name} As…`} onClick={save}><Icon name="save-as" /></button>}
+  </div>
+})
+
+/**
+ * A run's result sets stacked, each under its caption: a set that has all its rows and needs less than its share is
+ * sized to them, the rest share the pane equally (or by the weights a splitter drag left), no grid is shorter than a
+ * header and four rows (or its rows), a collapsed set is its caption alone, and when they do not fit the stack scrolls.
+ * Only the sets within a view above and below are rendered, at most 12, mounting at most 2 grids a frame; a set waiting
+ * for its grid shows its caption. Scroll position, weights, collapsed sets and the focused grid live in the tab's view
+ * state.
  */
 export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabResults }) {
   const { results } = useWorkbench()
@@ -33,9 +69,12 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   const [scrollTop, setScrollTop] = useState(view.stackScrollTop)
   const [weights, setWeightsState] = useState(view.weights)
   const [focused, setFocused] = useState(view.focusedIndex)
+  const [collapsed, setCollapsedState] = useState(view.collapsed)
   const [mounted, setMounted] = useState<ReadonlySet<number>>(() => new Set())
   const minHeight = useMemo(() => minGridHeight(scrollbarSize()), [])
-  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight), [paneHeight, count, weights, minHeight])
+  const settled = tab.settled
+  const content = useMemo(() => sets.map(entry => { const set = settled.get(setKey(entry.descriptor)); return set ? contentHeight(set.rows, scrollbarSize(), set.strip) : undefined }), [sets, settled])
+  const layout = useMemo(() => stackLayout(paneHeight, count, weights, minHeight, { content, collapsed }), [paneHeight, count, weights, minHeight, content, collapsed])
   const [first, last] = paneHeight > 0 ? mountedRange(layout, scrollTop, paneHeight) : [0, -1]
   const drag = useRef<{ index: number; pointerId: number; startY: number; heights: readonly number[]; frame?: () => void; y: number } | undefined>(undefined)
   const setWeights = (next: number[] | undefined) => { view.weights = next; setWeightsState(next) }
@@ -71,6 +110,13 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   useEffect(() => () => drag.current?.frame?.(), [])
 
   const focus = (index: number) => { view.focusedIndex = index; setFocused(index) }
+  // Stable, so captions re-render only when their own facts change.
+  const toggle = useCallback((index: number) => {
+    const next = new Set(view.collapsed)
+    if (!next.delete(index)) next.add(index)
+    view.collapsed = next
+    setCollapsedState(next)
+  }, [view])
   const splitterDown = (index: number, event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
     event.preventDefault()
@@ -108,8 +154,10 @@ export default function ResultsStack({ tabId, tab }: { tabId: string; tab: TabRe
   for (let index = first; index <= last; index++) {
     const entry = sets[index]
     if (!entry) continue
-    items.push(<div key={`item-${entry.descriptor.generation}:${entry.descriptor.resultId}`} className="rs-item" style={{ top: layout.offsets[index], height: layout.heights[index] }}>
-      {mounted.has(index) ? <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} onFocus={focus} /> : <GridPlaceholder entry={entry} />}
+    const shut = collapsed.has(index)
+    items.push(<div key={`item-${setKey(entry.descriptor)}`} className="rs-item" data-collapsed={shut || undefined} style={{ top: layout.offsets[index], height: layout.heights[index] }}>
+      <ResultCaption tabId={tabId} entry={entry} collapsed={shut} totalBatches={tab.totalBatches} onToggle={toggle} />
+      {!shut && mounted.has(index) && <ResultGrid tabId={tabId} entry={entry} count={count} focused={index === Math.min(focused, count - 1)} budget={tab.summary?.budget} onFocus={focus} />}
     </div>)
     if (index < count - 1) {
       // The value is the upper grid's height, which the splitter moves between the two grids' minimum heights.

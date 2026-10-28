@@ -1,6 +1,8 @@
 namespace Varia.Backend;
 
-internal enum MessageKind { Info, Error }
+/// <summary>Info is Varia's own lines (row counts and notes); Server is SQL Server's informational messages (PRINT, RAISERROR
+/// with severity 10 or less, SET STATISTICS output), which open the Messages strip under the results; Error is shown in red.</summary>
+internal enum MessageKind { Info, Server, Error }
 
 /// <summary>The Messages tab of one query, in order: PRINT and informational output, row counts, and SQL errors, cancellation
 /// and timeout as error entries.</summary>
@@ -8,6 +10,7 @@ internal enum MessageKind { Info, Error }
 internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
 {
     public const string Info = "info";
+    public const string Server = "server";
     public const string Error = "error";
     public const int MaxMessages = 1000;
     /// <summary>Error entries kept after the caps are reached (limits.messages.lateErrors in src/shared/ipc/wire/protocol.ts),
@@ -61,7 +64,7 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
 
     private void Store(string text, MessageKind kind)
     {
-        var entry = new MessageEntry(text, kind == MessageKind.Error ? Error : Info);
+        var entry = new MessageEntry(text, kind switch { MessageKind.Error => Error, MessageKind.Server => Server, _ => Info });
         messages.Add(entry);
         stored?.Invoke(entry);
     }

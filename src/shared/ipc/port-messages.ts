@@ -38,7 +38,7 @@ export const backendDescriptorSchema = z.object({
   columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
   state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean()
 }).strict()
-const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'error']) }).strict()
+const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),

@@ -129,8 +129,12 @@ export interface ResultDescriptor {
   truncated?: TruncationReason
   incomplete: boolean
 }
-/** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
-export interface MessageEntry { text: string; kind: 'info' | 'error' }
+/**
+ * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); SQL Server's
+ * informational messages (PRINT, RAISERROR with severity 10 or less, SET STATISTICS output) are `server` entries, which open
+ * the Messages strip under the results; Varia's own lines (row counts, notes) are `info`.
+ */
+export interface MessageEntry { text: string; kind: 'info' | 'server' | 'error' }
 export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */

@@ -425,12 +425,12 @@ try {
   await toolbarButton(page, /Execute/).click()
   await expect(messages(page)).toContainText('logical reads 2')
   await expect(messages(page)).toContainText('CPU time = 1 ms')
-  // A run with errors shows Messages, its error inline in red in SSMS's two-line form, then the line saying the next batch
-  // still ran, as in SSMS; its results stay a tab away.
+  // A run with errors stays on Results, with the Messages strip open under them: its error inline in red in SSMS's
+  // two-line form, then the line saying the next batch still ran, as in SSMS.
   await expect(errorMessages(page)).toContainText('Msg 137, Level 15, State 2, Line 8')
   await expect(errorMessages(page).locator('xpath=following-sibling::pre[1]')).toHaveText('Batch 2 raised an error; execution continued with the next batch.')
   await expect(messages(page)).toContainText('third batch')
-  await expect(outputStatus(page)).toContainText('Query completed with errors.')
+  await expect(outputStatus(page)).toContainText(/^Completed with errors · /)
   await expect(outputStatus(page)).toContainText('3/3 batches')
   await outputView(page, /^Results/).click()
   await expect(anyResultGrid(page)).toContainText('42')

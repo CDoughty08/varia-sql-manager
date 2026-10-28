@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { MessageEntry } from '../src/shared/contracts'
 import { messageTail } from '../src/renderer/src/results/MessagesView'
-import { completionSentence, formatCount, formatElapsed, statusSentence } from '../src/renderer/src/results/status'
+import { completionSentence, formatCount, formatDuration, formatElapsed, messagesSummary, runSummary, statusSentence, timeOfDay } from '../src/renderer/src/results/status'
 import { summaryOf } from './fixtures/results'
 
 const info = (text: string): MessageEntry => ({ text, kind: 'info' })
@@ -41,5 +41,35 @@ describe('Messages and the status line', () => {
     expect(completionSentence('completedWithErrors', 2, 1)).toBe('Query completed with errors. 2 result sets, 1 row.')
     expect(completionSentence('failed', 0, 0)).toBe('Query failed.')
     expect(completionSentence('lost', 0, 0)).toBe('The SQL backend stopped while this query was running.')
+  })
+  it('sum a run up in the results head: outcome, rows, duration to the millisecond, end time and batches', () => {
+    expect(formatDuration(184)).toBe('0.184 s')
+    expect(formatDuration(59_999)).toBe('59.999 s')
+    expect(formatDuration(60_000)).toBe('00:01:00')
+    expect(formatDuration(-5)).toBe('0.000 s')
+    expect(timeOfDay('2026-10-08T21:48:01.1234567+00:00')).toBe('21:48:01')
+    expect(timeOfDay(undefined)).toBe('')
+    expect(timeOfDay('not a time')).toBe('')
+    const base = { elapsedMs: 184, rows: 204, completedBatches: 1, totalBatches: 1, completedAt: '2026-10-08T22:44:51.0000000+00:00' }
+    const text = (summary: ReturnType<typeof runSummary>) => [summary.outcome, ...summary.facts].join(' · ')
+    const completed = runSummary({ ...base, status: 'completed' })
+    expect(text(completed)).toBe('Completed · 204 rows · 0.184 s · 22:44:51')
+    expect(completed).toMatchObject({ tone: 'success', icon: 'pass', sentence: 'Query executed successfully. · 00:00:00 · 204 rows' })
+    // While it runs: hh:mm:ss as it ticks, no end time; batches for a script of several.
+    expect(text(runSummary({ ...base, status: 'running', elapsedMs: 3000, rows: 1, completedBatches: 1, totalBatches: 3 }))).toBe('Executing · 1 row · 00:00:03 · 1/3 batches')
+    expect(runSummary({ ...base, status: 'running' })).toMatchObject({ tone: 'running', icon: 'loading' })
+    expect(runSummary({ ...base, status: 'completedWithErrors', completedBatches: 3, totalBatches: 3 })).toMatchObject({ outcome: 'Completed with errors', tone: 'warning', icon: 'warning', facts: ['204 rows', '0.184 s', '22:44:51', '3/3 batches'] })
+    expect(runSummary({ ...base, status: 'failed' })).toMatchObject({ outcome: 'Failed', tone: 'error', icon: 'error' })
+    expect(runSummary({ ...base, status: 'cancelled' })).toMatchObject({ outcome: 'Cancelled', tone: 'warning', icon: 'debug-stop' })
+    expect(runSummary({ ...base, status: 'timedOut' })).toMatchObject({ outcome: 'Timed out', tone: 'error', icon: 'watch' })
+    // Results closed to free memory keep how the run ended; a run the backend lost says only that.
+    expect(text(runSummary({ ...base, status: 'closed', closedStatus: 'completedWithErrors' }))).toBe('Completed with errors · 204 rows · 0.184 s · 22:44:51')
+    expect(runSummary({ ...base, status: 'lost' })).toEqual({ tone: 'error', icon: 'error', outcome: 'The SQL backend stopped while this query was running.', facts: [], sentence: 'The SQL backend stopped while this query was running.' })
+  })
+  it('sum Messages up in the strip line', () => {
+    expect(messagesSummary([]).text).toBe('0 · no errors')
+    expect(messagesSummary([info('(1 row affected)'), { text: 'printed', kind: 'server' }])).toEqual({ count: 2, errors: 0, text: '2 · no errors' })
+    expect(messagesSummary([info('a'), { text: 'Msg 1', kind: 'error' }, { text: 'Msg 2', kind: 'error' }]).text).toBe('3 · 2 errors')
+    expect(messagesSummary([{ text: 'Msg 1', kind: 'error' }]).text).toBe('1 · 1 error')
   })
 })

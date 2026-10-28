@@ -62,7 +62,7 @@ async function run(sql, timeout = 60000) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
   await page.keyboard.press('F5')
-  await expect(status()).toContainText(/^Query executed successfully\./, { timeout })
+  await expect(status()).toContainText(/^Completed · /, { timeout })
 }
 
 async function launch(env) {
@@ -186,7 +186,7 @@ try {
   await page.keyboard.insertText('-- varia-fake: sets=W1*1000000@250000')
   const streamStart = { task: await taskSeconds(), wall: performance.now() }
   await page.keyboard.press('F5')
-  await expect(status()).toContainText('Query executed successfully.', { timeout: 60000 })
+  await expect(status()).toContainText(/^Completed · /, { timeout: 60000 })
   const streamSeconds = (performance.now() - streamStart.wall) / 1000, streamBusy = await taskSeconds() - streamStart.task
   await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
   record('grid.stream.busyPercent', streamBusy / streamSeconds * 100, '%', `main-thread task time ${streamBusy.toFixed(2)} s of ${streamSeconds.toFixed(1)} s while 1,000,000 rows streamed at 250,000 a second`)

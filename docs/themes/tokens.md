@@ -88,7 +88,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `descriptionForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Secondary text: hints, captions, and explanations. |
 | `disabledForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. |
 | `errorForeground` | VS Code | `$error` | `#f39a9a` | `#b42229` | Error text. |
-| `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text. |
+| `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text, and the results head's icon for a run that completed with errors or was cancelled. |
 | `successForeground` | Varia | `$success` | `#74d19c` | `#146f3b` | Success text, such as the Execute button and confirmations. |
 | `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. Not used yet; reserved for notifications. |
 | `focusBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Focus ring around the focused control. |

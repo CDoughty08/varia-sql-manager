@@ -1,9 +1,9 @@
 import { Component, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
 import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultSetEntry } from '../results/ResultsService'
-import { formatBytes, formatCount, plural } from '../results/status'
+import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
 
@@ -34,7 +34,10 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
 function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes } = useWorkbench()
+  const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
+  const showTypes = useServiceSnapshot(settings).values['queryResults.grid.showColumnTypes']
+  const showTypesRef = useRef(showTypes)
+  showTypesRef.current = showTypes
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const [status, setStatus] = useState<GridStatus>({})
@@ -45,7 +48,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
   useLayoutEffect(() => {
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: entry.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -69,7 +72,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count }) }, [count])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes }) }, [count, showTypes])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
@@ -109,10 +112,4 @@ function ErrorBoundaryKey({ children }: { children: ReactNode }) { return <>{chi
 
 export default function ResultGrid(props: ResultGridProps) {
   return <GridErrorBoundary index={props.entry.index}><ResultGridShell {...props} /></GridErrorBoundary>
-}
-
-/** "Result 3 · 1,234 rows": a grid still waiting for its turn to mount. */
-export function GridPlaceholder({ entry }: { entry: ResultSetEntry }) {
-  const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  return <div className="rs-placeholder">Result {entry.index + 1} · {formatCount(snapshot.rowsAvailable)} {plural(snapshot.rowsAvailable, 'row')}</div>
 }

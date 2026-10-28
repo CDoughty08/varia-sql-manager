@@ -68,6 +68,11 @@ messages.Add("printed later");
 var late = messages.Snapshot();
 Check(late.Count == 1000 + 1 + QueryMessages.MaxLateErrors && late[1000].Text.StartsWith("Messages were truncated") && late.Skip(1001).All(entry => entry.Kind == "error" && entry.Text.Length == 16_384),
     "after the message caps, up to 20 errors are still kept (cut at 16,384 characters), after the truncation note");
+messages = new QueryMessages();
+messages.Add("(1 row affected)");
+messages.Add("printed", MessageKind.Server);
+messages.Add("Msg 1", MessageKind.Error);
+Check(messages.Snapshot().Select(entry => entry.Kind).SequenceEqual(["info", "server", "error"]), "messages carry their kind: Varia's lines, SQL Server's informational messages, errors");
 var stored = new List<MessageEntry>();
 messages = new QueryMessages(stored.Add);
 messages.Add("printed");
@@ -332,7 +337,8 @@ try
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
     Check(result.Status == "completedWithErrors" && result.CompletedBatches == 2 && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
-    Check(result.Status == "completed" && Texts(result).Contains("expected informational message") && Texts(result).Contains("expected print"), "low severity informational messages do not become errors");
+    Check(result.Status == "completed" && result.Messages.Where(entry => entry.Text is "expected informational message" or "expected print").Count(entry => entry.Kind == "server") == 2,
+        "low severity informational messages do not become errors and are marked as SQL Server's own (server)");
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
     Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
     result = await Run("SELECT DB_NAME();", database: result.Database);

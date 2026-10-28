@@ -622,7 +622,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
             {
-                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
+                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message, MessageKind.Server); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
                 lock (errors)
@@ -658,7 +658,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         void Report(SqlException error)
         {
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, MessageKind.Server); }
                 else if (!Delivered(item)) Raise(Describe(item));
             if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
@@ -899,7 +899,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // Messages delivered with the exception (e.g. PRINT before a severe error, or the error itself) belong in Messages,
             // in order, except errors InfoMessage already reported.
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, MessageKind.Server); }
                 else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
             if (details.Count == 0)

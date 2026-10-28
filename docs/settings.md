@@ -137,6 +137,7 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
+| `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -219,4 +220,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (68 today).
+A patch holds at most one entry per setting (69 today).

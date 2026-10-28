@@ -24,6 +24,11 @@ export const gridLimits = {
   busyRetryMs: 250,
   scrollCap: 15_000_000, scrollCapPhysical: 30_000_000, rebaseRows: 4096,
   splitter: 5, stackMinRows: 4, stackBorder: 2, mountedGrids: 12, mountsPerFrame: 2,
+  /** A set's caption (.rs-caption) and a grid's one-line strip (.rg-strip: 16 px line, 4 px padding, 1 px border), for sizing
+   *  stacked sets to their rows. */
+  captionHeight: 26, stripHeight: 25,
+  /** The space between a header's name and its SQL type (.rg-ct's margin). */
+  typeGap: 6,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,
   /**
    * How far in from the edge a press on the scroller itself counts as a press on an overlay scroll bar (macOS). The bar is

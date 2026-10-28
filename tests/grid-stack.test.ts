@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { dragSplitter, minGridHeight, mountedRange, stackLayout } from '../src/renderer/src/grid/stack'
+import { gridLimits } from '../src/renderer/src/grid/constants'
+import { stylesheetRules } from './fixtures/css-rules'
+import { contentHeight, dragSplitter, minGridHeight, mountedRange, stackLayout } from '../src/renderer/src/grid/stack'
 
 const min = minGridHeight(15)
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0)
 
 describe('stacked result sets', () => {
   it('give one set the whole pane and split it equally between several, within 1 px', () => {
-    expect(min).toBe(22 + 80 + 15 + 2)
+    // The caption, the header, four rows, the scroll bar and the border.
+    expect(min).toBe(26 + 22 + 80 + 15 + 2)
     expect(stackLayout(500, 1, undefined, min)).toEqual({ heights: [500], offsets: [0], total: 500 })
     expect(stackLayout(500, 0, undefined, min)).toEqual({ heights: [], offsets: [], total: 0 })
     const three = stackLayout(1000, 3, undefined, min)
@@ -29,6 +32,54 @@ describe('stacked result sets', () => {
     expect(weighted.heights[1]).toBe(min)
     expect(weighted.heights[0]).toBeGreaterThan(400)
   })
+  it('size a set that has all its rows to them when they fit its share, and give the rest to the others', () => {
+    // The caption, the header, three rows, the scroll bar and the border; and a set with a strip.
+    expect(contentHeight(3, 15, false)).toBe(26 + 22 + 60 + 15 + 2)
+    expect(contentHeight(3, 15, true)).toBe(26 + 22 + 60 + 15 + 2 + 25)
+    expect(contentHeight(0, 0, false)).toBe(26 + 22 + 2)
+    const small = contentHeight(3, 15, false), large = contentHeight(10_000, 15, false)
+    // A 3-row set beside a large one: the small one fits its rows, the large one takes the rest of the pane.
+    const pair = stackLayout(1000, 2, undefined, min, { content: [small, large] })
+    expect(pair.heights).toEqual([small, 1000 - 5 - small])
+    expect(pair.total).toBe(1000)
+    // One still streaming (no content yet) is flexible: it takes the rest whatever its rows so far.
+    expect(stackLayout(1000, 2, undefined, min, { content: [small, undefined] }).heights).toEqual([small, 1000 - 5 - small])
+    // Three: two small fit, the large and the streaming one share the rest equally.
+    const four = stackLayout(1000, 4, undefined, min, { content: [small, large, small, undefined] })
+    expect(four.heights[0]).toBe(small)
+    expect(four.heights[2]).toBe(small)
+    expect(Math.abs(four.heights[1] - four.heights[3])).toBeLessThanOrEqual(1)
+    expect(sum(four.heights) + 3 * 5).toBe(1000)
+    // Every set fits: the largest takes what is left, so the stack still fills the pane without a scroll bar.
+    const fits = stackLayout(1000, 3, undefined, min, { content: [small, contentHeight(8, 15, false), small] })
+    expect(fits.heights).toEqual([small, 1000 - 10 - 2 * small, small])
+    expect(fits.total).toBe(1000)
+    // A set with fewer rows than the minimum is not stretched to it; many small sets scroll at their own heights.
+    const tiny = contentHeight(1, 15, false)
+    expect(tiny).toBeLessThan(min)
+    const many = stackLayout(600, 20, undefined, min, { content: Array.from({ length: 20 }, () => tiny) })
+    expect(many.heights.every(height => height === tiny)).toBe(true)
+    expect(many.total).toBe(20 * tiny + 19 * 5)
+    // A set larger than its share is not capped by its content.
+    expect(stackLayout(400, 2, undefined, min, { content: [large, large] }).heights).toEqual([198, 197])
+    // Weights from a splitter drag win over the content, so a small set can be made taller.
+    expect(stackLayout(1000, 2, [600, 395], min, { content: [small, large] }).heights).toEqual([600, 395])
+  })
+  it('show a collapsed set as its caption alone and share its room between the others', () => {
+    const collapsed = stackLayout(1000, 3, undefined, min, { collapsed: new Set([1]) })
+    expect(collapsed.heights[1]).toBe(26)
+    expect(collapsed.heights[0] + collapsed.heights[2]).toBe(1000 - 10 - 26)
+    expect(collapsed.offsets).toEqual([0, collapsed.heights[0] + 5, collapsed.heights[0] + 5 + 26 + 5])
+    // With weights too, and when every set is collapsed the stack is the pane with the captions at the top.
+    expect(stackLayout(1000, 3, [1, 1, 1], min, { collapsed: new Set([0]) }).heights[0]).toBe(26)
+    const all = stackLayout(1000, 2, undefined, min, { collapsed: new Set([0, 1]) })
+    expect(all.heights).toEqual([26, 26])
+    expect(all.total).toBe(1000)
+    expect(stackLayout(500, 1, undefined, min, { collapsed: new Set([0]) }).heights).toEqual([26])
+    // A collapsed set with content keeps only its caption; the content of the others still applies.
+    const small = contentHeight(2, 15, false)
+    expect(stackLayout(1000, 3, undefined, min, { content: [small, small, undefined], collapsed: new Set([0]) }).heights).toEqual([26, small, 1000 - 10 - 26 - small])
+  })
   it('move a splitter within the pair, keeping their sum and both minimums, and turn heights back into weights', () => {
     const { heights } = stackLayout(1000, 3, undefined, min)
     const dragged = dragSplitter(heights, 0, 100, min)
@@ -50,8 +101,8 @@ describe('stacked result sets', () => {
   it('mount the grids in view first, then those within a view above and below, at most 12', () => {
     const layout = stackLayout(600, 1000, undefined, min)
     const step = min + 5
-    // At the top: the 5 grids in view and the 5 that start within one view below.
-    expect(mountedRange(layout, 0, 600)).toEqual([0, 9])
+    // At the top: the 4 grids in view and the 4 that start within one view below.
+    expect(mountedRange(layout, 0, 600)).toEqual([0, 7])
     expect(mountedRange(layout, 0, 600, 3)).toEqual([0, 2])
     // In view: grids 100–104 (the view is 600 px tall); then alternately below and above.
     const [first, last] = mountedRange(layout, 100 * step, 600)
@@ -69,5 +120,17 @@ describe('stacked result sets', () => {
     const started = performance.now()
     for (let index = 0; index < 1000; index++) mountedRange(layout, index * step, 600)
     expect((performance.now() - started) / 1000).toBeLessThan(2)
+  })
+  it('size captions, strips and the type gap in styles.css as the layout counts them', () => {
+    const value = (selector: string, property: string) => stylesheetRules().find(rule => rule.selector === selector && !rule.at.length && rule.declarations.some(item => item.property === property))
+      ?.declarations.find(item => item.property === property)?.value
+    expect(value('.rs-caption', 'height')).toBe(gridLimits.captionHeight + 'px')
+    expect(value('.rs-caption', 'box-sizing')).toBe('border-box')
+    expect(value('.rg-ct', 'margin-left')).toBe(gridLimits.typeGap + 'px')
+    // The strip: 4 px padding above and below its 16 px line, and its 1 px top border.
+    expect(value('.rg-strip', 'padding')).toBe('4px 8px')
+    expect(value('.rg-strip', 'font')).toMatch(/\/16px /)
+    expect(value('.rg-strip', 'border-top')).toMatch(/^1px solid/)
+    expect(gridLimits.stripHeight).toBe(4 + 16 + 4 + 1)
   })
 })

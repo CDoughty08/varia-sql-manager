@@ -57,6 +57,8 @@ export const part = {
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
+  /** A set's caption above its grid: Collapse and its name, its rows and columns, its batch, and Save Results As. */
+  resultCaption: '.rs-caption',
   resultStack: '.rs-stack',
   // Object Explorer
   explorerLabel: '.oe-label',
@@ -130,6 +132,8 @@ export const gridPart = {
   head: '.rg-head',
   corner: '.rg-corner',
   columnHeader: '.rg-ch',
+  /** The SQL type after a header's name, drawn only (screen readers read it in the tooltip). */
+  columnType: '.rg-ct',
   selectedColumnHeader: '.rg-ch.sel',
   row: '[role="rowgroup"] > [role="row"]',
   rowHeader: '[role="rowheader"]',
@@ -257,6 +261,12 @@ export const anyResultGrid = page => page.locator('[data-result-grid]')
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
+/** A set's caption Collapse button, named by the set ("Result 2"). */
+export const resultToggle = (page, index = 0) => outputPane(page).getByRole('button', { name: `Result ${index + 1}`, exact: true })
+/** The Messages strip's line under the results ("Messages · 2 · no errors"), a button that opens and closes it. */
+export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages · / })
+/** The Execution plan view's list of the run's plans. */
+export const planList = page => outputPane(page).getByRole('list', { name: 'Execution plans', exact: true })
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
 
 // Object Explorer
