@@ -401,10 +401,34 @@ try {
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(await explorerRow(page, server)).toBeVisible()
   }
+  // The servers also list databases whose names differ only in their spaces.
+  await writeFile(join(control, 'spaced-databases'), '')
   await connect('server-a')
   const tabA = await activeDocument(page).getAttribute('aria-label')
   const idA = await queryServer(page).inputValue()
   await queryDatabase(page).selectOption('AppData')
+  // Home and End move along the query bar from a list as from a button, and never pick a server or database.
+  await queryDatabase(page).focus()
+  await page.keyboard.press('End')
+  await expect(queryDatabase(page)).toBeFocused()
+  await page.keyboard.press('Home')
+  await expect(queryBarButton(page, /Execute/)).toBeFocused()
+  await queryServer(page).focus()
+  await page.keyboard.press('Home')
+  await expect(queryBarButton(page, /Execute/)).toBeFocused()
+  await queryServer(page).focus()
+  await page.keyboard.press('End')
+  await expect(queryDatabase(page)).toBeFocused()
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  // Each database is its exact name, spaces and all: an option's own text would turn "Sales  2024" into "Sales 2024".
+  for (const name of ['Sales  2024', ' lead', 'tab\there', 'AppData']) {
+    const index = await queryDatabase(page).evaluate((list, name) => [...list.options].findIndex(option => option.textContent === name), name)
+    expect(index, JSON.stringify(name)).toBeGreaterThan(0)
+    await queryDatabase(page).selectOption({ index })
+    await expect(queryDatabase(page)).toHaveValue(name)
+    await expect(queryDatabase(page)).toHaveAttribute('title', `Database: ${name}`)
+  }
   await typeSql('SELECT 1;')
   await connect('server-b')
   const tabB = await activeDocument(page).getAttribute('aria-label')
@@ -424,6 +448,12 @@ try {
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)
   expect(executed.every(call => call.timeoutSeconds === 0)).toBe(true)
+  // F5, which Execute shows, runs the query from the query bar too.
+  await queryDatabase(page).focus()
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await executions()).length).toBe(executed.length + 1)
+  expect((await executions()).at(-1).params).toMatchObject({ connectionId: idA, database: 'AppData', sql: 'SELECT 1;' })
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   // Selection line offsets and both editor shortcuts use the same query command.
   await typeSql('-- heading\nSELECT 10;\nSELECT 20;')
   await page.keyboard.press('Control+Home')
@@ -467,6 +497,22 @@ try {
   await expect(outputStatus(page)).toContainText('3/3 batches')
   await outputView(page, /^Results/).click()
   await expect(anyResultGrid(page)).toContainText('42')
+  // Choosing a server from the keyboard keeps focus on the list while the query's session ends, though every control of
+  // the bar is locked until then.
+  const closesNow = await sessionCloses()
+  await writeFile(join(control, 'hold', 'query.session.close'), '')
+  await queryServer(page).focus()
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(sessionCloses).toBe(closesNow + 1)
+  await expect(queryServer(page)).toBeDisabled()
+  await rm(join(control, 'hold', 'query.session.close'))
+  await expect(queryServer(page)).toHaveValue(idB)
+  await expect(queryServer(page)).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryServer(page)).toBeEnabled()
+  await expect(queryServer(page)).toBeFocused()
+  await queryDatabase(page).selectOption('AppData')
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
   await queryBarButton(page, /Execute/).click()

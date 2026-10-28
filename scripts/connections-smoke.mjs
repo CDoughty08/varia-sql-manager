@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { backendReady, connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, statusBar, toolbarButton, activeDocument, environmentPill, explorerLabel, queryBar } from './fixtures/ui.mjs'
+import { backendReady, connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, statusBar, toolbarButton, activeDocument, environmentPill, explorerLabel, queryBar, queryServer } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -676,6 +676,31 @@ async function environmentLabels() {
       await expect(tag(place), place).toHaveAttribute('data-tone', tone)
     }
   }
+  // Object Explorer dragged wider narrows the editor and its query bar to about `width`; the returned call drags it back.
+  // The same sash both ways: once dragged, Dockview may mark it dv-maximum rather than dv-enabled.
+  async function narrowBar(width) {
+    const sash = await page.locator('.dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled').first().elementHandle()
+    const drag = async dx => {
+      const box = await sash.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2
+      await page.mouse.move(x, y); await page.mouse.down()
+      await page.mouse.move(x + dx, y, { steps: 5 }); await page.mouse.up()
+    }
+    const before = (await queryBar(page).boundingBox()).width
+    await drag(before - width)
+    await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeLessThan(width + 12)
+    return async () => {
+      await drag((await queryBar(page).boundingBox()).width - before)
+      await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeGreaterThan(before - 12)
+    }
+  }
+  // The lists give way first, then a long label is cut short: the tag never runs under the server list, the lists keep
+  // their minimum, and the pill stays inside the bar.
+  const barFit = () => queryBar(page).evaluate((bar, part) => {
+    const box = bar.getBoundingClientRect(), pill = bar.querySelector('[role="group"]').getBoundingClientRect()
+    const tag = bar.querySelector(`${part.environmentTag} ${part.statusPill}`), label = tag.querySelector(part.statusPillLabel), edge = tag.getBoundingClientRect().right
+    const [server, database] = [...bar.querySelectorAll('select')].map(list => list.getBoundingClientRect())
+    return { clear: edge <= server.left + 0.5, inside: pill.left >= box.left - 0.5 && pill.right <= box.right + 0.5, lists: server.width >= 63.5 && database.width >= 63.5 && database.right <= pill.right + 0.5, cut: label.scrollWidth > label.clientWidth }
+  }, part)
   const serverMenu = async row => {
     await explorerLabel(row).click({ button: 'right' })
     await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Environment…', exact: true }).click()
@@ -710,6 +735,12 @@ async function environmentLabels() {
     return result
   }, part)
   expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
+  // The tag is no control, so the query bar's server list, which its keys reach, describes the environment.
+  await expect(queryServer(page)).toHaveAttribute('aria-description', 'Production environment')
+  // PROD stays whole beside both lists in a narrow editor.
+  let widen = await narrowBar(330)
+  expect(await barFit()).toEqual({ clear: true, inside: true, lists: true, cut: false })
+  await widen()
   await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
   // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
   let labelling = await serverMenu(row)
@@ -830,6 +861,13 @@ async function environmentLabels() {
     return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth, queryBar: kept }
   }, part)
   expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true, queryBar: true })
+  await expect(queryServer(page)).toHaveAttribute('aria-description', `${long} environment`)
+  for (const width of [580, 430]) {
+    widen = await narrowBar(width)
+    expect(await barFit(), String(width)).toEqual({ clear: true, inside: true, lists: true, cut: true })
+    if (width === 430) await page.screenshot({ path: resolve('artifacts', 'environment-narrow-query-bar.png') })
+    await widen()
+  }
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label.png') })
   // A long name and a long label in history: the name gives way and the tag stays inside the row, as PROD does.
   dialog = await open()

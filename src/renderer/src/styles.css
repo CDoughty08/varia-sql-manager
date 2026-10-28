@@ -342,8 +342,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-status-login { flex-shrink: 1000; }
 .query-status-database { flex-shrink: 1; }
 /* A query's own bar: Execute and Cancel, then the connection pill at the right. The bar is a size container: a narrow
-   editor first drops the key and the button words, then the lists give up width, and the pill never wraps. */
-.query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
+   editor first drops the key and the button words, then the lists give up width, then a long environment label is cut
+   short, and the pill never wraps. Its own size keeps the tag's 12em as wide as elsewhere. */
+.query-bar { display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-bar); padding: 0 var(--varia-space-2); flex-shrink: 0; min-width: 0; overflow: hidden; container-type: inline-size; font-size: var(--varia-size-sm); background: var(--varia-editor-background); border-bottom: 1px solid var(--varia-editorGroup-border); }
 .query-bar-action { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; flex-shrink: 0; }
 .query-bar-action.execute kbd { color: inherit; border-color: currentColor; }
 .query-connection { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; min-width: 0; height: var(--varia-control); margin-left: auto; padding: 0 var(--varia-space-0) 0 var(--varia-space-2); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
@@ -352,8 +353,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .query-connection-divider { width: 1px; height: 14px; flex: none; background: var(--varia-toolbar-separatorBackground); }
 .query-connection-icon { color: var(--varia-icon-foreground); }
 .query-bar-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; }
-/* The lists draw no box of their own inside the pill; focus still outlines the one that has it. */
-.query-connection select { flex: 0 1 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: transparent; border: 0; text-overflow: ellipsis; }
+/* The tag shrinks inside its wrapper, so a long label ends in an ellipsis rather than running under the server list. */
+.environment-tag[data-place="query"] { flex: 0 1 auto; }
+/* The lists draw no box of their own inside the pill; focus still outlines the one that has it. Their fill is the
+   pill's, opaque, because Chromium draws a list's open popup on its background, white for a transparent one. Their
+   shrink weight has them give way, down to their minimum, before the environment tag. */
+.query-connection select { flex: 0 1000 auto; min-width: 64px; max-width: 220px; height: 100%; padding: 0 2px; background: var(--varia-input-background); border: 0; text-overflow: ellipsis; }
 .query-connection select:focus-visible { outline-offset: 0; }
 @container (max-width: 520px) { .query-bar-action.execute kbd { display: none; } }
 @container (max-width: 400px) { .query-bar-label { display: none; } .query-bar-action { padding: 0 6px; } }

@@ -6,7 +6,7 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import QueryBar from '../src/renderer/src/QueryBar'
 import StandardToolbar from '../src/renderer/src/ShellToolbar'
-import { lostHint, queryContextModel, toolbarMove, toolbarRescue, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
+import { lostHint, queryContextModel, toolbarMove, toolbarRescue, toolbarReturn, toolbarStop, type QueryContextInput } from '../src/renderer/src/query-context'
 import type { LiveConnection } from '../src/renderer/src/services/connections'
 import { densityUse } from '../src/shared/theme/metrics'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -81,6 +81,16 @@ describe('query bar keyboard', () => {
     expect(toolbarRescue(done, done[1])).toBe(done[0])
     expect(toolbarRescue(controls(true, true), controls(true)[0])).toBeUndefined()
   })
+  it('waits while a document task disables every control, then gives focus back to the control that lost it', () => {
+    // Choosing a server ends the query's session first: every control is disabled until that task ends.
+    const all = controls(true, true, true, true)
+    expect(toolbarReturn(all, all[2])).toBeUndefined()
+    const done = controls(false, true, false, false)
+    expect(toolbarReturn(done, done[2])).toBe(done[2])
+    // Still disabled once the others are enabled again: the nearest enabled control takes it.
+    const locked = controls(false, true, true, false)
+    expect(toolbarReturn(locked, locked[2])).toBe(locked[3])
+  })
 })
 
 describe('query bar', () => {
@@ -99,7 +109,8 @@ describe('query bar', () => {
     connections.add({ ...connectionInfo('prod'), color: 'red', displayName: 'Orders' }, { ...connectionOptions, color: 'red', displayName: 'Orders', environment: 'Production' })
     documents.create('a.sql', 'SELECT 1', 'AppData', 'prod')
     const html = render(createElement(QueryBar))
-    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor">/)
+    // data-query-bar gives queryBarFocus, so F5, which Execute shows, runs the query from the bar too.
+    expect(html).toMatch(/^<div class="query-bar" role="toolbar" aria-label="SQL Editor" data-query-bar="">/)
     // Execute is the bar's only filled button and names its key; Cancel waits for a running query.
     expect(html).toMatch(/<button type="button" class="query-bar-action execute primary" aria-label="Execute" aria-keyshortcuts="F5" title="Execute \(F5\)">.*<kbd aria-hidden="true">F5<\/kbd><\/button>/)
     expect(html).toMatch(/<button type="button" class="query-bar-action" aria-label="Cancel" aria-keyshortcuts="Alt\+Pause" disabled="" title="Cancel Executing Query \(Alt\+Pause\)">/)
@@ -107,8 +118,18 @@ describe('query bar', () => {
     expect(pill).toMatch(/^<div class="query-connection" role="group" aria-label="Connection"><span class="connection-swatch" style="background:var\(--varia-connection-red\)" aria-hidden="true"><\/span>/)
     expect(pill).toContain('<span class="query-bar-environment"><span class="visually-hidden">Environment: </span><span class="environment-tag" data-place="query" data-tone="critical">')
     expect(pill).toContain('title="Orders (prod.example): Production environment"')
-    expect(pill).toMatch(/<select id="query-server" aria-label="Query server" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
-    expect(pill).toMatch(/<select id="query-database" aria-label="Query database" title="Database: AppData"><option selected="">AppData<\/option><\/select>/)
+    // The tag is no control: the server list, which the toolbar's keys reach, describes the environment.
+    expect(pill).toMatch(/<select id="query-server" aria-label="Query server" aria-description="Production environment" title="Server: Orders \(prod.example\)">.*<option value="prod" selected="">Orders \(prod.example\)<\/option><\/select>/)
+    expect(pill).toMatch(/<select id="query-database" aria-label="Query database" title="Database: AppData"><option value="AppData" selected="">AppData<\/option><\/select>/)
+  })
+  it('gives each database its exact name as the option\'s value, spaces and all', () => {
+    const { connections, documents, render } = fixture()
+    connections.add(connectionInfo('a'), connectionOptions)
+    // An option's text has its spaces collapsed and trimmed when it has no value: this one would read "Sales 2024".
+    documents.create('a.sql', '', 'Sales  2024', 'a')
+    const html = render(createElement(QueryBar))
+    expect(html).toContain('<option value="Sales  2024" selected="">Sales  2024</option>')
+    expect(html).not.toContain('aria-description')
   })
   it('names the lost connection on Execute, and shows no colour or tag for a disconnected query', () => {
     const { connections, documents, render, api } = fixture()
@@ -147,5 +168,17 @@ describe('query bar', () => {
     expect([value('.query-bar', 'container-type'), value('.query-bar', 'overflow'), value('.query-connection', 'margin-left')]).toEqual(['inline-size', 'hidden', 'auto'])
     expect(value('.query-bar-label', 'display', ['@container (max-width: 400px)'])).toBe('none')
     expect(value('.query-bar-action.execute kbd', 'display', ['@container (max-width: 520px)'])).toBe('none')
+    // The bar sets its own size, so the tag's 12em is as wide as on the status bar; the tag shrinks inside its wrapper
+    // rather than running under the server list, and the lists give way first, by weight, down to their minimum.
+    expect(value('.query-bar', 'font-size')).toBe('var(--varia-size-sm)')
+    expect(value('.environment-tag[data-place="query"]', 'flex')).toBe('0 1 auto')
+    expect([value('.query-connection select', 'flex'), value('.query-connection select', 'min-width')]).toEqual(['0 1000 auto', '64px'])
+  })
+  it('gives every list an opaque fill: Chromium draws an open list on its background, white for a transparent one', () => {
+    // In Dark the options keep the list's light text, which on white is all but invisible.
+    const targetsSelect = (selector: string) => selector.split(',').some(part => /(^|[\s>+~])select(?![\w-])[^\s>+~]*$/.test(part.trim()))
+    const clear = stylesheetRules().filter(rule => targetsSelect(rule.selector) && rule.declarations.some(item => /^background(-color)?$/.test(item.property) && /^(transparent|none)\b|rgba\([^)]*,\s*0\)/.test(item.value)))
+    expect(clear.map(rule => rule.selector)).toEqual([])
+    expect(stylesheetRules().find(rule => rule.selector === '.query-connection select')?.declarations.find(item => item.property === 'background')?.value).toBe('var(--varia-input-background)')
   })
 })

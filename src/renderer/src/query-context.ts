@@ -84,3 +84,11 @@ export function toolbarRescue<T extends ToolbarControl>(controls: readonly T[], 
   }
   return undefined
 }
+/**
+ * Where focus goes back to once the control that had it turned disabled and focus fell to the page: the nearest enabled
+ * control, or the control itself once it is enabled again. Undefined while every control is disabled (a document task
+ * ends the query's session after a server is chosen), so the toolbar waits for the render that enables one.
+ */
+export function toolbarReturn<T extends ToolbarControl>(controls: readonly T[], lost: T): T | undefined {
+  return lost.disabled ? toolbarRescue(controls, lost) : controls.includes(lost) ? lost : controls.find(control => !control.disabled)
+}

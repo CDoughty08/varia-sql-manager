@@ -100,7 +100,7 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
+| Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
@@ -606,7 +606,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (74)
+## Context keys (75)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -625,6 +625,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
+| `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
