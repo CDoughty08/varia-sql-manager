@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark, emptyState, emptyStateIcon, emptyStateTitle, primaryAction, workspaceEmpty } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -354,6 +354,13 @@ try {
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  // The empty workspace is the states kit's empty state: a title, a glyph, and one filled action.
+  const emptyWorkspace = emptyState(workspaceEmpty(page))
+  await expect(emptyStateTitle(emptyWorkspace)).toHaveText('No open queries')
+  await expect(emptyStateIcon(emptyWorkspace)).toHaveAttribute('data-icon', 'file-code')
+  await expect(emptyWorkspace.getByRole('button', { name: 'Open SQL file', exact: true })).toBeVisible()
+  await expect(primaryAction(emptyWorkspace)).toHaveText(['New query'])
+  await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()

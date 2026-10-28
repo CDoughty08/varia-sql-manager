@@ -9,6 +9,7 @@ import QueryEditor from './QueryEditor'
 import QueryStatusBar from './QueryStatusBar'
 import EditorStatus from './EditorStatus'
 import Icon from './Icon'
+import EmptyState from './kit/EmptyState'
 import ExplorerPane from './explorer/ExplorerPane'
 import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
@@ -25,6 +26,9 @@ import StandardToolbar, { CommandCentre, lostHint } from './ShellToolbar'
 import PaneMenuButton from './PaneMenuButton'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
+import EnvironmentDialog from './EnvironmentDialog'
+import EnvironmentTag from './EnvironmentTag'
+import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
@@ -70,6 +74,8 @@ export default function App() {
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
+  // The connected server whose Environment dialog is open.
+  const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
   const [pendingExecute, setPendingExecute] = useState<string>()
   const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
@@ -114,6 +120,7 @@ export default function App() {
       setOptions(lost.options)
       setShowConnect(true)
     },
+    editEnvironment: id => setEnvironmentFor(id),
     closePane: pane => workspaceRef.current?.close(pane),
     paneLocation: pane => workspaceRef.current?.location(pane) ?? 'closed',
     floatPane: pane => workspaceRef.current?.float(pane),
@@ -252,23 +259,25 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
-        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip}>{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>
+        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined}>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
-        </div>)}</div><PaneMenuButton pane="editor" /></div>
+        </div> })}</div><PaneMenuButton pane="editor" /></div>
         {active.id ? <>
           {statusTop && statusBar}
           {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer shows. */}
           <div className="editor-container" hidden={isDesigner}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
-        </> : <div className="workspace-empty"><p>No open queries</p><div><button onClick={() => run('file.new')}>New query</button><button onClick={() => run('file.open')}>Open SQL file</button></div></div>}
+        </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
     {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
       <span className="backend-status" title={backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
+      {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
       {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><EditorStatus /><MemoryIndicator />
     </footer>
+    {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}

@@ -315,7 +315,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())

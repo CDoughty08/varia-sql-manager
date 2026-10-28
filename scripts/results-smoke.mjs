@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -636,6 +636,11 @@ try {
   await expect(quickInputActive(page)).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(outputEmpty(page)).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  // A line only, centred by the states kit's empty state, with nothing to click.
+  await expect(emptyStateDetail(emptyState(outputEmpty(page)))).toHaveCount(1)
+  await expect(emptyState(outputEmpty(page))).toHaveCSS('justify-content', 'center')
+  await expect(emptyStateTitle(outputEmpty(page))).toHaveCount(0)
+  await expect(outputEmpty(page).getByRole('button')).toHaveCount(0)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   // Run from the editor, it leaves focus there.
   await expect(textbox()).toBeFocused()
@@ -689,6 +694,10 @@ try {
   await expect(server()).toHaveValue('')
   await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
+  await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
+  // Varia's own table icon, as in Object Explorer.
+  await expect(emptyStateIcon(outputEmpty(page))).toHaveAttribute('data-icon', 'table')
+  await expect(emptyState(outputEmpty(page))).toHaveCSS('justify-content', 'center')
   const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
   expect(await editorText()).toBe(forXmlText)
   await page.keyboard.press('F5')

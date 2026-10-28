@@ -107,6 +107,7 @@
     {"id":"connection.reconnect@query.connection","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
     {"type":"separator"}
     {"id":"query.changeConnection","label":"Change Connection…","registerAccelerator":false,"type":"normal","click":[["command","query.changeConnection"]]}
+    {"id":"connection.environment","label":"Environment…","registerAccelerator":false,"type":"normal","click":[["command","connection.environment"]]}
   {"accelerator":"Ctrl+U","id":"query.changeDatabase","label":"Change Database…","registerAccelerator":false,"type":"normal","click":[["command","query.changeDatabase"]]}
   {"type":"separator"}
   {"accelerator":"F5","id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}

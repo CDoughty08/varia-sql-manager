@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
-import { backendReady, documentTabs, editorText as editorTextOf, errorMessages, explorerLabel, explorerToolbar, messages, outputView, paneMenuButton, part, quickInput, serverRows, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, editorText as editorTextOf, errorMessages, explorerLabel, explorerToolbar, messages, outputView, paneMenuButton, part, quickInput, serverRows, toolbarButton as mainToolbarButton, copyOutcome, emptyState, emptyStateDetail, emptyStateIcon, explorerEmpty, explorerFault, primaryAction } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -153,6 +153,13 @@ try {
   await launch()
   await application.evaluate(installExplorerStub, explorerStubData())
   await expect(page.getByText('Connect to SQL Server to browse databases and objects.')).toBeVisible()
+  // The empty pane is the states kit's centred empty state, with Connect as its one filled action.
+  const emptyExplorer = emptyState(explorerEmpty(page))
+  // Varia's own server icon, as on the server nodes.
+  await expect(emptyStateIcon(emptyExplorer)).toHaveAttribute('data-icon', 'server')
+  await expect(emptyStateDetail(emptyExplorer)).toHaveText('Connect to SQL Server to browse databases and objects.')
+  await expect(primaryAction(emptyExplorer)).toHaveText(['Connect to server'])
+  await expect(emptyExplorer).toHaveCSS('justify-content', 'center')
 
   // 1. One focusable ARIA tree: a new server is expanded, its folders are collapsed, and nothing below them is loaded.
   // Connecting the first server by keyboard from the empty state moves focus to the tree, which replaced the button.
@@ -622,6 +629,14 @@ try {
   await expect(page.getByText('Object Explorer stopped because of a rendering error.')).toBeVisible()
   // Focus went with the tree to the Reload button, and after Reload to the new tree, which repeats no old announcement.
   await expect(page.getByRole('button', { name: 'Reload Object Explorer', exact: true })).toBeFocused()
+  // Copy details puts the fault and where it happened on the clipboard, through main, and says so.
+  await application.evaluate(({ clipboard }) => clipboard.writeText('before'))
+  await explorerFault(page).getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(copyOutcome(explorerFault(page))).toHaveText('Details copied.')
+  await expect.poll(clipboard).toContain('Message: Object Explorer stopped because of a rendering error.')
+  expect(await clipboard()).toContain('Object Explorer test fault.')
+  expect(await clipboard()).toContain('Component stack:')
+  await page.getByRole('button', { name: 'Reload Object Explorer', exact: true }).focus()
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-b')).toHaveAttribute('aria-expanded', 'true')
   await expect(tree()).toBeFocused()

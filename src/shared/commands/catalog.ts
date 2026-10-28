@@ -264,6 +264,16 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
+  // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
+  // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
+  'connection.environment': {
+    title: 'Set Connection Environment…', category: 'Connection', icon: 'tag', keywords: ['environment', 'production', 'prod', 'staging', 'test', 'development', 'label', 'tag'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    menus: [
+      { menu: 'query.connection', group: '2_change', order: 2, title: 'Environment…' },
+      { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
+  },
   // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
   'connection.reconnect': {
     title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',

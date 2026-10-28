@@ -102,6 +102,7 @@ Query
     &Reconnect…  ----
     ---
     C&hange Connection…  ++--
+    &Environment…  -++-
   Change &Database…  Ctrl+U  -+--
   ---
   E&xecute  F5  ++--

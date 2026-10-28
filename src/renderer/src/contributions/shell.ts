@@ -18,6 +18,8 @@ export interface ShellHost {
   showConnect(): void
   /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
   reconnect(connectionId: string): void
+  /** Opens the Connection Environment dialog for a connected server. */
+  editEnvironment(connectionId: string): void
   /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
   closePane(pane: PaneId): void
   paneLocation(pane: PaneId): PaneLocation
@@ -109,6 +111,20 @@ export function shellContribution({ commands, documents, files, quickInput, conn
         quickInput.show({
           ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
           items: serverItems(connections.live(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
+        })
+      }
+    }),
+    // A server node's menu labels that server; otherwise the active query's server, else the user picks a connected one.
+    commands.register('connection.environment', {
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId)) },
+      run: args => {
+        const node = explorerNodeOf(args)
+        if (node?.kind === 'server') return host.editEnvironment(node.connectionId)
+        const active = documents.active?.connectionId
+        if (active && connections.isLive(active)) return host.editEnvironment(active)
+        quickInput.show({
+          ariaLabel: 'Set Connection Environment', placeholder: 'Select a server to label', noun: 'servers',
+          items: serverItems(connections.live()), onDidAccept: item => host.editEnvironment(item.id)
         })
       }
     }),

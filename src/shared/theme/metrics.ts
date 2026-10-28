@@ -53,13 +53,15 @@ export const shadows = {
  * `--varia-motion-<name>`, in ms, and one easing curve. Transitions are 80 ms for hover and pressed fills, carried only
  * by `:hover` rules so that selection and other state changes are instant, and 120 ms for menus, popovers and dialogs;
  * `prefers-reduced-motion: reduce` sets both to 0. The loops (Varia's spinners, Monaco's codicon spinners and the live
- * dot) have their own periods and stop under reduced motion through `animation: none`.
+ * dot) have their own periods and stop under reduced motion through `animation: none`. `delay` holds a loading
+ * placeholder back (as an animation delay) and is not motion, so reduced motion leaves it alone.
  */
 export const motion = {
   fast: { ms: 80, use: 'Hover and pressed fills.' },
   base: { ms: 120, use: 'Menus, popovers and dialogs appearing.' },
   spin: { ms: 1500, use: 'One turn of a loading spinner (a loop).' },
-  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' }
+  pulse: { ms: 2000, use: 'One beat of the live dot, 0.5 Hz (a loop).' },
+  delay: { ms: 300, use: 'The wait before a loading placeholder appears, so a quick load never flashes one. Not motion: reduced motion keeps it.' }
 } as const
 export const motionEasing = 'cubic-bezier(0.2, 0, 0, 1)'
 /** The transitions reduced motion turns off; loops are stopped per rule instead. */
@@ -73,15 +75,19 @@ export const glyphSizes = {
   badge: { px: 9, use: 'The status mark at a tree icon\'s corner.' },
   sm: { px: 12, use: 'Glyphs in status bars and tab strips, beside xs and sm text.' },
   md: { px: 16, use: 'Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs.' },
-  lg: { px: 24, use: 'Empty states.' }
+  lg: { px: 24, use: 'Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies).' }
 } as const
 export type GlyphSizeName = keyof typeof glyphSizes
 /** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
-  sm: ['.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon'],
+  sm: [
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon',
+    '.editor-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
+    '.tile-caption > .codicon'
+  ],
   md: ['.icon'],
-  lg: ['.explorer-empty > .icon']
+  lg: []
 }
 
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
@@ -106,7 +112,8 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: ['.title-bar'], bar: ['.query-tabs', '.explorer-header'], control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute'], row: ['.explorer-row'], status: ['.status-bar', '.query-status-bar']
+  header: ['.title-bar'], bar: ['.query-tabs', '.explorer-header'], control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute'],
+  row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
