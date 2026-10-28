@@ -165,7 +165,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
-.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
 /* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
 .explorer-row.server { height: 30px; }
 .explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
@@ -198,8 +198,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /*
  * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes at
  * most 60% of the row and never shrinks for the label, so the count and dot always show; a chip or tag in it gives way
- * instead (flex: 0 1 auto; min-width: 0) under an absolute cap such as 12em. A percentage cap would resolve against this
- * content-sized box and clamp the tag to a share of its own width.
+ * instead (flex: 0 1 auto; min-width: 0) under a cap such as 12em, or a share of the row in cqw (each row is an inline-size
+ * container). A percentage cap would resolve against this content-sized box and clamp the tag to a share of its own width.
  */
 .oe-end { display: flex; flex: none; min-width: 0; max-width: 60%; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
 .oe-end:empty { display: none; }
@@ -739,7 +739,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill.small { height: 18px; padding: 0 6px; }
 /* An environment tag (PROD): squarer than a state pill, so the two read apart side by side. */
 .status-pill.tag { border-radius: var(--varia-radius-sm); letter-spacing: 0.04em; }
-.status-pill > .codicon, .chip > .codicon, .live-pill > .codicon, .stale-badge > .codicon, .tile-caption > .codicon { font-size: var(--varia-size-sm); }
+/* Pills and chips take any registry icon: a codicon, or one of Varia's svg icons, sized as the glyph it replaces. */
+.status-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.status-pill > .icon { font-size: var(--varia-glyph-sm); }
+.chip > .codicon { font-size: var(--varia-glyph-sm); }
+.chip > .icon { font-size: var(--varia-glyph-sm); }
+.live-pill > .codicon { font-size: var(--varia-glyph-sm); }
+.stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
+.tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
 .status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
 .status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
@@ -747,6 +754,25 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-pill[data-tone="critical"] { background: var(--varia-statusPill-criticalBackground); color: var(--varia-statusPill-criticalForeground); }
 .status-pill[data-tone="info"] { background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); }
 .status-pill[data-tone="neutral"] { background: var(--varia-statusPill-neutralBackground); color: var(--varia-statusPill-neutralForeground); }
+/* A connection's environment tag where it labels the connection. A preset's word always fits; a custom label (up to 32
+   characters) is bounded and ends in an ellipsis, with the full label in the tooltip and accessible name, so it never
+   takes the server's name, the tab or the bar it sits in. */
+.environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
+.environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
+/* In a server row's end (.oe-end), which is sized from its content: the tag gives way to the count and dot, at most 40% of
+   the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+.environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
+.environment-tag[data-place="tab"] { max-width: 10em; }
+.environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
+.environment-tag[data-place="list"] { vertical-align: middle; }
+.query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
+/* Apart from the backend's state, which it does not describe. */
+.status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
+.environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
+.environment-preview .environment-tag { flex: 0 1 auto; }
+.connection-choice-title { display: flex; align-items: center; min-width: 0; }
+.connection-choice .connection-choice-title strong { flex: 0 1 auto; min-width: 0; }
+.environment-field input { flex: 1; min-width: 0; }
 .chip-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .chip { display: inline-flex; align-items: center; gap: var(--varia-space-1); height: 24px; padding: 0 10px; border: 1px solid var(--varia-chip-border); border-radius: var(--varia-radius-pill); background: var(--varia-chip-background); color: var(--varia-chip-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .chip[aria-pressed="true"] { background: var(--varia-chip-activeBackground); color: var(--varia-chip-activeForeground); border-color: var(--varia-chip-activeBorder); transition: none; }

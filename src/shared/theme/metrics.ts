@@ -74,13 +74,16 @@ export const glyphSizes = {
   badge: { px: 9, use: 'The status mark at a tree icon\'s corner.' },
   sm: { px: 12, use: 'Glyphs in status bars and tab strips, beside xs and sm text.' },
   md: { px: 16, use: 'Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs.' },
-  lg: { px: 24, use: 'Large glyphs; none yet, as empty states draw theirs at md (16 px).' }
+  lg: { px: 24, use: 'Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies).' }
 } as const
 export type GlyphSizeName = keyof typeof glyphSizes
 /** The styles.css rules sized with each glyph size; tests/theme-metrics.test.ts checks the list both ways. */
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
-  sm: ['.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon'],
+  sm: [
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon',
+    '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.tile-caption > .codicon'
+  ],
   md: ['.icon'],
   lg: []
 }

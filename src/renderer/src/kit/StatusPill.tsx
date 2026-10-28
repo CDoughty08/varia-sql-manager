@@ -11,7 +11,7 @@ interface Props {
   readonly tone: StatusTone
   /** The word that says the state ("Running · 3:42", "RESTORING 42 %", "PROD"); the color only repeats it. */
   readonly label: string
-  /** An icon, `null` for none; by default a state pill shows its tone's glyph and a tag none. */
+  /** An icon from the registry, `null` for none; by default a state pill shows its tone's glyph and a tag none. */
   readonly icon?: IconId | null
   /** `tag` is the squarer environment label (PROD, Staging); `pill` a state. */
   readonly variant?: 'pill' | 'tag'

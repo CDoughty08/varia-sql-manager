@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefCallback, type SyntheticEvent } from 'react'
 import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { environmentTag } from '../../../shared/environments'
+import EnvironmentTag from '../EnvironmentTag'
 import { codiconClass } from '../../../shared/icons'
 import Icon from '../Icon'
 import { useConnectionAccent } from '../core/WorkbenchContext'
@@ -43,6 +45,8 @@ export interface RowProps {
   readonly active: boolean
   /** The connection's color, for a server row. */
   readonly color: string | undefined
+  /** The connection's environment label, for a server row: a tag at the row's end, also in its name and tooltip. */
+  readonly environment?: string
   readonly actions: RowActions
   readonly menuTarget: RefCallback<HTMLDivElement>
   /** The label is the inline Rename box. */
@@ -166,11 +170,11 @@ export function Label({ text, match }: { text: string; match: string | undefined
 export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel'>): string | undefined => node.lost ? '(connection lost)' : node.brief ?? node.sublabel
 
 /**
- * The row's end, right-aligned and never shrunk for the label: first the indicators later PRs add (`children`: E3's
- * state chips, E2's environment tag), then the item count and the connection dot, then `actions` (a lost server's
- * buttons). It takes at most 60% of the row; an indicator shrinks within that (`flex: 0 1 auto; min-width: 0`) under an
- * absolute cap such as `max-width: 12em`, never a percentage, which would resolve against this content-sized box
- * (explorer-smoke 10b measures such a tag here).
+ * The row's end, right-aligned and never shrunk for the label: first the indicators (`children`: E2's environment tag,
+ * later E3's state chips), then the item count and the connection dot, then `actions` (a lost server's buttons). It
+ * takes at most 60% of the row; an indicator shrinks within that (`flex: 0 1 auto; min-width: 0`) under a cap such as
+ * `max-width: min(40cqw, 12em)` (the row is an inline-size container), never a percentage, which would resolve against
+ * this content-sized box (explorer-smoke 10b measures the environment tag here).
  */
 export function RowEnd({ count, connection, children, actions }: { count?: number; connection?: ConnectionState; children?: ReactNode; actions?: ReactNode }) {
   return <span className="oe-end">
@@ -182,7 +186,7 @@ export function RowEnd({ count, connection, children, actions }: { count?: numbe
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node, text, selected, draggable, active, color, actions, menuTarget, renaming, match }: RowProps) {
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, match }: RowProps) {
   const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -200,10 +204,11 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node, text, s
   const toggle = (event: MouseEvent) => { event.stopPropagation(); if (expandable) actions.toggle(rowId) }
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
   const sublabel = shownSublabel(node)
+  const tag = root ? environmentTag(environment) : undefined
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} aria-description={rowDescription(node)} title={rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={tag ? `${rowName(node)}, ${tag.description}` : rowName(node)} aria-description={rowDescription(node)} title={tag ? clip(`${rowTooltip(node)}\n${tag.description}`) : rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
@@ -215,7 +220,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node, text, s
       : <Label text={node.label} match={match} />}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
-    <RowEnd count={itemCount(node)} connection={root ? connectionState(node) : undefined} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />} />
+    <RowEnd count={itemCount(node)} connection={root ? connectionState(node) : undefined} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
+      {tag && <EnvironmentTag environment={environment} place="explorer" />}
+    </RowEnd>
   </div>
 }
 

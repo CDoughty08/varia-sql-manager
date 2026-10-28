@@ -43,12 +43,6 @@ function sample(count = 3) {
   for (let index = 0; index < count; index++) t.add(tables.id, `dbo.Table${index}`)
   return { ...t, server, databases, system, app, tables }
 }
-function bestOf3(action: () => void): number {
-  let best = Infinity
-  for (let run = 0; run < 3; run++) { const start = performance.now(); action(); best = Math.min(best, performance.now() - start) }
-  return best
-}
-
 describe('row ids', () => {
   it('encode the owner and kind of synthetic rows, and leave node ids alone', () => {
     for (const kind of [RowKind.Loading, RowKind.Error, RowKind.More, RowKind.Stopped, RowKind.Capped, RowKind.Paused, RowKind.MoreError]) {
@@ -111,12 +105,26 @@ describe('flatten', () => {
     expect(rows.nodes.map(node => node?.label)).toEqual(['server-a', 'Databases', 'System Databases', 'AppData', 'Tables', undefined, 'dbo.Table0', 'Security'])
     expect(rows.nodes.every((node, index) => node ? node.id === rows.ids[index] : rows.ids[index] < 0)).toBe(true)
   })
-  it('flattens 250,000 visible rows within the budget', () => {
+  it('flattens 250,000 visible rows with one visit per node, preserving order and identity', () => {
     const t = sample(250_000)
-    let rows = t.rows()
-    const time = bestOf3(() => { rows = t.rows() })
+    const prefix = [t.server, t.databases, t.system, t.app, t.tables].map(node => node.id)
+    const children = t.tables.children!, security = t.server.children!.find(node => node.folder === 'serverSecurity')!
+    const visits = new Uint8Array(t.nodes.size)
+    for (const [id, node] of t.nodes) {
+      Object.defineProperty(node, 'id', { configurable: true, enumerable: true, get: () => {
+        if (++visits[id - 1] > 1) throw new Error('Flatten inspected a node more than once.')
+        return id
+      } })
+    }
+    const rows = t.rows()
     expect(rows.count).toBe(250_000 + 6)
-    expect(time).toBeLessThan(60)
+    expect(visits.every(count => count === 1)).toBe(true)
+    expect(Array.from(rows.ids.subarray(0, prefix.length))).toEqual(prefix)
+    expect(children.every((node, index) => rows.nodes[index + prefix.length] === node)).toBe(true)
+    expect(rows.nodes.at(-1)).toBe(security)
+    expect(rows.nodes.every((node, index) => node === t.nodes.get(rows.ids[index]))).toBe(true)
+    expect([rows.levels[5], rows.posinset[5], rows.setsize[5]]).toEqual([5, 1, 250_000])
+    expect([rows.levels.at(-2), rows.posinset.at(-2), rows.setsize.at(-2)]).toEqual([5, 250_000, 250_000])
   })
 })
 
@@ -267,14 +275,31 @@ describe('type-ahead', () => {
     expect(t.nodes.get(rows.ids[typeAhead(rows, 0, 'e')])!.label).toBe('Error')
     expect(typeAhead(rows, 0, '')).toBe(-1)
   })
-  it('scans 100,000 rows within the budget', () => {
+  it('searches 100,000 rows in one pass and wraps without rescanning', () => {
     const labels = Array.from({ length: 100_000 }, (_, index) => `dbo.table${index}`)
     const { rows, nodes } = folder(labels)
-    let found = -1
-    const time = bestOf3(() => { found = typeAhead(rows, 0, 'zzz') })
-    expect(found).toBe(-1)
-    expect(time).toBeLessThan(20)
-    expect(nodes.get(rows.ids[typeAhead(rows, 0, 'table99999')])!.label).toBe('dbo.table99999')
+    const visited: number[] = []
+    for (const [index, node] of rows.nodes.entries()) {
+      const lower = node!.lower
+      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => {
+        visited.push(index)
+        if (visited.length > rows.count) throw new Error('Type-ahead inspected more than one pass of the visible rows.')
+        return lower
+      } })
+    }
+    // Count actual matching work, independent of shared-runner scheduling or garbage-collection pauses.
+    expect(typeAhead(rows, 0, 'zzz')).toBe(-1)
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    visited.length = 0
+    const last = typeAhead(rows, 0, 'table99999')
+    expect(nodes.get(rows.ids[last])!.label).toBe('dbo.table99999')
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    visited.length = 0
+    const wrapped = typeAhead(rows, last, 'table0')
+    expect(nodes.get(rows.ids[wrapped])!.label).toBe('dbo.table0')
+    expect(visited).toEqual([last, 0, wrapped])
   })
   it('collects printable keys until a pause of a second, ignoring IME, modifiers and leading spaces', () => {
     let now = 0
@@ -403,10 +428,28 @@ describe('Filter loaded objects', () => {
     expect(filterMatch({ lower: 'dbo.orders' }, 'ord')).toBe(4)
     expect(filterMatch({ lower: 'dbo.orders' }, '')).toBe(-1)
   })
-  it('filters 100,000 loaded rows within a frame', () => {
+  it('filters 100,000 loaded rows in one pass, reading each open node\'s name once and nothing below a collapsed one', () => {
     const t = sample(100_000)
-    expect(flattenFiltered(t.nodes, t.roots, 'table9999').matches).toBe(11)
-    expect(bestOf3(() => flattenFiltered(t.nodes, t.roots, 'table9'))).toBeLessThan(50)
+    // A collapsed folder whose loaded rows would match: the filter narrows what is open, so it never looks inside.
+    const hidden = t.add(t.app.id, 'Views', { folder: 'views' })
+    for (let index = 0; index < 1_000; index++) t.add(hidden.id, `dbo.Table9View${index}`)
+    // An open match shows whole, down to its collapsed folders, whose loaded rows stay out of sight.
+    const table9 = t.tables.children![9], folder = t.add(table9.id, 'Columns', { folder: 'columns' })
+    table9.expanded = true
+    const columns = Array.from({ length: 100 }, (_, index) => t.add(folder.id, `table9_column${index}`, { kind: 'column' }))
+    const reads = new Map<number, number>()
+    for (const [id, node] of t.nodes) {
+      const lower = node.lower
+      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => { reads.set(id, (reads.get(id) ?? 0) + 1); return lower } })
+    }
+    // Count the work rather than time it, so a loaded runner cannot fail it: 1 + 10 + 100 + 1,000 + 10,000 tables match.
+    const result = flattenFiltered(t.nodes, t.roots, 'table9')
+    expect(result.matches).toBe(11_111)
+    expect(result.rows.count).toBe(11_111 + 5)
+    expect(reads.get(folder.id)).toBe(1)
+    expect(Math.max(...reads.values())).toBe(1)
+    expect(t.tables.children!.every(node => reads.get(node.id) === 1)).toBe(true)
+    expect([...hidden.children!, ...columns].some(node => reads.has(node.id))).toBe(false)
   })
 })
 

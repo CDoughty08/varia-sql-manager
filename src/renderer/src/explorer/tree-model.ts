@@ -204,15 +204,16 @@ export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filt
     const tail = tailRow(node)
     if (tail !== undefined) out.push(syntheticId(node.id, tail), tail, level, 0, 0, undefined)
   }
-  // A match's subtree shows whole, as without a filter; the matches in it still count.
-  const visitAll = (node: TreeNode, posinset: number, setsize: number) => {
+  // A match's subtree shows whole, as without a filter; the matches in it still count. `matched`: the caller has
+  // already matched the node, so each name is searched once.
+  const visitAll = (node: TreeNode, posinset: number, setsize: number, matched = false) => {
     out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
-    if (filterMatch(node, filter) >= 0) matches++
+    if (matched || filterMatch(node, filter) >= 0) matches++
     if (node.expanded) visitChildren(node, (child, index, size) => visitAll(child, index + 1, size))
   }
   /** Emits the node if it or a node below it matches, or it is a server or pinned; true when it did. */
   const visit = (node: TreeNode, posinset: number, setsize: number, server: boolean): boolean => {
-    if (filterMatch(node, filter) >= 0) { visitAll(node, posinset, setsize); return true }
+    if (filterMatch(node, filter) >= 0) { visitAll(node, posinset, setsize, true); return true }
     const mark = out.count
     out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
     const shown: number[] = []

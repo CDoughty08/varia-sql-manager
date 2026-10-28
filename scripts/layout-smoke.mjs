@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { closePaneButton, dockEmpty, editorText, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, primaryAction, layoutError, movePane, pane as paneOf, paneTab, part } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'layout-profile-'))
@@ -27,11 +28,11 @@ async function ready(editorVisible = true) {
   await expect(page.locator('.monaco-editor')).toHaveCount(1, { timeout: 30000 })
   if (editorVisible) await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   else await expect(page.locator('.monaco-editor')).toBeHidden()
-  await expect(page.locator('.layout-error')).toHaveCount(0)
+  await expect(layoutError(page)).toHaveCount(0)
   await dialogs()
 }
-const pane = id => page.locator('[data-pane="' + id + '"]')
-async function text() { return page.locator('.monaco-editor .view-lines').innerText() }
+const pane = id => paneOf(page, id)
+async function text() { return editorText(page) }
 async function typeSql(sql) {
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A'); await page.keyboard.insertText(sql)
@@ -51,12 +52,12 @@ async function aimGuide(source, destination, position, scope = 'panel') {
   const headerBox = await source.boundingBox(), target = await pane(destination).boundingBox()
   await page.mouse.move(headerBox.x + 20, headerBox.y + headerBox.height / 2); await page.mouse.down()
   await page.mouse.move(target.x + target.width / 2 + 95, target.y + target.height / 2, { steps: 5 })
-  await expect(page.locator('.docking-guides')).toBeVisible()
-  await expect(page.locator('.docking-guide-cell')).toHaveCount(9)
+  await expect(page.locator(part.dockingGuides)).toBeVisible()
+  await expect(page.locator(part.dockingGuideCell)).toHaveCount(9)
   const guide = await page.locator(`[data-guide-position="${position}"][data-guide-scope="${scope}"]`).boundingBox()
   await page.mouse.move(guide.x + guide.width / 2, guide.y + guide.height / 2, { steps: 3 })
-  await expect(page.locator('.docking-preview')).toBeVisible()
-  await expect(page.locator('.docking-guide-cell.active')).toHaveAttribute('data-guide-position', position)
+  await expect(page.locator(part.dockingPreview)).toBeVisible()
+  await expect(page.locator(part.activeDockingGuideCell)).toHaveAttribute('data-guide-position', position)
 }
 
 try {
@@ -76,7 +77,7 @@ try {
 
   await manage(); await page.getByLabel('Layout name', { exact: true }).fill('Analysis')
   const sashBox = await vertical.boundingBox()
-  expect(await page.evaluate(point => !!document.elementFromPoint(point.x, point.y)?.closest('.modal-backdrop'), { x: sashBox.x + sashBox.width / 2, y: sashBox.y + sashBox.height / 2 })).toBe(true)
+  expect(await page.evaluate(({ x, y, backdrop }) => !!document.elementFromPoint(x, y)?.closest(backdrop), { x: sashBox.x + sashBox.width / 2, y: sashBox.y + sashBox.height / 2, backdrop: part.modalBackdrop })).toBe(true)
   await page.getByRole('button', { name: 'Save layout', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText('Layout saved.')
   const exportedPath = resolve('artifacts', 'analysis.varia-layout.json')
@@ -91,13 +92,13 @@ try {
   console.log('Layout checks: splitter resizing, named save, and export passed.')
 
   // Real pointer docking, followed by a keyboard-accessible move action.
-  await aimGuide(page.locator('[data-pane-tab="explorer"]'), 'editor', 'right')
+  await aimGuide(paneTab(page, 'explorer'), 'editor', 'right')
   await page.screenshot({ path: resolve('artifacts', 'docking-guides.png') })
   await page.mouse.up()
   await expect.poll(async () => (await pane('explorer').boundingBox()).x).toBeGreaterThan((await pane('editor').boundingBox()).x)
-  await expect(page.locator('.docking-guides')).toBeHidden()
+  await expect(page.locator(part.dockingGuides)).toBeHidden()
   console.log('Layout checks: pointer docking passed.')
-  await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
+  await movePane(page, 'output', 'float')
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   // The floating container appears before its next-frame content resize.
   await expect.poll(async () => (await pane('output').boundingBox()).width).toBeLessThan(600)
@@ -111,7 +112,7 @@ try {
   await page.mouse.up()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   await expect.poll(async () => (await pane('output').boundingBox()).x - (await pane('editor').boundingBox()).x).toBeLessThan(0)
-  await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
+  await movePane(page, 'output', 'float')
   console.log('Layout checks: floating movement and resizing passed.')
 
   await manage()
@@ -129,9 +130,9 @@ try {
   await done()
   console.log('Layout checks: import and invalid-file recovery passed.')
 
-  await aimGuide(page.locator('[data-pane-tab="explorer"]'), 'output', 'center')
+  await aimGuide(paneTab(page, 'explorer'), 'output', 'center')
   await page.mouse.up()
-  await expect.poll(() => page.locator('.dv-groupview').filter({ has: page.locator('[data-pane-tab="explorer"]') }).locator('[data-pane-tab="output"]').count()).toBe(1)
+  await expect.poll(() => page.locator('.dv-groupview').filter({ has: paneTab(page, 'explorer') }).locator(paneTab(page, 'output')).count()).toBe(1)
   await manage()
   await page.getByLabel('Saved layouts', { exact: true }).selectOption({ label: 'Analysis' })
   await page.getByRole('button', { name: 'Load layout', exact: true }).click()
@@ -144,14 +145,14 @@ try {
   await expect.poll(text).not.toBe(typed)
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('edit.redo').click())
   await expect.poll(text).toBe(typed)
-  const selectionRules = await page.evaluate(() => ({
-    tabs: getComputedStyle(document.querySelector('.tab-name')).userSelect,
-    heading: getComputedStyle(document.querySelector('.explorer-toolbar')).userSelect,
-    status: getComputedStyle(document.querySelector('.status-bar')).userSelect,
+  const selectionRules = await page.evaluate(part => ({
+    tabs: getComputedStyle(document.querySelector(part.documentTabs + ' ' + part.tabName)).userSelect,
+    heading: getComputedStyle(document.querySelector(part.explorerToolbar)).userSelect,
+    status: getComputedStyle(document.querySelector(part.statusBar)).userSelect,
     editor: getComputedStyle(document.querySelector('.monaco-editor')).userSelect
-  }))
+  }), part)
   expect(selectionRules).toEqual({ tabs: 'none', heading: 'none', status: 'none', editor: 'text' })
-  await page.getByRole('button', { name: 'Close Query editor', exact: true }).click()
+  await closePaneButton(page, 'editor').click()
   await expect(pane('editor')).toBeHidden()
   await windowPane('editor')
   await expect(pane('editor')).toBeVisible()
@@ -162,23 +163,23 @@ try {
   await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('edit.redo').click())
   await expect.poll(text).toBe(typed)
   // Ctrl-drag floats even when passing over a docking target.
-  const explorerHeader = await page.locator('[data-pane-tab="explorer"]').boundingBox(), destination = await pane('editor').boundingBox()
+  const explorerHeader = await paneTab(page, 'explorer').boundingBox(), destination = await pane('editor').boundingBox()
   await page.mouse.move(explorerHeader.x + 20, explorerHeader.y + explorerHeader.height / 2); await page.keyboard.down('Control'); await page.mouse.down()
   await page.mouse.move(destination.x + destination.width / 2, destination.y + destination.height / 2, { steps: 5 })
-  await expect(page.locator('.docking-guides')).toBeHidden()
+  await expect(page.locator(part.dockingGuides)).toBeHidden()
   await page.mouse.up(); await page.keyboard.up('Control')
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
-  await page.locator('[data-pane-tab="explorer"]').dblclick({ modifiers: ['Control'] })
+  await paneTab(page, 'explorer').dblclick({ modifiers: ['Control'] })
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   // Outer cells split the entire workspace, not just the hovered destination.
-  await aimGuide(page.locator('[data-pane-tab="explorer"]'), 'editor', 'left', 'workspace')
+  await aimGuide(paneTab(page, 'explorer'), 'editor', 'left', 'workspace')
   await page.mouse.up()
   // Relative to the workspace rather than a pixel height: Windows shrinks the window to fit small displays (1024x768 on CI).
-  await expect.poll(async () => (await page.locator('.workbench').boundingBox()).height - (await pane('explorer').boundingBox()).height).toBeLessThan(40)
-  await expect(page.locator('.layout-error')).toHaveCount(0)
+  await expect.poll(async () => (await page.locator(part.workbench).boundingBox()).height - (await pane('explorer').boundingBox()).height).toBeLessThan(40)
+  await expect(layoutError(page)).toHaveCount(0)
   console.log('Layout checks: tab grouping, named load, and Monaco undo preservation passed.')
-  await page.getByLabel('Move Object Explorer', { exact: true }).selectOption('right')
-  await page.getByLabel('Move Query output', { exact: true }).selectOption('float')
+  await movePane(page, 'explorer', 'right')
+  await movePane(page, 'output', 'float')
   await manage(); await page.getByLabel('Layout name', { exact: true }).fill('Floating analysis')
   await page.getByRole('button', { name: 'Save layout', exact: true }).click()
   await expect(page.getByRole('dialog').getByRole('status')).toContainText('Layout saved.')
@@ -202,10 +203,10 @@ try {
   await done()
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   expect((await pane('explorer').boundingBox()).x).toBeLessThan((await pane('editor').boundingBox()).x)
-  await expect(page.locator('.layout-error')).toHaveCount(0)
+  await expect(layoutError(page)).toHaveCount(0)
   // Closing every panel is a valid, persisted layout; Window can recover each one.
   for (const id of ['explorer', 'output', 'editor']) {
-    await page.getByRole('button', { name: 'Close ' + ({ explorer: 'Object Explorer', editor: 'Query editor', output: 'Query output' })[id], exact: true }).click()
+    await closePaneButton(page, id).click()
     await expect(pane(id)).toBeHidden()
   }
   await manage(); await page.getByLabel('Layout name', { exact: true }).fill('Closed panels')
@@ -217,11 +218,12 @@ try {
   await ready(false)
   await expect(page.getByText('All panels are closed.', { exact: true })).toBeVisible()
   // The closed-panels view is the states kit's empty state: a glyph, the title, a line, and an outlined (not filled) action.
-  const closedPanels = page.locator('.dock-empty.empty-state')
-  await expect(closedPanels.locator('.empty-state-icon[data-icon="layout"]')).toHaveCount(1)
-  await expect(closedPanels.locator('.empty-state-title')).toHaveText('All panels are closed.')
-  await expect(closedPanels.locator('.empty-state-detail')).toHaveText('Open a panel from the Window menu.')
-  await expect(closedPanels.getByRole('button', { name: 'Open Query editor', exact: true })).not.toHaveClass('primary')
+  const closedPanels = emptyState(dockEmpty(page))
+  await expect(emptyStateIcon(closedPanels)).toHaveAttribute('data-icon', 'layout')
+  await expect(emptyStateTitle(closedPanels)).toHaveText('All panels are closed.')
+  await expect(emptyStateDetail(closedPanels)).toHaveText('Open a panel from the Window menu.')
+  await expect(closedPanels.getByRole('button', { name: 'Open Query editor', exact: true })).toBeVisible()
+  await expect(primaryAction(closedPanels)).toHaveCount(0)
   await expect(closedPanels).toHaveCSS('justify-content', 'center')
   // The saved layout loads after the window shows, and opening the file can take seconds on Windows. Main's read of it
   // is held here across a reload: the workspace shows nothing rather than "All panels are closed", and a Window choice
@@ -246,16 +248,16 @@ try {
   await expect(pane('explorer')).toBeHidden()
   await application.evaluate(() => globalThis.variaLayoutRead.release())
   await expect(pane('explorer')).toBeVisible()
-  await expect(page.locator('.layout-error')).toHaveCount(0)
+  await expect(layoutError(page)).toHaveCount(0)
   for (const id of ['explorer', 'editor', 'output']) { await windowPane(id); await expect(pane(id)).toBeVisible() }
-  await expect(page.locator('.layout-error')).toHaveCount(0)
+  await expect(layoutError(page)).toHaveCount(0)
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   await expect.poll(async () => Math.round((await pane('explorer').boundingBox()).width + (await pane('editor').boundingBox()).width)).toBe(1024)
   const compactWidth = (await pane('explorer').boundingBox()).width
   await drag(page.locator('.dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled').first(), 50, 0)
   await expect.poll(async () => (await pane('explorer').boundingBox()).width).toBeGreaterThan(compactWidth + 30)
-  await expect.poll(() => page.locator('.explorer').evaluate(element => element.clientWidth === element.parentElement.clientWidth)).toBe(true)
+  await expect.poll(() => page.locator(part.explorerPane).evaluate(element => element.clientWidth === element.parentElement.clientWidth)).toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'default-dock-layout.png') })
   console.log('Layout checks passed: splitters, nine-cell docking guides and previews, local/whole-workspace splits, tab drops, plain floating-titlebar redocking, Ctrl-drag and Ctrl-double-click, close/reopen without losing Monaco undo, named layouts, file round trips and invalid import recovery, closed-panel and empty-workspace restart persistence, Window recovery, selection rules, and reset.')
 } catch (error) {

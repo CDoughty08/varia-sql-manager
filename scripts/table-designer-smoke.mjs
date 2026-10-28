@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
+import { activeDocument, activeDocumentName, closeDocumentButton, documentTabs, kindIcon, menuItemNames, part, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'table-designer-profile-'))
@@ -17,10 +18,10 @@ const watchdog = setTimeout(() => { console.error('Table designer suite exceeded
 
 const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
-const tabs = () => page.locator('.query-tabs').getByRole('tab')
-const designer = () => page.locator('.table-designer')
+const tabs = () => documentTabs(page).getByRole('tab')
+const designer = () => page.locator(part.tableDesigner)
 const grid = () => designer().getByRole('grid', { name: 'Columns', exact: true })
-const rows = () => grid().locator('.designer-row')
+const rows = () => grid().getByRole('row').filter({ has: page.getByRole('rowheader') })
 const stubCalls = method => application.evaluate((_electron, name) => globalThis.variaStub.calls.filter(call => call.method === name).map(call => call.params), method)
 const appData = ['server-a', 'Databases', 'AppData']
 const tablesPath = [...appData, 'Tables']
@@ -34,7 +35,7 @@ async function menu(id) {
 }
 
 async function connect(server) {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
@@ -82,7 +83,7 @@ try {
   await expect(page.getByRole('tab', { name: 'server-a.AppData - dbo.Table_1', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect((await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'tableDesigner', target: { kind: 'database', name: 'AppData' } })
   // The query editor is hidden, and the Server and Database pickers belong to queries.
-  await expect(page.locator('.editor-container')).toBeHidden()
+  await expect(page.locator(part.editorPane)).toBeHidden()
   await expect(page.getByLabel('Query database', { exact: true })).toBeDisabled()
   console.log('Table designer checks: Tables › New › Table… opens the designer tab at once with the grid focused.')
 
@@ -99,20 +100,21 @@ try {
   await page.keyboard.type('nvarchar(50)')
   await page.keyboard.press('Enter')
   await expect(rows()).toHaveCount(3)
-  await expect(rows().nth(0).locator('.designer-text')).toHaveText(['Id', 'int'])
-  await expect(rows().nth(1).locator('.designer-text')).toHaveText(['Name', 'nvarchar(50)'])
+  await expect(rows().nth(0).locator(part.designerText)).toHaveText(['Id', 'int'])
+  await expect(rows().nth(1).locator(part.designerText)).toHaveText(['Name', 'nvarchar(50)'])
   await expect(rows().nth(0).getByRole('checkbox')).not.toBeChecked()
   await expect(rows().nth(1).getByRole('checkbox')).toBeChecked()
   // The tab shows its unsaved changes, and so does the window title.
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
+  await expect(kindIcon(activeDocument(page), 'Table Designer')).toHaveAttribute('data-icon', 'table')
   await expect.poll(() => page.title()).toBe('* server-a.AppData - dbo.Table_1 — Varia SQL Manager')
   console.log('Table designer checks: typing, Tab, Space and the empty last row add columns, and the tab is dirty.')
 
   // 3. The designer menu's Set Primary Key on the first row: the key glyph, and Allow Nulls greyed.
-  await rows().nth(0).locator('.designer-selector').click({ button: 'right' })
+  await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
   const designerMenu = menuNamed('Table Designer')
   await expect(designerMenu).toBeVisible()
-  expect(await designerMenu.locator('.menu-item .menu-label').allTextContents()).toEqual(['Set Primary Key', 'Insert Column', 'Delete Column', 'Generate Change Script…', 'Properties'])
+  expect(await menuItemNames(designerMenu)).toEqual(['Set Primary Key', 'Insert Column', 'Delete Column', 'Generate Change Script…', 'Properties'])
   await designerMenu.getByRole('menuitem', { name: 'Set Primary Key', exact: true }).click(fast)
   await expect(rows().nth(0).locator('[data-icon="key"]')).toHaveCount(1)
   await expect(rows().nth(0).getByRole('checkbox')).toBeDisabled()
@@ -140,7 +142,7 @@ try {
 
   // 4. Generate Change Script… shows the backend's script; No closes it.
   await grid().focus()
-  await rows().nth(0).locator('.designer-selector').click({ button: 'right' })
+  await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
   await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click(fast)
   const scriptDialog = page.getByRole('dialog', { name: 'Save Change Script', exact: true })
   // A text area's value has LF line breaks.
@@ -163,7 +165,7 @@ try {
   })
   await expect(designer().getByRole('status').filter({ hasText: 'dbo.Orders was created. Changing an existing table in the designer is not available yet.' })).toBeVisible()
   await expect(page.getByRole('tab', { name: 'server-a.AppData - dbo.Orders', exact: true })).toBeVisible()
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(0)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   await expect(rows().nth(0).getByRole('checkbox')).toBeDisabled()
   await expect(rows().nth(1).getByRole('checkbox')).toBeDisabled()
   // Object Explorer reloads Tables and selects the new table.
@@ -176,10 +178,10 @@ try {
   const hostile = '<img src=x onerror=alert(1)>'
   await page.keyboard.type(hostile)
   await page.keyboard.press('Enter')
-  await expect(rows().nth(0).locator('.designer-text').first()).toHaveText(hostile)
+  await expect(rows().nth(0).locator(part.designerText).first()).toHaveText(hostile)
   await expect(designer().locator('img')).toHaveCount(0)
   await application.evaluate(() => { globalThis.variaStub.answers.push(1) })
-  await page.locator('.query-tab.active').getByRole('button', { name: /^Close / }).click()
+  await closeDocumentButton(page, await activeDocumentName(page)).click()
   await expect(page.getByRole('tab', { name: 'server-a.AppData - dbo.Table_2', exact: true })).toHaveCount(0)
   expect(await application.evaluate(() => globalThis.variaStub.prompts.at(-1))).toMatchObject({ message: 'Save changes to server-a.AppData - dbo.Table_2?', buttons: ['Save', "Don't Save", 'Cancel'] })
   console.log('Table designer checks: a name like markup shows as text, and closing a dirty designer asks to save it (Don\'t Save closes).')
@@ -198,13 +200,13 @@ try {
   const held = (await stubCalls('actions.execute')).at(-1)
   expect(held).toMatchObject({ action: 'createTable', design: { name: 'Held' } })
   expect(await application.evaluate(() => globalThis.variaStub.cancels)).toContain(held.requestId)
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   console.log('Table designer checks: Stop cancels a waiting save in the backend, which SQL Server rolled back, and the designer stays dirty.')
 
   // 8. Generate Change Script… › Yes saves the script to the file main's Save dialog picks.
   const scriptFile = resolve(profile, 'Held.sql')
   await application.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, scriptFile)
-  await rows().nth(0).locator('.designer-selector').click({ button: 'right' })
+  await rows().nth(0).getByRole('rowheader').click({ button: 'right' })
   await menuNamed('Table Designer').getByRole('menuitem', { name: 'Generate Change Script…', exact: true }).click(fast)
   await scriptDialog.getByRole('button', { name: 'Yes', exact: true }).click()
   await expect(scriptDialog).toHaveCount(0)
@@ -220,13 +222,13 @@ try {
   await page.keyboard.press('Control+End')
   await page.keyboard.press('Home')
   await page.keyboard.type('Extra')
-  await expect(grid().locator('input.designer-editor')).toHaveValue('Extra')
+  await expect(grid().getByRole('textbox', { name: 'Column Name', exact: true })).toHaveValue('Extra')
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s')
   await expect(designer().getByRole('alert')).toHaveText('An object named Taken already exists in schema dbo.')
   await expect(page.getByRole('dialog', { name: 'Choose Name', exact: true })).toHaveCount(0)
   const taken = (await stubCalls('actions.execute')).at(-1)
   expect(taken).toMatchObject({ action: 'createTable', design: { name: 'Taken', columns: [{ name: 'Id' }, { name: 'Extra' }], primaryKey: [] } })
-  await expect(rows().nth(1).locator('.designer-text').first()).toHaveText('Extra')
+  await expect(rows().nth(1).locator(part.designerText).first()).toHaveText('Extra')
   await tableProperties.getByLabel('(Name)', { exact: true }).fill('Fixed')
   await grid().focus()
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s')
@@ -247,7 +249,7 @@ try {
   await expect(chooseName.getByLabel('Enter a name for the table:', { exact: true })).toHaveValue('Table_4')
   await chooseName.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(chooseName).toHaveCount(0)
-  await expect(page.locator('.query-tab.active .dirty-dot')).toHaveCount(1)
+  await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   console.log('Table designer checks: Save All brings an unnamed designer behind a query forward with Choose Name.')
 
   expect(failures).toEqual([])

@@ -22,6 +22,28 @@ void Check(bool condition, string name)
     if (!condition) throw new Exception("FAIL: " + name);
     passed++;
 }
+// A focused SQL Server lane: its permission checks are required, never an offline-only or skipped success.
+if (args is ["--activity-actions-live"])
+{
+    var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
+    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SERVER.");
+    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SCRATCH=1.");
+    var focusedUser = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_USER");
+    var focusedPassword = string.IsNullOrWhiteSpace(focusedUser) ? null
+        : Environment.GetEnvironmentVariable("VARIA_TEST_SQL_PASSWORD") ?? throw new Exception("VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.");
+    ConnectOptions FocusedLive(string database) => focusedPassword is null
+        ? new(focusedServer, database, "windows", null, null, true)
+        : new(focusedServer, database, "sql", focusedUser, focusedPassword, true);
+    using var focusedService = new SqlService();
+    var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
+    try
+    {
+        await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
+        Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+    }
+    finally { await focusedService.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(focusedInfo.Id), json), json); }
+    return;
+}
 void Invalid(string sql, string name)
 {
     try { SqlScript.Parse(sql); throw new Exception("Accepted invalid script: " + name); }
@@ -88,6 +110,16 @@ Check(builder.MultiSubnetFailover && builder.ServerSPN == "MSSQLSvc/db.example" 
 Check(!JsonSerializer.Serialize(ConnectionSettings.Preview(settings)).Contains("private-marker"), "connection preview never contains a password");
 builder = ConnectionSettings.Build(settings with { Authentication = "windows", Encrypt = "mandatory", Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "None") });
 Check(builder.ColumnEncryptionSetting.ToString() == "Enabled" && builder.AttestationProtocol.ToString() == "None" && builder.Password == "", "enclaves and Windows authentication map without SQL credentials");
+builder = ConnectionSettings.Build(settings with { Environment = new string('P', 32) });
+Check(!builder.ConnectionString.Contains("PPPP"), "a connection's environment label is accepted up to 32 characters and never reaches the connection string");
+builder = ConnectionSettings.Build(settings with { Environment = "  " + new string('P', 32) + "  " });
+Check(!builder.ConnectionString.Contains("PPPP"), "backend measures an environment label after trimming, as main does");
+foreach (var (environment, problem) in new[] { (new string('P', 33), "over 32 characters"), (" ", "that is blank"), ("PROD\u0007", "with a control character"),
+    ("PR\u202eOD", "with a bidirectional override"), ("PR\u200bOD", "with a zero-width space"), ("PR\u2028OD", "with a line separator"), ("PR\u2029OD", "with a paragraph separator"), ("PR\U000E0041OD", "with a tag character") })
+{
+    try { ConnectionSettings.Build(settings with { Environment = environment }); throw new Exception("Invalid environment accepted"); }
+    catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects an environment label " + problem); }
+}
 try { ConnectionSettings.Build(settings with { Advanced = new(PacketSize: 1) }); throw new Exception("Invalid packet size accepted"); }
 catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "backend rejects invalid advanced ranges"); }
 try { ConnectionSettings.Build(settings with { Advanced = new(ColumnEncryption: true, SecureEnclaves: true, AttestationProtocol: "HGS") }); throw new Exception("Missing attestation URL accepted"); }
@@ -95,8 +127,12 @@ catch (RequestException error) { Check(error.Code == "INVALID_PARAMS", "HGS requ
 ProtocolChecks.Run(Check);
 PageChecks.Run(Check);
 HostChecks.Run(Check);
+await LiveChecks.RunAsync(Check);
+await LiveSchedulerChecks.RunAsync(Check);
+await LiveTableChecks.RunAsync(Check);
 await ConnectionFailureChecks.RunAsync(Check);
 await ConnectionFailureChecks.IdentityAsync(Check);
+SessionChecks.Run(Check);
 await EntraChecks.RunAsync(Check);
 StoreChecks.Run(Check);
 await TextChecks.RunAsync(Check);
@@ -105,6 +141,9 @@ await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
+await SsisChecks.RunAsync(Check);
+ActivityChecks.Run(Check);
+await ActivityActionChecks.RunAsync(Check, json);
 using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }
@@ -126,9 +165,11 @@ using (var offline = new SqlService())
 Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
     && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
     "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
-Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
-    && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD" }.Any(ScratchDatabase.Sweepable),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp and the table designer's _tbd and _tbd.] included, and nothing else");
+Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+    && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
+        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "SSISDB" }.Any(ScratchDatabase.Sweepable),
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live and the SSIS checks' _ssis and _ssisref included, and nothing else (never SSISDB)");
+SsisFixtureChecks.Run(Check);
 Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
 QueryResult Stopped(string status, params long[] rowsRead) => new([.. rowsRead.Select((read, index) => new ResultDescriptor(1, index, 1, 1, "rows", [], read, 1, 1, 0, 0, "complete", null, true))],
     0, [], -1, 0, status, null, 0, 1, "master", false, new ResultBudget(0, 0, 0, 0), "");
@@ -370,6 +411,9 @@ try
     await Call<object>("query.session.close", new SessionArgs(sessionId));
     result = await Run("SELECT * FROM #VariaBatchTest;");
     Check(result.Status == "completedWithErrors" && result.Error?.Message.Contains("Msg 208") == true, "closing a tab removes temporary objects and session state");
+    await LiveChecks.LiveAsync(Check, service, info, Live("tempdb"), json);
+    await LiveDataChecks.RunAsync(Check, service, info, Live, json);
+    await LiveTableDataChecks.RunAsync(Check, service, Live, json);
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
     await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
@@ -378,6 +422,9 @@ try
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
+    await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
+    await ActivityLiveChecks.RunAsync(Check, service, info);
+    await ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }

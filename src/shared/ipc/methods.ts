@@ -7,10 +7,15 @@ export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
  *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
- *  2 in all), so a DROP waiting on a lock never holds a metadata slot. Main reserves 32 extra pending requests for the
- *  control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user signs in in the web
- *  browser, for up to 3 minutes; those sign-ins run one at a time. */
-export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions'
+ *  2 in all), so a DROP waiting on a lock never holds a metadata slot; Kill Process runs there under gates of its own, so
+ *  it never queues behind such a DROP. ssis runs SSIS Catalog reads at once under the SSIS service's own gates (2 per
+ *  connection, 4 in all), so a read waiting on SSISDB never holds a metadata slot either. Main reserves 32 extra pending
+ *  requests for the control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user
+ *  signs in in the web browser, for up to 3 minutes; those sign-ins run one at a time. A live subscription (lane live)
+ *  takes no slot: its own task samples on its own schedule, one tick at a time. Its statements, and those of a unary
+ *  method on lane live, run under the live gates (2 per connection, 8 in all, each waited for at most the statement's
+ *  budget, then BUSY). */
+export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'live' | 'ssis'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly kind: MethodKind
@@ -21,6 +26,9 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly backstopMs?: (params: BackendMethods[M]['params']) => number
   /** The request carries a password: its frame is zeroed once written. */
   readonly sensitive?: boolean
+  /** Its EVENT frames are charged against its credit, and only one may be unacknowledged (docs/ipc.md, Live
+   *  subscriptions). Only live.subscribe sets it; such a request has no DATA frames. */
+  readonly creditedEvents?: boolean
 }
 
 const metadata = { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 } as const
@@ -66,8 +74,19 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
+  // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
+  'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
+  // Activity Monitor's session actions. Details answers its own 10 s budget as an error: TIMEOUT value, inside this deadline;
+  // main cancels it from the renderer (varia:activity-cancel). Kill answers its own 25 s budget the same way, with the
+  // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.
+  'activity.details': { kind: 'unary', lane: 'live', deadlineMs: 15_000 },
+  'activity.kill': { kind: 'unary', lane: 'actions', deadlineMs: 30_000 },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
+  // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
+  'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true },
+  // Applied at once to the subscription's settings; its next scheduler wake uses them.
+  'live.update': control,
   'debug.results.synthesize': { kind: 'unary', lane: 'metadata', deadlineMs: 120_000 }
 }
 
