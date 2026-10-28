@@ -1397,6 +1397,22 @@ describe('ExplorerService: memory and speed', () => {
     expect(id.ref.object.parent).toBe(name.ref.object.parent)
     expect(id.ref.object.parent).toEqual({ kind: 'table', schema: 'dbo', name: 'T0' })
   })
+  it('shares a folder\'s owner only when every identity field matches, SSIS folder and project included', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const appData: ObjectRef = { kind: 'database', name: 'AppData' }
+    const databases = await f.open('Databases')
+    f.state.failNext = { ok: true, value: { nodes: [folder({ ...appData, ssisFolder: 'Finance' }, 'tables'), folder({ ...appData, ssisProject: 'Loads' }, 'views'), folder(appData, 'synonyms')], elapsedMs: 1, total: 3 } }
+    await f.open('AppData')
+    const database = f.explorer.node(f.find('AppData', databases))!
+    const [tables, views, synonyms] = database.children!
+    if (database.ref.type !== 'object' || tables.ref.type !== 'folder' || views.ref.type !== 'folder' || synonyms.ref.type !== 'folder') throw new Error('Unexpected refs.')
+    expect(tables.ref.owner).toEqual({ ...appData, ssisFolder: 'Finance' })
+    expect(views.ref.owner).toEqual({ ...appData, ssisProject: 'Loads' })
+    expect(synonyms.ref.owner).toBe(database.ref.object)
+    expect(new Set([tables, views, synonyms].map(node => f.explorer.keyOf(node.id))).size).toBe(3)
+  })
   it('merges a 2,000-node page with bounded matching work and republishes it', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 2000 }, (_, index) => `dbo.Table${index}`)

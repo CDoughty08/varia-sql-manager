@@ -17,6 +17,7 @@ internal sealed class Row(SqlDataReader reader, RowContext context, int keys)
     public RowContext Context => context;
     public string Key(int index) => reader.GetString(index);
     public int Ordinal => Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+    public long Id => Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
     public bool Null(int index) => reader.IsDBNull(keys + index);
     /// <summary>A name or text, verbatim (identifiers may end in spaces).</summary>
     public string? S(int index) => Null(index) ? null : Convert.ToString(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
@@ -79,6 +80,7 @@ internal sealed class ExplorerQuery
         {
             Keyset.Name => "(@k1 IS NULL OR " + Keys[0] + " > @k1)",
             Keyset.SchemaName => "(@k1 IS NULL OR " + Keys[0] + " > @k1 OR (" + Keys[0] + " = @k1 AND " + Keys[1] + " > @k2))",
+            Keyset.Id => "(@kb IS NULL OR " + Keys[0] + " > @kb)",
             _ => Keys[0] + " > ISNULL(@kn, 0)"
         };
         string Conditions(params string?[] parts)
@@ -109,6 +111,7 @@ internal sealed class ExplorerQuery
     {
         Keyset.Name => new(row.Key(0), null, null),
         Keyset.SchemaName => new(row.Key(0), row.Key(1), null),
+        Keyset.Id => new(null, null, null, row.Id),
         _ => new(null, null, row.Ordinal)
     };
 }
