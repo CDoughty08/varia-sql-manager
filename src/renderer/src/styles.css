@@ -685,6 +685,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .inline-error-message { margin: 0; user-select: text; }
 .inline-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .inline-error-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
+/* An action that cannot run now stays focusable (aria-disabled), drawn as a disabled button is. */
+.inline-error-actions button[aria-disabled="true"], .inline-error-actions button[aria-disabled="true"]:hover { opacity: .4; cursor: default; background: transparent; color: var(--varia-button-secondaryForeground); }
 .inline-error-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
 /* Held back for --varia-motion-delay (transparent until then), so a quick load never flashes a placeholder. */
 .skeleton { display: flex; flex-direction: column; padding: var(--varia-space-1) var(--varia-space-3); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease) var(--varia-motion-delay) both; }
@@ -839,8 +841,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .ssis-properties dt { color: var(--varia-descriptionForeground); }
 .ssis-properties dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .ssis-properties-table { overflow-x: auto; }
-.ssis-properties-table .object-dialog-grid { table-layout: auto; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
-.ssis-properties-table .object-dialog-grid .wide { min-width: 16ch; white-space: normal; overflow-wrap: anywhere; }
+/* Fixed layout and one-line rows: the list draws only the rows near the view (PropertiesList.tsx), so columns must not
+   change width as rows come and go, and every row must be as tall as the spacers assume. */
+.ssis-properties-table .object-dialog-grid { font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
+.ssis-properties-table .ssis-properties-spacer td { padding: 0; border: 0; }
 .ssis-properties-empty, .ssis-properties-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-properties-none { color: var(--varia-descriptionForeground); }
 /* A narrow document puts its section list across the top, and its verbs under the title. */

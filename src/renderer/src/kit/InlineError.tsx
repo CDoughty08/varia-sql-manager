@@ -2,7 +2,11 @@ import { useState, type Ref } from 'react'
 import Icon from '../Icon'
 import { copyStatus, copyText, errorDetailsText, type CopyRecord, type ErrorReport } from './format'
 
-export interface ErrorAction { readonly label: string; readonly run: () => void; readonly buttonRef?: Ref<HTMLButtonElement> }
+/**
+ * `disabled` keeps the button in place and focusable (aria-disabled) while it cannot run, so a person who pressed it
+ * from the keyboard keeps their place: a removed or natively disabled button would drop focus to the page.
+ */
+export interface ErrorAction { readonly label: string; readonly run: () => void; readonly buttonRef?: Ref<HTMLButtonElement>; readonly disabled?: boolean }
 type Clipboard = (text: string) => Promise<{ readonly ok: boolean }>
 
 interface Props extends ErrorReport {
@@ -31,7 +35,7 @@ export default function InlineError({ actions = [], copy = true, role = 'alert',
       {/* Only the sentence is the live region: the copy outcome below is a status of its own, announced once. */}
       <p className="inline-error-message" role={role}>{report.message}</p>
       {(actions.length > 0 || copy) && <div className="inline-error-actions">
-        {actions.map(action => <button key={action.label} type="button" ref={action.buttonRef} onClick={action.run}>{action.label}</button>)}
+        {actions.map(action => <button key={action.label} type="button" ref={action.buttonRef} aria-disabled={action.disabled || undefined} onClick={action.disabled ? undefined : action.run}>{action.label}</button>)}
         {copy && <button type="button" onClick={copyDetails}>Copy details</button>}
         <span className="inline-error-status" role="status">{copyStatus(copied, text)}</span>
       </div>}

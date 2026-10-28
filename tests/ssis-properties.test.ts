@@ -12,6 +12,8 @@ import { isCustomKind, isTextDocument, kindInfo } from '../src/renderer/src/docu
 import { parameterSource, parameterValue, referenceFolder, sensitiveMask, ssisCrumbs, ssisFacts, ssisHeaderState, ssisSectionViews, ssisTime, truncatedNote, validationLabel } from '../src/renderer/src/ssis/properties-view'
 import type { SsisPropertiesState } from '../src/renderer/src/ssis/SsisPropertiesService'
 import { SsisNotice } from '../src/renderer/src/ssis/SsisProperties'
+import { listLimits, listWindow, maskedLabel, noneLabel } from '../src/renderer/src/ssis/PropertiesList'
+import { ssisFocuser, type SsisFocusHost } from '../src/renderer/src/ssis/focus'
 import { initialFrameState, toggleSection } from '../src/renderer/src/kit/document-frame'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -287,6 +289,53 @@ describe('SSIS properties documents', () => {
     expect(state(id)).toMatchObject({ connectionId: 'c4', disconnected: false })
     expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c4' })
   })
+  it('never moves to another connection to its server that was already open when it disconnected, which may be another login', async () => {
+    const { documents, api, state, run, connections, targets: retarget, connect } = ssis()
+    connect({ ...connectionInfo('c2'), server: 'c1.example', displayName: 'Other login' })
+    await run('ssis.folderProperties', 'ssisFolder')
+    await settled()
+    const id = documents.getSnapshot().activeId
+    connections.remove('c1')
+    retarget.update(id, { connectionId: undefined })
+    await settled()
+    expect(state(id)).toMatchObject({ connectionId: 'c1', disconnected: true, serverLabel: 'c1.example' })
+    expect(api.describeSsis).toHaveBeenCalledTimes(1)
+    // A Connect made afterwards is the way back, and the header then names that connection.
+    connect({ ...connectionInfo('c3'), server: 'c1.example', displayName: 'Reconnected' })
+    await settled()
+    expect(state(id)).toMatchObject({ connectionId: 'c3', disconnected: false, serverLabel: 'Reconnected' })
+    expect(api.describeSsis.mock.calls.at(-1)![0]).toMatchObject({ connectionId: 'c3' })
+    // Reconnect onto the other open connection is explicit, so it moves there.
+    connections.remove('c3')
+    retarget.retarget('c3', 'c2')
+    await settled()
+    expect(state(id)).toMatchObject({ connectionId: 'c2', disconnected: false, serverLabel: 'Other login' })
+  })
+  it('names its tab without drawing bidi overrides or control characters from the catalog name', async () => {
+    const { documents, ssisProperties, select } = ssis()
+    const node = await select('ssisFolder')
+    const id = ssisProperties.open({ ...node, ref: { type: 'object', object: { kind: 'ssisFolder', name: 'Fin‮ecnan\nX' } } })
+    expect(documents.get(id)?.name).toBe('Folder Properties - Fin⟨U+202E⟩ecnan⟨U+000A⟩X')
+  })
+  it('offers Retry after a failure of main\'s only where a second read can get past it', async () => {
+    const { documents, api, state, run } = ssis()
+    await run('ssis.packageProperties', 'ssisPackage')
+    await settled()
+    const id = documents.getSnapshot().activeId
+    const retryable = async (result: ApiResult<SsisDescribeResult>) => {
+      api.describeSsis.mockResolvedValueOnce(result)
+      await run('ssis.refreshProperties', 'ssisPackage')
+      await settled()
+      return state(id).error?.retryable
+    }
+    // Main's schemas refusing the request (no code) or the answer fail the same way every time; so does a cancel.
+    expect(await retryable({ ok: false, error: 'Invalid request. Check the connection or query settings.' })).toBe(false)
+    expect(await retryable({ ok: false, error: 'The backend sent an invalid answer.' })).toBe(false)
+    expect(await retryable({ ok: false, error: 'Cancelled.', code: 'CANCELLED' })).toBe(false)
+    expect(await retryable({ ok: false, error: 'Unsupported.', code: 'INVALID_PARAMS' })).toBe(false)
+    expect(await retryable({ ok: false, error: 'Too many.', code: 'TOO_MANY_REQUESTS' })).toBe(true)
+    expect(await retryable({ ok: false, error: 'Slow.', code: 'TIMEOUT' })).toBe(true)
+  })
   it('keeps each document\'s section list and collapsed sections across tab switches', async () => {
     const { documents, ssisProperties, run } = ssis()
     await run('ssis.projectProperties', 'ssisProject')
@@ -330,8 +379,12 @@ describe('SSIS properties view', () => {
     // Even a sensitive value the backend sent by mistake stays masked.
     expect(parameterValue({ ...password, value: 'hunter2' })).toBe(sensitiveMask)
     const markup = html(createElement('div', null, ssisSectionViews(viewState(environment)).map(section => createElement('section', { key: section.id }, section.content))))
-    expect(markup).toContain(sensitiveMask)
     expect(markup).toContain('1433')
+    // The stars are drawn but not read: a screen reader hears that the value is hidden.
+    expect(markup).toContain(`<td title="${maskedLabel}"><bdi><span aria-hidden="true">${sensitiveMask}</span><span class="visually-hidden">${maskedLabel}</span></bdi></td>`)
+    const parameters = html(createElement('div', null, ssisSectionViews(viewState(project))[2].content))
+    expect(parameters).toContain(`<span aria-hidden="true">${sensitiveMask}</span><span class="visually-hidden">${maskedLabel}</span>`)
+    expect(parameters.split(maskedLabel)).toHaveLength(3)
   })
   it('lays a project out in General, Packages, Parameters and References, with counts after the lists\' titles', () => {
     const sections = ssisSectionViews(viewState(project))
@@ -343,15 +396,18 @@ describe('SSIS properties view', () => {
     expect(ssisSectionViews(viewState({ ...environment, variables: environment.variables.slice(0, 1) }))[1].count).toEqual({ text: '1', label: '1 variable' })
     expect(markup('general')).toContain('<dt>Last deployed</dt><dd title="2026-10-21 14:05:06 +02:00"><bdi>2026-10-21 14:05:06 +02:00</bdi></dd>')
     expect(markup('general')).toContain('<dt>Validation status</dt><dd title="Not validated">')
-    // An empty value shows a muted dash, not a blank, in General and in the lists alike.
-    const none = '<bdi><span class="ssis-properties-none">—</span></bdi>'
+    // An empty value shows a muted dash, not a blank, in General and in the lists alike, and is read as None.
+    const none = `<bdi><span class="ssis-properties-none"><span aria-hidden="true">—</span><span class="visually-hidden">${noneLabel}</span></span></bdi>`
     expect(markup('general')).toContain(`<dt>Description</dt><dd title="">${none}</dd>`)
-    expect(markup('packages')).toContain(`<td class="wide" title="">${none}</td>`)
+    expect(markup('general')).toContain(`<dt>Last validated</dt><dd title="">${none}</dd>`)
+    expect(markup('packages')).toContain(`<td title="">${none}</td>`)
     expect(markup('packages')).not.toMatch(/<bdi><\/bdi>/)
     expect(markup('packages')).toContain('aria-label="Packages"')
     expect(markup('references')).toMatch(/<td[^>]*><bdi>Test<\/bdi><\/td><td[^>]*><bdi>\.<\/bdi><\/td><td[^>]*><bdi>Relative<\/bdi><\/td>/)
     expect(markup('references')).toContain('<bdi>Absolute</bdi>')
-    expect(markup('parameters').match(/<tr>/g)).toHaveLength(5)
+    // The header row and four parameters, each with its place in the list.
+    expect(markup('parameters')).toContain('aria-rowcount="5"')
+    expect(markup('parameters').match(/<tr aria-rowindex="\d+">/g)).toEqual(['<tr aria-rowindex="1">', '<tr aria-rowindex="2">', '<tr aria-rowindex="3">', '<tr aria-rowindex="4">', '<tr aria-rowindex="5">'])
     // A package without parameters says so.
     expect(html(createElement('div', null, ssisSectionViews(viewState(pkg))[1].content))).toContain('This package has no parameters.')
   })
@@ -377,14 +433,35 @@ describe('SSIS properties view', () => {
     expect(truncatedNote(viewState({ ...pkg, truncated: true }))).toBe('This package has more parameters than one read returns: the list shows its first 2,048.')
     expect(truncatedNote(viewState({ ...environment, truncated: true }))).toBe('This environment has more variables than one read returns: the list shows its first 2,048.')
   })
-  it('offers Retry over a failed read only while no read runs, since one in flight makes it do nothing', () => {
+  it('keeps Retry over a failed read in place while it reads again, disabled but focusable, so focus on it stays', () => {
     const blocked = { code: 'BLOCKED', message: 'SSISDB is locked by another session.', retryable: true }
     const notice = (extra: Partial<SsisPropertiesState>) => html(createElement(SsisNotice, { state: viewState(pkg, { error: blocked, ...extra }), close: { label: 'Close', run: () => {} }, retry: () => {} }))
-    expect(notice({})).toContain('>Retry</button>')
-    expect(notice({ loading: true })).not.toContain('>Retry</button>')
+    expect(notice({})).toContain('<button type="button">Retry</button>')
+    expect(notice({ loading: true })).toContain('<button type="button" aria-disabled="true">Retry</button>')
     expect(notice({ loading: true })).toContain('SSISDB is locked by another session.')
     expect(notice({ disconnected: true })).not.toContain('>Retry</button>')
     expect(notice({ gone: true, error: { code: 'NOT_FOUND', message: 'Gone.', retryable: false } })).toContain('>Close</button>')
+  })
+  it('draws only the rows near the view of a list at the cap, with spacers for the rest', () => {
+    const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
+    const markup = html(createElement('div', null, ssisSectionViews(viewState(many))[2].content))
+    expect(markup).toContain('aria-rowcount="2049"')
+    expect(markup.match(/<tr aria-rowindex=/g)).toHaveLength(listLimits.initialRows + 1)
+    expect(markup.match(/class="ssis-properties-spacer"/g)).toHaveLength(1)
+    // In view at the top: the first rows and the overscan, snapped out to a block.
+    expect(listWindow(2048, 23, 0, 600)).toEqual({ start: 0, end: 64 })
+    // Scrolled to row 1,000: from a block before it to a block past the view.
+    expect(listWindow(2048, 23, -1000 * 23, 600)).toEqual({ start: 960, end: 1056 })
+    expect(listWindow(2048, 23, -2048 * 23 + 300, 600)).toEqual({ start: 1984, end: 2048 })
+    // A list far below the view draws nothing yet; before any measure it draws the first rows.
+    expect(listWindow(2048, 23, 5000, 600)).toEqual({ start: 0, end: 0 })
+    expect(listWindow(100, 23, 0, Number.NaN)).toEqual({ start: 0, end: 64 })
+    expect(listWindow(0, 23, 0, 600)).toEqual({ start: 0, end: 0 })
+    for (let top = -50000; top <= 1000; top += 997) {
+      const { start, end } = listWindow(2048, 23, top, 600), first = Math.max(0, Math.floor(-top / 23)), last = Math.min(2048, Math.ceil((600 - top) / 23))
+      if (first < last) expect(start <= first && end >= last, String(top)).toBe(true)
+      expect(end - start).toBeLessThanOrEqual(Math.ceil(600 / 23) + 2 * (listLimits.overscan + listLimits.block))
+    }
   })
   it('builds a model\'s sections once, so choosing a section does not rebuild lists of thousands of rows', () => {
     const many = { ...project, truncated: true, parameters: Array.from({ length: 2048 }, (_, index) => ({ ...project.parameters[0], name: `P${index}` })) }
@@ -393,6 +470,52 @@ describe('SSIS properties view', () => {
     again.forEach((section, index) => expect(section.content).toBe(first[index].content))
     // A new model (a Refresh) builds them again.
     expect(ssisSectionViews(viewState({ ...many }))[2].content).not.toBe(first[2].content)
+  })
+  it('focuses a document opened while its first read runs once that read ends, unless focus moved meanwhile', () => {
+    let loading = true
+    const listeners = new Set<() => void>(), frames: (() => void)[] = []
+    const documents = { get: () => ({ loading }) as SsisPropertiesState, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+    const tree = { id: 'tree' } as unknown as Element, body = { id: 'body' } as unknown as Element, elsewhere = { id: 'other' } as unknown as Element
+    let active: Element | null = tree
+    const focused: string[] = []
+    const control = { focus: () => { focused.push('refresh'); active = control as unknown as Element } }
+    const root = { querySelector: (selector: string) => !loading && selector.startsWith('button') ? control : null } as unknown as HTMLElement
+    const host: SsisFocusHost = { root: () => root, activeElement: () => active, body: () => body, modalOpen: () => false, frame: callback => { frames.push(callback); return () => {} } }
+    const run = () => frames.splice(0).forEach(frame => frame())
+    const finish = () => { loading = false; [...listeners].forEach(listener => listener()); run() }
+    const focuser = ssisFocuser(documents, host)
+    focuser.focus('d1')
+    run()
+    expect(focused).toEqual([])
+    expect(listeners.size).toBe(1)
+    finish()
+    expect(focused).toEqual(['refresh'])
+    expect(listeners.size).toBe(0)
+    // Focus that moved on while the read ran stays where it went.
+    loading = true
+    active = tree
+    focuser.focus('d1')
+    run()
+    active = elsewhere
+    finish()
+    expect(focused).toEqual(['refresh'])
+    // Focus that fell to the page (the menu that opened it closed) is taken.
+    loading = true
+    active = tree
+    focuser.focus('d1')
+    run()
+    active = body
+    finish()
+    expect(focused).toEqual(['refresh', 'refresh'])
+    // A newer request replaces the wait, and dispose ends it.
+    loading = true
+    focuser.focus('d1')
+    run()
+    focuser.focus('d1')
+    run()
+    expect(listeners.size).toBe(1)
+    focuser.dispose()
+    expect(listeners.size).toBe(0)
   })
   it('keeps the Refresh key to the document, so a query\'s F5 still executes', () => {
     expect(commandDescriptor('ssis.refreshProperties').keybindings).toEqual([{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus" }])

@@ -7,7 +7,8 @@ import { closeDocumentButton, documentCrumbs, documentFactValues, documentFrame,
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
 // which each tab keeps across switches, list and content; Refresh with F5; Close cancelling a read in flight; a failed read
-// and Retry, with the header the same height in every state; an object deleted elsewhere.
+// and Retry from the keyboard, with focus kept in the document and the header the same height in every state; lists at
+// the 2,048-row cap drawn only near the view; an object deleted elsewhere.
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'ssis-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'ssis-control-'))
@@ -59,6 +60,10 @@ async function menuOn(path, item) {
   if (item) await objectMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
   return labels
 }
+/** Whether focus is inside the document's frame. */
+const focusIn = title => frame(title).evaluate(element => element.contains(document.activeElement))
+/** Rows a document draws (its lists draw only those near the view), and every element in it. */
+const drawn = title => frame(title).evaluate(element => ({ rows: element.querySelectorAll('tbody tr[aria-rowindex]').length, nodes: element.querySelectorAll('*').length }))
 /** A General fact by its label. */
 const fact = (title, label) => frameSection(frame(title), 'General').locator('dl > div').filter({ has: page.locator('dt', { hasText: new RegExp(`^${label}$`) }) }).locator('dd')
 
@@ -73,11 +78,18 @@ try {
   await expandExplorerPath(page, ...finance, 'Environments')
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
 
-  // 1. A folder's menu has one Properties (Object Explorer's own is not offered), which opens Folder Properties at once.
+  // 1. A folder's menu has one Properties (Object Explorer's own is not offered), which opens Folder Properties at once,
+  // reading; focus moves into it when that read ends, though it had nothing to focus while it read.
   const before = await tabs().count()
+  await writeFile(join(control, 'hold', 'ssis.describe'), '')
   const items = await menuOn(finance, 'Properties')
   expect(items.filter(label => label === 'Properties')).toHaveLength(1)
   await expect(tab('Folder Properties - Finance')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentStatePill(frame('Finance'))).toHaveText('Loading')
+  // Long enough for the focus the open asked for (a frame, or 50 ms in a throttled window) to find nothing to focus.
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 250)))
+  expect(await focusIn('Finance')).toBe(false)
+  await rm(join(control, 'hold', 'ssis.describe'))
   await expect(tabs()).toHaveCount(before + 1)
   await expect(page.locator(part.editorPane)).toBeHidden()
   await expect(frame('Finance').getByRole('heading', { level: 1 })).toHaveText('Finance')
@@ -108,8 +120,10 @@ try {
   await expect(documentFactValues(loads)).toHaveText(['Finance', '2026-10-21 14:05:06 +02:00', 'Not validated'])
   const parameters = loads.getByRole('table', { name: 'Parameters', exact: true })
   await expect(parameters.locator('tbody tr')).toHaveCount(3)
-  await expect(parameters.locator('tbody tr').nth(0).locator('td')).toHaveText(['Server', 'String', 'sql01', 'Literal', 'Yes', 'No', '—'])
-  await expect(parameters.locator('tbody tr').nth(1).locator('td').nth(2)).toHaveText('********')
+  // An empty value is a dash read as None; a sensitive one is stars read as hidden.
+  await expect(parameters.locator('tbody tr').nth(0).locator('td')).toHaveText(['Server', 'String', 'sql01', 'Literal', 'Yes', 'No', '—None'])
+  await expect(parameters.locator('tbody tr').nth(1).locator('td').nth(2)).toHaveText('********Sensitive value, not shown')
+  await expect(parameters.locator('tbody tr').nth(1).locator('td').nth(2).locator('[aria-hidden="true"]')).toHaveText('********')
   await expect(parameters.locator('tbody tr').nth(2).locator('td').nth(3)).toHaveText('Environment variable')
   await expect(loads.getByRole('table', { name: 'References', exact: true }).locator('tbody td')).toHaveText(['Test', '.', 'Relative', 'Not validated'])
   // The count follows the title inside the heading, and says what it counts: the section is "Packages (2 packages)".
@@ -133,7 +147,7 @@ try {
   await (await explorerRow(page, ...finance, 'Environments', 'Test')).dblclick()
   await expect(tab('Environment Properties - Test')).toHaveAttribute('aria-selected', 'true')
   const variables = frame('Test').getByRole('table', { name: 'Variables', exact: true })
-  await expect(variables.locator('tbody tr').nth(1).locator('td')).toHaveText(['Secret', 'String', '********', 'Yes', 'Never read'])
+  await expect(variables.locator('tbody tr').nth(1).locator('td')).toHaveText(['Secret', 'String', '********Sensitive value, not shown', 'Yes', 'Never read'])
   console.log('SSIS checks: Enter on a package and a double-click on an environment open their Properties.')
 
   // 4. Each tab keeps its section across switches; opening the folder again shows its tab and reads it again.
@@ -175,11 +189,30 @@ try {
   await expect(documentNotice(frame('Daily.dtsx')).getByRole('alert')).toHaveText('The SSIS Catalog did not answer in time.')
   await expect(fact('Daily.dtsx', 'Version')).toHaveText('1.0.7')
   expect(await headerHeight('Daily.dtsx')).toBe(daily)
+  // Retry from the keyboard keeps focus on Retry while it reads (disabled, not removed) and after it fails again.
+  const retry = documentNotice(frame('Daily.dtsx')).getByRole('button', { name: 'Retry', exact: true })
+  await retry.focus()
+  await writeFile(join(control, 'hold', 'ssis.describe'), '')
+  await page.keyboard.press('Enter')
+  await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Refreshing')
+  await expect(retry).toHaveAttribute('aria-disabled', 'true')
+  await expect(retry).toBeFocused()
+  await rm(join(control, 'hold', 'ssis.describe'))
+  await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveText(/^Stale since /)
+  await expect(retry).not.toHaveAttribute('aria-disabled', 'true')
+  await expect(retry).toBeFocused()
+  // A Retry that succeeds takes the notice away, and focus goes to the document's Refresh, not the page.
   await rm(join(control, 'ssis', 'fail'))
-  await documentNotice(frame('Daily.dtsx')).getByRole('button', { name: 'Retry', exact: true }).click()
+  await writeFile(join(control, 'hold', 'ssis.describe'), '')
+  await page.keyboard.press('Enter')
+  await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Refreshing')
+  await expect(retry).toBeFocused()
+  await rm(join(control, 'hold', 'ssis.describe'))
   await expect(documentNotice(frame('Daily.dtsx'))).toHaveCount(0)
   await expect(documentStaleBadge(frame('Daily.dtsx'))).not.toHaveAttribute('data-stale', '')
-  console.log('SSIS checks: a failed read keeps the model, marks the header stale at the same height, and Retry reads it again.')
+  await expect(frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
+  expect(await focusIn('Daily.dtsx')).toBe(true)
+  console.log('SSIS checks: a failed read keeps the model, marks the header stale at the same height, and Retry from the keyboard reads it again with focus kept in the document.')
 
   // 7. An object deleted elsewhere: Refresh says so over the last model, and Close is the way out.
   await writeFile(join(control, 'ssis', 'missing'), '')
@@ -194,7 +227,42 @@ try {
   await expect(tab('Package Properties - Daily.dtsx')).toHaveCount(0)
   console.log('SSIS checks: an object deleted elsewhere says so over the last model, and Close closes it.')
 
-  // 8. Light theme, and still no page-wide horizontal scroll.
+  // 8. Lists at the 2,048-row cap draw only the rows near the view, also after a tab switch, and scroll to their last row.
+  await writeFile(join(control, 'ssis', 'many'), '')
+  await tab('Project Properties - Loads').click()
+  await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
+  const references = frame('Loads').getByRole('table', { name: 'References', exact: true })
+  await expect(references).toHaveAttribute('aria-rowcount', '2049')
+  await expect(frame('Loads').getByRole('table', { name: 'Parameters', exact: true })).toHaveAttribute('aria-rowcount', '2049')
+  await expect(documentNotice(frame('Loads'))).toContainText('each list shows its first 2,048')
+  // 6,144 rows of 4 to 7 cells each were 67,701 elements; a screen of rows is a few hundred.
+  const bounded = async () => {
+    const { rows, nodes } = await drawn('Loads')
+    expect(rows).toBeGreaterThan(0)
+    expect(rows).toBeLessThanOrEqual(400)
+    expect(nodes).toBeLessThanOrEqual(6000)
+  }
+  await bounded()
+  await sections('Loads').getByRole('button', { name: 'References', exact: true }).click()
+  await expect.poll(() => headingShown('Loads', 'references')).toEqual({ shown: true, scrolled: true })
+  await expect(references.locator('tbody tr[aria-rowindex="2"] td').first()).toHaveText('Environment 1')
+  await bounded()
+  await sectionColumn(frame('Loads'), 'Loads').evaluate(column => { column.scrollTop = column.scrollHeight })
+  const last = references.locator('tbody tr[aria-rowindex="2049"]')
+  await expect(last.locator('td').first()).toHaveText('Environment 2048')
+  await expect(last).toBeInViewport()
+  await bounded()
+  await tab('Environment Properties - Test').click()
+  await tab('Project Properties - Loads').click()
+  await expect(references).toHaveAttribute('aria-rowcount', '2049')
+  await expect(sections('Loads').getByRole('button', { name: 'References', exact: true })).toHaveAttribute('aria-current', 'location')
+  await bounded()
+  await rm(join(control, 'ssis', 'many'))
+  await frame('Loads').getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(references).toHaveAttribute('aria-rowcount', '2')
+  console.log('SSIS checks: lists at the 2,048-row cap draw only the rows near the view, after a tab switch too, and reach their last row.')
+
+  // 9. Light theme, and still no page-wide horizontal scroll.
   await tab('Project Properties - Loads').click()
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
@@ -203,7 +271,7 @@ try {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 
   expect(failures).toEqual([])
-  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a failed read and Retry; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
+  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a failed read and Retry from the keyboard; lists at the cap; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'ssis-failure.png') }).catch(() => {})
   throw error

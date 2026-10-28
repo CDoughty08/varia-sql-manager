@@ -48,6 +48,7 @@ import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { MenuService } from '../menus/MenuService'
@@ -183,15 +184,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
-  // Focus goes to the document's current section in its list, else to its first button (Refresh).
-  const ssisProperties = new SsisPropertiesService({
-    api, documents, connections,
-    focus: id => nextFrame(() => {
-      const root = modalOpen() ? null : document.querySelector(`[data-ssis-document="${CSS.escape(id)}"]`)
-      const target = root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]') ?? root?.querySelector<HTMLElement>('button:not(:disabled)')
-      target?.focus()
-    })
+  // Focus goes to the document's current section in its list, else to its first button (Refresh), once its first read
+  // has drawn them.
+  const ssisFocus = ssisFocuser({ get: id => ssisProperties.get(id), subscribe: listener => ssisProperties.subscribe(listener) }, {
+    root: id => document.querySelector<HTMLElement>(`[data-ssis-document="${CSS.escape(id)}"]`), activeElement: () => document.activeElement, body: () => document.body,
+    modalOpen, frame
   })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -292,6 +291,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()
+      ssisFocus.dispose()
       ssisProperties.dispose()
       documents.dispose()
       backend.dispose()

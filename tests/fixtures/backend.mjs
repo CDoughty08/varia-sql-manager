@@ -18,6 +18,7 @@
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
 //   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
 //   ssis/fail           ssis.describe answers a retryable TIMEOUT
+//   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
@@ -638,7 +639,8 @@ function liveUpdate(id, params) {
 // The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
 // entry point Daily.dtsx and Child.dtsx) and its environment Test. Times keep the catalog's own offset (+02:00), and a
 // sensitive parameter or variable has no value, as the backend never reads one. ssis/missing makes every object
-// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; hold/ssis.describe
+// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; ssis/many fills the
+// project's three lists to the 2,048 rows one read returns, with long descriptions, as a truncated answer; hold/ssis.describe
 // holds a read until the file goes or a CANCEL frame ends it (logged to cancels.jsonl).
 const ssisTime = '2026-10-21T14:05:06.1234567+02:00'
 const ssisParameter = (name, fields = {}) => ({ name, dataType: 'String', required: false, sensitive: false, valueType: 'V', valueSet: false, ...fields })
@@ -660,6 +662,13 @@ const ssisModels = {
     variables: [{ name: 'Port', type: 'Int32', sensitive: false, value: '1433' }, { name: 'Secret', type: 'String', sensitive: true, description: 'Never read' }], truncated: false
   })
 }
+/** The project at the cap of every list (ssisLimits.rows), each row with a 200-character description or value. */
+const ssisMany = (model, rows = 2048) => ({
+  ...model, truncated: true,
+  packages: Array.from({ length: rows }, (_, index) => ({ name: `Package ${index + 1}.dtsx`, entryPoint: index % 7 === 0, version: `1.0.${index}`, description: `Package ${index + 1} `.padEnd(200, 'x') })),
+  parameters: Array.from({ length: rows }, (_, index) => ssisParameter(`Parameter ${index + 1}`, { valueSet: true, ...index % 5 === 0 ? { sensitive: true } : { value: `Value ${index + 1} `.padEnd(200, 'v') } })),
+  references: Array.from({ length: rows }, (_, index) => ({ id: index + 1, type: index % 2 ? 'A' : 'R', ...index % 2 ? { folder: 'Shared' } : {}, environment: `Environment ${index + 1}`, validationStatus: 'N' }))
+})
 async function ssisDescribe(id, { view, target }) {
   while (await controlled(join('hold', 'ssis.describe'))) {
     if (cancelled.delete(id)) {
@@ -670,7 +679,8 @@ async function ssisDescribe(id, { view, target }) {
   }
   if (await controlled(join('ssis', 'fail'))) return respond(id, { elapsedMs: 1, error: { code: 'TIMEOUT', message: 'The SSIS Catalog did not answer in time.', retryable: true } })
   if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
-  return respond(id, { model: ssisModels[view](target), revision: 'a'.repeat(64), elapsedMs: 1 })
+  const model = ssisModels[view](target)
+  return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
 }
 
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */

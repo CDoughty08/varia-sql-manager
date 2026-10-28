@@ -7,10 +7,10 @@ import type { SsisParameter } from '../../../shared/ssis/schema.ts'
 import type { StatusTone } from '../../../shared/theme/tones'
 import { formatCount } from '../results/status'
 import type { Crumb, Fact, FrameSection } from '../kit/DocumentFrame'
+import PropertiesList, { listValue, sensitiveMask, type ListColumn } from './PropertiesList'
 import type { SsisPropertiesModel, SsisPropertiesState } from './SsisPropertiesService'
 
-/** What a sensitive parameter or variable shows: the catalog never returns its value, and Varia never reads it. */
-export const sensitiveMask = '********'
+export { sensitiveMask }
 
 /**
  * A catalog time as the catalog stores it, in its own offset ("2026-10-21 14:05:06 +02:00"): never converted to the
@@ -81,8 +81,8 @@ export function truncatedNote(state: SsisPropertiesState): string | undefined {
   return `This ${noun} has more ${model.view === 'package' ? 'parameters' : 'variables'} than one read returns: the list shows its first ${first}.`
 }
 
-/** A value the catalog left empty: a muted dash, the same in General and in the lists. */
-const valueText = (value: string): ReactNode => value === '' ? <span className="ssis-properties-none">—</span> : displayText(value)
+/** A value the catalog left empty: a muted dash (None to a screen reader), the same in General and in the lists. */
+const valueText = (value: string): ReactNode => listValue(displayText(value))
 
 type Row = readonly [label: string, value: string]
 /** The General section: label and value pairs, as SSMS's General page lists them (facts as text, not input boxes). */
@@ -92,26 +92,22 @@ function General({ rows }: { readonly rows: readonly Row[] }) {
   </dl>
 }
 
-interface Column<T> { readonly title: string; readonly value: (row: T) => string; readonly wide?: boolean }
-/** A read-only list: an ordinary table with a header row, at most ssisLimits.rows rows. */
-function List<T>({ label, rows, columns, empty, rowKey }: { readonly label: string; readonly rows: readonly T[]; readonly columns: readonly Column<T>[]; readonly empty: string; readonly rowKey: (row: T, index: number) => string }) {
+/** A read-only list of at most ssisLimits.rows rows, or what an empty one says. */
+function List<T>({ label, rows, columns, empty, rowKey }: { readonly label: string; readonly rows: readonly T[]; readonly columns: readonly ListColumn<T>[]; readonly empty: string; readonly rowKey: (row: T, index: number) => string }) {
   if (!rows.length) return <p className="ssis-properties-empty">{empty}</p>
-  return <div className="ssis-properties-table">
-    <table className="object-dialog-grid" aria-label={label}>
-      <thead><tr>{columns.map(column => <th key={column.title} scope="col" className={column.wide ? 'wide' : undefined}>{column.title}</th>)}</tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={rowKey(row, index)}>{columns.map(column => { const value = column.value(row); return <td key={column.title} className={column.wide ? 'wide' : undefined} title={value}><bdi>{valueText(value)}</bdi></td> })}</tr>)}</tbody>
-    </table>
-  </div>
+  return <PropertiesList label={label} rows={rows} columns={columns} rowKey={rowKey} text={displayText} />
 }
 
-const parameterColumns: readonly Column<SsisParameter>[] = [
-  { title: 'Name', value: parameter => parameter.name },
-  { title: 'Data type', value: parameter => parameter.dataType },
-  { title: 'Value', value: parameterValue, wide: true },
-  { title: 'Source', value: parameterSource },
-  { title: 'Required', value: parameter => yesNo(parameter.required) },
-  { title: 'Sensitive', value: parameter => yesNo(parameter.sensitive) },
-  { title: 'Description', value: parameter => parameter.description ?? '', wide: true }
+// Column widths in characters: names and codes fit; values and descriptions share the rest.
+const nameWidth = 24, flagWidth = 11
+const parameterColumns: readonly ListColumn<SsisParameter>[] = [
+  { title: 'Name', value: parameter => parameter.name, width: nameWidth },
+  { title: 'Data type', value: parameter => parameter.dataType, width: 12 },
+  { title: 'Value', value: parameterValue, masked: parameter => parameter.sensitive },
+  { title: 'Source', value: parameterSource, width: 21 },
+  { title: 'Required', value: parameter => yesNo(parameter.required), width: flagWidth },
+  { title: 'Sensitive', value: parameter => yesNo(parameter.sensitive), width: flagWidth },
+  { title: 'Description', value: parameter => parameter.description ?? '' }
 ]
 const parameters = (rows: readonly SsisParameter[], owner: string) =>
   <List label="Parameters" rows={rows} columns={parameterColumns} empty={`This ${owner} has no parameters.`} rowKey={parameter => parameter.name} />
@@ -141,16 +137,16 @@ function buildContent(model: SsisPropertiesModel): SectionContent {
       packages: {
         count: model.packages.length,
         content: <List label="Packages" rows={model.packages} empty="This project has no packages." rowKey={item => item.name} columns={[
-          { title: 'Name', value: item => item.name }, { title: 'Entry point', value: item => yesNo(item.entryPoint) }, { title: 'Version', value: item => item.version },
-          { title: 'Description', value: item => item.description ?? '', wide: true }
+          { title: 'Name', value: item => item.name, width: nameWidth }, { title: 'Entry point', value: item => yesNo(item.entryPoint), width: flagWidth },
+          { title: 'Version', value: item => item.version, width: 14 }, { title: 'Description', value: item => item.description ?? '' }
         ]} />
       },
       parameters: { count: model.parameters.length, content: parameters(model.parameters, 'project') },
       references: {
         count: model.references.length,
         content: <List label="References" rows={model.references} empty="This project references no environments." rowKey={item => String(item.id)} columns={[
-          { title: 'Environment', value: item => item.environment }, { title: 'Folder', value: item => referenceFolder(item.folder) }, { title: 'Type', value: item => referenceTypeLabel(item.type) },
-          { title: 'Validation status', value: item => validationLabel(item.validationStatus) }
+          { title: 'Environment', value: item => item.environment }, { title: 'Folder', value: item => referenceFolder(item.folder) }, { title: 'Type', value: item => referenceTypeLabel(item.type), width: 12 },
+          { title: 'Validation status', value: item => validationLabel(item.validationStatus), width: 18 }
         ]} />
       }
     }
@@ -166,8 +162,9 @@ function buildContent(model: SsisPropertiesModel): SectionContent {
       variables: {
         count: model.variables.length,
         content: <List label="Variables" rows={model.variables} empty="This environment has no variables." rowKey={item => item.name} columns={[
-          { title: 'Name', value: item => item.name }, { title: 'Type', value: item => item.type }, { title: 'Value', value: item => item.sensitive ? sensitiveMask : item.value ?? '', wide: true },
-          { title: 'Sensitive', value: item => yesNo(item.sensitive) }, { title: 'Description', value: item => item.description ?? '', wide: true }
+          { title: 'Name', value: item => item.name, width: nameWidth }, { title: 'Type', value: item => item.type, width: 12 },
+          { title: 'Value', value: item => item.sensitive ? sensitiveMask : item.value ?? '', masked: item => item.sensitive },
+          { title: 'Sensitive', value: item => yesNo(item.sensitive), width: flagWidth }, { title: 'Description', value: item => item.description ?? '' }
         ]} />
       }
     }

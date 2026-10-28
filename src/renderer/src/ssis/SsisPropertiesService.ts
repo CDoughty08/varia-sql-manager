@@ -1,5 +1,6 @@
 import type { ErrorDetails, VariaApi } from '../../../shared/contracts'
-import { refKey, type ObjectRef } from '../../../shared/explorer/refs.ts'
+import { displayText, refKey, type ObjectRef } from '../../../shared/explorer/refs.ts'
+import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { catalogDatabase, isSsisDocumentKind, ssisDocumentName, ssisDocumentSpecs, ssisLimits, type SsisDocumentKind } from '../../../shared/ssis/catalog.ts'
 import type { SsisEnvironmentModel, SsisFolderModel, SsisPackageModel, SsisProjectModel } from '../../../shared/ssis/schema.ts'
 import { onUnexpectedError } from '../core/errors'
@@ -49,6 +50,11 @@ export interface SsisPropertiesServiceOptions {
 }
 
 const goneCodes: ReadonlySet<string> = new Set(['NOT_FOUND', 'CATALOG_MISSING'])
+/**
+ * Main's failures that a second read can get past: the backend or its connection came back, a wait ran out, a queue was
+ * full. Anything else (a request main's schemas refuse, an answer they refuse, a cancel) fails the same way again.
+ */
+const retryableCodes: ReadonlySet<ErrorCode> = new Set(['BACKEND_LOST', 'BACKEND_UNAVAILABLE', 'BACKEND_CRASH', 'CONNECTION_LOST', 'SESSION_LOST', 'TIMEOUT', 'BUSY', 'TOO_MANY_REQUESTS', 'DUPLICATE_REQUEST'])
 const objectKey = (target: ObjectRef) => refKey('', { type: 'object', object: target })
 
 /**
@@ -65,6 +71,11 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
   private readonly unsubscribe: (() => void)[]
   /** Each document's read in flight, so Close, a disconnect and dispose can cancel it. */
   private readonly requests = new Map<string, string>()
+  /**
+   * The connections each disconnected document saw go or stay when it lost its own: it moves only to a connection made
+   * after that (or by Reconnect), never to another login's connection to the same server that was already open.
+   */
+  private readonly stranded = new Map<string, ReadonlySet<string>>()
   private disposed = false
 
   constructor(private readonly options: SsisPropertiesServiceOptions) {
@@ -93,7 +104,7 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
       this.refresh(existing.id)
       return existing.id
     }
-    const document = this.options.documents.openCustom(kind, ssisDocumentName(kind, target.name), connection.id, catalogDatabase)
+    const document = this.options.documents.openCustom(kind, ssisDocumentName(kind, displayText(target.name)), connection.id, catalogDatabase)
     this.put({
       id: document.id, kind, target, connectionId: connection.id, server: connection.server, serverLabel: connection.displayName || connection.server, loading: false, gone: false,
       disconnected: false, frame: initialFrameState(ssisDocumentSpecs[kind].sections)
@@ -133,7 +144,7 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
     }
     const error: SsisPropertiesError = result.ok
       ? result.value.error ?? { code: 'BACKEND_ERROR', message: 'The SSIS Catalog sent no properties.', retryable: true }
-      : { code: result.code ?? 'BACKEND_ERROR', message: result.error, retryable: result.code !== 'CANCELLED', ...result.details ? { details: result.details } : {} }
+      : { code: result.code ?? 'BACKEND_ERROR', message: result.error, retryable: result.code !== undefined && retryableCodes.has(result.code), ...result.details ? { details: result.details } : {} }
     this.patch(id, { loading: false, error, gone: goneCodes.has(error.code) })
   }
 
@@ -154,32 +165,38 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
     const requestId = this.requests.get(id)
     this.requests.delete(id)
     if (requestId) this.cancel([requestId])
+    this.stranded.delete(id)
     const { [id]: _closed, ...rest } = this.getSnapshot().documents
     this.publish({ documents: rest })
   }
 
   /**
    * A server that disconnects: a read in flight is cancelled, and the document says it cannot read until it reconnects.
-   * Any live connection to the server it was opened on reconnects it, not only an explicit Reconnect (which retargets
-   * it): after Disconnect, or removing a lost server, a new Connect to that server is the only way back. It moves to that
-   * connection, and documentsChanged reads it again there.
+   * Reconnect retargets it (documentsChanged). After Disconnect, or removing a lost server, a new Connect to the server it
+   * was opened on is the only way back, so it moves to a live connection to that server made after it lost its own; one
+   * already open then may be another login, whose catalog views show other rows. documentsChanged reads it again there.
    */
   private connectionsChanged(): void {
+    const connections = this.options.connections.getSnapshot()
     for (const state of Object.values(this.getSnapshot().documents)) {
       const disconnected = !this.live(state.connectionId)
-      if (disconnected && this.requests.has(state.id)) {
+      if (!disconnected) {
+        this.stranded.delete(state.id)
+        if (state.disconnected) this.patch(state.id, { disconnected: false })
+        continue
+      }
+      if (this.requests.has(state.id)) {
         this.cancel([this.requests.get(state.id)!])
         this.requests.delete(state.id)
         this.patch(state.id, { loading: false })
       }
-      const replacement = disconnected ? this.liveOn(state.server) : undefined
+      const seen = this.stranded.get(state.id)
+      if (!seen) this.stranded.set(state.id, new Set(connections.map(connection => connection.id)))
+      const name = state.server.trim().toLowerCase()
+      const replacement = seen && connections.find(connection => !connection.lost && !seen.has(connection.id) && connection.server.trim().toLowerCase() === name)
       if (replacement) this.options.documents.update(state.id, { connectionId: replacement.id })
-      else if (disconnected !== this.get(state.id)?.disconnected) this.patch(state.id, { disconnected })
+      else if (!this.get(state.id)?.disconnected) this.patch(state.id, { disconnected: true })
     }
-  }
-  private liveOn(server: string): LiveConnection | undefined {
-    const name = server.trim().toLowerCase()
-    return this.options.connections.getSnapshot().find(connection => !connection.lost && connection.server.trim().toLowerCase() === name)
   }
   /** Reconnect moves the tab to the new connection (TargetService.retarget), and a disconnect clears it: read again on the new one. */
   private documentsChanged(): void {
@@ -191,7 +208,10 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
       }
       const requestId = this.requests.get(state.id)
       if (requestId) { this.requests.delete(state.id); this.cancel([requestId]) }
-      this.patch(state.id, { connectionId, loading: false, disconnected: !this.live(connectionId) })
+      const connection = this.live(connectionId)
+      if (connection) this.stranded.delete(state.id)
+      // The header names the connection it now reads on.
+      this.patch(state.id, { connectionId, loading: false, disconnected: !connection, ...connection ? { serverLabel: connection.displayName || connection.server } : {} })
       this.refresh(state.id)
     }
   }
