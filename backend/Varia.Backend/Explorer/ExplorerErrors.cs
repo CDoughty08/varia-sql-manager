@@ -54,9 +54,11 @@ internal static class ExplorerErrors
             "BLOCKED" => "Another session holds a lock on this metadata (for example an uncommitted CREATE or ALTER). Retry after it commits.",
             "TIMEOUT" => "Loading took longer than 30 seconds. Retry, or filter this folder.",
             "CONNECTION_LOST" => "The connection to the server was lost.",
+            // What the server cannot have (the SSIS Catalog on Linux): the caller words it.
+            "NOT_SUPPORTED" => serverText ?? subject,
             _ => "Msg " + number + ": " + serverText
         };
-        return new(code, Clip(message, MaxMessage), code is not ("NO_DB_ACCESS" or "NOT_FOUND"), code == "NOT_FOUND" ? "refreshParent" : null);
+        return new(code, Clip(message, MaxMessage), code is not ("NO_DB_ACCESS" or "NOT_FOUND" or "NOT_SUPPORTED"), code == "NOT_FOUND" ? "refreshParent" : null);
     }
 
     /// <summary>A pool connection that could not sign in with Kerberos (ConnectionFailures.OpenAsync): what to fix, such as kinit,

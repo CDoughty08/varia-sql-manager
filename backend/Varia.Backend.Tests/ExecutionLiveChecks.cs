@@ -134,6 +134,24 @@ internal static class ExecutionLiveChecks
                 + string.Join(", ", midSet.ResultSets.Select(set => set.Columns[0].Name + (set.Incomplete ? "*" : "") + set.State)) + " | " + string.Join(" | ", midTexts));
             var after = await Options();
             check(after == Defaults, "the session survives batches that raised errors: " + after);
+            // Managed SNI can raise a fatal transport error (a KILL from another tab, say) before its asynchronous close
+            // updates Connection.State; the row hook raises one while the connection still reads Open. The script must end the
+            // session there and say so, not report the dead session's SPID and keep it for the next execution to find lost.
+            var doomed = Guid.NewGuid().ToString();
+            var doomedOpen = await Run("SELECT 1;", doomed);
+            service.RowFault = () => ConnectionFailureChecks.Sql(0, 0, 20, "", "Varia live check: a transport-level error has occurred.");
+            QueryResult severed;
+            try { severed = await Run("SELECT n FROM (VALUES (1), (2)) AS v (n);\nGO\nPRINT 'SHOULD_NOT_RUN';", doomed); }
+            finally { service.RowFault = null; }
+            string? severedState = null;
+            try { await Call("query.session.state", new SessionStateArgs(doomed)); }
+            catch (RequestException error) { severedState = error.Code; }
+            check(doomedOpen.Spid > 0 && severed.Status == "failed" && severed.Spid is null && severed.Login is null && Texts(severed).Contains(ClosedNote)
+                && !Texts(severed).Contains("SHOULD_NOT_RUN") && severedState == "SESSION_CLOSED",
+                "a fatal error while the connection still reads open ends the session with the script, without its SPID: " + severed.Spid + ", " + severedState + " | " + string.Join(" | ", Texts(severed)));
+            var renewed = await Run("SELECT 1;", doomed);
+            check(renewed.Status == "completed" && renewed.Spid > 0, "the next execution in that tab opens a new session rather than answering SESSION_LOST: " + renewed.Status);
+            await Call("query.session.close", new SessionArgs(doomed, null));
 
             // stopOnError keeps the stop-at-first-error policy (SQLCMD's :on error exit).
             var stopped = await Run(script, stopOnError: true);

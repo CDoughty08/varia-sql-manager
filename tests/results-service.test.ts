@@ -272,7 +272,9 @@ describe('results service', () => {
     expect(api.copyResults).not.toHaveBeenCalled()
   })
   it('saves a set through main, shows its strip 300 ms after the file is chosen, and says how the save ended', async () => {
-    const { api, service, tab, timers, flush, progress } = fixture()
+    const { api, service, tab, timers, flush, progress, events } = fixture()
+    const saved: unknown[] = []
+    events.subscribe(event => { if (event.type === 'results.saved') saved.push(event) })
     service.begin('t1', 'q1')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1), descriptor(2, { index: 1, rowsRead: 5, rowsStored: 5, rowsAvailable: 5 })]) })
     const pending = deferred<ApiResult<SavedResults | null>>()
@@ -300,6 +302,8 @@ describe('results service', () => {
     expect(await saving).toBeUndefined()
     flush()
     expect(tab()).toMatchObject({ jobs: [], jobNotice: 'Saved 5 rows to out.csv. 1 value was truncated.' })
+    // The workbench hears of it too, for a toast when the tab is not in view.
+    expect(saved).toEqual([{ type: 'results.saved', tabId: 't1', text: 'Saved 5 rows to out.csv. 1 value was truncated.' }])
     timers.advance(300)
     expect(tab().announcement).toBe('Saved 5 rows to out.csv. 1 value was truncated.')
     timers.advance(8000)
@@ -314,6 +318,8 @@ describe('results service', () => {
     expect(await service.saveAs('t1', 0, 'SQLQuery1')).toBeUndefined()
     flush()
     expect(tab().jobNotice).toBe('Saving was cancelled. The file was not written.')
+    // A cancelled dialog or save is no news elsewhere.
+    expect(saved).toHaveLength(1)
   })
   it('returns why a save could not run: main\'s and the backend\'s sentences as they are, anything else prefixed', async () => {
     const { api, client, service } = fixture()

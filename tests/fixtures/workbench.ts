@@ -50,6 +50,8 @@ import { actionsContribution } from '../../src/renderer/src/contributions/action
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
+import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
+import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -287,6 +289,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const inputMode = new InputModeService(fakeInputMode())
+  const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const context = new ContextKeyService({
     platform,
     documents,
@@ -304,6 +307,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    notifications,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -313,7 +317,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
-    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), closePane: vi.fn(),
+    disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
     paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
@@ -356,7 +360,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
-    designers
+    designers,
+    notifications
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -376,7 +381,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
-    settingsContribution(workbench)
+    settingsContribution(workbench),
+    notificationsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -408,6 +414,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
+    notifications.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -432,6 +439,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     dialogs,
     designers,
     focusEditor,
+    notifications,
     queries,
     files,
     recentFiles,

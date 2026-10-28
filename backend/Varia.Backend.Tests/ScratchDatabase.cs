@@ -46,8 +46,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Designer => Name + "_tbd";
     /// <summary>A second table designer database, whose name HAS_PERMS_BY_NAME cannot read unbracketed (created on demand).</summary>
     public string DesignerOdd => Name + "_tbd.]";
+    /// <summary>The fake SSIS catalog: tables named after SSISDB's catalog views, built from tests/fixtures/ssisdb (created on demand).</summary>
+    public string Ssis => Name + "_ssis";
+    /// <summary>The Integration Services feature's own catalog backup restored under a scratch name, so its schema can be read
+    /// without a catalog (created on demand; never named SSISDB, never given a master key, CLR or jobs).</summary>
+    public string SsisReference => Name + "_ssisref";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
+    /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
+    public string Live => Name + "_live";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -56,8 +63,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public bool FullText { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
-    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\])?$")]
+    // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
+    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -70,6 +78,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// Another run's can be mid-setup, single-user, offline or gone a moment later.</summary>
     public static bool IsScratchName(string name) =>
         name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Lists every database by name, for "the server is unchanged" checks through <see cref="Lasting"/>.</summary>
+    public const string DatabaseNamesSql = "SELECT name FROM sys.databases ORDER BY name;";
+
+    /// <summary>The database names no other run creates or drops, from <see cref="DatabaseNamesSql"/>. Other runs on the
+    /// same server add and drop scratch databases at any moment, so a count of every database is not this run's to check.</summary>
+    public static string Lasting(SqlRun run) =>
+        string.Join("\n", (run.Sets.Count > 0 ? run.Sets[0] : []).Select(row => row[0] ?? "").Where(name => !IsScratchName(name)));
 
     private static string RandomPassword()
     {
@@ -188,8 +204,30 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
 
+    /// <summary>Creates the empty, marked live tables database.</summary>
+    public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
+
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
+
+    /// <summary>Creates the empty, marked fake SSIS catalog database with the real catalog's collation.</summary>
+    public Task<string> CreateSsisAsync(string collation) => CreateMarkedAsync(Ssis, collation);
+
+    /// <summary>Restores the Integration Services catalog backup at a server-side path as <see cref="SsisReference"/>, with its
+    /// files in the instance's default folders, and marks it. Only its schema is read: it gets no master key, CLR or jobs, and
+    /// nothing treats a database of this name as the catalog.</summary>
+    public async Task<string> RestoreSsisReferenceAsync(string backup)
+    {
+        var paths = (await Exec("SELECT CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath')), CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultLogPath'));")).Sets[0][0];
+        var files = await Exec("RESTORE FILELISTONLY FROM DISK = " + Quote(backup) + ";");
+        var moves = files.Sets[0].Select((file, index) => "MOVE " + Quote(file[0]!) + " TO "
+            + Quote((file[2] == "L" ? paths[1] : paths[0]) + SsisReference + "_" + index.ToString(CultureInfo.InvariantCulture) + (file[2] == "L" ? ".ldf" : ".mdf")));
+        created.Add(SsisReference);
+        await Exec("RESTORE DATABASE " + Bracket(SsisReference) + " FROM DISK = " + Quote(backup) + " WITH RECOVERY, " + string.Join(", ", moves) + ";\n"
+            + "ALTER DATABASE " + Bracket(SsisReference) + " SET RECOVERY SIMPLE;");
+        await Exec("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", SsisReference);
+        return SsisReference;
+    }
 
     /// <summary>Creates the empty, marked second table designer database, case- and accent-insensitive.</summary>
     public Task<string> CreateDesignerOddAsync() => CreateMarkedAsync(DesignerOdd, "Latin1_General_100_CI_AI");

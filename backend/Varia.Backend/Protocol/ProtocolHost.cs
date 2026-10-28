@@ -13,6 +13,10 @@ internal interface IRequestDispatcher : IDisposable
     /// <summary>Every method name, announced in HELLO so main can detect a stale build.</summary>
     IReadOnlyList<string> Methods { get; }
     RequestLane LaneOf(string method);
+    /// <summary>Whether Stop (CANCEL reason 1) is answered by the handler, with what it completed, rather than by the host at once.</summary>
+    bool AnswersStop(string method);
+    /// <summary>Whether a request's frame may carry a secret (methodPolicies' sensitive): its body and JSON buffer are zeroed after parsing.</summary>
+    bool Sensitive(string method);
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
@@ -178,7 +182,7 @@ internal sealed class ProtocolHost
             Respond(header.Id, Error("BUSY", "The backend is busy. Retry after a running operation finishes."), stream: credit is not null);
             return null;
         }
-        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData, SendEvent);
+        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData, SendEvent, SendCreditedEvent);
         contexts[header.Id] = context;
         var task = Task.Run(() => HandleAsync(context, body, start, length));
         work[task] = 0;
@@ -234,10 +238,10 @@ internal sealed class ProtocolHost
         try
         {
             JsonElement parameters;
-            var sensitive = context.Method is "connections.connect" or "connections.databases" or "connections.preview";
+            var sensitive = dispatcher!.Sensitive(context.Method);
             try { parameters = JsonBridge.ParseControl(body.AsSpan(start, length), sensitive); }
             catch (ProtocolException) { throw new RequestException("INVALID_PARAMS", "Invalid request parameters."); }
-            // The frame body holds the password in clear text; managed strings made from it cannot be zeroed.
+            // The frame body holds the secret in clear text; managed strings made from it cannot be zeroed.
             finally { if (sensitive) Array.Clear(body); }
             var lane = context.Lane switch { RequestLane.Metadata => metadataSlots, RequestLane.Results => resultSlots, _ => null };
             if (lane is not null)
@@ -272,11 +276,11 @@ internal sealed class ProtocolHost
 
     /// <summary>A unary request answers as soon as it is cancelled or its deadline passes; work that ignores the token
     /// keeps running and its late result is discarded. Queries answer with their summary, and streams after their
-    /// current page. Stop on an object action (actions lane, reason 1) answers with the action's steps once SQL Server has
-    /// ended its statement, within the action service's grace, so the user learns what the DDL completed.</summary>
+    /// current page. Stop (reason 1) on an object action or an SSIS write (AnswersStop) answers with the action's steps once SQL
+    /// Server has ended its statement, within the service's grace, so the user learns what the write completed.</summary>
     private void Cancelled(RequestContext context)
     {
-        if (context.Lane == RequestLane.Query || context.IsStream || context.Lane == RequestLane.Actions && context.Reason == CancelReason.User) return;
+        if (context.Lane == RequestLane.Query || context.IsStream || context.Reason == CancelReason.User && dispatcher?.AnswersStop(context.Method) == true) return;
         Respond(context, CancelledError(context));
     }
 
@@ -297,7 +301,9 @@ internal sealed class ProtocolHost
             _ when Find<SqlException>(error) is { } sql => Error("SQL_ERROR", sql.Message),
             // SMO wraps server failures (permissions, missing objects) in its own exception types.
             _ when error.GetType().Namespace?.StartsWith("Microsoft.SqlServer.Management", StringComparison.Ordinal) == true => Error("SMO_ERROR", error.GetBaseException().Message),
-            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.")
+            // The sentence hides the cause (such as a native library that cannot load from a long install path), so the details
+            // name the exception's types for Copy details; never its message.
+            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.", new(null, null, null, null, Exception: ErrorDetailsLimits.Summary(error)))
         };
     }
 
@@ -326,7 +332,8 @@ internal sealed class ProtocolHost
         if (details is not null)
         {
             writer.WriteString("details");
-            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1));
+            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1)
+                + (details.Reason is null ? 0 : 1) + (details.Exception is null ? 0 : 1));
             if (details.Number is { } number) { writer.WriteString("number"); writer.WriteInt64(number); }
             if (details.State is { } state) { writer.WriteString("state"); writer.WriteInt64(state); }
             if (details.Class is { } level) { writer.WriteString("class"); writer.WriteInt64(level); }
@@ -334,6 +341,12 @@ internal sealed class ProtocolHost
             {
                 writer.WriteString("server");
                 writer.WriteString(server.Length > ConnectionFailures.MaxServerLength ? server[..ConnectionFailures.MaxServerLength] : server);
+            }
+            if (details.Reason is { } reason) { writer.WriteString("reason"); writer.WriteString(reason); }
+            if (details.Exception is { } exception)
+            {
+                writer.WriteString("exception");
+                writer.WriteString(exception.Length > ErrorDetailsLimits.MaxExceptionLength ? exception[..ErrorDetailsLimits.MaxExceptionLength] : exception);
             }
         }
         return buffer.WrittenSpan.ToArray();
@@ -360,6 +373,18 @@ internal sealed class ProtocolHost
     }
 
     private void SendEvent(RequestContext context, object value, bool droppable) => Event(context.Id, value, droppable);
+
+    /// <summary>A live EVENT: never droppable (the producer sends one only after the previous one was acknowledged), at
+    /// most 256 KiB. Returns its body length, or −1 when it was not queued for its size.</summary>
+    private int SendCreditedEvent(RequestContext context, object value)
+    {
+        byte[] body;
+        try { body = JsonBridge.Encode(value, json); }
+        catch (InvalidOperationException) { return -1; }
+        if (body.Length > ProtocolLimits.EventBody) return -1;
+        outbound.Control(Frames.Encode(FrameKind.Event, context.Id, 0, body), droppable: false);
+        return body.Length;
+    }
 
     /// <summary>A global EVENT (id 0), such as results.memory. Always droppable: false when it was not queued (the control
     /// lane is full while main is not reading), so the publisher can send it again later.</summary>
