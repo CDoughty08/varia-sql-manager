@@ -64,6 +64,12 @@ internal static class ActivityActionChecks
             && !identity.Text.Contains("JOIN", StringComparison.OrdinalIgnoreCase) && !identity.Text.Contains("sys.dm_exec_connections", StringComparison.OrdinalIgnoreCase)
             && identity.Columns.SequenceEqual(["session_id", "same_session"]) && identity.Parameters.Select(parameter => parameter.Name).ToHashSet().SetEquals(["@session_id", "@login_time"]),
             "Details' visibility and identity preflight needs only sessions, so an invisible target requires no joined-DMV permissions");
+        var sections = details.Skip(2).ToList();
+        var unguarded = sections.Where(statement => !statement.Text.Contains(" AND " + ActivitySql.SameSession, StringComparison.Ordinal) && !statement.Text.Contains("WHERE " + ActivitySql.SameSession, StringComparison.Ordinal)
+            || !statement.Parameters.Any(parameter => parameter.Name == "@login_time")).Select(statement => statement.Id).ToList();
+        check(sections.Select(statement => statement.Id).SequenceEqual(["texts", "inputBuffer", "waits", "transactions", "tempdb", "locks"]) && unguarded.Count == 0
+            && ActivitySql.SameSession == "EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS g WHERE g.session_id = @session_id AND g.login_time = @login_time)",
+            "every Details section after the session read filters on the session's login time too, so an id SQL Server reused meanwhile reads nothing: " + string.Join(", ", unguarded));
         check(Catalog.KillOutcomes.SequenceEqual(["killed", "ended", "changed", "own", "system", "varia", "denied", "failed"])
             && Enumerable.Range(-1, 8).Select(SessionActions.KillOutcome).All(Catalog.KillOutcomes.Contains)
             && Catalog.Limit("detailsBudgetMs") == 10_000 && Catalog.Limit("killBudgetMs") == 25_000 && Catalog.Limit("detailsPreviewChars") == 65_536 && Catalog.Limit("detailsChars") == 1_000_000

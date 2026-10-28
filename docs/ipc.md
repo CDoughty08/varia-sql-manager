@@ -556,7 +556,12 @@ left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or th
 transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
 lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
 `SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
-committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+committed. Check the data before running the work again." A commit the deadline or a cancel interrupts answers `TIMEOUT` or
+`CANCELLED` and leaves the session open, its outcome unknown: the session remembers it, and when a later commit or state
+read finds it lost it answers `SESSION_LOST` with "The SQL session was lost after a commit that did not finish (it was
+cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work
+again." A severity 20 error ends the session even while its connection still reads open (managed SNI closes it later):
+the state read, the commit and an execution all take it for lost. `'rollback'` is a plain close: SQL Server rolls back what a
 closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
@@ -1431,7 +1436,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
-| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 
