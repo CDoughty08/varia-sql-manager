@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, queryBar, queryBarButton, toolbarButton, unsavedMark, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -690,9 +690,9 @@ try {
   await expect(kindIcon(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
   await expect(activeDocument(page)).toHaveAccessibleName(forXmlName)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
-  await expect(server()).toBeDisabled()
-  await expect(server()).toHaveValue('')
-  await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
+  // A value has no server and never executes: it has no query bar.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(server()).toHaveCount(0)
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
   // Varia's own table icon, as in Object Explorer.
@@ -870,10 +870,11 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
-  // Script As's segment, then the query's facts and the editor's segments, give way to a long text; the backend status and
-  // the indicator keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
+  // Script As's segment, then the query's facts, give way to a long text; the backend status, the editor's segments (Ln,
+  // Col, Ch, INS, the line ending and encoding) and the indicator keep their size. Every segment keeps one line (step 17
+  // fits a long server name into a small window).
   expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
-    .toEqual(['0 nowrap', '1 nowrap', '1 nowrap', '0 nowrap'])
+    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
@@ -1121,7 +1122,7 @@ try {
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(status()).toContainText('Query was cancelled.')
   await outputTab(/^Results/).click()
   await expect(strip()).toContainText('This result is incomplete')
@@ -1268,7 +1269,7 @@ try {
     await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
     await expect(status()).toContainText('Executing query…')
     await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
-    await toolbarButton(page, 'Cancel').click()
+    await queryBarButton(page, 'Cancel').click()
     await expect(status()).toContainText('Query was cancelled.', { timeout: 30000 })
     await outputTab(/^Results/).click()
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')

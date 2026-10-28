@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 
 await mkdir('artifacts', { recursive: true })
@@ -105,7 +105,7 @@ try {
   const paint = locator => locator.evaluate(element => { const style = getComputedStyle(element); return [style.backgroundColor, style.color] })
   await searchBox(page).hover()
   expect(await paint(searchBox(page))).toEqual([await colorOf('commandCenter.activeBackground'), await colorOf('commandCenter.foreground')])
-  const execute = toolbarButton(page, 'Execute')
+  const execute = queryBarButton(page, 'Execute')
   await expect(execute).toBeEnabled()
   await execute.hover()
   expect(await paint(execute)).toEqual([await colorOf('button.hoverBackground'), await colorOf('button.foreground')])

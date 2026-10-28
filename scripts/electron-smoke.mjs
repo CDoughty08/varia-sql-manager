@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark, emptyState, emptyStateIcon, emptyStateTitle, primaryAction, workspaceEmpty } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, queryBar, queryBarButton, queryConnection, toolbar, toolbarButton, unsavedMark, emptyState, emptyStateIcon, emptyStateTitle, primaryAction, workspaceEmpty } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -165,9 +165,34 @@ try {
   // One header row: the Standard toolbar and the search box share it with the menus, and take clicks rather than drags.
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
+  // The header keeps the file commands; each query has its own bar under the tab strip, with Execute (the filled button)
+  // and Cancel, then its server and database lists in the connection pill.
+  expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All'])
+  await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
+  await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
+  await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
+  expect(await page.evaluate(part => {
+    const bar = document.querySelector(part.queryBar), box = bar.getBoundingClientRect()
+    return { below: box.top >= document.querySelector(part.documentTabs).getBoundingClientRect().bottom - 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
+      height: box.height, stops: [...bar.querySelectorAll('button, select')].filter(control => control.tabIndex === 0).length, primary: [...bar.querySelectorAll(part.primaryAction)].map(button => button.getAttribute('aria-label')) }
+  }, part)).toEqual({ below: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
+  // One tab stop: the arrow keys move between the enabled controls (Cancel waits for a running query) and leave the
+  // server list's value alone.
+  await queryServer(page).focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(queryBarButton(page, 'Execute')).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(queryServer(page)).toBeFocused()
+  await expect(queryServer(page)).toHaveValue('')
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
+  // Its Server and Database lists are the active query's again, and query tabs show no bar of their own.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(toolbar(page).getByLabel('Query server', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Query server', { exact: true })).toHaveCount(1)
+  await expect(toolbarButton(page, /Execute/)).toBeVisible()
   expect(await page.evaluate(part => {
     const header = document.querySelector(part.titleBar), toolbar = document.querySelector(part.toolbar)
     return [header.contains(toolbar), toolbar.getBoundingClientRect().top >= header.getBoundingClientRect().bottom - 0.5, document.querySelectorAll(part.toolbar).length]
@@ -175,6 +200,7 @@ try {
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': null }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toHaveCount(0)
   await expect(toolbarButton(page, 'New query')).toBeVisible()
+  await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
   // The renderer draws the title-bar menus: no native popup or menu-focus channel is left to call.
   expect(await page.evaluate(() => ({ showMenu: typeof window.varia.showMenu, onMenuFocus: typeof window.varia.onMenuFocus }))).toEqual({ showMenu: 'undefined', onMenuFocus: 'undefined' })
   const editorText = () => editorTextOf(page)
@@ -386,12 +412,12 @@ try {
   expect(idA).not.toBe(idB)
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await typeSql('SELECT 2;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-b')
   await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
   await expect(anyResultGrid(page)).toContainText('AppData')
   const executed = (await executions()).map(call => call.params)
@@ -409,7 +435,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
   expect((await executions()).at(-1).params.startLine).toBe(3)
-  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
@@ -429,7 +455,7 @@ try {
   await expect(queryServer(page)).toBeEnabled()
   await queryDatabase(page).selectOption('AppData')
   await typeSql('BATCH_STATS_FIXTURE')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(messages(page)).toContainText('logical reads 2')
   await expect(messages(page)).toContainText('CPU time = 1 ms')
   // A run with errors shows Messages, its error inline in red in SSMS's two-line form, then the line saying the next batch
@@ -443,11 +469,11 @@ try {
   await expect(anyResultGrid(page)).toContainText('42')
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML>')
   await expect(page.locator('ShowPlanXML')).toHaveCount(0)
   await typeSql('SELECT 1;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
 
   // Object Explorer: one keyboard tree over both servers. Connecting expanded each server without loading below its
   // folders; folders load when expanded, keep their rows when collapsed, and fail on their own.
@@ -554,25 +580,27 @@ try {
 
   // Independent running state and cancellation for queries on two servers.
   await typeSql('WAIT_FOR_CANCEL')
-  await toolbarButton(page, /Execute/).click()
-  await expect(toolbarButton(page, 'Cancel')).toBeEnabled()
+  await queryBarButton(page, /Execute/).click()
+  await expect(queryBarButton(page, 'Cancel')).toBeEnabled()
+  // A click on the bar's buttons leaves the keyboard in the query, as SSMS's toolbar does.
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.monaco-editor'))).toBe(true)
   await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
   await typeSql('WAIT_FOR_CANCEL')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(executingMark(documentTabs(page))).toHaveCount(2)
   // Running is a spinner, unlike the unsaved dot, and the status bar takes its executing tint for the active query.
   await expect(executingMark(documentTabs(page)).first()).toHaveAttribute('data-icon', 'loading')
   await expect(page.getByRole('contentinfo', { name: 'Status bar', exact: true })).toHaveAttribute('data-state', 'executing')
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(1)
   await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(0)
   // Tabs are whole pixels wide, so each tab's kind icon starts on a whole pixel, as the first one's does.
   const iconOffsets = await documentTabs(page).evaluate((strip, icon) => [...strip.querySelectorAll(icon)].map(glyph => glyph.getBoundingClientRect().left % 1), part.tabIcon)
   expect([iconOffsets.length > 1, iconOffsets.every(offset => offset === 0)]).toEqual([true, true])
   await typeSql('SELECT 1;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
   await activeDocument(page).focus()
   await page.keyboard.press('Space')
@@ -585,7 +613,7 @@ try {
   await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
   await expect(queryServer(page)).toHaveValue('')
   // A disconnected query's Execute connects it first.
-  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(part => {

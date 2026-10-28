@@ -86,7 +86,7 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | Token | Compact px | Comfortable px | Planned for | Sized with it now |
 | --- | --- | --- | --- | --- |
 | `--varia-header` | 40 | 44 | The title bar. | `.title-bar` |
-| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.explorer-header` |
-| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.command-centre`, `.header-context select`, `.header-toolbar .execute` |
+| `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.explorer-header`, `.query-bar` |
+| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.command-centre`, `.query-bar-action`, `.query-connection` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

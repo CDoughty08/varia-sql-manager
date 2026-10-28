@@ -112,7 +112,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: ['.title-bar'], bar: ['.query-tabs', '.explorer-header'], control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute'],
+  header: ['.title-bar'], bar: ['.query-tabs', '.explorer-header', '.query-bar'], control: ['.icon-button', '.command-centre', '.query-bar-action', '.query-connection'],
   row: ['.explorer-row', '.skeleton-row'], status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */

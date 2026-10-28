@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { backendReady, connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, statusBar, toolbarButton, activeDocument, environmentPill, explorerLabel } from './fixtures/ui.mjs'
+import { backendReady, connectErrorDetails, databaseErrorDetails, part, queryStatus, savedConnections, statusBar, toolbarButton, activeDocument, environmentPill, explorerLabel, queryBar } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -788,9 +788,17 @@ async function environmentLabels() {
   })
   expect(typed).toBe('Staging')
   expect(await saved()).toBe('Staging')
-  // The status bars say what the tag labels.
-  await expect(queryStatus(page).locator(part.queryEnvironment)).toHaveText('Environment: STAGING')
+  // The query bar and the status bar say what the tag labels, and the status bar shows it once.
+  await expect(queryBar(page).locator(part.queryEnvironment)).toHaveText('Environment: STAGING')
   await expect(statusBar(page).locator(part.statusEnvironment)).toHaveText('Active connection environment: STAGING')
+  await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
+  // SSMS's query window status bar (for one release) leads its server with the tag too, and the window's keeps its own.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': true }))).toMatchObject({ ok: true })
+  await expect(queryStatus(page).locator(part.queryStatusEnvironment)).toHaveText('Environment: STAGING')
+  await expect(tag('queryStatus')).toHaveText('STAGING')
+  await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': null }))).toMatchObject({ ok: true })
+  await expect(tag('queryStatus')).toHaveCount(0)
   // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bars keep
   // their room; the full label stays in the tooltip.
   const long = 'W'.repeat(32)
@@ -816,9 +824,12 @@ async function environmentLabels() {
     const tabTag = document.querySelector(`${part.activeDocumentTab} ${part.environmentTag}`), tab = document.querySelector(part.activeDocumentTab).getBoundingClientRect().width
     const sized = ['query', 'status'].map(place => { const element = document.querySelector(`${part.environmentTag}[data-place="${place}"]`); return element.querySelector(part.statusPill).getBoundingClientRect().width <= 12 * em(element) + 0.5 })
     const label = document.querySelector(`${part.environmentTag}[data-place="status"] ${part.statusPillLabel}`)
-    return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth }
+    // The query bar keeps its controls inside it: the label gives way, never the lists.
+    const bar = document.querySelector(part.queryBar), lists = [...bar.querySelectorAll('select')].map(list => list.getBoundingClientRect())
+    const kept = bar.scrollWidth <= bar.clientWidth && lists.every(list => list.width >= 64 - 0.5 && list.right <= bar.getBoundingClientRect().right + 0.5)
+    return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth, queryBar: kept }
   }, part)
-  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true })
+  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true, queryBar: true })
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label.png') })
   // A long name and a long label in history: the name gives way and the tag stays inside the row, as PROD does.
   dialog = await open()

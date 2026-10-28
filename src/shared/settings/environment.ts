@@ -2,7 +2,7 @@ import type { SettingDef } from './types'
 
 /**
  * Environment pages. Later environment settings (documents, AutoRecover, the status bar) get area files of their own. The
- * classic toolbar keeps the layout from before the header row for one release.
+ * classic toolbar keeps the layout from before the header row and the query bar for one release.
  */
 export const environmentSettings = [
   {
@@ -14,7 +14,7 @@ export const environmentSettings = [
   {
     key: 'environment.layout.classicToolbar', page: 'environment.general', label: 'Show the classic toolbar', type: 'boolean', default: false, varia: true,
     keywords: ['toolbar', 'standard', 'classic', 'legacy', 'server', 'database', 'execute', 'layouts'],
-    description: 'Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the Server and Database boxes. The header then keeps only the menus and the search box. This option will be removed in a later release.'
+    description: 'Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query\'s Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release.'
   },
   {
     key: 'environment.layout.panelTabs', page: 'environment.general', label: 'Show panel tabs', type: 'boolean', default: false, varia: true, hidden: true,

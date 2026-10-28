@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, backendReady, errorMessages, explorerLabel, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, toolbarButton } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, errorMessages, explorerLabel, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -62,7 +62,7 @@ async function typeSql(sql) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
 }
-const execute = () => toolbarButton(page, /Execute/)
+const execute = () => queryBarButton(page, /Execute/)
 async function messages() {
   await outputView(page, /^Messages/).click()
   return messagesOf(page)
