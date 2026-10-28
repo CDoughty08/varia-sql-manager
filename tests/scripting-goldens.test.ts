@@ -52,7 +52,15 @@ describe('scripting golden cases', () => {
       expect(scriptVerbOffered(item.target.kind as NodeKind, item.verb as ScriptVerb, item.target.parent?.kind as ParentKind | undefined), item.id).toBe(true)
       expect(scriptingOptionsSchema.safeParse({ ...defaultScriptingOptions, ...item.options }).success, item.id).toBe(true)
       if (item.expectError) expect(scriptErrorCodes, item.id).toContain(item.expectError)
-      if (item.requires) expect(['sqlLogin', 'snapshot'], item.id).toContain(item.requires)
+      if (item.requires) expect(['sqlLogin', 'snapshot', 'fullText', 'noFullText'], item.id).toContain(item.requires)
+    }
+    // SMO scripts some objects differently where Full-Text Search is installed (a catalog's ACCENT_SENSITIVITY), so such a
+    // case comes in pairs: CI's SQL Server has no Full-Text Search, and a developer's server may.
+    const split = cases.filter(item => item.requires === 'fullText' || item.requires === 'noFullText')
+    expect(split.length).toBeGreaterThanOrEqual(2)
+    for (const item of split) {
+      const twin = split.filter(other => other.requires !== item.requires && JSON.stringify([other.target, other.verb, other.options]) === JSON.stringify([item.target, item.verb, item.options]))
+      expect(twin.length, item.id).toBe(1)
     }
     const orders = cases.flatMap(item => item.roundTrip === undefined ? [] : [item.roundTrip])
     expect(orders.length).toBeGreaterThanOrEqual(20)

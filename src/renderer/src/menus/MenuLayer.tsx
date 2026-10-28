@@ -5,6 +5,8 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { placeMenu, type Placement, type Rect } from './geometry'
 import type { MenuController, MenuLevel, MenuView } from './MenuController'
 import type { ResolvedMenuItem } from './resolve'
+import { codiconClass, type IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 
 interface ControlsOverlay { readonly visible: boolean; getTitlebarAreaRect(): DOMRect }
 const point = (event: ReactPointerEvent) => ({ x: event.clientX, y: event.clientY })
@@ -27,10 +29,10 @@ function controlsArea(): Rect | undefined {
 function itemRole(item: Extract<ResolvedMenuItem, { kind: 'command' }>): string {
   return item.radio ? 'menuitemradio' : item.checked !== undefined ? 'menuitemcheckbox' : 'menuitem'
 }
-function gutterIcon(item: ResolvedMenuItem): string | undefined {
+function gutterIcon(item: ResolvedMenuItem): IconId | undefined {
   if (item.kind !== 'command') return undefined
   if (item.checked) return item.radio ? 'circle-filled' : 'check'
-  return item.checked === undefined ? item.icon : undefined
+  return item.checked === undefined ? item.icon ?? undefined : undefined
 }
 
 function MenuItemView({ item, level, depth, index, expanded, controller }: {
@@ -46,10 +48,10 @@ function MenuItemView({ item, level, depth, index, expanded, controller }: {
     onPointerEnter={event => controller.pointerEnterItem(depth, index, point(event))}
     onPointerUp={event => controller.pointerUp(depth, index, point(event), event.button)}
     onClick={event => { if (event.button === 0) controller.click(depth, index) }}>
-    <span className="menu-gutter" aria-hidden="true">{icon && <span className={`codicon codicon-${icon}`} />}</span>
+    <span className="menu-gutter" aria-hidden="true">{icon && <Icon name={icon} />}</span>
     <span className="menu-label"><Mnemonic title={item.title} index={item.mnemonic} /></span>
     <span className="menu-keybinding" aria-hidden="true">{keys?.text}</span>
-    <span className={item.kind === 'submenu' ? 'menu-chevron codicon codicon-chevron-right' : 'menu-chevron'} aria-hidden="true" />
+    <span className={item.kind === 'submenu' ? 'menu-chevron ' + codiconClass('chevron-right') : 'menu-chevron'} aria-hidden="true" />
   </div>
 }
 

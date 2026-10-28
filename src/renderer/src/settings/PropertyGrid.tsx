@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { propertyGridAttribute, visibleGridRows } from './grid-rows'
+import Icon from '../Icon'
 
 /**
  * One row of a property grid: its label and description, and its control's value as text. 'choice' is a list,
@@ -82,7 +83,7 @@ export default function PropertyGrid({ label, groups, order = 'categorized', idP
         return <div key={row.key} className="options-row" data-focused={row.key === focused || undefined} data-child={row.parent !== undefined || undefined} onPointerDown={() => onFocusRow(row.key)}>
           {row.expanded === undefined ? name : <span className="property-parent">
             <button type="button" className="property-twisty" aria-expanded={row.expanded} aria-label={(row.expanded ? 'Collapse ' : 'Expand ') + row.label} onClick={() => onToggle?.(row.key)}>
-              <span className={`codicon codicon-chevron-${row.expanded ? 'down' : 'right'}`} aria-hidden="true" /></button>{name}</span>}
+              <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} /></button>{name}</span>}
           <Control row={row} id={id} error={error} onFocus={() => onFocusRow(row.key)} onChange={text => onChange(row.key, text)} autoFocus={autoFocus && row.key === first} />
           {error && <span className="options-field-error" id={id + '-error'}>{error}</span>}
         </div>

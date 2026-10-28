@@ -1,5 +1,5 @@
 import type { LayoutLoad, LayoutState, WorkspaceLayout } from './layouts'
-import type { ConnectContext, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
+import type { ConnectContext, ConnectionEnvironmentInput, ConnectionLibraryView, ConnectionProfileInput, SecretStorageState } from './connections'
 import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } from './theme/types'
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
@@ -15,6 +15,8 @@ import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/sche
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
+import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
+import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -57,6 +59,8 @@ export interface ConnectionOptions {
   hostNameInCertificate?: string
   displayName?: string
   color?: string
+  /** None when absent; a preset (Production, Staging, Test, Development) or a custom label of 1–32 characters (src/shared/environments.ts). */
+  environment?: string
   advanced?: Partial<AdvancedConnectionOptions>
 }
 
@@ -67,6 +71,8 @@ export interface ConnectionOptions {
  */
 export interface ConnectionInfo {
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
+  /** Set by main: the saved entry's environment label, which a connect without one kept. */
+  environment?: string
   productVersion?: string; login?: string; engineEdition?: number
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
@@ -265,12 +271,20 @@ export interface RpcMethods {
   /** Changes the SSIS Catalog (Stop Operation) on its own unpooled connection after a preflight; never re-sent, and only Stop
    *  (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
   'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
+  /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
+  'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
+  /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
+  'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
 export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
+  /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
+   *  a disconnect, a backend shutdown, a failure or its source ending. */
+  'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }
+  'live.update': { params: LiveUpdateParams; result: LiveUpdateResult }
 }
 /** Methods only main sends (results jobs): no renderer or port schema accepts them. */
 export interface JobMethods {
@@ -368,6 +382,9 @@ export interface VariaApi {
   integratedIdentity(): Promise<ApiResult<IntegratedIdentity>>
   saveConnectionProfile(profile: ConnectionProfileInput): Promise<ApiResult<ConnectionLibraryView>>
   removeConnectionProfile(id: string): Promise<ApiResult<ConnectionLibraryView>>
+  /** Set Connection Environment: main changes only the label of the entry the options name (saving it again when it left
+   *  history) and returns the library it wrote. */
+  setConnectionEnvironment(input: ConnectionEnvironmentInput): Promise<ApiResult<ConnectionLibraryView>>
   disconnect(connectionId: string): Promise<ApiResult<{ disconnected: boolean }>>
   databases(connectionId: string): Promise<ApiResult<DatabaseInfo[]>>
   tableColumns(connectionId: string, database: string, schema: string, name: string): Promise<ApiResult<TableColumns>>
@@ -397,6 +414,13 @@ export interface VariaApi {
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an Activity Monitor session's details (the flyout). Failures the user can act on come back as `result.error`. */
+  activityDetails(params: ActivityDetailsRequest): Promise<ApiResult<ActivityDetailsResult>>
+  /** Kills sessions (1–64) after checking each one's identity; every session gets an outcome or is reported untried. */
+  activityKill(params: ActivityKillRequest): Promise<ApiResult<ActivityKillResult>>
+  /** Cancels Details reads by their `requestId`s (1–16); `cancelled` counts those still running. A read cancelled this
+   *  way answers `CANCELLED`. */
+  cancelActivity(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
   getSettings(): Promise<ApiResult<SettingsLoad>>
   /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */

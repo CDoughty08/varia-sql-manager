@@ -42,7 +42,7 @@ describe('native menu requests', () => {
     const request = nativeMenuRequest(3, 'editor.context', items, { x: 10.6, y: -4 })
     expect(request).toEqual({
       token: 3, menu: 'editor.context', x: 11, y: 0,
-      visible: ['edit.insertSnippet', 'edit.surroundWith', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect', 'query.changeConnection', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
+      visible: ['edit.insertSnippet', 'edit.surroundWith', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect', 'query.changeConnection', 'connection.environment', 'query.execute', 'query.cancel', 'edit.cut', 'edit.copy', 'edit.paste', 'workbench.showCommands'],
       disabled: ['connection.connect', 'connection.reconnect', 'query.cancel'], checked: []
     })
     expect(contextMenuRequestSchema.safeParse(request).success).toBe(true)

@@ -53,15 +53,19 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SsisReference => Name + "_ssisref";
     /// <summary>The low-privilege login (same name as the database), when the server accepts SQL logins.</summary>
     public string? Login { get; private set; }
+    /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
+    public string Live => Name + "_live";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
     public int Major { get; private set; }
+    /// <summary>Whether the server has Full-Text Search installed, which changes what SMO scripts for a full-text catalog.</summary>
+    public bool FullText { get; private set; }
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
-    // _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_ssis|_ssisref)?$")]
+    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -148,10 +152,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     private async Task SetUpAsync(string fixtures)
     {
-        var facts = await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly'));");
+        var facts = await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly')), CONVERT(int, FULLTEXTSERVICEPROPERTY('IsFulltextInstalled'));");
         var fact = facts.Sets[0][0];
         Major = int.Parse(fact[0]!, CultureInfo.InvariantCulture);
         var sqlLogins = fact[1] == "0";
+        FullText = fact[2] == "1";
         const string marker = "EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;";
         foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser })
         {
@@ -190,6 +195,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked Database Properties database.</summary>
     public Task<string> CreatePropertiesAsync() => CreateMarkedAsync(Properties);
+
+    /// <summary>Creates the empty, marked live tables database.</summary>
+    public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);

@@ -56,25 +56,25 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     const owner = node.owner
     switch (node.folder) {
       case 'databases': {
-        const rows = [object({ kind: 'database', name: 'AppData' }, 'AppData', 'svg:database'), object({ kind: 'database', name: 'Legacy' }, 'Legacy', 'svg:database', { sublabel: '(Offline)', status: 'unavailable', hasChildren: false })]
+        const rows = [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database'), object({ kind: 'database', name: 'Legacy' }, 'Legacy', 'database', { sublabel: '(Offline)', status: 'unavailable', hasChildren: false })]
         const nodes = [...folders(owner, statics.folders.databases), ...rows.filter(row => matches(row.label, params.filter))]
         return ok({ nodes, total: nodes.length, elapsedMs: 1 })
       }
       case 'tables': return paged(params, owner, stub.tables, index => {
         const name = index === 0 ? 'Orders' : `table${index}`
-        return object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'svg:table')
+        return object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')
       })
       case 'views': return paged(params, owner, stub.views, index => object({ kind: 'view', database: owner.name, schema: 'dbo', name: `view${index}` }, `dbo.view${index}`, 'eye'))
       case 'columns': {
         const parent = { kind: owner.kind, schema: owner.schema, name: owner.name }
         const column = (name, sublabel, icon) => object({ kind: 'column', database: owner.database, parent, name }, name, icon, { sublabel, hasChildren: false })
-        const nodes = owner.name === 'Orders' ? [column('Id', '(PK, int, not null)', 'svg:key'), column('CustomerName', '(nvarchar(50), null)', 'symbol-field')] : [column('Id', '(int, not null)', 'symbol-field')]
+        const nodes = owner.name === 'Orders' ? [column('Id', '(PK, int, not null)', 'key'), column('CustomerName', '(nvarchar(50), null)', 'symbol-field')] : [column('Id', '(int, not null)', 'symbol-field')]
         return ok({ nodes, total: nodes.length, elapsedMs: 1 })
       }
-      case 'logins': return ok({ nodes: [object({ kind: 'login', name: 'sa' }, 'sa', 'svg:login', { hasChildren: false })], total: 1, elapsedMs: 1 })
+      case 'logins': return ok({ nodes: [object({ kind: 'login', name: 'sa' }, 'sa', 'login', { hasChildren: false })], total: 1, elapsedMs: 1 })
       case 'audits':
         if (!stub.auditsOk) return ok({ nodes: [], elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } })
-        return ok({ nodes: [object({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit', 'svg:shield', { hasChildren: false })], total: 1, elapsedMs: 1 })
+        return ok({ nodes: [object({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit', 'shield', { hasChildren: false })], total: 1, elapsedMs: 1 })
       case 'linkedServers': {
         if (stub.holdLinked) {
           const cancelled = await new Promise(resolve => { stub.held.set(params.requestId, resolve) })

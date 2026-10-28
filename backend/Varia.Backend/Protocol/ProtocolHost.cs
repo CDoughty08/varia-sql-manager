@@ -182,7 +182,7 @@ internal sealed class ProtocolHost
             Respond(header.Id, Error("BUSY", "The backend is busy. Retry after a running operation finishes."), stream: credit is not null);
             return null;
         }
-        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData, SendEvent);
+        var context = new RequestContext(header.Id, method, dispatcher!.LaneOf(method), header.Arg, credit, Cancelled, SendData, SendEvent, SendCreditedEvent);
         contexts[header.Id] = context;
         var task = Task.Run(() => HandleAsync(context, body, start, length));
         work[task] = 0;
@@ -364,6 +364,18 @@ internal sealed class ProtocolHost
     }
 
     private void SendEvent(RequestContext context, object value, bool droppable) => Event(context.Id, value, droppable);
+
+    /// <summary>A live EVENT: never droppable (the producer sends one only after the previous one was acknowledged), at
+    /// most 256 KiB. Returns its body length, or −1 when it was not queued for its size.</summary>
+    private int SendCreditedEvent(RequestContext context, object value)
+    {
+        byte[] body;
+        try { body = JsonBridge.Encode(value, json); }
+        catch (InvalidOperationException) { return -1; }
+        if (body.Length > ProtocolLimits.EventBody) return -1;
+        outbound.Control(Frames.Encode(FrameKind.Event, context.Id, 0, body), droppable: false);
+        return body.Length;
+    }
 
     /// <summary>A global EVENT (id 0), such as results.memory. Always droppable: false when it was not queued (the control
     /// lane is full while main is not reading), so the publisher can send it again later.</summary>
