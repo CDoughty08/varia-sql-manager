@@ -1,8 +1,10 @@
 # Integration Services (SSIS Catalog)
 
-Varia does not show the SSIS Catalog yet. This page records what is known about the catalog (`SSISDB`) that the SSIS
-work builds on, how it was found out, and the test fixtures that stand in for a catalog where there is none. The design
-is D-ssis (wave 4); this page is PR S0's part of it: verification and fixtures, no product code.
+Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projects, packages and environments, and
+`ssis.describe` reads each of them for the properties documents that follow. Nothing in Varia changes the catalog yet.
+This page records what is known about the catalog that the SSIS work builds on, how it was found out, and the test
+fixtures that stand in for a catalog where there is none; its last part, generated from `src/shared/ssis/catalog.ts`,
+is the reference for the tree, the reads, the catalog's code tables and the limits. The design is D-ssis (wave 4).
 
 ## Fixtures
 
@@ -25,11 +27,11 @@ does in a real catalog (14.3). The fake has the catalog's `ssis_admin` and `ssis
 points the backend at it through an internal test option, never a request field. Checks against it never claim real
 SSIS behaviour.
 
-Without an `internal` schema the fake reads as a catalog without the features D-ssis 4.1's `SsisProfile` finds there:
-`eventMessageGuid` (`internal.event_messages_scaleout`) and `executedCount` (`internal.operations.executed_count`) read
-as absent, although the 2025 catalog the manifest describes has both. S1b adds what its profile probes to the fake
-(and to the manifest, which records only the `internal` tables' identities, indexes and foreign keys) before its fake
-checks rely on those features.
+The fake has no `internal` schema, so `SsisProfile` finds its features in the catalog's views instead, which the fake
+has as tables with the manifest's columns: `eventMessageGuid` is `catalog.event_messages.event_message_guid` and
+`executedCount` is `catalog.executions.executed_count` (D-ssis 4.1 named `internal` tables), so the fake reads as the
+2025 catalog does. It has none of the catalog's functions and only four of its procedures, so `operationLogSize` and
+`checkSchemaVersion` read as absent there.
 
 What the checks prove:
 
@@ -51,6 +53,16 @@ What the checks prove:
   `LOCK_TIMEOUT 1000` waits on the held row and ends with 1222, READ UNCOMMITTED reads it before it commits, and under
   RCSI a tail that keeps only the highest id it read never reads that message; and four sessions write 2,000 messages
   of one execution with none lost or duplicated, each with its event message under the same id.
+- **The tree and `ssis.describe` against the fake** (`SsisCatalogLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`): Object
+  Explorer lists the fake as the catalog, its folders, projects, environments and packages (one page per package by
+  `package_id`, a 260-character name included), with names made to break out of brackets, strings, comments and LIKE
+  patterns; a listing below a folder or project that is gone, and a catalog whose database does not exist, answer
+  `NOT_FOUND` (`CATALOG_MISSING` for a describe); every view reads its object, a sensitive parameter or variable without
+  its value; a read under a writer's held row returns at once, the committed row under RCSI and the change without it;
+  a describe past its budget answers `TIMEOUT` and a cancelled one ends at once; and, as the scratch SQL Server login,
+  the profile answers `BLOCKED` while another session holds a change to `ssis_admin`'s members, then reads the login's
+  roles and, for ssis_admin, `catalog_properties`. Every connection those reads leave in the catalog's database is the
+  SSIS read pool's.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -92,7 +104,225 @@ Not yet done: the probe against a created catalog, the drift check against it, a
   and `IS_MEMBER('ssis_logreader')` never wait on locks. Not so: while another session holds an uncommitted change to
   a role's members, `IS_MEMBER` of that role waits for it, under READ UNCOMMITTED too (1222 at `LOCK_TIMEOUT 1000`;
   without a timeout, until the change ends), as the fake catalog checks and a probe in tempdb showed for a sysadmin
-  caller. `IS_SRVROLEMEMBER('sysadmin')` and fixed database roles answered. That is the engine's behaviour, so S1b
-  reads `SsisProfile.Roles` under the live prologue's lock timeout and maps 1222 to `BLOCKED` like any other read.
+  caller. `IS_SRVROLEMEMBER('sysadmin')` and fixed database roles answered. That is the engine's behaviour, so
+  `SsisProfile` reads the roles under the live reads' `LOCK_TIMEOUT 1000`, evaluates `IS_MEMBER` only for logins that
+  are not sysadmin, and answers a lock timeout `BLOCKED` like any other read (checked against the fake with a SQL
+  Server login). S1b found that it reaches further: while another session's transaction creates a user in the
+  catalog's database and adds it to a role, a new connection that a login without sysadmin opens into that database
+  waits in the post-login phase until its connect timeout (15 s by default), which no `LOCK_TIMEOUT` bounds; the SSIS
+  pool answers that as `CONNECTION_LOST` ("Could not connect to the server"), retryable, and a pooled connection opened
+  before is reused without the wait. The fake checks warm the pool before they hold the change.
   Every catalog view's row-level security filter calls the same `IS_MEMBER`s (14.2), so a view read can wait on such
   a change too (14.11); how the real catalog's `grant_permission` and cleanup touch the roles is not checked.
+
+<!-- Generated below from src/shared/ssis/catalog.ts. Regenerate with: npx vitest run tests/ssis-catalog.test.ts -u -->
+
+## Catalogue reference
+
+Everything below comes from `src/shared/ssis/catalog.ts`, which the backend embeds as `backend/Varia.Backend/Ssis/ssis-catalog.json`.
+The catalog is the database `SSISDB` (SSMS fixes the name; only an internal test option points the backend at a fake catalog).
+
+### The tree
+
+Object Explorer serves the catalog as SSMS does, from SQL Server 2016: the server's Integration Services Catalogs folder lists the
+catalog's database when it exists, the catalog lists its folders directly, a folder has Projects and Environments, and a project
+has Packages. Packages list in deployment order (`package_id`), because a package name can be longer than a sysname cursor key; a
+package that is not an entry point has the subtype `child`. On SQL Server on Linux the folder says the catalog is not supported. The
+kinds, folders and their identity are in docs/object-explorer.md.
+
+| Folder | Id | Lists (query) | Filters |
+| --- | --- | --- | --- |
+| Integration Services Catalogs | `integrationServicesCatalogs` | Integration Services Catalog (`ssisCatalogs`) | — |
+| Projects | `ssisProjects` | Project (`ssisProjects`) | Name |
+| Environments | `ssisEnvironments` | Environment (`ssisEnvironments`) | Name |
+| Packages | `ssisPackages` | Package (`ssisPackages`) | Name |
+
+The catalog's listings run on the SSIS read pool (the program name plus " - Integration Services"), whose connections are in the
+catalog's database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog row itself is read from `sys.databases` on the Object
+Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in
+use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.
+
+### Reads (`ssis.describe`)
+
+One request reads one view in one batch, under the SSIS gates, and answers its model with a `revision`, or an error value. The
+revision is a SHA-256 of what a later write depends on (names, descriptions, a project's deployment, parameter values,
+references, variables, catalog properties), not of validation results or counts, which change without a write; a truncated answer
+has none.
+Reads run READ COMMITTED when the catalog's database has READ_COMMITTED_SNAPSHOT on, otherwise READ UNCOMMITTED, with
+`LOCK_TIMEOUT 5000`; a read that meets the catalog's cleanup moving rows (error 601) reads once more. The first read on a
+connection also reads its profile, with the role checks at the live reads' `LOCK_TIMEOUT 1000`, because `IS_MEMBER` waits on a pending
+change to a role's members; a sysadmin's are not evaluated.
+
+| View | Describes | Model |
+| --- | --- | --- |
+| `catalog` | `ssisCatalog` | The connection's profile (band, engine, host platform, authentication, RCSI, features, roles), the folders the login may read, and `catalog_properties` for ssis_admin and sysadmin |
+| `folder` | `ssisFolder` | Id, name, description, creator, created time, and its project and environment counts |
+| `project` | `ssisProject` | Its row (deployment, version LSN, validation), its packages, its parameters (object type 20) and its environment references |
+| `package` | `ssisPackage` | Its row (format, version, entry point, validation) and its parameters (object type 30) |
+| `environment` | `ssisEnvironment` | Its row and its variables; a sensitive variable's value is never read |
+
+| Feature | Found when the catalog has |
+| --- | --- |
+| `customizedLoggingLevels` | `catalog.customized_logging_levels` |
+| `scaleOut` | `catalog.worker_agents` |
+| `eventMessageGuid` | `catalog.event_messages.event_message_guid` |
+| `executedCount` | `catalog.executions.executed_count` |
+| `operationLogSize` | `catalog.get_operation_log_size` |
+| `checkSchemaVersion` | `catalog.check_schema_version` |
+
+| Error | Retry helps |
+| --- | --- |
+| `CATALOG_MISSING` | No |
+| `NO_DB_ACCESS` | No |
+| `DATABASE_UNAVAILABLE` | Yes |
+| `BLOCKED` | Yes |
+| `TIMEOUT` | Yes |
+| `PERMISSION_DENIED` | No |
+| `NOT_FOUND` | No |
+| `NOT_SUPPORTED` | No |
+| `CONNECTION_LOST` | Yes |
+| `AUTH_KERBEROS` | Yes |
+| `AUTH_UNSUPPORTED` | No |
+| `AUTH_ENTRA` | No |
+| `SQL_ERROR` | Yes |
+
+### Code tables
+
+Operation types (`catalog.operations.operation_type`):
+
+| Code | Meaning |
+| --- | --- |
+| `1` | Integration Services initialization |
+| `2` | Operation cleanup |
+| `3` | Project version cleanup |
+| `101` | Deploy project |
+| `102` | Export project |
+| `106` | Restore project |
+| `200` | Create and start execution |
+| `202` | Stop operation |
+| `300` | Validate project |
+| `301` | Validate package |
+| `1000` | Configure catalog |
+
+Operation statuses; open: `1`, `2`, `5`, `8`, final: `3`, `4`, `6`, `7`, `9`:
+
+| Code | Meaning |
+| --- | --- |
+| `1` | Created |
+| `2` | Running |
+| `3` | Canceled |
+| `4` | Failed |
+| `5` | Pending |
+| `6` | Ended unexpectedly |
+| `7` | Succeeded |
+| `8` | Stopping |
+| `9` | Completed |
+
+Message types, with the tone a log row takes:
+
+| Code | Meaning | Tone |
+| --- | --- | --- |
+| `-1` | Unknown | info |
+| `10` | Pre-validate | info |
+| `20` | Post-validate | info |
+| `30` | Pre-execute | info |
+| `40` | Post-execute | info |
+| `50` | Status change | info |
+| `60` | Progress | muted |
+| `70` | Information | info |
+| `80` | Variable value changed | info |
+| `90` | Diagnostic | muted |
+| `100` | Query cancel | info |
+| `110` | Warning | warning |
+| `120` | Error | error |
+| `130` | Task failed | error |
+| `140` | Diagnostic (extended) | info |
+| `200` | Custom | info |
+| `400` | Non-diagnostic | info |
+
+Message source types:
+
+| Code | Meaning |
+| --- | --- |
+| `10` | Entry APIs |
+| `20` | External process |
+| `30` | Package |
+| `40` | Control flow task |
+| `50` | Control flow container |
+| `60` | Data flow task |
+
+Executable results:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Failure |
+| `2` | Completion |
+| `3` | Cancelled |
+
+Logging levels:
+
+| Code | Meaning | Since |
+| --- | --- | --- |
+| `0` | None | — |
+| `1` | Basic | — |
+| `2` | Performance | — |
+| `3` | Verbose | — |
+| `4` | Runtime lineage | 2016 (13) |
+| `100` | Custom | 2016 (13) |
+
+Parameter object types:
+
+| Code | Meaning |
+| --- | --- |
+| `20` | Project |
+| `30` | Package |
+| `50` | System |
+
+System parameters an execution may set: `LOGGING_LEVEL`, `CUSTOMIZED_LOGGING_LEVEL`, `DUMP_ON_ERROR`, `DUMP_ON_EVENT`, `DUMP_EVENT_CODE`. `SYNCHRONIZED` is absent by design.
+
+Securable types and permissions:
+
+| Code | Meaning |
+| --- | --- |
+| `1` | Folder |
+| `2` | Project |
+| `3` | Environment |
+| `4` | Operation |
+
+| Code | Permission | On |
+| --- | --- | --- |
+| `1` | READ | Folder, Project, Environment, Operation |
+| `2` | MODIFY | Folder, Project, Environment, Operation |
+| `3` | EXECUTE | Project |
+| `4` | MANAGE_PERMISSIONS | Folder, Project, Environment, Operation |
+| `100` | CREATE_OBJECTS | Folder |
+| `101` | READ_OBJECTS | Folder |
+| `102` | MODIFY_OBJECTS | Folder |
+| `103` | EXECUTE_OBJECTS | Folder |
+| `104` | MANAGE_OBJECT_PERMISSIONS | Folder |
+
+Environment reference types: `R` Relative, `A` Absolute. Parameter value types: `V` Literal, `R` Environment variable.
+
+### Limits
+
+| Limit | Value | Meaning |
+| --- | --- | --- |
+| `name` | 128 | UTF-16 code units in a folder, project, environment, parameter or variable name (sysname) |
+| `packageName` | 260 | UTF-16 code units in a package name (`catalog.packages.name` is nvarchar(260)) |
+| `description` | 1,024 | Characters in a description |
+| `value` | 4,000 | Characters of a parameter, variable or catalog property value; a longer one ends in "…" |
+| `rows` | 2,048 | Rows one describe list holds (packages, parameters, references, variables, properties); more set `truncated` |
+| `describeBytes` | 4,000,000 | Estimated bytes of one describe answer; rows past it set `truncated` |
+| `revision` | 64 | Characters in a revision (a SHA-256 in hex) |
+| `messageChars` | 2,048 | Characters in an error message |
+| `describeMs` | 40,000 | A describe's budget, in ms, answered as `TIMEOUT` |
+| `gateWaitMs` | 30,000 | How long a request waits for an SSIS read gate before `BUSY`, in ms |
+| `readPerConnection` | 2 | SSIS reads at once per connection |
+| `readTotal` | 4 | SSIS reads at once in all |
+| `registered` | 256 | SSIS requests registered at once |
+| `cancelIds` | 64 | Request ids per `varia:ssis-cancel` |
+| `tombstones` | 64 | Ids main remembers that were cancelled before they were sent |
+| `tombstoneMs` | 60,000 | How long main remembers them, in ms |
+| `readLockTimeoutMs` | 5,000 | LOCK_TIMEOUT of the tree's and describe's reads, in ms |
+| `profileLockTimeoutMs` | 1,000 | LOCK_TIMEOUT of the profile read (its role checks), in ms |

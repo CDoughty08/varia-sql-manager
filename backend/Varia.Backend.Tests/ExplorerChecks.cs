@@ -70,7 +70,7 @@ internal static class ExplorerChecks
     private static void Catalog(Action<bool, string> check)
     {
         var catalog = ExplorerCatalog.Current;
-        check(catalog.FolderIds.Count == 72 && catalog.Kinds.Count() == 51 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
+        check(catalog.FolderIds.Count == 76 && catalog.Kinds.Count() == 56 && catalog.CloudEditions.SetEquals([5, 6, 9, 11, 12]), "the embedded Object Explorer catalogue loads");
         var lists = Listings(catalog).Select(listing => listing.Query).ToHashSet();
         var queries = ExplorerQueries.All.Keys.Append("historyTable").ToHashSet();
         check(queries.SetEquals(catalog.Queries) && lists.All(ExplorerQueries.All.ContainsKey) && ExplorerQueries.All.Keys.All(lists.Contains),
@@ -91,7 +91,9 @@ internal static class ExplorerChecks
             "a server's band is its version's, raised to that of the catalog columns it has (Azure SQL Database and Managed Instance report 12)");
         var box12 = new ExplorerProfile(12, false);
         check(Names(catalog.StaticFolders("server", null, box12)) == "databases,serverSecurity,serverObjects"
-            && Names(catalog.StaticFolders("server", null, new ExplorerProfile(16, true))) == "databases", "the server's folders; cloud editions browse only Databases");
+            && Names(catalog.StaticFolders("server", null, new ExplorerProfile(13, false))) == "databases,serverSecurity,serverObjects,integrationServicesCatalogs"
+            && Names(catalog.StaticFolders("server", null, new ExplorerProfile(16, true))) == "databases,integrationServicesCatalogs",
+            "the server's folders, the SSIS Catalog's from SQL Server 2016; cloud editions browse only Databases and the SSIS Catalog");
         check(Names(catalog.Subfolders("tables", box12)) == "systemTables,fileTables" && Names(catalog.Subfolders("tables", new ExplorerProfile(14, false))) == "systemTables,fileTables,externalTables,graphTables"
             && Names(catalog.Subfolders("tables", new ExplorerProfile(16, false))) == "systemTables,fileTables,externalTables,graphTables,droppedLedgerTables",
             "Tables' subfolders follow the version band");
@@ -439,14 +441,17 @@ internal static class ExplorerChecks
                 required.Contains("parent") ? new ParentRefDto(kind.Parents[0], "s", "p") : null, required.Contains("ssisFolder") ? "f" : null, required.Contains("ssisProject") ? "p" : null);
         }
         var kinds = catalog.Kinds.ToList();
-        check(kinds.All(kind => kind.MaxName == 128 && kind.List is null && kind.Rows.Count == 0) && catalog.Scopes.Count == 11
+        // Only an SSIS package's name may pass sysname (nvarchar(260)), and only the SSIS catalog lists rows directly below itself.
+        check(kinds.All(kind => kind.MaxName == (kind.Kind == "ssisPackage" ? 260 : 128) && (kind.List is null) == (kind.Kind != "ssisCatalog") && kind.Rows.Count == (kind.List is null ? 0 : 1))
+            && catalog.KindOf("ssisCatalog") is { List: "ssisFolders", Rows: ["ssisFolder"], Folders.Count: 0 } && catalog.Scopes.Count == 11
             && catalog.Scopes["ssisProjectObject"].Required.SequenceEqual(["ssisFolder", "ssisProject", "name"]),
-            "the embedded catalogue has the SSIS scopes, and every shipped kind keeps sysname's bound and lists no rows of its own");
-        var wrong = kinds.Where(kind => !Valid(catalog, Minimal(catalog, kind)) || Valid(catalog, Minimal(catalog, kind) with { SsisFolder = "f" })
-            || Valid(catalog, Minimal(catalog, kind) with { SsisProject = "p" })
-            || Minimal(catalog, kind).Name is not null && (!Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', 128) }) || Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', 129) })))
+            "the embedded catalogue has the SSIS scopes; every kind keeps sysname's bound but packages (260), and only the SSIS catalog lists rows of its own");
+        var wrong = kinds.Where(kind => !Valid(catalog, Minimal(catalog, kind))
+            || !kind.Scope.StartsWith("ssis", StringComparison.Ordinal) && (Valid(catalog, Minimal(catalog, kind) with { SsisFolder = "f" }) || Valid(catalog, Minimal(catalog, kind) with { SsisProject = "p" }))
+            || Minimal(catalog, kind).Name is not null && (!Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', kind.MaxName) })
+                || Valid(catalog, Minimal(catalog, kind) with { Name = new string('x', kind.MaxName + 1) })))
             .Select(kind => kind.Kind).ToList();
-        check(wrong.Count == 0, "every shipped kind refuses SSIS fields and names past 128 UTF-16 code units: " + string.Join(", ", wrong));
+        check(wrong.Count == 0, "every kind outside the SSIS scopes refuses SSIS fields, and every kind refuses names past its bound: " + string.Join(", ", wrong));
 
         var ssis = Variant(json =>
         {
@@ -558,7 +563,7 @@ internal static class ExplorerChecks
         check(kindProblems.Any(problem => problem.StartsWith("database band ", StringComparison.Ordinal)) && goodProblems.Count == 0 && kindRenders > baseRenders,
             "the SQL lint renders and checks the queries kinds list: " + kindProblems.Count + " problems in a kind's bad query");
         var declared = CatalogSql.Declarations.Split(", ").Select(item => item.Split(' ')[0]).ToList();
-        check(declared.Count == 15 && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
+        check(declared.Count == 16 && declared.Contains("@ssis_catalog") && declared.Contains("@ssis_folder") && declared.Contains("@ssis_project") && declared.Contains("@kb")
             && declared.All(name => CatalogSql.ModuleCall.Contains(name + " = " + name, StringComparison.Ordinal)) && CatalogSql.ModuleCall.Split(" = @").Length - 1 == declared.Count,
             "the scope wrapper passes exactly the declared parameters, the SSIS folder, project and bigint key among them");
     }
@@ -609,6 +614,13 @@ internal static class ExplorerChecks
         /// <summary>Replaces the open, as SqlService's does for a Kerberos token failure.</summary>
         public Func<SqlConnection, CancellationToken, Task>? Opening { get; set; }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => Opening?.Invoke(connection, token) ?? connection.OpenAsync(token);
+        public int SsisConnections;
+        public SqlConnection SsisConnection(string connectionId)
+        {
+            Interlocked.Increment(ref SsisConnections);
+            return Connection(connectionId, SsisCatalog);
+        }
+        public string SsisCatalog => "SSISDB";
     }
 
     private static async Task ServiceAsync(Action<bool, string> check)
@@ -636,7 +648,7 @@ internal static class ExplorerChecks
         using var service = new ExplorerService(host);
         var server = new ObjectRefDto("server");
         var root = await service.ChildrenAsync(Args(Object(server)), CancellationToken.None);
-        check(root.Nodes.Select(node => node.Label).SequenceEqual(["Databases", "Security", "Server Objects"]) && root.Total == 3 && root.Error is null && host.Connections == 0
+        check(root.Nodes.Select(node => node.Label).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs"]) && root.Total == 4 && root.Error is null && host.Connections == 0
             && root.Nodes.All(node => node is { Icon: "folder", HasChildren: true, Ref: { Type: "folder", Owner.Kind: "server" } }), "the server's folders come from the catalogue without SQL");
         var database = new ObjectRefDto("database", Name: "Sales");
         var programmability = await service.ChildrenAsync(Args(Folder(database, "programmability")), CancellationToken.None);
@@ -651,7 +663,7 @@ internal static class ExplorerChecks
         var json = JsonSerializer.Serialize(root, Json);
         check(json.Contains("\"ref\":{\"type\":\"folder\",\"owner\":{\"kind\":\"server\"},\"folder\":\"databases\"}") && !json.Contains("null"), "nodes serialize without null members");
         var cloud = new ExplorerService(new FakeHost(16, 5));
-        check((await cloud.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Label).SequenceEqual(["Databases"]), "cloud editions show only Databases");
+        check((await cloud.ChildrenAsync(Args(Object(server)), CancellationToken.None)).Nodes.Select(node => node.Label).SequenceEqual(["Databases", "Integration Services Catalogs"]), "cloud editions show only Databases and the SSIS Catalog (the Azure-SSIS IR's)");
         try { await cloud.ChildrenAsync(Args(Folder(server, "logins")), CancellationToken.None); check(false, "a box-only folder is refused on a cloud edition"); }
         catch (RequestException error) { check(error.Code == "INVALID_PARAMS", "the service checks folders against the server's profile"); }
         // Azure SQL Database reports version 12 but has every catalog column up to the ledger ones.
@@ -666,7 +678,7 @@ internal static class ExplorerChecks
         var instanceTables = (await instance.ChildrenAsync(Args(Folder(database, "tables")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
         var instanceDatabase = ExplorerCatalog.Current.StaticFolders("database", null, new FakeHost(12, 8, 16).Profile("x").Explorer(ExplorerCatalog.Current));
         var instanceSecurity = (await instance.ChildrenAsync(Args(Folder(database, "databaseSecurity")), CancellationToken.None)).Nodes.Select(node => node.Ref.Folder).ToList();
-        check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
+        check(instanceServer.SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs"]) && instanceTables.SequenceEqual(["systemTables", "fileTables", "externalTables", "graphTables", "droppedLedgerTables"])
             && instanceDatabase.Contains("externalResources") && instanceSecurity.Contains("alwaysEncryptedKeys") && instanceSecurity.Contains("securityPolicies"),
             "Managed Instance reporting version 12 serves the server folders and the folders its catalog columns allow: " + string.Join(",", instanceTables));
 
@@ -676,7 +688,7 @@ internal static class ExplorerChecks
         {
             var page = await lists.ChildrenAsync(Args(Object(server)), CancellationToken.None);
             var next = await lists.ChildrenAsync(Args(Object(server), cursor: ExplorerCursor.Encode("logins", new("sa", null, null))), CancellationToken.None);
-            check(page.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["databases", "serverSecurity", "serverObjects"]) && page.Error is { Retryable: true } && next.Nodes.Count == 0
+            check(page.Nodes.Select(node => node.Ref.Folder).SequenceEqual(["databases", "serverSecurity", "serverObjects", "integrationServicesCatalogs"]) && page.Error is { Retryable: true } && next.Nodes.Count == 0
                 && next.Error is not null && listing.Connections == 2, "an object kind that lists rows serves its folders first, then runs its query; a cursor page runs the query alone");
         }
 

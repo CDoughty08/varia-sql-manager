@@ -1,0 +1,114 @@
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { stripTypeScriptTypes } from 'node:module'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import { kindScope } from '../src/shared/explorer/refs'
+import { nodeKinds } from '../src/shared/explorer/catalog'
+import {
+  catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
+  parameterObjectTypes, permissionTypes, securableTypes, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits, systemParameters
+} from '../src/shared/ssis/catalog'
+import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
+import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
+import { methodPolicies } from '../src/shared/ipc/methods'
+
+const unique = (values: readonly unknown[]) => new Set(values).size === values.length
+const docsPath = join('docs', 'integration-services.md')
+
+describe('SSIS catalogue', () => {
+  it('has unique codes in every code table, as Learn documents them', () => {
+    for (const [name, rows] of Object.entries({ operationTypes, operationStatuses, messageTypes, messageSourceTypes, executableResults, loggingLevels, parameterObjectTypes, securableTypes, permissionTypes })) {
+      expect(unique(rows.map(row => row.code)), name).toBe(true)
+      for (const row of rows) expect(row.label, name).toMatch(/^\S(.*\S)?$/)
+    }
+    expect(operationTypes.map(row => row.code)).toEqual([1, 2, 3, 101, 102, 106, 200, 202, 300, 301, 1000])
+    expect(operationStatuses.map(row => row.code)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect([...openStatuses, ...finalStatuses].sort((a, b) => a - b)).toEqual(operationStatuses.map(row => row.code))
+    expect(messageTypes.map(row => row.code)).toEqual([-1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 200, 400])
+    expect(messageTypes.filter(row => row.tone === 'error').map(row => row.code)).toEqual([120, 130])
+    expect(messageTypes.filter(row => row.tone === 'warning').map(row => row.code)).toEqual([110])
+    expect(messageTypes.filter(row => row.tone === 'muted').map(row => row.code)).toEqual([60, 90])
+    expect(loggingLevels.map(row => row.code)).toEqual([0, 1, 2, 3, 4, 100])
+    for (const row of permissionTypes) for (const on of row.on) expect(securableTypes.map(type => type.code), row.label).toContain(on)
+    expect(permissionTypes.filter(row => row.code >= 100).every(row => row.on.length === 1 && row.on[0] === 1)).toBe(true)
+  })
+  it('leaves SYNCHRONIZED and any 32-bit runtime out, so no request can carry either', () => {
+    expect(systemParameters).toEqual(['LOGGING_LEVEL', 'CUSTOMIZED_LOGGING_LEVEL', 'DUMP_ON_ERROR', 'DUMP_ON_EVENT', 'DUMP_EVENT_CODE'])
+    const json = ssisCatalogJson()
+    expect(json).not.toMatch(/SYNCHRONIZED/i)
+    // Owner decision 11: no 32-bit support on any version.
+    expect(json).not.toMatch(/32bit|32-bit/i)
+  })
+  it('describes each view\'s own SSIS kind, and probes each feature through a catalog object', () => {
+    expect(describeViews).toEqual(['catalog', 'folder', 'project', 'package', 'environment'])
+    for (const view of describeViews) {
+      expect(nodeKinds, view).toContain(describeTargets[view])
+      expect(kindScope(describeTargets[view]).startsWith('ssis'), view).toBe(true)
+    }
+    expect(unique(Object.values(describeTargets))).toBe(true)
+    expect(Object.keys(ssisFeatureSources)).toEqual([...ssisFeatures])
+    for (const source of Object.values(ssisFeatureSources)) expect(source).toMatch(/^catalog\.[a-z_]+(\.[a-z_]+)?$/)
+    expect(catalogDatabase).toBe('SSISDB')
+  })
+  it('keeps error codes retryable only where a retry can help', () => {
+    expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'SQL_ERROR'])
+    expect(ssisErrorCodes).toContain('CATALOG_MISSING')
+  })
+  it('keeps the read path\'s limits, and main uses them for varia:ssis-cancel', () => {
+    expect(ssisLimits).toMatchObject({ name: 128, packageName: 260, description: 1024, value: 4000, rows: 2048, describeMs: 40_000, gateWaitMs: 30_000, readPerConnection: 2, readTotal: 4,
+      registered: 256, cancelIds: 64, readLockTimeoutMs: 5000, profileLockTimeoutMs: 1000, revision: 64 })
+    expect(ssisRequestLimits).toEqual({ tombstones: 64, tombstoneMs: 60_000, running: 256, cancelBatch: 64 })
+    // The answer fits main's 16 MiB response limit with room to spare, and the deadline covers the backend's own budget.
+    expect(ssisLimits.describeBytes).toBeLessThan(16 * 1024 * 1024 / 2)
+    expect(methodPolicies['ssis.describe']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 45_000 })
+    expect(methodPolicies['ssis.describe'].deadlineMs as number).toBeGreaterThan(ssisLimits.describeMs)
+  })
+  it('loads in plain Node 24, as the other catalogues do', () => {
+    const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'ssis', name))
+    for (const file of files) expect(() => stripTypeScriptTypes(readFileSync(file, 'utf8'), { mode: 'strip' }), file).not.toThrow()
+    const script = files.map(file => `await import(${JSON.stringify(pathToFileURL(file).href)})`).join(';')
+    const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })
+    expect(result.stderr).toBe('')
+    expect(result.status).toBe(0)
+  })
+})
+
+// Regenerate both after changing the catalogue: npx vitest run tests/ssis-catalog.test.ts -u
+describe('generated SSIS files', () => {
+  it('keeps the backend\'s embedded copy in sync', async () => {
+    await expect(ssisCatalogJson()).toMatchFileSnapshot('../backend/Varia.Backend/Ssis/ssis-catalog.json')
+  })
+  it('exports sorted keys, every view, error and table', () => {
+    const json = JSON.parse(ssisCatalogJson()) as { version: number; catalogDatabase: string; views: { view: string; kind: string }[]; errors: { code: string; retryable: boolean }[]; features: string[]; limits: Record<string, number> }
+    const sorted = (value: unknown, path: string): void => {
+      if (Array.isArray(value)) { value.forEach((item, index) => sorted(item, `${path}[${index}]`)); return }
+      if (!value || typeof value !== 'object') return
+      const keys = Object.keys(value)
+      expect(keys, path).toEqual([...keys].sort())
+      for (const key of keys) sorted((value as Record<string, unknown>)[key], `${path}.${key}`)
+    }
+    sorted(json, '$')
+    expect(json.version).toBe(1)
+    expect(json.views).toEqual(describeViews.map(view => ({ view, kind: describeTargets[view] })))
+    expect(json.errors.map(error => error.code)).toEqual(ssisErrorCodes)
+    expect(json.features).toEqual([...ssisFeatures])
+    expect(json.limits).toEqual(ssisLimits)
+  })
+  it('keeps the generated part of docs/integration-services.md in sync, below its hand-written part', async () => {
+    const current = readFileSync(docsPath, 'utf8')
+    const at = current.indexOf(generatedMarker)
+    expect(at, 'the marker line').toBeGreaterThan(0)
+    expect(current.indexOf(generatedMarker, at + 1)).toBe(-1)
+    await expect(current.slice(0, at) + renderSsisDocs()).toMatchFileSnapshot('../docs/integration-services.md')
+  })
+  it('documents every view, error, feature and limit', () => {
+    const docs = renderSsisDocs()
+    for (const view of describeViews) expect(docs, view).toContain(`| \`${view}\` |`)
+    for (const code of ssisErrorCodes) expect(docs, code).toContain(`| \`${code}\` |`)
+    for (const feature of ssisFeatures) expect(docs, feature).toContain(`| \`${feature}\` |`)
+    for (const key of Object.keys(ssisLimits)) expect(docs, key).toContain(`| \`${key}\` |`)
+    expect(docs).toContain('| Packages | `ssisPackages` | Package (`ssisPackages`) | Name |')
+  })
+})

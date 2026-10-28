@@ -50,7 +50,7 @@ describe('Activity Monitor session actions', () => {
     expect(Object.keys(requestSchemas)).toEqual(expect.arrayContaining(['activity.details', 'activity.kill']))
   })
   it('routes only Details to varia:activity-cancel: Kill carries no requestId and is never cancelled', () => {
-    const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', activity: 'activity', connections: 'connections' }
+    const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' }
     expect(cancellableRequests('activity.details', channels)).toBe('activity')
     expect(cancellableRequests('activity.kill', channels)).toBeUndefined()
     const main = readFileSync(join('src', 'main', 'index.ts'), 'utf8')

@@ -211,6 +211,31 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 internal sealed record ActionStepDto(string Status, string? Message = null);
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
 
+/// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
+internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);
+internal sealed record SsisError(string Code, string Message, bool Retryable);
+/// <summary>Model is one of the Ssis*Model records below, whose View names it; Revision is a SHA-256 of what a later write
+/// depends on (SsisService.Revision), absent when the model is truncated.</summary>
+internal sealed record SsisDescribeResult(object? Model, string? Revision, long ElapsedMs, SsisError? Error = null);
+/// <summary>Admin is sysadmin or ssis_admin; SsisAdmin and SsisLogreader are read only for logins that are not sysadmin.</summary>
+internal sealed record SsisRolesDto(bool Sysadmin, bool Admin, bool SsisAdmin, bool SsisLogreader);
+/// <summary>Auth: sql, integrated or entra. Features: src/shared/ssis/catalog.ts ssisFeatures, each found or not.</summary>
+internal sealed record SsisProfileDto(int Band, bool Cloud, string HostPlatform, string Auth, bool Rcsi, Dictionary<string, bool> Features, SsisRolesDto Roles);
+internal sealed record SsisPropertyDto(string Name, string Value);
+/// <summary>Times are datetimeoffset in ISO 8601 with their offset (never converted to datetime).</summary>
+internal sealed record SsisCatalogModel(string View, string Name, SsisProfileDto Profile, long Folders, List<SsisPropertyDto>? Properties, bool Truncated);
+internal sealed record SsisFolderModel(string View, long Id, string Name, string? Description, string CreatedBy, string Created, long Projects, long Environments);
+/// <summary>A sensitive parameter never carries a value.</summary>
+internal sealed record SsisParameterDto(string Name, string DataType, bool Required, bool Sensitive, string? Description, string? DesignDefault, string? Value, string ValueType, bool ValueSet,
+    string? Variable);
+internal sealed record SsisPackageRowDto(string Name, bool EntryPoint, string? Description, string Version);
+internal sealed record SsisReferenceDto(long Id, string Type, string? Folder, string Environment, string ValidationStatus);
+internal sealed record SsisProjectModel(string View, long Id, string Folder, string Name, string? Description, int? FormatVersion, string DeployedBy, string Deployed, string Created,
+    long VersionLsn, string ValidationStatus, string? Validated, List<SsisPackageRowDto> Packages, List<SsisParameterDto> Parameters, List<SsisReferenceDto> References, bool Truncated);
+internal sealed record SsisPackageModel(string View, long Id, string Folder, string Project, string Name, string? Description, int FormatVersion, string Version, string? VersionComments,
+    bool EntryPoint, string ValidationStatus, string? Validated, List<SsisParameterDto> Parameters, bool Truncated);
+internal sealed record SsisVariableDto(string Name, string Type, string? Description, bool Sensitive, string? Value);
+internal sealed record SsisEnvironmentModel(string View, long Id, string Folder, string Name, string? Description, string CreatedBy, string Created, List<SsisVariableDto> Variables, bool Truncated);
 /// <summary>activity.details (src/shared/activity/schema.ts): one session by its id and login time (server local time,
 /// yyyy-MM-ddTHH:mm:ss.fffffff); Text asks for one text whole, Locks also reads its locks. SessionActions re-checks every bound.</summary>
 internal sealed record ActivityDetailsArgs(string ConnectionId, string RequestId, int SessionId, string LoginTime, string? Text = null, bool? Locks = null);

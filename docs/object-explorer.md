@@ -35,7 +35,7 @@ The server row expands on connect; its folders stay collapsed.
 | PolyBase | — | 2019 (15) | — | Planned | — |
 | Always On High Availability | — | — | — | Planned | — |
 | Management | — | — | — | Planned: Policy Management, Data Collection, Resource Governor, Extended Events, Maintenance Plans, SQL Server Logs, Database Mail, Distributed Transaction Coordinator, Legacy | — |
-| Integration Services Catalogs | — | — | — | Planned | — |
+| Integration Services Catalogs | `integrationServicesCatalogs` | 2016 (13) | Yes | Integration Services Catalog (`ssisCatalogs`) | — |
 | SQL Server Agent | — | — | — | Planned | — |
 | XEvent Profiler | — | — | — | Planned | — |
 
@@ -108,7 +108,8 @@ A database expands only while it is online (or in emergency mode). Expanding one
 
 ## Object children
 
-Child folders list their rows by name, except Columns and Parameters, which keep the object's order. Every other kind is a leaf.
+Child folders list their rows by name, except Columns and Parameters, which keep the object's order, and an SSIS project's Packages,
+which list in deployment order (`package_id`: a package name can be longer than a sysname cursor key). Every other kind is a leaf.
 
 | Kind | Subtypes | Children |
 | --- | --- | --- |
@@ -121,6 +122,9 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | `function` | none, `scalar`, `clrScalar`, `aggregate` | Parameters |
 | `function` | `inline`, `tableValued`, `clrTableValued` | Columns, Parameters |
 | `tableType` | any | Columns, Keys, Constraints, Indexes |
+| `ssisCatalog` | any | Folder rows (`ssisFolders`) |
+| `ssisFolder` | any | Projects, Environments |
+| `ssisProject` | any | Packages |
 
 | Folder | Id | Below | Lists (query) |
 | --- | --- | --- | --- |
@@ -131,8 +135,11 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | Indexes | `indexes` | `table`, `view`, `tableType` | Index (`indexes`) |
 | Statistics | `statistics` | `table`, `view` | Statistic (`statistics`) |
 | Parameters | `parameters` | `procedure`, `function` | Parameter, Return value (`parameters`) |
+| Projects | `ssisProjects` | `ssisFolder` | Project (`ssisProjects`) |
+| Environments | `ssisEnvironments` | `ssisFolder` | Environment (`ssisEnvironments`) |
+| Packages | `ssisPackages` | `ssisProject` | Package (`ssisPackages`) |
 
-## Node kinds (51)
+## Node kinds (56)
 
 Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
@@ -190,6 +197,11 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `statistic` | Statistic | `child` | `graph` | Statistic | Yes | `[name]` |
 | `parameter` | Parameter | `child` | `symbol-parameter` | Parameter | No | the name as is (`@name`) |
 | `returnValue` | Return value | `childUnnamed` | `arrow-left` | — | No | — |
+| `ssisCatalog` | Integration Services Catalog | `ssisCatalog` | `database` | — | No | — |
+| `ssisFolder` | Folder | `ssisFolder` | `folder-library` | — | No | — |
+| `ssisProject` | Project | `ssisFolderObject` | `project` | — | No | — |
+| `ssisPackage` | Package | `ssisProjectObject` | `package`; `child` → `symbol-file` | — | No | — |
+| `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
 
 ## Node identity
 
@@ -208,10 +220,10 @@ SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject
 | `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
 | `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
 | `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject` | `returnValue` |
-| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | — |
-| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | — |
-| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | — |
-| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | — |
+| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisCatalog` |
+| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisFolder` |
+| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | `ssisProject`, `ssisEnvironment` |
+| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | `ssisPackage` |
 
 | Child kind | Parent kinds |
 | --- | --- |
