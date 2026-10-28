@@ -62,17 +62,28 @@ const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(foo
 }))
 /**
  * Stacked, in a narrow or zoomed window: the panes in one scroll, the list two rows tall, the form with room for at least
- * two of its rows beside the outcome, and the outcome and footer inside the dialog.
+ * two of its rows beside the outcome, and, with the panes scrolled back up to the list, the outcome under the scroll and
+ * the footer at the dialog's bottom.
  */
 const stackedRoom = dialog => dialog.evaluate((form, part) => {
   const box = element => element.getBoundingClientRect()
-  const panes = form.querySelector(part.connectPanes), list = form.querySelector(part.connectionSources), row = form.querySelector(part.connectionListRow), scroll = form.querySelector(part.connectFormScroll), actions = form.querySelector(part.connectActions), outcome = form.querySelector(part.connectOutcome)
+  const panes = form.querySelector(part.connectPanes), list = form.querySelector(part.connectionSources), row = form.querySelector(part.connectionListRow), scroll = form.querySelector(part.connectFormScroll), actions = form.querySelector(part.connectActions), outcome = form.querySelector(part.connectOutcome), footer = form.querySelector(part.connectionFooter)
   scroll.scrollIntoView({ block: 'start' })
   const top = Math.max(box(scroll).top, box(panes).top), bottom = Math.min(box(scroll).bottom, box(panes).bottom, box(actions).top)
+  const room = bottom - top >= 60
+  panes.scrollTop = 0
+  const end = box(form).top + form.clientTop + form.clientHeight
   return {
-    stacked: box(form.querySelector(part.connectSourcesPane)).bottom <= box(scroll).top + 0.5, rows: list.clientHeight >= 2 * box(row).height, room: bottom - top >= 60,
-    inside: !!outcome && box(outcome).bottom <= box(form).bottom + 0.5 && box(actions).bottom <= box(form).bottom + 0.5 && form.scrollHeight <= form.clientHeight + 0.5
+    stacked: box(form.querySelector(part.connectSourcesPane)).bottom <= box(scroll).top + 0.5, rows: list.clientHeight >= 2 * box(row).height, room,
+    inside: !!outcome && box(outcome).top >= box(panes).bottom - 0.5 && box(actions).bottom <= end + 0.5 && Math.abs(box(footer).bottom - end) < 1 && form.scrollHeight <= form.clientHeight + 0.5
   }
+}, part)
+/** Whether the focused element's focus ring (outline) lies inside the scrolling list that holds it, which would clip it. */
+const ringInside = dialog => dialog.evaluate((form, part) => {
+  const row = document.activeElement, list = form.querySelector(part.connectionSources)
+  const style = getComputedStyle(row), reach = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset)
+  const inner = row.getBoundingClientRect(), outer = list.getBoundingClientRect()
+  return list.contains(row) && style.outlineStyle !== 'none' && inner.left - reach >= outer.left - 0.5 && inner.right + reach <= outer.left + list.clientWidth + 0.5
 }, part)
 /** A saved connection's row by its name: the Environment list has a Development option too. */
 const savedNamed = (dialog, name) => dialog.locator(part.connectionChoice + ' strong', { hasText: new RegExp('^' + name + '$') })
@@ -90,8 +101,15 @@ try {
   expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureAtConnect: null })
   // Up and Down move from the filter box through the rows and back.
   await dialog.getByLabel('Filter connections').focus()
+  // With a modifier the key stays the text's: Shift+Down selects, Ctrl+Down and Cmd+Down move the caret.
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+ArrowDown')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(savedConnections(dialog).first()).toBeFocused()
+  // The scrolling list would clip a ring drawn outside the row.
+  expect(await ringInside(dialog)).toBe(true)
   await page.keyboard.press('ArrowDown')
   await expect(savedConnections(dialog).nth(1)).toBeFocused()
   await page.keyboard.press('ArrowUp')
@@ -202,8 +220,13 @@ try {
   await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toBeFocused()
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await expect(dialog.getByText('Discovering local servers…')).toHaveCount(0, { timeout: 10000 })
+  // Refresh stays beside the source select, where it reads as a button, not wrapped under it as a lone word.
+  const middle = async locator => { const box = await locator.boundingBox(); return box.y + box.height / 2 }
+  expect(Math.abs(await middle(dialog.getByRole('button', { name: 'Refresh', exact: true })) - await middle(dialog.getByLabel('Server source', { exact: true })))).toBeLessThan(2)
   await dialog.getByLabel('Server source', { exact: true }).selectOption('registered')
   await expect(savedNamed(dialog, 'Development')).toBeVisible()
+  // The narrow list cuts a long name short, so the row's tooltip starts with the name.
+  await expect(dialog.locator(part.connectionChoice, { has: page.locator('strong', { hasText: /^Development$/ }) })).toHaveAttribute('title', /^Development\n/)
   await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
@@ -475,6 +498,20 @@ try {
     await expect.poll(() => stackedRoom(dialog), `zoom ${zoom} at ${width}x${height}`).toEqual({ stacked: true, rows: true, room: true, inside: true })
     await expect(connectFailure(dialog)).toBeInViewport()
     await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeInViewport()
+    if (zoom === 2) {
+      // Stacked too, Connect and Cancel stay put whether or not the outcome shows: an edit clears the failure, and
+      // Connect brings it back.
+      const stackedFooter = await footerPlace(dialog)
+      const trustBox = dialog.getByLabel('Trust server certificate', { exact: true })
+      await trustBox.check()
+      await trustBox.uncheck()
+      await expect(connectFailure(dialog)).toHaveCount(0)
+      expect(await footerPlace(dialog)).toEqual(stackedFooter)
+      await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+      await expect(dialog.getByRole('alert')).toContainText('not trusted')
+      expect(await footerPlace(dialog)).toEqual(stackedFooter)
+      await expect.poll(() => stackedRoom(dialog)).toEqual({ stacked: true, rows: true, room: true, inside: true })
+    }
     if (zoom === 1.5) await page.screenshot({ path: resolve('artifacts', 'connect-dialog-zoomed.png') })
   }
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
@@ -485,7 +522,7 @@ try {
   await expect(dialog.getByRole('alert')).toContainText('Login failed after trusting the certificate.')
   await expect(dialog.getByLabel('Trust server certificate', { exact: true })).toBeChecked()
   await expect(trust).toHaveCount(0)
-  expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'cert-error').map(call => call.params.trustServerCertificate))).toEqual([false, true])
+  expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'cert-error').map(call => call.params.trustServerCertificate))).toEqual([false, false, true])
   // Strict encryption validates the certificate whatever the box says: the dialog explains, with nothing to click.
   await dialog.getByLabel('Encrypt', { exact: true }).selectOption('strict')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()

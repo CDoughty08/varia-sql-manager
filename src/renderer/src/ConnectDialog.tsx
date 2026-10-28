@@ -6,7 +6,7 @@ import { connectionPickerColor, connectionPresets } from '../../shared/theme/con
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
-import { advancedSummary, customSummary, listStep } from './connect-form'
+import { advancedSummary, customSummary, listStep, rowTitle } from './connect-form'
 import { EnvironmentField } from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
 import { entryKey, parseEnvironment, savedEntry } from './services/environments'
@@ -367,7 +367,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const passwordShown = usesPassword(options.authentication)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
@@ -378,7 +378,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     const fromFilter = event.target === filterInput.current
     const current = fromFilter ? -1 : rows.indexOf(event.target as HTMLButtonElement)
     if (!fromFilter && current < 0) return
-    const next = listStep(current, rows.length, event.key)
+    const next = listStep(current, rows.length, event.key, event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing)
     if (next === undefined) return
     event.preventDefault()
     if (next < 0) filterInput.current?.focus()
@@ -453,19 +453,19 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
               <div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div>
             </section>
           </div>
-          <div className="connect-actions">
-            {(busy || notice || error) && <div className="connect-outcome">
-              {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
-              {notice && <p className="field-note" role="status">{notice}</p>}
-              {error && <div ref={failureBox} className="connect-failure">
-                <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
-                  note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
-                {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
-              </div>}
-            </div>}
-            <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
-          </div>
         </div>
+      </div>
+      <div className="connect-actions">
+        {(busy || notice || error) && <div className="connect-outcome">
+          {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
+          {notice && <p className="field-note" role="status">{notice}</p>}
+          {error && <div ref={failureBox} className="connect-failure">
+            <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
+              note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
+            {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
+          </div>}
+        </div>}
+        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
       </div>
     </form></div>
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}

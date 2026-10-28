@@ -37,14 +37,19 @@ export function customSummary(options: Pick<ConnectionOptions, 'displayName' | '
 /**
  * Arrow keys in the saved and discovered server lists: the index to focus next among `count` rows, or undefined for a
  * key the lists leave alone. -1 is the filter box: Down enters the list from it, and Up from the first row goes back.
- * Home and End in the filter box stay the text's.
+ * Home and End in the filter box stay the text's, as does any key with a modifier or during an IME composition (Shift+Down
+ * selects, Ctrl+Down and Cmd+Down move the caret).
  */
-export function listStep(current: number, count: number, key: string): number | undefined {
-  if (count === 0) return undefined
+export function listStep(current: number, count: number, key: string, modified = false): number | undefined {
+  if (count === 0 || modified) return undefined
   if (key === 'ArrowDown') return Math.min(current + 1, count - 1)
   if (key === 'ArrowUp') return current < 0 ? undefined : current - 1
   if (current < 0) return undefined
   if (key === 'Home') return 0
   if (key === 'End') return count - 1
   return undefined
+}
+/** A saved connection row's tooltip: its name first, which the narrow list often cuts short, then server and database. */
+export function rowTitle(options: Pick<ConnectionOptions, 'displayName' | 'server' | 'database'>): string {
+  return [options.displayName, `${options.server} · ${options.database || '<default>'}`].filter(Boolean).join('\n')
 }

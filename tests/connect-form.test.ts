@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { advancedCount, advancedSummary, colorName, customSummary, listStep } from '../src/renderer/src/connect-form'
+import { advancedCount, advancedSummary, colorName, customSummary, listStep, rowTitle } from '../src/renderer/src/connect-form'
 import EnvironmentTag from '../src/renderer/src/EnvironmentTag'
 import { advancedDefaults, advancedToStore } from '../src/shared/connections'
 import { connectionPresets } from '../src/shared/theme/connection-colors'
@@ -55,12 +55,25 @@ describe('Connect dialog v2 form', () => {
     expect(listStep(-1, 3, 'End')).toBeUndefined()
     expect(listStep(-1, 0, 'ArrowDown')).toBeUndefined()
     expect(listStep(1, 3, 'Enter')).toBeUndefined()
+    // A modifier or an IME composition leaves the key to the filter's text: Shift+Down selects, Ctrl+Down moves the caret.
+    expect(listStep(-1, 3, 'ArrowDown', true)).toBeUndefined()
+    expect(listStep(1, 3, 'ArrowUp', true)).toBeUndefined()
+    expect(listStep(1, 3, 'Home', true)).toBeUndefined()
+  })
+  it('puts a saved row\'s name in its tooltip, since the narrow list cuts it short', () => {
+    expect(rowTitle({ displayName: 'Production Finance Reporting Cluster Primary', server: 'prod-sql-01', database: 'FinanceDW' })).toBe('Production Finance Reporting Cluster Primary\nprod-sql-01 · FinanceDW')
+    expect(rowTitle({ displayName: '', server: 'localhost', database: '' })).toBe('localhost · <default>')
   })
   it('keeps one bounded two-pane size, stacking the panes in a narrow window', () => {
     expect(valueOf('.connection-modal.connect-dialog', 'width')).toBe('min(720px, calc(100vw - 40px))')
     expect(valueOf('.connection-modal.connect-dialog', 'height')).toBe('min(520px, calc(100vh - 40px))')
-    expect(valueOf('.connect-panes', 'display')).toBe('flex')
-    expect(valueOf('.connect-sources-pane', 'width')).toBe('272px')
+    expect(valueOf('.connection-modal.connect-dialog', 'display')).toBe('grid')
+    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns')).toBe('272px minmax(0, 1fr)')
+    // The panes are the grid's cells side by side; the actions are their sibling, outside every scroll, under the form.
+    expect(valueOf('.connect-panes', 'display')).toBe('contents')
+    expect(valueOf('.connect-sources-pane', 'grid-row')).toBe('2 / 4')
+    expect(valueOf('.connect-actions', 'grid-column')).toBe('2')
+    expect(valueOf('.connect-actions', 'position')).toBeUndefined()
     // Both panes scroll on their own, and what sits under Connect is bounded, so Connect stays in view.
     expect(valueOf('.connect-sources-pane .connection-sources', 'min-height')).toBe('0')
     // A long custom label shrinks in the list instead of pushing the name and itself out of the row; a preset's word
@@ -69,18 +82,26 @@ describe('Connect dialog v2 form', () => {
     expect(valueOf('.environment-tag', 'flex')).toBe('none')
     expect(rules.filter(rule => rule.selector.includes('[data-place="list"]') && rule.declarations.some(declaration => declaration.property.startsWith('flex'))).map(rule => rule.selector)).toEqual(['.connect-sources-pane .environment-tag[data-place="list"][data-custom]'])
     expect(valueOf('.connect-form-scroll', 'overflow-y')).toBe('auto')
-    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most 55% of the pane.
-    expect(valueOf('.connect-actions', 'max-height')).toBe('55%')
+    // The outcome sits above the footer, so Connect and Stop never move; together they keep at most half the dialog.
+    expect(valueOf('.connect-actions', 'max-height')).toBe('calc(min(520px, 100vh - 40px) / 2)')
     expect(valueOf('.connect-outcome', 'min-height')).toBe('0')
     expect(valueOf('.connect-outcome', 'overflow-y')).toBe('auto')
-    // Stacked (a narrow or zoomed window): one scroll, the list two rows tall, and Connect stuck to the bottom.
+    // Stacked (a narrow or zoomed window): one scroll, the list two rows tall, and Connect under the scroll, across the
+    // dialog. Sticky inside the form pane, it could not rise above that pane's top and left the view when scrolled up.
     const stacked = ['@media (max-width: 760px)']
+    expect(valueOf('.connection-modal.connect-dialog', 'grid-template-columns', stacked)).toBe('minmax(0, 1fr)')
+    expect(valueOf('.connect-panes', 'display', stacked)).toBe('flex')
     expect(valueOf('.connect-panes', 'flex-direction', stacked)).toBe('column')
     expect(valueOf('.connect-panes', 'overflow-y', stacked)).toBe('auto')
     expect(valueOf('.connect-sources-pane .connection-sources', 'height', stacked)).toBe('136px')
     expect(valueOf('.connect-form-scroll', 'overflow-y', stacked)).toBe('visible')
-    expect(valueOf('.connect-actions', 'position', stacked)).toBe('sticky')
-    expect(valueOf('.connect-actions', 'max-height', stacked)).toBe('40vh')
+    expect(valueOf('.connect-actions', 'position', stacked)).toBeUndefined()
+    expect(valueOf('.connect-actions', 'grid-column', stacked)).toBe('1')
+    // The rows draw their focus ring inside, which the scrolling list would clip, and Browse's Refresh stays beside the
+    // source select rather than wrapping under it as a lone, borderless word.
+    expect(valueOf('.connect-sources-pane .connection-choice:focus-visible, .connect-sources-pane .discovered-server:focus-visible, .connect-sources-pane .connection-list-row .icon-button:focus-visible', 'outline-offset')).toBe('-2px')
+    expect(valueOf('.connect-sources-pane .browse-toolbar', 'flex-wrap')).toBeUndefined()
+    expect(valueOf('.connect-sources-pane .browse-toolbar select', 'min-width')).toBe('0')
   })
   it('marks only a custom environment label as one that may give way', () => {
     const html = (environment: string) => renderToStaticMarkup(createElement(EnvironmentTag, { environment, place: 'list' }))
