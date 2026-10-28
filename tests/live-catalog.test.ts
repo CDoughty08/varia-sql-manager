@@ -61,7 +61,8 @@ describe('live catalogue', () => {
           expect((table.facets ?? []).length, id).toBeLessThanOrEqual(L.facetColumns)
           expect(new Set(table.facets ?? []).size, id).toBe((table.facets ?? []).length)
           for (const facet of table.facets ?? []) expect(columnIds, id).toContain(facet)
-          expect(table.settle === undefined && table.batchRows === undefined, id).toBe(true)
+          // A snapshot built from ids read above a settled one (the Operations window) names its settle window as an append table does.
+          expect(table.batchRows === undefined && (table.settle === undefined || (Number.isInteger(table.settle.ticks) && table.settle.ticks >= 1 && table.settle.ticks <= 10 && Number.isInteger(table.settle.ms) && table.settle.ms >= 0 && table.settle.ms <= 60_000)), id).toBe(true)
         } else {
           // An append table reads by one integer keyset id, settles within a minute, and reads at most batchRows a tick.
           expect(table.key.length, id).toBe(1)

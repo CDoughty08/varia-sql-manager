@@ -34,7 +34,7 @@
 // or by prefix, caller, limit), and new args replace the old ones whole. ssis.execute's stopOperation turns a running or
 // pending execution or validation Stopping (stopped by FAKE\smoke) and the next sample Canceled; anything else answers as the
 // real preflight does (ALREADY_FINAL, NOT_STARTED, NOT_SUPPORTED, NOT_FOUND). A connection to server 'no-ssisdb' has no
-// catalog: its first tick reports CATALOG_MISSING, and the subscription ends failed.
+// catalog: its first tick reports CATALOG_MISSING, and the subscription ends failed; one to 'ssis-denied' does the same with PERMISSION_DENIED.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -557,7 +557,7 @@ function liveSubscribe(id, credit, params) {
     probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
     seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0,
     // As the real source does when the catalog's database does not exist: its first tick reports it, and the view ends.
-    missing: ssis && workbenchConnections.get(params.connectionId)?.server === 'no-ssisdb'
+    missing: ssis ? ssisFailures[workbenchConnections.get(params.connectionId)?.server] : undefined
   }
   live.grant = more => { live.available += more; wakeLive(live) }
   live.end = (ended, error) => {
@@ -597,7 +597,7 @@ function wakeLive(live) {
     probe.resumed = false
     const n = ++probe.samples
     if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
-    else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, code: 'CATALOG_MISSING', message: ssisMissing, retryInMs: 0, terminal: true })
+    else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })
     else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -607,7 +607,7 @@ function wakeLive(live) {
   sendLive(live, { type: 'live.tick', seq: ++live.seq, sampledAt: live.sampledAt, samples, ...(errors.length ? { errors } : {}) })
   live.ticks++
   if (live.args.endAfterTicks && live.ticks >= live.args.endAfterTicks) { lives.delete(live.id); return live.end('sourceEnded') }
-  if (live.missing) { lives.delete(live.id); return live.end('failed', { code: 'CATALOG_MISSING', message: ssisMissing }) }
+  if (live.missing) { lives.delete(live.id); return live.end('failed', live.missing) }
   wakeLive(live)
 }
 /** One snapshot revision: ids n … n + rows − 1, sorted as asked (the id breaks ties), stored as a result. */
@@ -627,10 +627,14 @@ function liveTable(live, probe, n) {
   return { table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
 }
 const ssisOperationsProbe = 'ssis.operations.list'
-const ssisMissing = 'This server has no SSIS Catalog (it may have been deleted).'
+/** Servers whose catalog a subscription cannot open, and how its first tick says so before the view ends (as the real source's terminal probe errors do). */
+const ssisFailures = {
+  'no-ssisdb': { code: 'CATALOG_MISSING', message: 'This server has no SSIS Catalog (it may have been deleted).' },
+  'ssis-denied': { code: 'PERMISSION_DENIED', message: 'This login cannot read the SSIS Catalog. Ask for access to the catalog\'s database, or connect with a login that has it.' }
+}
 const ssisColumns = liveProbes[ssisOperationsProbe].tables[0].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
 const ssisCatalogs = new Map()
-const ssisTime = date => date.toISOString().replace('T', ' ').replace('Z', '0000 +00:00')
+const ssisTime = date => date.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +00:00')
 /** A connection's fake catalog: eight operations of every kind, newest last; a running execution, a pending validation. */
 function ssisCatalogOf(connectionId) {
   let catalog = ssisCatalogs.get(connectionId)

@@ -25,14 +25,17 @@ export const operationTypes: readonly CodeLabel[] = [
   { code: 1000, label: 'Configure catalog' }
 ]
 /** A row's tone in the Operations grid (one of the live grid's tones, src/shared/live/catalog.ts liveTones). */
-export type OperationTone = 'error' | 'warning' | 'running' | 'muted'
-/** catalog.operations.status, with the tone an Operations row takes (none for one that succeeded or completed). */
+export type OperationTone = 'error' | 'warning' | 'muted'
+/**
+ * catalog.operations.status, with the tone an Operations row takes: none for one that is running, pending, succeeded or
+ * completed. The grid's running tone is the accent's hue, as its selection is, so open rows toned with it read as selected.
+ */
 export const operationStatuses: readonly (CodeLabel & { readonly tone?: OperationTone })[] = [
   { code: 1, label: 'Created', tone: 'muted' },
-  { code: 2, label: 'Running', tone: 'running' },
+  { code: 2, label: 'Running' },
   { code: 3, label: 'Canceled', tone: 'muted' },
   { code: 4, label: 'Failed', tone: 'error' },
-  { code: 5, label: 'Pending', tone: 'running' },
+  { code: 5, label: 'Pending' },
   { code: 6, label: 'Ended unexpectedly', tone: 'error' },
   { code: 7, label: 'Succeeded' },
   { code: 8, label: 'Stopping', tone: 'warning' },

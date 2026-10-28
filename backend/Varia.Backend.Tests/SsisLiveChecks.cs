@@ -55,6 +55,8 @@ internal static class SsisLiveChecks
                     + ", RCSI " + (real.Database.ReadCommittedSnapshot ? "on" : "off") + ", collation " + real.Database.Collation + ".");
                 if (update) written = real;
                 else Drift(check, manifest, real, "the real SSISDB");
+                // S3: the Operations source against the real catalog (it only reads).
+                if (!update) await SsisOperationsLiveChecks.RealAsync(check, service, info, json, text => Sql(text));
             }
             else Console.WriteLine("SSISDB does not exist on this server: the real catalog's drift check is skipped. It runs with VARIA_TEST_SSIS=1 once the catalog exists, created with Varia's Create Catalog (PR S9a).");
         }
@@ -99,7 +101,7 @@ internal static class SsisLiveChecks
         // S-A: ssis.execute (Stop Operation), against the same fake catalog.
         await SsisActionLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S3: the ssis.operations live source (the Operations document), against the same fake catalog.
-        await SsisOperationsLiveChecks.RunAsync(check, service, info, json, scratch.Ssis, Sql);
+        await SsisOperationsLiveChecks.RunAsync(check, service, info, json, scratch.Ssis, Sql, live, scratch);
     }
 
     private static void Write(ManifestFile? manifest, CatalogShape? shape, string path)

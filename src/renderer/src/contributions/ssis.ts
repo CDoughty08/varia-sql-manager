@@ -37,8 +37,8 @@ export function ssisContribution({ commands, explorer, operations, documents, co
   const registrations = [
     ...operationsPresets.map(preset => commands.register(operationsPresetSpecs[preset].command, open(preset))),
     commands.register('ssis.stopOperation', on(id => operations.requestStop(id), id => operations.stoppable(id))),
-    commands.register('ssis.refreshOperations', on(id => operations.refresh(id))),
-    commands.register('ssis.pauseOperations', on(id => operations.togglePause(id))),
+    commands.register('ssis.refreshOperations', on(id => operations.refresh(id), id => operations.refreshable(id))),
+    commands.register('ssis.pauseOperations', on(id => operations.togglePause(id), id => operations.pausable(id))),
     commands.register('ssis.copyOperations', on(id => operations.copy(id, false))),
     commands.register('ssis.copyOperationsWithHeaders', on(id => operations.copy(id, true)))
   ]

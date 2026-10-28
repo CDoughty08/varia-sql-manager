@@ -1082,19 +1082,26 @@ or `READ UNCOMMITTED` (owner decision 4); catalog views need no server permissio
 only what it may read. Its one probe, `ssis.operations.list`, keeps the window in backend state (a snapshot table
 materialised from it, not from one result set): a baseline, after the first sample, new args or a lost connection, reads
 the newest `2 × limit` operations of the scope that are open or were created in the window and pass the status filter (an
-open one the status filter hides is read too and followed unseen, since it can still end in a status the filter shows);
-each later sample reads the operations above the newest id it has settled (an id settles 2 samples and 5 s after it was
-first seen, since SQL Server assigns an identity before its row commits, so a lower id can appear after a higher one; a row
-read twice replaces itself) and the open ones it holds again by id (an `xml` list `@open`, at most 256 a sample, in turn
-when there are more; a row no longer found leaves: the catalog's retention cleanup removed it, or a dirty read was rolled
-back), then drops what it neither shows nor follows and keeps the newest `limit`. Every 30 s (and with each baseline) the
-same batch counts the last 24 hours by final status; samples in between repeat those counts, while Running and Pending
-count what the window holds. Lists go in as `xml` parameters read with `.nodes('/i')` (any compatibility level), names
+open one the status filter hides is read too and followed unseen, since it can still end in a status the filter shows),
+and apart the newest `2 × limit` open operations of the scope whatever their age, so a busy hour of finished ones never
+crowds out a long run; each later sample reads the operations above the newest id it has settled (an id settles after the
+operations table's `settle` in the catalogue, 2 samples and 5 s, since SQL Server assigns an identity before its row
+commits, so a lower id can appear after a higher one; a row read twice replaces itself) and the open ones it holds again by
+id (an `xml` list `@open`, at most 256 a sample, in turn when there are more; a row no longer found leaves: the catalog's
+retention cleanup removed it, or a dirty read was rolled back), then drops what it neither shows nor follows and keeps
+`limit` rows, the open ones first and then the newest. The scope (kinds, names, caller) matches an execution's folder,
+project and package (`catalog.executions`), a validation's folder and project (`catalog.validations`), and a deployment's
+project (its `object_name`), all joined by id. The tiles ignore the scope, the status filter and the limit: every sample
+counts the running and pending operations (`COUNT_BIG … WHERE status IN (2, 5)`), and every 30 s (and with each baseline)
+the same batch counts the last 24 hours by final status, which samples in between repeat. Lists go in as `xml` parameters read with `.nodes('/i')` (any compatibility level), names
 as `LIKE` patterns with their wildcards escaped (`ESCAPE N'\'`, a trailing `%` for a prefix), times stay
 `datetimeoffset`, and the SQL passes both the live lint and the SSIS lint. A connection that cannot open the catalog's
 database (4060 or 916) reads why on the same pool in the login's own database: no `sys.databases` row is
-`CATALOG_MISSING` (terminal), one that is not online or is single-user or restricted is `DATABASE_UNAVAILABLE` (retried),
-and an online one the login may not open is `PERMISSION_DENIED` (terminal). A server on Linux, or one older than SQL Server
+`CATALOG_MISSING` (terminal) for a login with VIEW ANY DATABASE, and `PERMISSION_DENIED` (terminal) for one without it,
+which sees no row of a database it cannot open; one that is not online or is single-user or restricted is
+`DATABASE_UNAVAILABLE` (retried), and an online one the login may not open is `PERMISSION_DENIED` (terminal). The
+renderer's `LiveHandle.refresh` subscribes again to a view that ended `failed` or was refused (Retry), never to one that
+was disconnected or whose source ended. A server on Linux, or one older than SQL Server
 2016, opens the probe `unavailable` `NOT_SUPPORTED`.
 
 **Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
@@ -1452,7 +1459,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
-| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048 | zod and backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project and caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window of at most 10,000 rows, at most 20,000 (2 × limit) read a sample and as many open ones with a baseline, at most 256 open ids read again a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |

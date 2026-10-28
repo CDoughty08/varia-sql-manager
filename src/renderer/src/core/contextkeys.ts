@@ -23,7 +23,7 @@ export interface FocusFacts {
 export interface DesignerKeys { readonly editable: boolean; readonly rowSelected: boolean; readonly keyRemovable: boolean }
 export interface DesignerContextState { readonly byDocument: Readonly<Record<string, DesignerKeys>>; readonly saving: boolean }
 /** An Integration Services Operations document's state for its commands: SsisOperationsService publishes one per document. */
-export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paused: boolean }
+export interface SsisOperationsKeys { readonly stoppable: boolean; readonly paused: boolean; readonly refreshable: boolean; readonly pausable: boolean }
 export interface SsisOperationsContextState { readonly byDocument: Readonly<Record<string, SsisOperationsKeys>> }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
@@ -91,7 +91,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
     anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner',
-    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused,
+    activeDocumentIsSsisOperations: active?.kind === 'ssisOperations', ssisOperationStoppable: !!operations?.stoppable, ssisOperationsPaused: !!operations?.paused, ssisOperationsRefreshable: !!operations?.refreshable, ssisOperationsPausable: !!operations?.pausable,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,

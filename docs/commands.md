@@ -186,8 +186,8 @@ keys it uses are listed below.
 | All Validations | `ssis.allValidations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Validations |
 | All Operations | `ssis.allOperations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Operations; View › Integration Services Operations |
 | Stop Operation | `ssis.stopOperation` | — | — | — | `backendReady && ssisOperationStoppable` | Integration Services Operations context menu › Stop Operation |
-| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | `backendReady && activeDocumentIsSsisOperations` | Integration Services Operations context menu › Refresh |
-| Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
+| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
+| Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
 
@@ -606,7 +606,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-#### Integration Services Operations context menu (`ssisOperations.context`)
+#### Integration Services Operations context menu (`ssis.operation.context`)
 
 Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document's rows.
 
@@ -618,7 +618,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (75)
+## Context keys (77)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -646,6 +646,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
+| `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |
+| `ssisOperationsPausable` | boolean | state | The active Integration Services Operations document has not stopped, so Pause applies. |
 | `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |

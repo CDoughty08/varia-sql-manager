@@ -64,15 +64,19 @@ internal sealed record SsisOperation(long Id, int Type, int Status, DateTimeOffs
 internal sealed record SsisOperationUpdate(long Id, int Status, DateTimeOffset? Start, DateTimeOffset? End, string? StoppedBy, long? DurationMs);
 
 /// <summary>The Operations view's window (D-ssis 5.3, a snapshot table materialised from backend state), kept by id: the operations
-/// of the view's scope (kinds, names, caller) that it shows, the newest `limit` that pass the status filter and are open or were
-/// created in the last hours, and those it follows unseen, the open ones the status filter hides, which can still end in a
-/// status it shows. A baseline replaces it; each later sample merges the operations read above the settled id (read again until
+/// of the view's scope (kinds, names, caller) that it shows, `limit` of those that pass the status filter and are open or were
+/// created in the last hours (the open ones first, then the newest), and those it follows unseen, the open ones the status
+/// filter hides, which can still end in a status it shows. A baseline replaces it; each later sample merges the operations read above the settled id (read again until
 /// they settle, since an id is assigned before its row commits, so a lower one can appear after a higher one; a row read twice
 /// replaces itself) and the open ones read again (a row no longer found leaves: the catalog's cleanup removed it, or a dirty read
-/// was rolled back), then drops what it neither shows nor follows and what passes the limit, oldest first. Pure: the checks drive
-/// it without SQL Server.</summary>
-internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks = 2, int settleMs = 5000)
+/// was rolled back), then drops what it neither shows nor follows and what passes the limit, oldest first. Its settle window is
+/// the catalogue's (the operations table's settle). Pure: the checks drive it without SQL Server.</summary>
+internal sealed class SsisOperationsWindow(SsisCatalog catalog, LiveSettleJson settle)
 {
+    /// <summary>The operations table's settle window in the live catalogue.</summary>
+    public static LiveSettleJson CatalogueSettle => LiveCatalog.Current.Probes[LiveSql.OperationsProbe].Tables[0].Settle
+        ?? throw new InvalidOperationException("The operations table names no settle window.");
+
     private readonly SortedDictionary<long, SsisOperation> rows = [];
     /// <summary>Ids above the settled one, with the tick and time they were first seen.</summary>
     private readonly Dictionary<long, (long Tick, long Ms)> seen = [];
@@ -98,9 +102,6 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks 
     private bool Open(SsisOperation row) => catalog.OpenStatuses.Contains(row.Status);
     /// <summary>Shown: it passes the status filter, and is open or was created inside the window.</summary>
     private bool Shown(SsisOperation row) => Filter.Keeps(row.Status) && (Open(row) || row.Created is { } created && created >= since);
-
-    /// <summary>How many operations of the scope the window holds in each of these statuses (the open tiles: shown or not).</summary>
-    public int CountOf(IReadOnlyList<int> statuses) => rows.Values.Count(row => statuses.Contains(row.Status));
 
     /// <summary>New filters: the next sample reads the window again under them.</summary>
     public void Use(SsisOperationsFilter filter)
@@ -135,7 +136,7 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks 
         ticks++;
         refreshFrom = long.MaxValue;
         foreach (var row in read) rows[row.Id] = row;
-        var recent = serverNow.AddMilliseconds(-settleMs);
+        var recent = serverNow.AddMilliseconds(-settle.Ms);
         settled = read.Where(row => row.Created is { } created && created <= recent).Select(row => row.Id).DefaultIfEmpty().Max();
         foreach (var row in read) if (row.Id > settled) seen[row.Id] = (ticks, nowMs);
         Trim(serverNow);
@@ -167,29 +168,30 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks 
     {
         var next = settled;
         foreach (var (id, (tick, ms)) in seen)
-            if (id > next && ticks - tick >= settleTicks && nowMs - ms >= settleMs) next = id;
+            if (id > next && ticks - tick >= settle.Ticks && nowMs - ms >= settle.Ms) next = id;
         // Bounded: an id the window no longer holds needs no second look.
         foreach (var id in seen.Keys.Where(id => id <= next || !rows.ContainsKey(id)).ToList()) seen.Remove(id);
         settled = next;
     }
 
-    /// <summary>Drops what the window neither shows nor follows (an ended operation the status filter hides, or created before
-    /// its hours by the server's clock), then the oldest past the limit: of the shown ones (an open one past it is followed
-    /// unseen, so Running and Pending still count it), and of the followed ones.</summary>
+    /// <summary>Picks the rows shown, the open ones first and then the newest, up to the limit (an open operation is what Stop
+    /// Operation acts on, so a busy hour of finished ones never hides it), then drops what the window neither shows nor follows:
+    /// an ended operation the status filter hides, created before its hours by the server's clock, or past the limit, and the
+    /// oldest of the open ones it follows unseen past the limit.</summary>
     private void Trim(DateTimeOffset serverNow)
     {
         since = serverNow.AddHours(-Filter.WindowHours);
         shown.Clear();
+        var newest = rows.Values.Reverse().ToList();
+        foreach (var row in newest) if (shown.Count < Filter.Limit && Open(row) && Shown(row)) shown.Add(row.Id);
+        foreach (var row in newest) if (shown.Count < Filter.Limit && !Open(row) && Shown(row)) shown.Add(row.Id);
         var followed = 0;
-        foreach (var row in rows.Values.Reverse().ToList())
-        {
-            if (Shown(row) && shown.Count < Filter.Limit) shown.Add(row.Id);
-            else if (!Open(row) || ++followed > Filter.Limit) rows.Remove(row.Id);
-        }
+        foreach (var row in newest) if (!shown.Contains(row.Id) && (!Open(row) || ++followed > Filter.Limit)) rows.Remove(row.Id);
     }
 
-    /// <summary>The operations shown, as table rows, newest first, in the catalogue's column order: labels for codes, times with
-    /// their offset, the duration as h:mm:ss.fff (sorting by its ms), and the row's tone by its status.</summary>
+    /// <summary>The operations shown, as table rows, newest first, in the catalogue's column order: labels for codes, times to the
+    /// second with their offset (the catalog's fractions are not worth a column's width; each time sorts by its full value), the
+    /// duration as h:mm:ss.fff (sorting by its ms), and the row's tone by its status.</summary>
     public List<LiveRow> Rows()
     {
         var list = new List<LiveRow>(shown.Count);
@@ -199,7 +201,7 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks 
 
     private LiveRow Row(SsisOperation row)
     {
-        static LiveCell Time(DateTimeOffset? value) => value is { } some ? LiveCell.Offset(some, 7) : LiveCell.Null;
+        static LiveCell Time(DateTimeOffset? value) => value is { } some ? LiveCell.Offset(some, 0) : LiveCell.Null;
         string Label(IReadOnlyDictionary<int, string> labels, int code) => labels.TryGetValue(code, out var label) ? label : "Unknown (" + code.ToString(CultureInfo.InvariantCulture) + ")";
         return new LiveRow([
             LiveCell.Of(row.Id), LiveCell.Of(Label(catalog.OperationTypes, row.Type)), LiveCell.Of(Label(catalog.OperationStatuses, row.Status)),
@@ -216,14 +218,14 @@ internal sealed class SsisOperationsWindow(SsisCatalog catalog, int settleTicks 
 }
 
 /// <summary>ssis.operations (D-ssis 5.3) on SqlSampler's connection in the catalog's database: one batch a sample
-/// (LiveSql.Operations) for the window (SsisOperationsWindow), the running and pending counts with the server's time, and
-/// every operationsCountMs the 24-hour counts, which samples in between repeat. The session probe reads whether the catalog's
+/// (LiveSql.Operations) for the window (SsisOperationsWindow), the server's time and the running and pending counts, and every
+/// operationsCountMs the 24-hour counts, which samples in between repeat. The counts ignore the filters and the limit. The session probe reads whether the catalog's
 /// database has READ_COMMITTED_SNAPSHOT on, which picks the prologue (owner decision 4). New args and a lost connection read
 /// the window again. It never writes and never logs names or values.</summary>
 internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLiveArgs? args, Func<string> catalogDatabase, bool ignoreLinux = false, Func<long>? clock = null) : ILiveSqlReader
 {
     private readonly Lock gate = new();
-    private readonly SsisOperationsWindow window = new(catalog);
+    private readonly SsisOperationsWindow window = new(catalog, SsisOperationsWindow.CatalogueSettle);
     private readonly Func<long> now = clock ?? (() => Environment.TickCount64);
     private SsisOperationsFilter pending = SsisOperationsFilter.Of(args, catalog);
     private bool changed = true;
@@ -283,22 +285,34 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         long[] open = baseline ? [] : window.OpenIds(catalog.Limit("operationsRefresh"));
         await using var command = connection.CreateCommand();
         command.CommandTimeout = 0;
-        var text = (prologue ?? scopePrologue) + LiveSql.Operations(count);
+        var text = (prologue ?? scopePrologue) + LiveSql.Operations(count, baseline);
         command.CommandText = testText?.Invoke(item.Probe.Spec.Id, text) ?? text;
         Bind(command, filter, baseline ? 0 : window.SettledId, open);
         var read = new List<SsisOperation>();
         var updates = new List<SsisOperationUpdate>();
         DateTimeOffset serverNow;
         var tiles = catalog.OperationTiles;
+        var values = new double?[tiles.Count];
         await using (var reader = await command.ExecuteReaderAsync(token).ConfigureAwait(false))
         {
             while (await reader.ReadAsync(token).ConfigureAwait(false)) read.Add(Operation(reader));
             await reader.NextResultAsync(token).ConfigureAwait(false);
+            if (baseline)
+            {
+                // The open operations of any age, which the newest finished ones may have crowded out of the first read.
+                var held = read.Select(row => row.Id).ToHashSet();
+                while (await reader.ReadAsync(token).ConfigureAwait(false)) if (Operation(reader) is var row && held.Add(row.Id)) read.Add(row);
+                await reader.NextResultAsync(token).ConfigureAwait(false);
+            }
             while (await reader.ReadAsync(token).ConfigureAwait(false))
                 updates.Add(new(reader.GetInt64(0), reader.GetInt32(1), Offset(reader, 2), Offset(reader, 3), Text(reader, 4), Long(reader, 5)));
             await reader.NextResultAsync(token).ConfigureAwait(false);
             if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new InvalidOperationException("The operations sample returned no server time.");
             serverNow = reader.GetDateTimeOffset(0);
+            await reader.NextResultAsync(token).ConfigureAwait(false);
+            if (!await reader.ReadAsync(token).ConfigureAwait(false)) throw new InvalidOperationException("The operations sample returned no open counts.");
+            var next = 0;
+            for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is null) values[i] = Long(reader, next++);
             if (count)
             {
                 await reader.NextResultAsync(token).ConfigureAwait(false);
@@ -312,9 +326,8 @@ internal sealed class SsisOperationsReader(SsisCatalog catalog, SsisOperationsLi
         }
         if (baseline) window.Baseline(read, serverNow, at);
         else window.Merge(read, open, updates, serverNow, at);
-        // The open tiles count what the window holds of the scope, shown or followed; the final ones repeat their last read.
-        var values = new double?[tiles.Count];
-        for (var i = 0; i < tiles.Count; i++) values[i] = tiles[i].LastHours is null ? window.CountOf(tiles[i].Statuses) : i < counts.Length ? counts[i] : null;
+        // The final tiles repeat their last count between reads.
+        for (var i = 0; i < tiles.Count; i++) if (tiles[i].LastHours is not null) values[i] = i < counts.Length ? counts[i] : null;
         var raw = new LiveRawSample(null, null, values, new double?[values.Length]);
         return new(raw, [new LiveReaderTable(0, window.Rows())], [], Status: [new LiveStatus("newest", window.Newest)]);
     }

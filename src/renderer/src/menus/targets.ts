@@ -53,12 +53,12 @@ export type MenuTarget =
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
   editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
-  ssisOperations: 'ssisOperations.context'
+  ssisOperations: 'ssis.operation.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
-  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssisOperations.context': 'Integration Services Operations'
+  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssis.operation.context': 'Integration Services Operations'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */

@@ -60,6 +60,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['inputValidation.errorForeground'], ['editorWidget.background', 'inputValidation.errorBackground']),
   ...text(['banner.errorForeground'], ['editor.background', 'banner.errorBackground']),
   ...text(['banner.warningForeground'], ['editor.background', 'banner.warningBackground']),
+  // A question on a warning banner (Stop Operation's) draws its destructive answer in the error colour, at rest and hovered.
+  ...text(['errorForeground'], ['editor.background', 'banner.warningBackground'], hovered('editor.background', 'banner.warningBackground')),
   ...text(['statusBar.foreground'], statusBar),
   ...text(['statusBar.executingForeground'], ['statusBar.executingBackground']),
   ...text(['statusBar.disconnectedForeground'], ['statusBar.disconnectedBackground']),

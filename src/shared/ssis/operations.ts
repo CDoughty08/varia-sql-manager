@@ -3,8 +3,8 @@
 // is in src/shared/live/catalog.ts; its kinds, statuses, tiles and tones are in ./catalog.ts. Erasable TypeScript (no enums).
 import { openStatuses, operationStatuses, operationTypes, stoppableOperationTypes, type OperationKind } from './catalog.ts'
 
-/** The document's title, and its tab's: "Integration Services Operations - SQL01". */
-export const operationsTitle = 'Integration Services Operations'
+/** The document's title (its crumbs name the server and SSISDB), and its tab's: "Operations - SQL01". */
+export const operationsTitle = 'Operations'
 export const operationsTabName = (server: string): string => `Operations - ${server}`
 
 /** What opens the document, and the filters each opens it with (its window and limit come from the settings). */
@@ -33,6 +33,10 @@ export const operationsWindows: readonly { readonly hours: number; readonly labe
 /** A window's words: one of the choices', else "Last 36 hours". */
 export const windowLabel = (hours: number): string => operationsWindows.find(choice => choice.hours === hours)?.label ?? `Last ${hours} hours`
 
+/** The status filter's chips, in the tiles' order: the open statuses first (Running, Pending, then Created and Stopping), then the
+ *  final ones (Failed and Ended unexpectedly, Succeeded and Completed, Canceled). */
+export const operationStatusOrder: readonly number[] = [2, 5, 1, 8, 4, 6, 7, 9, 3]
+
 /** The statuses whose label a row shows, by label: the grid holds display text, so the document reads codes back from it. */
 export const operationStatusByLabel: ReadonlyMap<string, number> = new Map(operationStatuses.map(status => [status.label, status.code]))
 export const operationTypeByLabel: ReadonlyMap<string, number> = new Map(operationTypes.map(type => [type.label, type.code]))
@@ -55,7 +59,7 @@ export interface OperationsCommandEntry {
   readonly toggled?: string
   readonly unavailableHint: string
   readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
-  readonly menus?: readonly { readonly menu: 'explorer.context' | 'view' | 'ssisOperations.context'; readonly group: string; readonly order: number; readonly title?: string; readonly mnemonic?: string; readonly when?: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context' | 'view' | 'ssis.operation.context'; readonly group: string; readonly order: number; readonly title?: string; readonly mnemonic?: string; readonly when?: string }[]
 }
 const openOperations = 'Open Integration Services Operations first.'
 /**
@@ -81,25 +85,25 @@ export function operationsCommandEntries(): { readonly [K in OperationsCommandId
     'ssis.stopOperation': {
       title: 'Stop Operation', category: 'Integration Services', icon: 'debug-stop', keywords: ['ssis', 'stop', 'cancel', 'execution', 'package', 'validation'],
       precondition: 'backendReady && ssisOperationStoppable', unavailableHint: 'Select a running execution or validation in Integration Services Operations.',
-      menus: [{ menu: 'ssisOperations.context', group: '1_operation', order: 1, mnemonic: 's' }]
+      menus: [{ menu: 'ssis.operation.context', group: '1_operation', order: 1, mnemonic: 's' }]
     },
     // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus) still executes.
     'ssis.refreshOperations': {
-      title: 'Refresh Operations', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'update', 'now'], precondition: 'backendReady && activeDocumentIsSsisOperations',
+      title: 'Refresh Operations', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'update', 'now'], precondition: 'backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable',
       unavailableHint: openOperations, keybindings: [{ key: 'f5', when: "activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus" }],
-      menus: [{ menu: 'ssisOperations.context', group: '8_view', order: 1, title: 'Refresh', mnemonic: 'r' }]
+      menus: [{ menu: 'ssis.operation.context', group: '8_view', order: 1, title: 'Refresh', mnemonic: 'r' }]
     },
     'ssis.pauseOperations': {
-      title: 'Pause Operations', category: 'Integration Services', icon: 'debug-pause', keywords: ['ssis', 'pause', 'resume', 'freeze', 'live'], precondition: 'activeDocumentIsSsisOperations',
-      toggled: 'ssisOperationsPaused', unavailableHint: openOperations, menus: [{ menu: 'ssisOperations.context', group: '8_view', order: 2, title: 'Pause', mnemonic: 'p' }]
+      title: 'Pause Operations', category: 'Integration Services', icon: 'debug-pause', keywords: ['ssis', 'pause', 'resume', 'freeze', 'live'], precondition: 'activeDocumentIsSsisOperations && ssisOperationsPausable',
+      toggled: 'ssisOperationsPaused', unavailableHint: openOperations, menus: [{ menu: 'ssis.operation.context', group: '8_view', order: 2, title: 'Pause', mnemonic: 'p' }]
     },
     'ssis.copyOperations': {
       title: 'Copy Operations', category: 'Integration Services', icon: 'copy', keywords: ['ssis', 'copy', 'clipboard', 'rows'], precondition: 'activeDocumentIsSsisOperations',
-      unavailableHint: openOperations, menus: [{ menu: 'ssisOperations.context', group: '5_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
+      unavailableHint: openOperations, menus: [{ menu: 'ssis.operation.context', group: '5_copy', order: 1, title: 'Copy', mnemonic: 'c' }]
     },
     'ssis.copyOperationsWithHeaders': {
       title: 'Copy Operations with Headers', category: 'Integration Services', icon: 'copy', keywords: ['ssis', 'copy', 'clipboard', 'columns'], precondition: 'activeDocumentIsSsisOperations',
-      unavailableHint: openOperations, menus: [{ menu: 'ssisOperations.context', group: '5_copy', order: 2, title: 'Copy with Headers', mnemonic: 'h' }]
+      unavailableHint: openOperations, menus: [{ menu: 'ssis.operation.context', group: '5_copy', order: 2, title: 'Copy with Headers', mnemonic: 'h' }]
     }
   }
 }

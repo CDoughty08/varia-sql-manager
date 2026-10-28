@@ -84,48 +84,69 @@ internal static partial class LiveSql
     public const string SsisSession = "SELECT @@SPID, (SELECT CONVERT(int, d.is_read_committed_snapshot_on) FROM sys.databases AS d WHERE d.name = @catalog);";
 
     /// <summary>An SSISDB source whose connection could not open the catalog's database: its state and user access, read on
-    /// a connection in the login's own database. No row: there is no catalog.</summary>
-    public const string CatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @catalog;";
+    /// a connection in the login's own database, and whether the login sees every database's row (VIEW ANY DATABASE). No row
+    /// says there is no catalog only when it does: without the permission a login sees no row of a database it cannot open.</summary>
+    public const string CatalogState = "SELECT d.state, d.user_access, x.sees_all FROM (SELECT CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW ANY DATABASE'), 0)) AS sees_all) AS x\n"
+        + "LEFT JOIN sys.databases AS d ON d.name = @catalog;";
 
     public const string OperationsProbe = "ssis.operations.list";
+
+    /// <summary>An operation's folder and project as the Operations view shows and filters them: an execution's, a validation's,
+    /// and a deployment's project (its object). Package is an execution's only.</summary>
+    private const string OperationNames = "CROSS APPLY (SELECT COALESCE(e.folder_name, v.folder_name) AS folder_name,\n"
+        + "    COALESCE(e.project_name, v.project_name, CASE WHEN o.operation_type = 101 THEN o.object_name END) AS project_name) AS n\n";
+    private const string OperationsFrom = "FROM [catalog].[operations] AS o LEFT JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id\n"
+        + "LEFT JOIN [catalog].[validations] AS v ON v.validation_id = o.operation_id\n" + OperationNames;
+    private const string OperationColumns = "SELECT TOP (@take) o.operation_id, o.operation_type, o.status, o.created_time, o.start_time, o.end_time, o.object_name, n.folder_name, n.project_name, e.package_name,\n"
+        + "    o.caller_name, o.stopped_by_name, o.server_name, o.machine_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n";
 
     /// <summary>The Operations view's scope, as SsisOperationsReader binds it (NULL: no filter). Kinds are the operation types
     /// they name (@types, an xml list) plus every type no kind names when Other is on (@other); names match by LIKE with their
     /// wildcards escaped, from the start when a prefix asks for it; the caller exactly. The status filter and the window are
-    /// not part of it: the tiles count over the scope whatever they are.</summary>
+    /// not part of it.</summary>
     private static readonly string OperationScope =
         "    AND (@types IS NULL OR o.operation_type IN (SELECT t.i.value('.', 'int') FROM @types.nodes('/i') AS t(i))\n"
         + "        OR (@other = 1 AND o.operation_type NOT IN (" + string.Join(", ", SsisCatalog.Current.OperationKinds.Values.SelectMany(types => types)) + ")))\n"
-        + "    AND (@folder IS NULL OR e.folder_name LIKE @folder ESCAPE N'\\') AND (@project IS NULL OR e.project_name LIKE @project ESCAPE N'\\')\n"
+        + "    AND (@folder IS NULL OR n.folder_name LIKE @folder ESCAPE N'\\') AND (@project IS NULL OR n.project_name LIKE @project ESCAPE N'\\')\n"
         + "    AND (@package IS NULL OR e.package_name LIKE @package ESCAPE N'\\') AND (@caller IS NULL OR o.caller_name = @caller)\n";
 
     private static string OpenStatuses => string.Join(", ", SsisCatalog.Current.OpenStatuses.Order());
+    private static string CountOf(OperationTile tile) => "COUNT_BIG(CASE WHEN o.status IN (" + string.Join(", ", tile.Statuses) + ") THEN 1 END) AS " + tile.Series;
 
-    /// <summary>One Operations sample (SsisOperationsReader), in the catalog's database: the newest @take operations above
-    /// @after in the scope that are open, or were created in the last @window hours and pass the status filter (@statuses, an
-    /// xml list; an open one that does not pass it is read too, since it can still end in a status that does, and the window
-    /// follows it unseen); the open ones the window holds (@open, an xml list of ids) as they are now; the server's time; and,
-    /// when <paramref name="counts"/>, each final tile's count over its hours in the scope. An execution shares its id with its
-    /// operation. Durations are the server's, to its own time while an operation runs. Times stay datetimeoffset.</summary>
-    public static string Operations(bool counts)
+    /// <summary>One Operations sample (SsisOperationsReader), in the catalog's database, its result sets in this order:
+    /// <list type="number">
+    /// <item>the newest @take operations above @after in the scope that are open, or were created in the last @window hours and
+    /// pass the status filter (@statuses, an xml list; an open one that does not pass it is read too, since it can still end in a
+    /// status that does, and the window follows it unseen);</item>
+    /// <item>on a <paramref name="baseline"/> only, the newest @take open operations in the scope whatever their age, so finished
+    /// ones never crowd a long run out of a new window;</item>
+    /// <item>the open ones the window holds (@open, an xml list of ids) as they are now;</item>
+    /// <item>the server's time;</item>
+    /// <item>the open tiles' counts (Running, Pending) over every operation the login may see, whatever the scope;</item>
+    /// <item>when <paramref name="counts"/>, each final tile's count over its hours, also whatever the scope.</item>
+    /// </list>
+    /// An execution and a validation share their id with their operation. Durations are the server's, to its own time while an
+    /// operation runs. Times stay datetimeoffset.</summary>
+    public static string Operations(bool counts, bool baseline)
     {
-        static string Count(OperationTile tile) => "COUNT_BIG(CASE WHEN o.status IN (" + string.Join(", ", tile.Statuses) + ") THEN 1 END) AS " + tile.Series;
-        var text = "SELECT TOP (@take) o.operation_id, o.operation_type, o.status, o.created_time, o.start_time, o.end_time, o.object_name, e.folder_name, e.project_name, e.package_name,\n"
-            + "    o.caller_name, o.stopped_by_name, o.server_name, o.machine_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n"
-            + "FROM [catalog].[operations] AS o LEFT JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id\n"
+        var tiles = SsisCatalog.Current.OperationTiles;
+        var text = OperationColumns + OperationsFrom
             + "WHERE o.operation_id > @after AND (o.status IN (" + OpenStatuses + ")\n"
             + "    OR o.created_time >= DATEADD(hour, -@window, SYSDATETIMEOFFSET()) AND (@statuses IS NULL OR o.status IN (SELECT s.i.value('.', 'int') FROM @statuses.nodes('/i') AS s(i))))\n"
             + OperationScope
-            + "ORDER BY o.operation_id DESC;\n"
-            + "SELECT o.operation_id, o.status, o.start_time, o.end_time, o.stopped_by_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n"
+            + "ORDER BY o.operation_id DESC;\n";
+        if (baseline) text += OperationColumns + OperationsFrom + "WHERE o.status IN (" + OpenStatuses + ")\n" + OperationScope + "ORDER BY o.operation_id DESC;\n";
+        var open = tiles.Where(tile => tile.LastHours is null).ToList();
+        text += "SELECT o.operation_id, o.status, o.start_time, o.end_time, o.stopped_by_name, DATEDIFF_BIG(millisecond, o.start_time, ISNULL(o.end_time, SYSDATETIMEOFFSET())) AS duration_ms\n"
             + "FROM [catalog].[operations] AS o WHERE o.operation_id IN (SELECT r.i.value('.', 'bigint') FROM @open.nodes('/i') AS r(i));\n"
-            + "SELECT SYSDATETIMEOFFSET() AS server_now;";
+            + "SELECT SYSDATETIMEOFFSET() AS server_now;\n"
+            + "SELECT " + string.Join(", ", open.Select(CountOf)) + " FROM [catalog].[operations] AS o WHERE o.status IN (" + string.Join(", ", open.SelectMany(tile => tile.Statuses).Order()) + ");";
         if (!counts) return text;
         // The catalogue gives every final tile the same hours, so one read counts them all.
-        var final = SsisCatalog.Current.OperationTiles.Where(tile => tile.LastHours is not null).ToList();
+        var final = tiles.Where(tile => tile.LastHours is not null).ToList();
         var hours = final.Select(tile => tile.LastHours!.Value).Distinct().Single();
-        return text + "\nSELECT " + string.Join(", ", final.Select(Count)) + "\nFROM [catalog].[operations] AS o LEFT JOIN [catalog].[executions] AS e ON e.execution_id = o.operation_id\n"
-            + "WHERE o.created_time >= DATEADD(hour, -" + hours.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", SYSDATETIMEOFFSET())\n" + OperationScope.TrimEnd('\n') + ";";
+        return text + "\nSELECT " + string.Join(", ", final.Select(CountOf)) + " FROM [catalog].[operations] AS o\n"
+            + "WHERE o.created_time >= DATEADD(hour, -" + hours.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", SYSDATETIMEOFFSET());";
     }
 
     public const string OverviewProbe = "activity.overview";

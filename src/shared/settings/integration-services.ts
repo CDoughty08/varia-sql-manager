@@ -26,7 +26,7 @@ export const integrationServicesSettings = [
     key: 'integrationServices.operationsLimit', page: 'integrationServices', label: 'Show at most', type: 'integer',
     min: 100, max: ssisLimits.operationsRows, default: ssisLimits.operationsDefaultRows, unit: 'operations', varia: true,
     keywords: ['ssis', 'operations', 'rows', 'limit', 'maximum'],
-    description: 'The most operations an Operations document holds: the newest ones of its window that pass its filters. The tiles count every operation whatever this limit is.'
+    description: 'The most operations an Operations document holds: the newest ones of its window that pass its filters, open ones first. Open documents read their window again with the new limit. The tiles count every operation the login may see, whatever this limit and the filters are.'
   },
   {
     key: 'integrationServices.confirmStop', page: 'integrationServices', label: 'Ask before Stop Operation', type: 'boolean', default: true, varia: true,

@@ -59,6 +59,9 @@ export interface SsisOperationsState {
   /** The tiles' counts from the last sample, in the catalogue's tile order (null where the source has none yet). */
   readonly counts?: readonly (number | null)[]
 }
+/** How a document's view ended by failing: the catalog is missing (nothing to retry until one exists), or another failure
+ *  that Retry (Refresh) may get past, such as access granted since. */
+export interface SsisOperationsEnd { readonly code?: string; readonly message: string; readonly missing: boolean }
 export interface SsisOperationsSnapshot { readonly documents: Readonly<Record<string, SsisOperationsState>> }
 export type { SsisOperationsContextState, SsisOperationsKeys }
 
@@ -79,7 +82,8 @@ export const operationsText = {
   stopSent: (id: number) => `Stop Operation sent for operation ${id}. The catalog shows it Stopping until it ends.`,
   stopFailed: (message: string) => `Stop Operation failed: ${message}`,
   notStoppable: (id: number) => `Operation ${id} cannot be stopped: only an execution or validation that is running or pending can be.`,
-  noCatalog: 'This server has no SSIS Catalog. Create it on the Integration Services Catalogs node, or connect to a server that has one.',
+  noCatalog: 'This server has no SSIS Catalog. Create it on the Integration Services Catalogs node, or connect to a server that has one, then open Operations again.',
+  failed: 'Operations stopped reading the catalog.',
   copyFailed: (message: string) => `Could not copy the rows: ${message}`
 } as const
 
@@ -165,6 +169,7 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   private readonly watches = new Map<string, () => void>()
   private readonly contextStore = new (class extends SnapshotStore<SsisOperationsContextState> { set(value: SsisOperationsContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private refreshSeconds: number
+  private limit: number
   private disposed = false
 
   constructor(private readonly options: SsisOperationsServiceOptions) {
@@ -172,15 +177,22 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.registration = options.documents.registerProvider(this)
     this.refreshSeconds = this.values['integrationServices.operationsRefreshSeconds']
+    this.limit = this.values['integrationServices.operationsLimit']
     // A Reconnect moves a document to the new connection (DocumentService); a lost or closed one disables Stop Operation.
     const follow = () => { try { this.following() } catch (failure) { onUnexpectedError(failure) } }
     const stopDocuments = options.documents.subscribe(follow), stopConnections = options.connections.subscribe(follow)
     this.stopFollowing = () => { stopDocuments(); stopConnections() }
+    // Both apply to open documents at once; a new limit reads each window again.
     this.stopSettings = options.settings.subscribe(() => {
-      const seconds = this.values['integrationServices.operationsRefreshSeconds']
-      if (seconds === this.refreshSeconds) return
-      this.refreshSeconds = seconds
-      for (const handle of this.handles.values()) handle.setProbe(operationsProbe, { intervalMs: this.intervalMs })
+      const seconds = this.values['integrationServices.operationsRefreshSeconds'], limit = this.values['integrationServices.operationsLimit']
+      if (seconds !== this.refreshSeconds) {
+        this.refreshSeconds = seconds
+        for (const handle of this.handles.values()) handle.setProbe(operationsProbe, { intervalMs: this.intervalMs })
+      }
+      if (limit !== this.limit) {
+        this.limit = limit
+        for (const id of Object.keys(this.getSnapshot().documents)) this.update(id, filters => ({ ...filters, limit }))
+      }
     })
   }
 
@@ -234,9 +246,9 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
       connectionId: state.connectionId!, source: operationsSource, args: operationsArgs(state.filters), probes: [{ probe: operationsProbe, intervalMs: this.intervalMs }]
     }, documentOwner(state.id, this.options.documents, this.options.panes))
     this.handles.set(state.id, handle)
-    // The view's status decides Pause's key, and a catalog that is missing says so in the document; each sample's metrics
-    // are the tiles' counts.
-    const stopWatch = handle.subscribe(() => this.liveChanged(state.id))
+    // The view's status decides the Pause, Refresh and Stop Operation keys (an ended view says why in place of its rows);
+    // each sample's metrics are the tiles' counts.
+    const stopWatch = handle.subscribe(() => this.publishContext())
     const ticks = handle.onTick(({ tick }) => {
       const sample = tick.samples.find(item => item.probe === operationsProbe)
       if (sample?.metrics) this.patch(state.id, { counts: [...sample.metrics] })
@@ -253,13 +265,25 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     this.publishContext()
   }
 
-  private liveChanged(id: string): void {
+  /** How the document's view ended, when it failed: the document then shows why in place of its rows. A view that was
+   *  disconnected, or is lost with the backend, is not ended this way (a Reconnect resumes it). */
+  ended(id: string): SsisOperationsEnd | undefined {
     const snapshot = this.handles.get(id)?.getSnapshot()
-    if (!snapshot) return
-    const error = snapshot.probes[operationsProbe]?.error ?? (snapshot.status === 'ended' ? snapshot.error : undefined)
-    if (error?.code === 'CATALOG_MISSING' && this.get(id)?.notice?.code !== 'CATALOG_MISSING') this.patch(id, { notice: { tone: 'error', text: operationsText.noCatalog, code: 'CATALOG_MISSING' } })
-    this.publishContext()
+    if (snapshot?.status !== 'ended' || (snapshot.ended ? snapshot.ended.ended !== 'failed' : !snapshot.error)) return undefined
+    const code = snapshot.ended?.code ?? snapshot.error?.code
+    const missing = code === 'CATALOG_MISSING'
+    return { ...code ? { code } : {}, message: missing ? operationsText.noCatalog : snapshot.ended?.message ?? snapshot.error?.message ?? operationsText.failed, missing }
   }
+  /** Refresh (and Retry) apply: to a running view, and to one that failed for a reason other than a missing catalog. */
+  refreshable(id: string): boolean {
+    const snapshot = this.handles.get(id)?.getSnapshot()
+    if (!snapshot) return false
+    if (snapshot.status !== 'ended') return true
+    const end = this.ended(id)
+    return !!end && !end.missing
+  }
+  /** Pause applies while the view runs: an ended one reads nothing to pause. */
+  pausable(id: string): boolean { const status = this.handles.get(id)?.getSnapshot().status; return status !== undefined && status !== 'ended' }
 
   // --- Filters ---------------------------------------------------------------------------------------------------------
 
@@ -268,7 +292,11 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
     const state = this.get(id)
     if (!state) return
     this.patch(id, { filters, ...preset ? { preset } : {} })
-    this.handles.get(id)?.setArgs(operationsArgs(filters))
+    const handle = this.handles.get(id)
+    if (!handle) return
+    handle.setArgs(operationsArgs(filters))
+    // A view that failed reads nothing: new filters (or the document opened again) subscribe again with them.
+    if (handle.getSnapshot().status === 'ended') handle.refresh()
   }
   /** Filters changed by a chip, tile or field; nothing is sent when the args stay the same. */
   update(id: string, change: (filters: SsisOperationsFilters) => SsisOperationsFilters): void {
@@ -393,9 +421,8 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   focus(id: string): void { this.options.focus?.(id) }
   /** It follows a reconnect to the same server, as a query tab does (the view subscribes again there). */
   follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
+  /** A Stop Operation the user confirmed still goes through when its document closes: only its answer is dropped. */
   closed(id: string): void {
-    const requests = this.stopRequests.get(id)
-    if (requests?.size) void this.options.api.cancelSsis([...requests]).catch(onUnexpectedError)
     this.stopRequests.delete(id)
     this.attachGrid(id, undefined)
     this.watches.get(id)?.()
@@ -409,6 +436,9 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
 
   dispose(): void {
     if (this.disposed) return
+    // The app is closing: stops still on their way are withdrawn rather than left behind with nothing to say how they ended.
+    const requests = [...this.stopRequests.values()].flatMap(set => [...set])
+    if (requests.length) void this.options.api.cancelSsis(requests).catch(onUnexpectedError)
     for (const id of Object.keys(this.getSnapshot().documents)) this.closed(id)
     this.disposed = true
     this.registration.dispose()
@@ -433,9 +463,10 @@ export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot>
   }
   private publishContext(): void {
     const byDocument: Record<string, SsisOperationsKeys> = {}
-    for (const id of Object.keys(this.getSnapshot().documents)) byDocument[id] = { stoppable: this.stoppable(id), paused: this.paused(id) }
+    for (const id of Object.keys(this.getSnapshot().documents)) byDocument[id] = { stoppable: this.stoppable(id), paused: this.paused(id), refreshable: this.refreshable(id), pausable: this.pausable(id) }
     const current = this.contextStore.getSnapshot().byDocument
-    const same = Object.keys(byDocument).length === Object.keys(current).length && Object.entries(byDocument).every(([id, keys]) => current[id]?.stoppable === keys.stoppable && current[id]?.paused === keys.paused)
+    const same = Object.keys(byDocument).length === Object.keys(current).length
+      && Object.entries(byDocument).every(([id, keys]) => (Object.keys(keys) as (keyof SsisOperationsKeys)[]).every(key => current[id]?.[key] === keys[key]))
     if (!same) this.contextStore.set({ byDocument })
   }
 }

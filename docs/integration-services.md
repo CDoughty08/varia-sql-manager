@@ -79,13 +79,24 @@ What the checks prove:
   `SsisOptions.IgnoreSqlAuthentication` lets them run.
 - **Operations against the fake** (`SsisOperationsLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`): the `ssis.operations` source
   shows the fake catalog's operations newest first on the SSIS read pool at READ UNCOMMITTED, in the catalog's words, with
-  their times' offsets, durations and tones; the tiles count the running operations and the last 24 hours' failures; a new
+  their times to the second with their offsets, durations and tones, a validation's folder and project and a deployment's
+  project; the tiles count the running operations and the last 24 hours' failures, the same whatever the filters; a new
   execution appears, turns Running when started, Stopping with its stopper when Stop Operation stops it, and Canceled when it
-  ends; new args read the window again under a status filter, a kind, and a folder whose name holds LIKE's wildcards by its
-  prefix; with READ_COMMITTED_SNAPSHOT on the catalog's database the source reads committed rows; and a catalog that does
-  not exist ends the view `CATALOG_MISSING`. Offline (`SsisOperationsChecks`), the window's state machine is driven without
-  SQL Server: settling ids that commit out of order, open operations refreshed in turns of 256, rows a refresh no longer
-  finds, followed operations a status filter hides, open operations older than the window, and the limit.
+  ends; new args read the window again under a status filter, a kind, a folder whose name holds LIKE's wildcards by its
+  prefix, and the project or folder a validation or deployment carries; a writer's open transaction on an operation's row
+  never blocks the view (READ UNCOMMITTED reads its uncommitted status through it; with READ_COMMITTED_SNAPSHOT on, READ
+  COMMITTED reads the committed one), which keeps sampling; a window of 10,000 rows arrives within the probe's statement
+  budget; a catalog that does not exist ends the view `CATALOG_MISSING`; and the scratch login, denied the fake's database,
+  ends it `PERMISSION_DENIED`, as it does a missing catalog once denied VIEW ANY DATABASE (it cannot tell the two apart).
+  Offline (`SsisOperationsChecks`), the window's state machine is driven without SQL Server: settling ids that commit out of
+  order (after the catalogue's settle window), open operations refreshed in turns of 256, rows a refresh no longer finds,
+  followed operations a status filter hides, open operations older than the window or behind more than twice the limit of
+  finished ones, and the limit with open operations first; the args against `tests/fixtures/live/ssis-operations-args.json`,
+  which the zod schema must accept and refuse alike; why a connection cannot open the catalog; and the Linux and pre-2016
+  notes.
+- **Operations against the real catalog** (`SsisOperationsLiveChecks.RealAsync`, `VARIA_TEST_SSIS=1`, when SSISDB exists):
+  the source reads the real views at the isolation the catalog's READ_COMMITTED_SNAPSHOT picks, with every column and tile,
+  and reports the probe's cost. It only reads. It has not run yet: this server has no SSISDB until Create Catalog (S9a).
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -244,13 +255,17 @@ Stop operation Running until SQL Server restarts and the catalog's startup proce
 
 The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of
 the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the
-document's filters; new args read the window again. The backend keeps the window: the newest `limit` operations that pass the
-filters and are still open or were created in the last `windowHours` (an open one of any age stays, so Active Operations finds
-a long run), and the open ones the status filter hides, followed unseen since they can end in a status it shows. Each sample
-reads the operations above the newest id it has settled (2 samples and 5 s after it was first seen: an id is assigned before
-its row commits), refreshes the open ones it holds (at most 256 a sample, in turn), and drops what it neither shows nor
-follows; every 30 s it counts the last 24 hours by status. A row a refresh no longer finds (removed by the
-retention cleanup, or a dirty read rolled back) leaves the window.
+document's filters; new args read the window again. The backend keeps the window: `limit` operations that pass the filters
+and are still open or were created in the last `windowHours`, the open ones first (an open one of any age stays, so Active
+Operations finds a long run), then the newest, and the open ones the status filter hides, followed unseen since they can end
+in a status it shows. A new window reads the open operations of its scope apart, whatever their age. Each sample reads the
+operations above the newest id it has settled (2 samples and 5 s after it was first seen, the operations table's
+settle in the live catalogue: an id is assigned before its row commits), refreshes the open ones it holds (at most 256 a
+sample, in turn), counts the running and pending operations, and drops what it neither shows nor follows; every
+30 s it counts the last 24 hours by status. The counts ignore the filters and the limit. A row a refresh no longer
+finds (removed by the retention cleanup, or a dirty read rolled back) leaves the window. Folder and Project match an
+execution's or a validation's names (`catalog.executions`, `catalog.validations`) and Project a deployment's project (its
+`object_name`); Package matches an execution's.
 
 | Kind | Label | Operation types |
 | --- | --- | --- |
@@ -259,15 +274,16 @@ retention cleanup, or a dirty read rolled back) leaves the window.
 | `deploy` | Deployments | `101` |
 | `other` | Other | every type but `200`, `300`, `301`, `101` |
 
-A row's tone follows its status (none for one that succeeded or completed):
+A row's tone follows its status (none for one that is running, pending, succeeded or completed: the grid's running tone is
+the selection's hue):
 
 | Status | Meaning | Tone |
 | --- | --- | --- |
 | `1` | Created | muted |
-| `2` | Running | running |
+| `2` | Running | — |
 | `3` | Canceled | muted |
 | `4` | Failed | error |
-| `5` | Pending | running |
+| `5` | Pending | — |
 | `6` | Ended unexpectedly | error |
 | `7` | Succeeded | — |
 | `8` | Stopping | warning |

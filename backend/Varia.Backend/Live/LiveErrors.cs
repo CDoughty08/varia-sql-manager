@@ -39,11 +39,12 @@ internal static class LiveErrors
     }
 
     /// <summary>Why an SSISDB source cannot open the catalog's database, from its sys.databases row (state and user_access;
-    /// null when there is none): no catalog (terminal), an unavailable one (offline, restoring, recovering or suspect; single-
-    /// user, or restricted to db_owner, dbcreator and sysadmin for maintenance: it can come back, so it retries), or an online
-    /// one the login may not open (terminal).</summary>
-    public static LiveProbeError Catalog(string probe, int? state, int? userAccess) =>
-        state is null ? Create(probe, "CATALOG_MISSING", CatalogMissingMessage)
+    /// null when there is none) and whether the login sees every database's row (VIEW ANY DATABASE): no catalog (terminal), an
+    /// unavailable one (offline, restoring, recovering or suspect; single-user, or restricted to db_owner, dbcreator and sysadmin
+    /// for maintenance: it can come back, so it retries), or one the login may not open (terminal). A login that does not see
+    /// every row sees none of a database it cannot open, so no row then says only that it has no access.</summary>
+    public static LiveProbeError Catalog(string probe, int? state, int? userAccess, bool seesAll) =>
+        state is null ? seesAll ? Create(probe, "CATALOG_MISSING", CatalogMissingMessage) : Create(probe, "PERMISSION_DENIED", CatalogAccessMessage)
         : state != 0 || userAccess is 1 or 2 ? Create(probe, "DATABASE_UNAVAILABLE", UnavailableMessage)
         : Create(probe, "PERMISSION_DENIED", CatalogAccessMessage);
 

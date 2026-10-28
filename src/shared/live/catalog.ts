@@ -46,9 +46,10 @@ export interface LiveTableSpec {
   /** Snapshot: columns whose distinct values, with their counts, samples carry whenever they change (column value
    *  filters), at most limits.live.facetColumns. */
   readonly facets?: readonly string[]
-  /** Append: an id counts as settled once it was first seen at least this many ticks and milliseconds ago
-   *  (defaultSettle). Ids are assigned at insert, not commit, so a lower id can appear after a higher one; until the ids
-   *  around it settle, every tick reads them again and appends only the ones it has not seen. */
+  /** Append, and a snapshot the backend builds from ids it reads above a settled one (the Operations window): an id counts
+   *  as settled once it was first seen at least this many ticks and milliseconds ago (defaultSettle). Ids are assigned at
+   *  insert, not commit, so a lower id can appear after a higher one; until the ids around it settle, every tick reads them
+   *  again and appends (or keeps) only the ones it has not seen. */
   readonly settle?: { readonly ticks: number; readonly ms: number }
   /** Append: the most new rows one tick reads (defaultBatchRows, at most limits.live.batchRows), so a catch-up never runs
    *  one huge read; twice as many unsettled ids are remembered to skip repeats. */
@@ -112,6 +113,8 @@ export const defaultDutyCycle = 0.25
 export const defaultSnapshotRows = 5000
 export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
+/** The Operations window's settle window: its ids, like an append table's, are assigned before their rows commit. */
+const operationsSettle = defaultSettle
 
 export const liveSourceIds = ['debug.synthetic', 'activity', 'ssis.operations'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
@@ -188,7 +191,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
   },
   'ssis.operations.list': {
     id: 'ssis.operations.list', source: 'ssis.operations', label: 'Operations', intervalMs: { default: 2000, min: 1000, max: 60_000 }, budgetMs: { min: 500, max: 10_000 },
-    description: 'The window\'s operations, newest first, as the backend keeps them: each sample reads the operations above the newest id it has settled (an id settles 2 samples and 5 s after it was first seen, since an id is assigned before its row commits) and the open ones it holds again (at most 256 a sample, in turn), and drops what left the window or the status filter; every 30 s it counts the last 24 hours by status. The counts, like Running and Pending, cover every operation the login may see, whatever the filters; row-level security shows a login only the operations it may read.',
+    description: `The window's operations, newest first, as the backend keeps them. A new window (the first sample, new args) reads the newest operations that pass the filters and, apart, every open one in their scope whatever its age; each later sample reads the operations above the newest id it has settled (an id settles ${operationsSettle.ticks} samples and ${operationsSettle.ms / 1000} s after it was first seen, since an id is assigned before its row commits) and the open ones it holds again (at most 256 a sample, in turn), and drops what left the window or the status filter. Within the limit, open operations come first. Folder and Project match an execution's or a validation's names, and Project a deployment's project too. The tiles ignore the filters and the limit: each sample counts the running and pending operations, and every 30 s those created in the last 24 hours by status, over every operation the login may see (row-level security shows a login only the operations it may read).`,
     series: [
       { id: 'running', unit: 'count', label: 'Running', counter: 'gauge' },
       { id: 'pending', unit: 'count', label: 'Pending', counter: 'gauge' },
@@ -198,7 +201,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     ],
     status: ['newest'],
     tables: [{
-      id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true,
+      id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true, settle: operationsSettle,
       columns: [
         { id: 'operationId', name: 'ID', dataType: 'bigint' }, { id: 'type', name: 'Type', dataType: 'nvarchar' }, { id: 'status', name: 'Status', dataType: 'nvarchar' },
         { id: 'folder', name: 'Folder', dataType: 'nvarchar' }, { id: 'project', name: 'Project', dataType: 'nvarchar' }, { id: 'package', name: 'Package', dataType: 'nvarchar' },
@@ -227,7 +230,7 @@ export function liveCatalogJson(): string {
   const probes = liveProbeIds.map(id => {
     const spec = liveProbes[id]
     const tables = (spec.tables ?? []).map(table => table.mode === 'snapshot'
-      ? { id: table.id, mode: table.mode, columns: table.columns, key: table.key, rowCap: table.rowCap ?? defaultSnapshotRows, departed: table.departed ?? false, facets: table.facets ?? [] }
+      ? { id: table.id, mode: table.mode, columns: table.columns, key: table.key, rowCap: table.rowCap ?? defaultSnapshotRows, departed: table.departed ?? false, facets: table.facets ?? [], ...table.settle ? { settle: table.settle } : {} }
       : { id: table.id, mode: table.mode, columns: table.columns, key: table.key, settle: table.settle ?? defaultSettle, batchRows: table.batchRows ?? defaultBatchRows })
     return {
       ...spec, series: spec.series ?? [], tables, status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none',

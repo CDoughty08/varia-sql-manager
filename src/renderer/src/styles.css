@@ -818,10 +818,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .ssis-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--varia-space-2); }
 .ssis-tile { display: block; min-width: 0; padding: 0; border: none; border-radius: var(--varia-radius-lg); background: none; color: inherit; text-align: left; }
 .ssis-tile:hover:not(:disabled) .tile { border-color: var(--varia-chip-activeBorder); }
-.ssis-tile:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 1px; }
 /* A pressed tile filters the grid: the accent outline, twice as thick, says so without colour alone (aria-pressed for assistive technology). */
 .ssis-tile[aria-pressed="true"] .tile { border-color: var(--varia-chip-activeBorder); box-shadow: inset 0 0 0 1px var(--varia-chip-activeBorder); }
 .ssis-filters { display: flex; flex-direction: column; gap: var(--varia-space-1); }
+/* Each chip row starts with its label, as the name fields do, in a column of its own so the rows line up. */
+.ssis-filter-row { display: flex; align-items: baseline; gap: var(--varia-space-2); }
+.ssis-filter-label { flex: none; min-width: 6ch; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.ssis-filter-row > .chip-group { flex: 1; min-width: 0; }
 .ssis-filter-fields { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1) var(--varia-space-3); }
 .ssis-filter-field { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-filter-field input { width: 14ch; padding: var(--varia-space-0) var(--varia-space-2); }
@@ -834,7 +837,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .ssis-confirm, .ssis-notice { display: flex; align-items: center; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
 .ssis-confirm { background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); }
 .ssis-confirm > p, .ssis-notice-text { flex: 1; min-width: 0; margin: 0; }
-.ssis-confirm button { border-color: var(--varia-button-border); }
+/* The answers are drawn in the banner's own text colour, outline included, as the banners elsewhere draw theirs; Stop Operation in the error colour. */
+.ssis-confirm button { color: inherit; border-color: currentColor; }
+.ssis-confirm button.danger, .ssis-confirm button.danger:hover:not(:disabled) { color: var(--varia-errorForeground); font-weight: 600; }
+/* A view that stopped says why where its rows were. */
+.ssis-operations-ended { display: flex; flex: 1; flex-direction: column; justify-content: center; min-height: 0; }
 .ssis-notice { border: 1px solid var(--varia-panel-border); color: var(--varia-foreground); }
 .ssis-notice > .codicon-info { color: var(--varia-descriptionForeground); }
 @media (forced-colors: active) {

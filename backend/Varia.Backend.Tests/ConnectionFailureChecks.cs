@@ -12,13 +12,24 @@ internal static class ConnectionFailureChecks
 {
     /// <summary>A SqlException as SqlClient builds one. Its constructors are internal; a SqlClient upgrade that changes them
     /// fails these checks here rather than silently testing something else.</summary>
-    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null)
+    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null) =>
+        Create([Error(number, state, level, server, message, procedure, inner)]);
+
+    /// <summary>A SqlException that carries several errors, as one batch or login raises them (4060 with 18456, say), each
+    /// with its number and severity.</summary>
+    internal static SqlException SqlMany(IReadOnlyList<(int Number, byte Level)> numbers) =>
+        Create([.. numbers.Select(item => Error(item.Number, 1, item.Level, "server", "failed " + item.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), "", null))]);
+
+    private static SqlError Error(int number, byte state, byte level, string server, string message, string procedure, Exception? inner) =>
+        (SqlError)(typeof(SqlError).GetConstructor(BindingFlags.NonPublic | BindingFlags.Instance, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
+            ?? throw new Exception("SqlClient's SqlError constructor changed; update ConnectionFailureChecks.Sql")).Invoke([number, state, level, server, message, procedure, 0, inner]);
+
+    private static SqlException Create(IEnumerable<SqlError> items)
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
-        var error = (SqlError)(typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
-            ?? throw new Exception("SqlClient's SqlError constructor changed; update ConnectionFailureChecks.Sql")).Invoke([number, state, level, server, message, procedure, 0, inner]);
         var errors = (SqlErrorCollection)(typeof(SqlErrorCollection).GetConstructor(flags, Type.EmptyTypes) ?? throw new Exception("SqlErrorCollection's constructor changed")).Invoke([]);
-        (typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed")).Invoke(errors, [error]);
+        var add = typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed");
+        foreach (var error in items) add.Invoke(errors, [error]);
         var create = typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string)])
             ?? throw new Exception("SqlException.CreateException changed");
         return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;

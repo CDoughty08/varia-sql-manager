@@ -2,7 +2,8 @@
 // the SSISDB node's Active Operations and reports open one live document per connection; tiles count and filter, the
 // filter bar reads the window again, the grid updates in place with the selection kept on the same operation, Stop Operation
 // asks, stops and shows Stopping then Canceled, F5, Pause and Copy act on it, hiding the tab pauses it and closing ends it,
-// and a server with no catalog says so. Screenshots in Dark and Light go to artifacts/.
+// a server with no catalog says so in place of its rows (in view in a short window), and a view the catalog refuses offers
+// Retry, which subscribes again. Screenshots in Dark and Light go to artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -23,7 +24,7 @@ const failures = []
 let step = 'start'
 page.on('pageerror', error => failures.push(error.message))
 
-const title = 'Integration Services Operations'
+const title = 'Operations'
 const frame = () => documentFrame(page, title)
 const grid = () => liveGrid(page, 'Operations')
 const fast = { force: true }
@@ -52,6 +53,9 @@ const verb = name => frame().getByRole('group', { name: `${title} actions`, exac
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText())
 
+async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
+/** Whether the header shows the server's crumb whole: its text is not cut. */
+const serverCrumbWhole = () => documentCrumbs(frame()).first().evaluate(item => { const text = item.firstElementChild; return !!text && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth })
 async function connect(server) {
   await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -83,16 +87,23 @@ try {
   await fromCatalog('server-a', 'Active Operations')
   await expect(documentTab(page, 'Operations - server-a')).toHaveAttribute('aria-selected', 'true')
   await expect(frame()).toBeVisible()
-  await expect(documentCrumbs(frame())).toHaveText(['server-a', 'Integration Services Catalogs', 'SSISDB'])
+  await expect(documentCrumbs(frame())).toHaveText(['server-a', 'SSISDB'])
   await expect(frame()).toContainText('Active Operations')
   await expect(frame()).toContainText(/Live · every 1 s/)
   // Active Operations lists what has not ended: the running execution and the pending validation, newest first.
-  await expect.poll(async () => (await rows()).map(row => `${row.id} ${row.status} ${row.tone}`).slice(-2)).toEqual(['108 Running running', '107 Pending running'])
+  // Open operations carry no tint: the grid's running tone is the selection's hue, and would read as a selected block.
+  await expect.poll(async () => (await rows()).map(row => `${row.id} ${row.status} ${row.tone}`).slice(-2)).toEqual(['108 Running none', '107 Pending none'])
   await expect(grid()).toHaveAttribute('aria-label', /^Operations, \d+ rows, 14 columns$/)
   expect((await calls('live.subscribe')).at(-1)).toMatchObject({ source: 'ssis.operations', args: { statuses: [1, 2, 5, 8], windowHours: 24, limit: 1000 }, probes: [{ probe: 'ssis.operations.list', intervalMs: 1000 }] })
   await expect(tile('Failed')).toHaveAttribute('aria-label', 'Failed: 1, Last 24 hours')
   await expect(tile('Pending')).toHaveAttribute('aria-label', 'Pending: 1, Now')
+  // The chip rows are labelled for sight, and Status lists the open statuses first, as the tiles do.
+  await expect(frame().getByRole('group', { name: 'Status', exact: true }).getByRole('button').first()).toHaveAccessibleName('Running')
   await page.screenshot({ path: 'artifacts/ssis-operations-dark.png' })
+  // At 1280 px the header still says which server the document is for.
+  await size(1280, 800)
+  await expect.poll(serverCrumbWhole).toBe(true)
+  await size(1600, 1000)
   console.log('Open passed: SSISDB › Active Operations opens a live document of open operations with counts.')
 
   step = 'in place'
@@ -209,12 +220,40 @@ try {
   console.log('Hidden passed: a hidden document pauses, comes back, and closing it ends its view.')
 
   step = 'no catalog'
+  // A short window: what the document says must be in view, not scrolled away by the grid taking focus.
+  await size(1024, 700)
   await connect('no-ssisdb')
   await fromCatalog('no-ssisdb', 'All Executions')
   await expect(documentTab(page, 'Operations - no-ssisdb')).toHaveAttribute('aria-selected', 'true')
-  await expect(frame().getByRole('alert').filter({ hasText: 'This server has no SSIS Catalog.' })).toBeVisible()
+  const noCatalog = frame().getByRole('status').filter({ hasText: 'This server has no SSIS Catalog.' })
+  await expect(noCatalog).toBeVisible()
+  await expect(noCatalog).toBeInViewport()
+  await expect(frame()).toContainText('No SSIS Catalog')
   await expect(frame()).toContainText(/Stopped/)
-  console.log('No catalog passed: a server without SSISDB says so.')
+  // Nothing in place of the rows suggests the view still runs: no tiles, filters, Retry, Refresh or Pause.
+  await expect(frame().getByRole('group', { name: 'Operation counts', exact: true })).toHaveCount(0)
+  await expect(frame().getByRole('group', { name: 'Filters', exact: true })).toHaveCount(0)
+  await expect(frame().getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0)
+  await expect(frame()).not.toContainText('Waiting for data')
+  await expect(verb('Refresh')).toBeDisabled()
+  await expect(verb('Pause')).toBeDisabled()
+  await page.screenshot({ path: 'artifacts/ssis-operations-no-catalog.png' })
+  console.log('No catalog passed: a server without SSISDB says so where the rows would be, and offers nothing that cannot work.')
+
+  step = 'retry'
+  // A login the catalog refuses: the document says why and offers Retry, which subscribes again.
+  await connect('ssis-denied')
+  await fromCatalog('ssis-denied', 'Active Operations')
+  await expect(documentTab(page, 'Operations - ssis-denied')).toHaveAttribute('aria-selected', 'true')
+  const retry = frame().getByRole('button', { name: 'Retry', exact: true })
+  await expect(frame()).toContainText('This login cannot read the SSIS Catalog.')
+  await expect(retry).toBeInViewport()
+  await expect(verb('Refresh')).toBeEnabled()
+  const subscribed = (await calls('live.subscribe')).filter(call => call.source === 'ssis.operations').length
+  await retry.click()
+  await expect.poll(async () => (await calls('live.subscribe')).filter(call => call.source === 'ssis.operations').length).toBe(subscribed + 1)
+  await expect(frame().getByRole('button', { name: 'Retry', exact: true })).toBeVisible()
+  console.log('Retry passed: a refused view says why, and Retry subscribes again.')
 
   if (failures.length) throw new Error('Page errors: ' + failures.join(' | '))
   console.log('SSIS Operations suite passed.')

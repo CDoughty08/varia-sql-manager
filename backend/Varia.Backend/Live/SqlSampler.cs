@@ -324,9 +324,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             command.CommandText = LiveSql.UncommittedPrologue + LiveSql.CatalogState;
             command.Parameters.Add(new SqlParameter("@catalog", SqlDbType.NVarChar, 128) { Value = host.SsisCatalog });
             await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, budget.Token).ConfigureAwait(false);
-            return await reader.ReadAsync(budget.Token).ConfigureAwait(false)
-                ? LiveErrors.Catalog(probe, Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture))
-                : LiveErrors.Catalog(probe, null, null);
+            if (!await reader.ReadAsync(budget.Token).ConfigureAwait(false)) return null;
+            int? Number(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+            return LiveErrors.Catalog(probe, Number(0), Number(1), Number(2) == 1);
         }
         catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
