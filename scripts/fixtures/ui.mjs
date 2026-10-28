@@ -99,6 +99,8 @@ export const part = {
   // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
+  /** The states kit's live label (kit/LivePill.tsx): "Live · every 2 s", "Paused", "Stopped · backend unavailable". */
+  livePill: '.live-pill',
   statusPillLabel: '.status-pill-label',
   /** The status bars' spans that hold the tag with its visually hidden prefix. */
   queryEnvironment: '.query-status-environment',
@@ -188,7 +190,7 @@ export const titleBar = page => page.locator(part.titleBar)
 /** Dockview's theme classes on its shell, and whether Varia's own class sits beside them. */
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
-/** The Standard toolbar: Connect, New query, Open, Save, Execute, Cancel, Layouts, and the server and database pickers. */
+/** The Standard toolbar: Connect, New query, Open, Save, Execute, Cancel, Activity Monitor, Layouts, and the server and database pickers. */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
@@ -338,6 +340,8 @@ export const scriptSplitter = frame => frame.getByRole('separator', { name: 'Res
 export const scriptActions = (frame, name) => scriptDrawer(frame).getByRole('group', { name: 'Script', exact: true }).getByRole('button', name === undefined ? {} : named(name))
 export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
 export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
+/** A live document's label of what its view is doing, in its header (kit/LivePill.tsx). */
+export const livePill = scope => scope.locator(part.livePill)
 
 // Menus and the quick input
 

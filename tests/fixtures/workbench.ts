@@ -49,6 +49,10 @@ import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialog
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
+import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
+import { activityContribution } from '../../src/renderer/src/contributions/activity'
+import { documentOwner } from '../../src/renderer/src/live/LiveService'
+import { fakeLiveViews } from './live-views'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
@@ -286,6 +290,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
+  // Activity Monitors subscribe through a stand-in for LiveService that records each view.
+  const liveViews = fakeLiveViews()
+  const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
@@ -304,6 +311,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    activity: activity.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -356,7 +364,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
-    designers
+    designers,
+    activity
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -376,6 +385,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    activityContribution(workbench),
     settingsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
@@ -405,6 +415,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     designers.dispose()
+    activity.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
@@ -431,6 +442,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
+    activity,
+    liveViews,
     focusEditor,
     queries,
     files,

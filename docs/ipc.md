@@ -1112,7 +1112,10 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   would mislead): `bindChart` follows the handle's snapshot, and the times read "now" and "ago" only while the probe is
   `fresh` or `limited` and its newest sample came within twice its effective interval (so a resumed view is not "now"
   until its first sample). Otherwise (paused, stale, failing, lost, ended) they read as clock times at once, and the name,
-  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
+  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup. A chart reads any
+  `RingReader` (`live/ring.ts`), so a series sent in one unit can be shown in another through `scaledRing(ring, factor)`, a
+  cached view that multiplies values and keeps the ring's times, flags and revision (the Activity Monitor's waiting tasks,
+  sent as wait milliseconds per second); a `ChartSource` may hand one out from `ring()`.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
@@ -1120,6 +1123,16 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
+  `pillStatus` and `freshness` give the states kit's `LivePill` and `StaleBadge` the same facts: the pace of the probes
+  that run (`slowed` when the backend runs one slower than asked), who paused the view and how it ended, the newest
+  running sample's time, and since when a running probe has been stale or failing.
+- **Activity Monitor.** One monitor is one handle on the `activity` source with every probe the live catalogue declares,
+  owned by its tab (`documentOwner`). `ActivityMonitorService` (`src/renderer/src/activity/`) keeps each probe paused unless
+  a shown pane whose grid exists reads it (`paneProbes` in `src/shared/activity/catalog.ts`; the tiles' overview always
+  runs), sends the monitor's interval raised to each probe's floor (`probeIntervalMs`), and changes only the probes a pane
+  or interval change moves, through `setProbe` (one debounced `live.update`). Pause is the handle's user pause, Refresh Now
+  its `refresh`, Retry a new handle. The view reads the overview's ring for its tiles and charts and runs no timer but the
+  states kit's one-second age ticker.
 
 Later: `LiveGrid` (L5) on these views.
 

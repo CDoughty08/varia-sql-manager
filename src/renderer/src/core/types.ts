@@ -26,6 +26,8 @@ export type WorkbenchEvent =
   | { type: 'query.finished'; tabId: string; queryId: string; summary?: QueryResult; error?: string }
   /** Execute ran on a query with no connection: the Connect dialog opens, and the query runs once connected. */
   | { type: 'query.connectRequested'; tabId: string }
+  /** Activity Monitor ran with no server connected: the Connect dialog opens, and the monitor opens on the new connection. */
+  | { type: 'activity.connectRequested' }
   /** The query's SQL session ended (closed, or found lost), and its open transaction with it. */
   | { type: 'session.ended'; tabId: string }
   /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */

@@ -16,6 +16,7 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import TableDesigner from './designer/TableDesigner'
+import ActivityMonitor from './activity/ActivityMonitor'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -79,19 +80,21 @@ export default function App() {
   const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
   const [pendingExecute, setPendingExecute] = useState<string>()
+  // Activity Monitor ran with no server connected: it opens on the connection the Connect dialog makes.
+  const [pendingMonitor, setPendingMonitor] = useState(false)
   const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
   const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
-    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel')
+    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel'), monitor: useCommandEnabled('activity.open')
   }
-  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
+  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute'), monitor: useKeybindingLabel('activity.open') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
-  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer has
-  // a server and database, but they are its own: the toolbar's pickers do not change them.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner'
+  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
+  // an Activity Monitor have a server, but it is their own: the toolbar's pickers do not change it.
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isMonitor = activeKind === 'activityMonitor'
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -105,7 +108,7 @@ export default function App() {
 
   // SSMS's query window status bar, below the query unless Options puts it above; its tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const statusBar = active.id && !isDesigner ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
+  const statusBar = active.id && !isDesigner && !isMonitor ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
 
   function activate(id: string) { documents.activate(id) }
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
@@ -116,12 +119,13 @@ export default function App() {
     manageLayouts: mode => workspaceRef.current?.manage(mode),
     resetLayout: () => workspaceRef.current?.reset(),
     flushLayout: async () => { await workspaceRef.current?.flush() },
-    showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setShowConnect(true) },
+    showConnect: () => { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false); setShowConnect(true) },
     reconnect: id => {
       const lost = workbench.connections.get(id)
       if (!lost?.lost) return
       setReconnecting(id)
       setPendingExecute(undefined)
+      setPendingMonitor(false)
       setOptions(lost.options)
       setShowConnect(true)
     },
@@ -160,7 +164,8 @@ export default function App() {
       if ((event.type === 'query.started' || event.type === 'query.finished') && event.tabId === documents.getSnapshot().activeId) workspaceRef.current?.reveal('output')
       if (event.type === 'documents.activated' || event.type === 'documents.closed') workspaceRef.current?.reveal('editor')
       // Execute on a query with no connection: connect first, as SSMS does, then run it.
-      if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setShowConnect(true) }
+      if (event.type === 'query.connectRequested') { setReconnecting(undefined); setPendingExecute(event.tabId); setPendingMonitor(false); setShowConnect(true) }
+      if (event.type === 'activity.connectRequested') { setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(true); setShowConnect(true) }
     })
     return () => subscription.dispose()
   }, [workbench, documents])
@@ -182,6 +187,7 @@ export default function App() {
     setShowConnect(false)
     setReconnecting(undefined)
     setPendingExecute(undefined)
+    setPendingMonitor(false)
     // Only this explicit reconnect moves a lost connection's queries to a new session.
     if (reconnecting && workbench.connections.get(reconnecting)?.lost) {
       workbench.connections.replace(reconnecting, info, chosen)
@@ -189,6 +195,10 @@ export default function App() {
       return
     }
     workbench.connections.add(info, chosen)
+    if (pendingMonitor) {
+      try { workbench.activity.open(info.id) } catch (error) { setExplorerError(errorText(error)) }
+      return
+    }
     const waiting = pendingExecute ? documents.get(pendingExecute) : undefined
     if (waiting && !workbench.connections.isLive(waiting.connectionId ?? '') && isQueryDocument(waiting) && !queries.isRunning(waiting.id)) {
       targets.update(waiting.id, { connectionId: info.id, database: info.database })
@@ -240,6 +250,8 @@ export default function App() {
         <button className="execute" disabled={!enabled.execute} title={connection?.lost ? lostHint : undefined} onClick={() => run('query.execute')}><Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
         <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
         <span className="toolbar-divider" />
+        {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
+        <button disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
         <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
       </div>
       <div className="toolbar-context">
@@ -262,15 +274,16 @@ export default function App() {
         </div> })}</div>
         {active.id ? <>
           {statusTop && statusBar}
-          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer shows. */}
-          <div className="editor-container" hidden={isDesigner}><QueryEditor /></div>
+          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or a monitor shows. */}
+          <div className="editor-container" hidden={isDesigner || isMonitor}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
+          {isMonitor && <ActivityMonitor key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
     <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}{environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
-    {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
+    {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined); setPendingMonitor(false) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
     <ObjectDialog />

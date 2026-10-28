@@ -402,6 +402,40 @@ export const paneSpecs: { readonly [P in ActivityPane]: PaneSpec } = {
 }
 /** Split view's panes on first open: Processes beside Resource Waits. */
 export const defaultPanes = { primary: 'processes', secondary: 'waits' } as const satisfies { readonly primary: ActivityPane; readonly secondary: ActivityPane | 'none' }
+/** Panes whose grid the document does not draw yet: each says so where its grid goes, and its probe stays paused for it
+ *  (no SQL runs for a pane nobody can read). Processes, Blocking and Active Expensive Queries arrive with the sessions
+ *  grids, Resource Waits and Data File I/O with the resources probe, Recent Expensive Queries with query statistics. */
+export const pendingPanes: readonly ActivityPane[] = [
+  'processes',
+  'blocking',
+  'waits',
+  'fileIo',
+  'recentQueries',
+  'activeQueries'
+]
+export const pendingPaneNote = (pane: ActivityPane): string => `${paneSpecs[pane].title} is not shown yet; it arrives in a later version of Varia.`
+/** The probes that must run for these panes: each shown pane's probe, unless the pane's grid is pending. The overview runs
+ *  whenever the document shows (its tiles are always visible), so it is not a pane's to start or stop. */
+export function paneProbes(shown: readonly ActivityPane[], pending: readonly ActivityPane[] = pendingPanes): ActivityProbe[] {
+  const probes = new Set<ActivityProbe>(['activity.overview'])
+  for (const pane of shown) if (!pending.includes(pane)) probes.add(paneSpecs[pane].probe)
+  return activityProbes.filter(probe => probes.has(probe))
+}
+
+/** The charts' time window, in minutes (the header's choice; the live rings keep liveData.historyMinutes of samples). */
+export const chartWindowsMinutes = [1, 5, 15, 60] as const
+export type ChartWindowMinutes = typeof chartWindowsMinutes[number]
+export const defaultChartWindowMinutes: ChartWindowMinutes = 15
+
+/** The permission that shows other sessions and server activity: VIEW SERVER PERFORMANCE STATE from SQL Server 2022 (major
+ *  version 16), VIEW SERVER STATE before it and on Managed Instance (EngineEdition 8), which names permissions as it does. */
+export function serverStatePermission(majorVersion: number | undefined, engineEdition?: number): string {
+  return engineEdition !== 8 && majorVersion !== undefined && majorVersion >= 16 ? 'VIEW SERVER PERFORMANCE STATE' : 'VIEW SERVER STATE'
+}
+/** The statement Copy GRANT statement puts on the clipboard (never run by Varia): the login as a bracketed name with `]`
+ *  doubled, so any login name stays one identifier. */
+export const grantStatement = (login: string, majorVersion: number | undefined, engineEdition?: number): string =>
+  `GRANT ${serverStatePermission(majorVersion, engineEdition)} TO [${login.replaceAll(']', ']]')}];`
 
 /** How a series turns samples into values (D-live's counter kinds); `scale` multiplies the result. */
 export type SeriesKind = 'gauge' | 'rate' | 'msPerSecond' | 'ratio' | 'cpuPercent'

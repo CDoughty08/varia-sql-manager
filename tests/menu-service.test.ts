@@ -454,7 +454,7 @@ describe('context menus', () => {
     doc.activeElement = tree
     expect(menus.openForElement(tree.dom, { keyboard: true })).toBe(true)
     expect(level(menus)).toMatchObject({ label: 'Object Explorer', active: 0, anchor: { kind: 'below', rect: { left: 18, top: 100, right: 260, bottom: 122 } } })
-    expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', 'Environment…', '-', 'New Query', '-', 'Copy Name', '-', 'Refresh'])
+    expect(titles(level(menus).items)).toEqual(['Connect…', 'Disconnect', 'Environment…', '-', 'New Query', 'Activity Monitor', '-', 'Copy Name', '-', 'Refresh'])
     expect([row.hasAttribute('data-menu-target'), tree.hasAttribute('data-menu-target'), doc.activeElement]).toEqual([true, false, tree])
     expect(view.scrollTop).toBe(0)
     menus.close('escape')

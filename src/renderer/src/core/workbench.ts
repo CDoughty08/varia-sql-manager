@@ -15,7 +15,9 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { ResultMemoryService } from '../results/memory'
-import { documentPage, LiveService } from '../live/LiveService'
+import { documentOwner, documentPage, LiveService } from '../live/LiveService'
+import { ActivityMonitorService } from '../activity/ActivityMonitorService'
+import { activityContribution } from '../contributions/activity'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
@@ -121,6 +123,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** The Activity Monitors: one per connection, each a live view of its server. */
+  readonly activity: ActivityMonitorService
   readonly theme: ThemeService
 }
 /**
@@ -179,6 +183,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
+  const activity = new ActivityMonitorService({
+    documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -196,6 +204,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recentFiles,
     recovery,
     designer: designers.context,
+    activity: activity.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -255,6 +264,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    activity,
     theme,
     dispose: () => {
       if (disposed) return
@@ -273,6 +283,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the live views: each monitor disposes its own; then the client, while the port is still there.
+      activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       live.dispose()
       resultClient.dispose()
@@ -315,6 +327,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    activityContribution(workbench),
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.

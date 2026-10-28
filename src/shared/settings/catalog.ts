@@ -4,6 +4,7 @@ import { commandDescriptor, type CommandId } from '../commands/catalog'
 import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
+import { activityMonitorSettings } from './activity-monitor'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
 import { liveDataSettings } from './live-data'
@@ -26,7 +27,8 @@ const settingAreas = [
   queryExecutionSettings,
   queryResultsSettings,
   objectExplorerSettings,
-  liveDataSettings
+  liveDataSettings,
+  activityMonitorSettings
 ] as const
 
 type Def = typeof settingAreas[number][number]

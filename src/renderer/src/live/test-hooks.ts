@@ -21,6 +21,7 @@ export interface SyntheticOptions {
   readonly tabId?: string
   /** The view's connection; the tab's own by default (or a new id: the synthetic source runs no SQL). */
   readonly connectionId?: string
+  /** The metrics, table and status probes by default: the ones the fake backend (live-smoke.mjs) runs too. */
   readonly probes?: readonly LiveProbeId[]
   readonly intervalMs?: number
   readonly rows?: number
@@ -101,7 +102,8 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     }
   }
   return {
-    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : handle(id)?.getSnapshot(),
+    // Any open view's snapshot, the Activity Monitor's included, not only the views these hooks opened.
+    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : (handle(id) ?? live.get(id))?.getSnapshot(),
     frames: (id: string) => live.frames(id),
     setPageHidden: (hidden?: boolean) => live.setPageHidden(hidden),
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {

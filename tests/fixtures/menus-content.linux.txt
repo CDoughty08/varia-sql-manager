@@ -68,6 +68,8 @@ View
   &Load Layout…  ++++
   &Reset Layout  ++++
   ---
+  &Activity Monitor  +++-
+  ---
   T&heme >
     &Color Theme…  ++++
     ---

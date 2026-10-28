@@ -97,7 +97,7 @@ try {
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
   expect(await treeNames()).toEqual([
     'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Live Data', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
-    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting'
+    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor'
   ])
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The tree's keys: Up and Down show the page they reach, Left goes to the parent, Home to the first node.

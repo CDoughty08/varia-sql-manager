@@ -33,6 +33,7 @@ from Microsoft's documentation, so Varia keeps its own.
 - SQL Server Object Explorer
   - Commands (`objectExplorer.commands`)
   - Scripting (`objectExplorer.scripting`)
+- Activity Monitor (`activityMonitor`)
 
 A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
 page titles, setting labels, descriptions and keywords.
@@ -198,6 +199,22 @@ A property grid: True/False lists, values that differ from their default in bold
 | `objectExplorer.scripting.targetEngineType` | Script for database engine type | One of `standalone` (Stand-alone instance) | Stand-alone instance |  | All | At once | The database engine type the script is for. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 | `objectExplorer.scripting.targetServerVersion` | Script for server version | One of `130` (SQL Server 2016), `140` (SQL Server 2017), `150` (SQL Server 2019), `160` (SQL Server 2022), `170` (SQL Server 2025) | SQL Server 2022 |  | All | At once | The SQL Server version the script is for; features it lacks cannot be scripted. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 
+### Activity Monitor
+
+What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `activityMonitor.refreshIntervalSeconds` | Refresh interval | One of `1` (1 second), `2` (2 seconds), `3` (3 seconds), `5` (5 seconds), `10` (10 seconds), `15` (15 seconds), `30` (30 seconds), `60` (60 seconds) | 2 seconds |  | All | At once | How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor's interval. Not in SSMS. |
+| `activityMonitor.chartWindowMinutes` | Chart window | One of `1` (1 minute), `5` (5 minutes), `15` (15 minutes), `60` (60 minutes) | 15 minutes |  | All | At once | How much time a new Activity Monitor's tiles and charts show. Charts reach back only as far as Environment › Live Data keeps history. Not in SSMS. |
+| `activityMonitor.primaryPane` | First pane | One of `processes` (Processes), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries) | Processes |  | All | At once | The pane a new Activity Monitor shows first (on the left, or on top in a narrow window). Not in SSMS. |
+| `activityMonitor.secondaryPane` | Second pane | One of `processes` (Processes), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries), `none` (None (no split view)) | Resource Waits |  | All | At once | The pane a new Activity Monitor shows beside the first in split view. None opens it with one pane; Split View shows a second one again. Not in SSMS. |
+| `activityMonitor.cpuWarningPercent` | Processor time warning | Integer 50–100 percent | 80 percent |  | All | At once | The % Processor Time tile is outlined as a warning from this much SQL Server CPU, and as an error from 95 %. Not in SSMS. |
+| `activityMonitor.blockedWarningSeconds` | Blocking warning after | Integer 1–3,600 seconds | 5 seconds |  | All | At once | The Blocked Sessions tile is outlined as a warning once a session has waited on another this long. Not in SSMS. |
+| `activityMonitor.blockedErrorSeconds` | Blocking error after | Integer 1–3,600 seconds | 30 seconds |  | All | At once | The Blocked Sessions tile is outlined as an error once a session has waited on another this long. Not in SSMS. |
+| `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning when reads or writes take this long on average over the interval. Not in SSMS. |
+| `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error when reads or writes take this long on average over the interval. Not in SSMS. |
+
 ## Storage
 
 - `<userData>/settings.json` holds `{ "version": 1, "values": { ... } }`: only the values that differ from their
@@ -228,4 +245,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (78 today).
