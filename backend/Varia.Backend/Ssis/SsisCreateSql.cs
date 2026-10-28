@@ -17,13 +17,34 @@ internal enum SsisCreateContext { Master, Catalog }
 /// checks those rules for every command.</summary>
 internal static partial class SsisCreateSql
 {
+    /// <summary>The dynamic sp_configure changes waiting for a RECONFIGURE, by name, or NULL: what RECONFIGURE (enabling CLR) and
+    /// sys.sp_procoption (which ends with RECONFIGURE WITH OVERRIDE) would apply too. Not 'clr enabled' set to 1, which enabling CLR
+    /// applies with the user's agreement, and not 'min server memory (MB)' at 0, which SQL Server always shows in use as 16 and no
+    /// RECONFIGURE changes.</summary>
+    internal const string PendingList = "STUFF((SELECT N', ' + c.name FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use\n"
+        + "    AND NOT (c.name = N'clr enabled' AND CONVERT(int, c.value) = 1) AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0) ORDER BY c.name FOR XML PATH(N'')), 1, 2, N'')";
+
+    /// <summary>The state of the error <see cref="PendingGuard"/> raises (50000), which Create Catalog answers as CONFIGURATION_PENDING.</summary>
+    public const byte PendingState = 42;
+
+    /// <summary>Right before a statement that reconfigures the server, in its own batch: refuses, and ends the batch, while other
+    /// configuration changes wait. The setup read refuses them too, but another session may stage one after it.</summary>
+    internal static readonly string PendingGuard =
+        "    DECLARE @pending nvarchar(2000) = LEFT(" + PendingList + ", 2000);\n"
+        + "    IF @pending IS NOT NULL\n"
+        + "    BEGIN\n"
+        + "        RAISERROR(N'Create Catalog reconfigures the server, which would also apply these pending server configuration changes: %s. Apply them (RECONFIGURE) or undo them (sp_configure) first.', 16, "
+        + PendingState.ToString(System.Globalization.CultureInfo.InvariantCulture) + ", @pending);\n"
+        + "        RETURN;\n"
+        + "    END\n";
+
     /// <summary>What the dialog and the write's preflight read (SSMS's Create checks): sysadmin, the catalog's database, clr enabled
     /// in use, scan for startup procs (SSMS's default for the startup procedure), the Integration Services folder from the
     /// registry's SSIS\Setup\DTSPath for the server's version (CatalogHelper.GetCatalogBackupPath's xp_regread), the catalog backup
     /// and assembly in its Binn folder, whether the backup exists (xp_fileexist), and the master database's folder for the new
     /// files (GetDataDirectoryPath) with whether they exist already (CheckIfDatabaseFilesExist), and the other dynamic sp_configure
-    /// changes waiting for a RECONFIGURE, which enabling CLR would apply too (not 'min server memory (MB)' at 0, which SQL Server
-    /// always shows in use as 16 and no RECONFIGURE changes). The extended procedures run only
+    /// changes waiting for a RECONFIGURE (<see cref="PendingList"/>), which enabling CLR and sp_procoption would apply too. The
+    /// extended procedures run only
     /// for sysadmin, who alone may create the catalog. Its own lock timeout, as a write's preflight: parameterized, so the SET ends
     /// with the batch.</summary>
     public static readonly SsisCreateCommand Setup = new("setup",
@@ -33,8 +54,7 @@ internal static partial class SsisCreateSql
         + "DECLARE @exists bit = CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = @catalog) THEN 1 ELSE 0 END;\n"
         + "DECLARE @clr int = (SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.name = N'clr enabled');\n"
         + "DECLARE @scan int = (SELECT CONVERT(int, c.value) FROM sys.configurations AS c WHERE c.name = N'scan for startup procs');\n"
-        + "DECLARE @pending nvarchar(max) = STUFF((SELECT N', ' + c.name FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled'\n"
-        + "    AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0) ORDER BY c.name FOR XML PATH(N'')), 1, 2, N'');\n"
+        + "DECLARE @pending nvarchar(max) = " + PendingList + ";\n"
         + "DECLARE @dts nvarchar(1024), @backup nvarchar(1024), @assembly nvarchar(1024), @master nvarchar(1024), @directory nvarchar(1024), @data nvarchar(1024), @log nvarchar(1024);\n"
         + "DECLARE @backup_exists int = 0, @data_exists int = 0, @log_exists int = 0;\n"
         + "DECLARE @found TABLE (file_exists int, is_directory int, parent_directory_exists int);\n"
@@ -71,8 +91,10 @@ internal static partial class SsisCreateSql
     public static readonly SsisCreateCommand FileList = new("fileList", "RESTORE FILELISTONLY FROM DISK = @backup;", ["@backup"]);
 
     /// <summary>The CLR checkbox: what SMO's Configuration.IsSqlClrEnabled with Alter() runs for SSMS's dialog. RECONFIGURE applies
-    /// every pending change, so Create Catalog refuses (CONFIGURATION_PENDING) while the setup read finds another one.</summary>
-    public static readonly SsisCreateCommand EnableClr = new("enableClr", "EXEC sys.sp_configure N'clr enabled', 1;\nRECONFIGURE;", []);
+    /// every pending change, so Create Catalog refuses (CONFIGURATION_PENDING) while the setup read finds another one, and the guard
+    /// refuses one staged since.</summary>
+    public static readonly SsisCreateCommand EnableClr = new("enableClr",
+        "SET NOCOUNT ON;\nBEGIN\n" + PendingGuard + "    EXEC sys.sp_configure N'clr enabled', 1;\n    RECONFIGURE;\nEND", []);
 
     /// <summary>DatabaseCheck.sql's 27135, in the restore's own batch, then CatalogHelper.RestoreCatalogBackup with every name and
     /// path a parameter. SSMS adds WITH REPLACE after checking the files; Varia does not, so a database or file that appeared
@@ -140,11 +162,13 @@ internal static partial class SsisCreateSql
     public static readonly SsisCreateCommand AddTrusted = new("addTrusted",
         "IF NOT EXISTS (SELECT 1 FROM sys.trusted_assemblies AS t WHERE t.hash = @hash) EXEC sys.sp_add_trusted_assembly @hash, @assembly;", ["@hash", "@assembly"]);
 
-    /// <summary>CreateCatalog.sql's second batch: an earlier sp_ssis_startup goes, startup flag first.</summary>
+    /// <summary>CreateCatalog.sql's second batch: an earlier sp_ssis_startup goes, startup flag first. sys.sp_procoption ends with
+    /// RECONFIGURE WITH OVERRIDE, so it runs only behind the guard.</summary>
     public static readonly SsisCreateCommand DropStartup = new("dropStartup",
         "SET NOCOUNT ON;\n"
         + "IF EXISTS (SELECT 1 FROM sys.procedures AS p WHERE p.name = N'sp_ssis_startup')\n"
         + "BEGIN\n"
+        + PendingGuard
         + "    EXEC sys.sp_procoption N'sp_ssis_startup', 'startup', 'off';\n"
         + "    DROP PROCEDURE [dbo].[sp_ssis_startup];\n"
         + "END",
@@ -171,8 +195,9 @@ internal static partial class SsisCreateSql
         []);
 
     /// <summary>CreateCatalog.sql's last batch, when "Enable automatic execution of Integration Services stored procedure at SQL
-    /// Server startup" is checked.</summary>
-    public static readonly SsisCreateCommand StartupOn = new("startupOn", "IF @startup = 1 EXEC sys.sp_procoption N'sp_ssis_startup', 'startup', 'on';", ["@startup"]);
+    /// Server startup" is checked, behind the guard (sys.sp_procoption ends with RECONFIGURE WITH OVERRIDE).</summary>
+    public static readonly SsisCreateCommand StartupOn = new("startupOn",
+        "SET NOCOUNT ON;\nIF @startup = 1\nBEGIN\n" + PendingGuard + "    EXEC sys.sp_procoption N'sp_ssis_startup', 'startup', 'on';\nEND", ["@startup"]);
 
     /// <summary>CreateCleanupJobLogin.sql's first batches: both SSIS jobs and the cleanup login go, then the login comes back with
     /// a random password the server generates and quotes, disabled.</summary>
@@ -268,15 +293,21 @@ internal static partial class SsisCreateSql
         + "END",
         ["@catalog", "@restoring"]);
 
+    /// <summary>After the removal of a restore that may not have ended: whether a database of the catalog's name is still there.</summary>
+    public static readonly SsisCreateCommand CatalogState = new("catalogState", "SELECT d.state FROM sys.databases AS d WHERE d.name = @catalog;", ["@catalog"]);
+
     /// <summary>Every command, for the lint and the docs.</summary>
     public static IEnumerable<SsisCreateCommand> All =>
     [
         Setup, FileList, EnableClr, Restore, ReadWrite, MasterKey, Assembly, AddTrusted, DropStartup, CreateStartup, StartupOn, CleanupLogin, CleanupUser, CleanupGrant, MaintenanceJob,
-        CleanupPrologue, DropTrusted, DropLoadingLogin, DropJobs, DropDatabase
+        CleanupPrologue, DropTrusted, DropLoadingLogin, DropJobs, DropDatabase, CatalogState
     ];
 
-    /// <summary>The commands a server verb of the catalogue (scope 'server', run in master) may run, all covered by <see cref="Lint"/>;
-    /// null for any other verb, so a new server verb fails the checks until its commands are listed here and pass the lint.</summary>
+    /// <summary>The commands a server verb of the catalogue (scope 'server', run in master) may run, all covered by <see cref="Lint"/>
+    /// for that verb; null for any other verb, so a new server verb fails the checks until its commands are listed here and pass the
+    /// lint. Delete Catalog (S9) needs commands of its own: <see cref="DropDatabase"/> ends other sessions (ROLLBACK IMMEDIATE), which
+    /// only Create Catalog's removal of the database it restored may do, and <see cref="DropTrusted"/> drops only the hash a request
+    /// added, not the existing catalog's.</summary>
     public static IReadOnlyList<SsisCreateCommand>? ServerCommands(string verb) => verb switch
     {
         "createCatalog" => [.. All],
@@ -319,10 +350,12 @@ internal static partial class SsisCreateSql
     /// own parameters and the variables it declares; only the master key reads the password, exactly once, through the server's
     /// binary-collation quoting; text that runs is built only from literals, QUOTENAME of a variable, the server's quoting of one,
     /// variables assigned from that quoting and nothing else, and conditions (a parameter never directly, nor wrapped in anything
-    /// else); the restore never replaces; only the read-only fix and the database drop roll other sessions back; and nothing runs
-    /// the shell.</summary>
-    public static List<string> Lint(SsisCreateCommand command)
+    /// else); the restore never replaces; only Create Catalog's own restore, read-only fix and database drop (these instances, for
+    /// that verb) restore, roll other sessions back or drop a database; RECONFIGURE and sp_procoption run only behind the
+    /// pending-configuration guard; and nothing runs the shell.</summary>
+    public static List<string> Lint(SsisCreateCommand command, string verb = "createCatalog")
     {
+        var create = verb == "createCatalog";
         var problems = new List<string>();
         var text = command.Text;
         if (text.Contains('{') || text.Contains('}')) problems.Add("has a format placeholder");
@@ -372,10 +405,15 @@ internal static partial class SsisCreateSql
             }
         }
         if (Regex.IsMatch(code, @"\bWITH\s+REPLACE\b|,\s*REPLACE\s*(,|;|$)", RegexOptions.IgnoreCase | RegexOptions.Multiline)) problems.Add("restores WITH REPLACE");
-        if (code.Contains("RESTORE DATABASE", StringComparison.OrdinalIgnoreCase) && command.Id != "restore") problems.Add("restores a database");
-        if (code.Contains("ROLLBACK IMMEDIATE", StringComparison.OrdinalIgnoreCase) && command.Id is not ("readWrite" or "dropDatabase")) problems.Add("rolls other sessions back");
-        if (code.Contains("DROP DATABASE", StringComparison.OrdinalIgnoreCase) && command.Id != "dropDatabase") problems.Add("drops a database");
-        if (code.Contains("xp_cmdshell", StringComparison.OrdinalIgnoreCase)) problems.Add("runs the shell");
+        if (text.Contains("RESTORE DATABASE", StringComparison.OrdinalIgnoreCase) && !(create && ReferenceEquals(command, Restore))) problems.Add("restores a database");
+        if (text.Contains("ROLLBACK IMMEDIATE", StringComparison.OrdinalIgnoreCase) && !(create && (ReferenceEquals(command, ReadWrite) || ReferenceEquals(command, DropDatabase))))
+            problems.Add("rolls other sessions back");
+        if (text.Contains("DROP DATABASE", StringComparison.OrdinalIgnoreCase) && !(create && ReferenceEquals(command, DropDatabase))) problems.Add("drops a database");
+        // sp_procoption ends with RECONFIGURE WITH OVERRIDE, so it, like RECONFIGURE, runs only after the guard, whose RETURN ends the batch.
+        // These look at the text with its literals: text that runs (EXEC of a string) is where they would hide.
+        if (Regex.IsMatch(text.Split(PendingGuard)[0], @"\bRECONFIGURE\b|\bsp_procoption\b", RegexOptions.IgnoreCase))
+            problems.Add("reconfigures the server without the pending-configuration guard");
+        if (text.Contains("xp_cmdshell", StringComparison.OrdinalIgnoreCase)) problems.Add("runs the shell");
         return [.. problems.Distinct()];
     }
 }

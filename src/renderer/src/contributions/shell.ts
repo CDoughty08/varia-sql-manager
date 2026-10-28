@@ -54,7 +54,7 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, ssisCatalog }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'ssisCatalog'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
   const lostNode = (args: CommandArgs | undefined) => {
@@ -64,7 +64,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
   }
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
-    commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
+    // A running Create Catalog would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
+    commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => ssisCatalog.closeRefusal()) }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     commands.register('window.editor', { run: () => host.reveal('editor') }),

@@ -5,6 +5,8 @@ import { createCatalogMessages, CreateCatalogService } from '../src/renderer/src
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
 import { deferred } from './fixtures/documents'
+import { contextRecord } from '../src/shared/commands/context-keys'
+import { resolveMenu } from '../src/renderer/src/menus/resolve'
 import { connectionInfo, connectionOptions, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
@@ -157,6 +159,49 @@ describe('CreateCatalogService', () => {
     expect(service.current).toMatchObject({ phase: 'stopped', error: { code: 'CANCELLED' } })
     expect(service.current?.stopping).toBeUndefined()
   })
+  it('sends the startup box as the user leaves it: checked by SSMS\'s default (scan for startup procs) or by hand', async () => {
+    const { service, api, execute, settle } = setup(setupOf({ clrEnabled: true, startupDefault: true }))
+    service.open(folder())
+    await settle()
+    expect(service.current?.startupProcedure).toBe(true)
+    const running = service.create(secret, secret)
+    expect(api.executeSsis.mock.calls[0][0].action).toEqual({ verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: true })
+    execute.resolve(created)
+    await running
+    const other = setup(setupOf({ clrEnabled: true, startupDefault: false }))
+    other.service.open(folder())
+    await other.settle()
+    other.service.setStartupProcedure(true)
+    void other.service.create(secret, secret)
+    expect(other.api.executeSsis.mock.calls[0][0].action).toMatchObject({ startupProcedure: true })
+  })
+  it('alerts, as a failure does, when Stop\'s removal of what Create Catalog made failed, and says Stopped only when it succeeded', async () => {
+    const { service, execute, settle } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    const running = service.create(secret, secret)
+    service.stop()
+    const message = 'Create Catalog was stopped at "Create the maintenance job"; SQL Server cancelled that statement. Removing what Create Catalog had created failed too (Lock request time out period exceeded.): delete the SSISDB database before you try again.'
+    execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'CANCELLED', message, retryable: true }, steps: [
+      { status: 'done', message: titles[1] }, { status: 'done', message: titles[2] }, { status: 'done', message: titles[3] }, { status: 'cancelled', message: titles[4] },
+      { status: 'failed', message: 'Remove the incomplete catalog: Lock request time out period exceeded.' }
+    ] } })
+    await running
+    expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'CANCELLED', message } })
+    expect(service.current?.stopping).toBeUndefined()
+  })
+  it('refuses to let the window close while Create Catalog runs, and only then', async () => {
+    const { service, execute, settle } = setup(setupOf({ clrEnabled: true }))
+    expect(service.closeRefusal()).toBeUndefined()
+    service.open(folder())
+    await settle()
+    expect(service.closeRefusal()).toBeUndefined()
+    const running = service.create(secret, secret)
+    expect(service.closeRefusal()).toBe(createCatalogMessages.closing)
+    execute.resolve(created)
+    await running
+    expect(service.closeRefusal()).toBeUndefined()
+  })
   it('says the outcome is unknown when the server goes away while it runs, and cancels it', async () => {
     const { service, api, connections, execute, settle } = setup(setupOf({ clrEnabled: true }))
     service.open(folder())
@@ -185,6 +230,37 @@ describe('Create Catalog command', () => {
     fixture.ssisCatalog.open(folder())
     expect(fixture.ssisCatalog.current).toMatchObject({ connectionId: 'server-a', nodeId: 4 })
     expect(fixture.commands.canRun('explorer.createCatalog', { target })).toBe(false)
+  })
+  it('keeps the window open while Create Catalog runs: File › Exit and closing the window report why, and tell main the close ended', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    const answer = deferred<ApiResult<SsisExecuteResult>>()
+    fixture.api.executeSsis.mockImplementationOnce(() => answer.promise)
+    fixture.ssisCatalog.open(folder())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    fixture.ssisCatalog.setEnableClr(true)
+    const running = fixture.ssisCatalog.create(secret, secret)
+    expect(fixture.ssisCatalog.current?.phase).toBe('executing')
+    await fixture.commands.execute('window.close', undefined, 'menu')
+    expect(fixture.api.closeWindow).not.toHaveBeenCalled()
+    expect(fixture.api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+    expect(fixture.files.getSnapshot().error).toBe(createCatalogMessages.closing)
+    expect(fixture.api.cancelSsis).not.toHaveBeenCalled()
+    answer.resolve(created)
+    await running
+    await fixture.commands.execute('window.close', undefined, 'menu')
+    expect(fixture.api.closeWindow).toHaveBeenCalledOnce()
+  })
+  it('is hidden from the context menu of a lost server\'s Integration Services Catalogs', () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    const items = (lost: boolean) => resolveMenu('explorer.context', {
+      platform: 'win32', state: contextRecord('win32', { explorerFolder: 'integrationServicesCatalogs', explorerServerLost: lost }), commands: fixture.commands, keybindings: fixture.keybindings
+    }).flatMap(item => item.kind === 'command' ? [item.id] : [])
+    expect(items(false)).toContain('explorer.createCatalog')
+    expect(items(true)).not.toContain('explorer.createCatalog')
   })
   it('is disabled for a lost node, and for a server whose backend generation ended', () => {
     const fixture = workbenchFixture()

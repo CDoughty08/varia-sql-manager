@@ -54,8 +54,11 @@ internal sealed class SsisOptions
     public TimeSpan PreflightBudget { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("preflightMs"));
     /// <summary>How long Stop on a write waits for SQL Server to end the statement before the request answers CANCELLED.</summary>
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("stopGraceMs"));
-    /// <summary>How long a backend that is shutting down waits for a Create Catalog past its restore (see SsisActionService.DrainCommitted).</summary>
+    /// <summary>How long a backend that is shutting down waits for a Create Catalog past its restore (SsisActionService.DrainCommitted),
+    /// and how long past the Stop grace a Stop or a disconnect waits for one (SsisActionService.AfterStopAsync).</summary>
     public TimeSpan CreateDrain { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("createDrainMs"));
+    /// <summary>How long Create Catalog's restore runs on after a Stop, a disconnect or a shutdown before SQL Server is asked to end it too.</summary>
+    public TimeSpan RestoreStop { get; set; } = TimeSpan.FromMilliseconds(SsisCatalog.Current.Limit("restoreStopMs"));
     /// <summary>Writes for SQL Server logins too, which a box server's SSISDB refuses (27123) but the fake catalog need not, so its
     /// checks run on CI, which connects with SQL Server authentication.</summary>
     public bool IgnoreSqlAuthentication { get; set; }
@@ -68,7 +71,7 @@ internal sealed class SsisOptions
     /// jobs. The live checks set it; it is never a request field.</summary>
     public string? CreateScratch { get; set; }
     /// <summary>Runs before each Create Catalog step after the restore began, with the step's title (the checks hold a step or make
-    /// it fail from another session there). Those steps cannot be stopped, so it takes no token.</summary>
+    /// it fail from another session there). It takes no token: a hook ends what it holds itself.</summary>
     public Func<string, Task>? BeforeCreateStep { get; set; }
 }
 

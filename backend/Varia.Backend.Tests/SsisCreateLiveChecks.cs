@@ -17,14 +17,15 @@ namespace Varia.Backend.Tests;
 /// CATALOG_EXISTS; a request that did not agree to CLR is CLR_REQUIRED on a server with CLR off; a database another session creates
 /// between the preflight and the restore is CATALOG_EXISTS and left alone (and the destructive check's guarded drop leaves it too); a
 /// step that fails after the restore removes the database; the removal drops a database still RESTORING and keeps an online one;
-/// Stop during the restore lets it end and then removes it; a shutdown during the restore (CancelAll, then DrainCommitted, as
+/// Stop during the restore lets it end (within RestoreStop) and then removes it, the database marked right after its restore in every case; a shutdown during the restore (CancelAll, then DrainCommitted, as
 /// ProtocolHost does on stdin EOF) waits for the removal; Stop while the master key waits for another session's lock ends it within
 /// the grace and removes the database; Stop before the restore creates nothing. The dry run never touches CLR, the assembly trust,
 /// sp_ssis_startup, logins or jobs, and checks so. With VARIA_TEST_SSIS_CREATE=1 only (a server whose owner allows it; never set by
 /// default), and only on a server without SSISDB: the destructive check creates the catalog with Varia, checks what SSMS's Create
 /// leaves, removes it, creates it again with the startup procedure chosen and makes its last step fail, and checks that the server
 /// is as before (CLR restored, unless other configuration changes wait for RECONFIGURE). It drops only an SSISDB its own Create
-/// restored (by database_id and create_date) and checks again for SSISDB before each Create. Passwords are never printed.</summary>
+/// restored (by database_id and create_date) and checks again for SSISDB before each Create. With VARIA_TEST_SSIS=1 on a server that
+/// has an SSISDB, a read-only check compares it with what SSMS's Create leaves. Passwords are never printed.</summary>
 internal static class SsisCreateLiveChecks
 {
     private static string Literal(string value) => "N'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
@@ -33,9 +34,8 @@ internal static class SsisCreateLiveChecks
     /// <summary>A database's identity, so a drop takes only the one a check made: database_id and create_date, or null when it does not exist.</summary>
     private const string IdentityRead = "SELECT CONCAT(d.database_id, N'|', CONVERT(nvarchar(30), d.create_date, 126)) FROM sys.databases AS d WHERE d.name = ";
     private static readonly string[] Titles = [.. SsisCatalog.Current.Action("createCatalog")!.Steps];
-    /// <summary>The dynamic configuration changes a RECONFIGURE would apply besides CLR, as the setup read finds them.</summary>
-    private const string PendingRead = "SELECT COUNT(*) FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled' "
-        + "AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0);";
+    /// <summary>Whether dynamic configuration changes wait for a RECONFIGURE (1) or not (0), as the setup read and the guard find them.</summary>
+    private const string PendingRead = "SELECT CASE WHEN " + SsisCreateSql.PendingList + " IS NULL THEN 0 ELSE 1 END;";
 
     public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
@@ -68,20 +68,21 @@ internal static class SsisCreateLiveChecks
         else if (setup.Setup is { } found)
         {
             var directory = facts[6]![..facts[6]!.LastIndexOf('\\')] + "\\";
-            check(!(pending && !clr) && found.Catalog == "SSISDB" && found.ClrEnabled == clr && found.StartupDefault == scan && found.BackupFile.EndsWith(@"\DTS\Binn\" + expectedBackup, StringComparison.OrdinalIgnoreCase)
+            check(!pending && found.Catalog == "SSISDB" && found.ClrEnabled == clr && found.StartupDefault == scan && found.BackupFile.EndsWith(@"\DTS\Binn\" + expectedBackup, StringComparison.OrdinalIgnoreCase)
                 && string.Equals(found.DataFile, directory + "SSISDB.mdf", StringComparison.OrdinalIgnoreCase) && string.Equals(found.LogFile, directory + "SSISDB.ldf", StringComparison.OrdinalIgnoreCase),
                 "ssis.catalogSetup reads what SSMS's Create reads: CLR in use (" + clr + "), scan for startup procs (" + scan + "), the " + expectedBackup + " in the registry's DTS folder, the new files "
                 + "beside master.mdf, and no other configuration change waiting for RECONFIGURE (" + pending + "): " + Dump(setup));
         }
         else if (setup.Error?.Code == "CONFIGURATION_PENDING")
-            check(pending && !clr && setup.Error.Message.Contains("RECONFIGURE", StringComparison.Ordinal),
-                "ssis.catalogSetup refuses to enable CLR while other configuration changes wait for RECONFIGURE, as an independent read finds them: " + Dump(setup));
+            check(pending && setup.Error.Message.Contains("RECONFIGURE WITH OVERRIDE", StringComparison.Ordinal),
+                "ssis.catalogSetup refuses while other configuration changes wait for RECONFIGURE, CLR in use or not (sp_procoption reconfigures too), as an independent read finds them: " + Dump(setup));
         else check(setup.Error?.Code == "NOT_SUPPORTED" && setup.Error.Message.Contains("catalog backup file", StringComparison.Ordinal),
             "without the Integration Services catalog backup, ssis.catalogSetup answers SSMS's NOT_SUPPORTED: " + Dump(setup));
         // Bounded by the read's own budget, not a guess at a shared server's speed; and what only Create Catalog makes is unchanged.
         check(elapsed < options.Budget + TimeSpan.FromSeconds(5) && await ServerObjectsAsync(Sql) == objects,
             "ssis.catalogSetup changes nothing Create Catalog makes and answers within its " + (int)options.Budget.TotalSeconds + " s budget (" + (long)elapsed.TotalMilliseconds + " ms)");
 
+        if (exists && !linux && sysadmin && Environment.GetEnvironmentVariable("VARIA_TEST_SSIS") == "1") await ExistingAsync(check, Sql, major);
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1" || linux || !sysadmin)
         {
             Console.WriteLine("Create Catalog's dry run is skipped: it needs VARIA_TEST_SQL_SCRATCH=1, SQL Server on Windows and sysadmin.");
@@ -110,6 +111,7 @@ internal static class SsisCreateLiveChecks
                 options.BeforeCreateStep = null;
                 options.BeforeWrite = null;
                 options.StopGrace = new SsisOptions().StopGrace;
+                options.RestoreStop = new SsisOptions().RestoreStop;
             }
         }
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SSIS_CREATE") != "1")
@@ -117,8 +119,8 @@ internal static class SsisCreateLiveChecks
         else if (exists)
             Console.WriteLine("Create Catalog's destructive check is skipped: this server has an SSISDB, and the check never drops a catalog it did not create (its projects, environments, "
                 + "history and master key password would be lost). Run it on a server without SSISDB.");
-        else if (pending && !clr)
-            Console.WriteLine("Create Catalog's destructive check is skipped: other configuration changes wait for RECONFIGURE on this server, so Create Catalog refuses to enable CLR.");
+        else if (pending)
+            Console.WriteLine("Create Catalog's destructive check is skipped: other configuration changes wait for RECONFIGURE on this server, so Create Catalog refuses (CONFIGURATION_PENDING).");
         else await DestructiveAsync(check, service, info, Sql, clr, objects);
     }
 
@@ -133,7 +135,10 @@ internal static class SsisCreateLiveChecks
             ? "EXISTS (SELECT 1 FROM sys.databases AS d WHERE d.name = " + Literal(name) + " AND d.database_id = " + databaseId.ToString(CultureInfo.InvariantCulture)
                 + " AND CONVERT(nvarchar(30), d.create_date, 126) = " + Literal(created) + ")"
             : "1 = 0";
-        const string Server = "IF EXISTS (SELECT 1 FROM master.sys.procedures WHERE name = N'sp_ssis_startup') BEGIN EXEC master.sys.sp_procoption N'sp_ssis_startup', 'startup', 'off'; DROP PROCEDURE dbo.sp_ssis_startup; END\n"
+        // sp_procoption ends with RECONFIGURE WITH OVERRIDE: refused, as Create Catalog refuses, while other changes wait.
+        const string Server = "IF EXISTS (SELECT 1 FROM master.sys.procedures WHERE name = N'sp_ssis_startup')\n"
+            + "    IF " + SsisCreateSql.PendingList + " IS NOT NULL RAISERROR(N'Other configuration changes wait for RECONFIGURE, so sp_ssis_startup was left.', 16, 1);\n"
+            + "    ELSE BEGIN EXEC master.sys.sp_procoption N'sp_ssis_startup', 'startup', 'off'; DROP PROCEDURE dbo.sp_ssis_startup; END\n"
             + "IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'SSIS Server Maintenance Job') EXEC msdb.dbo.sp_delete_job @job_name = N'SSIS Server Maintenance Job';\n"
             + "IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'SSIS Failover Monitor Job') EXEC msdb.dbo.sp_delete_job @job_name = N'SSIS Failover Monitor Job';\n"
             + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'##MS_SSISServerCleanupJobLogin##') DROP LOGIN [##MS_SSISServerCleanupJobLogin##];\n";
@@ -151,8 +156,7 @@ internal static class SsisCreateLiveChecks
 
     /// <summary>Puts CLR integration back off in one batch that first looks for other dynamic configuration changes waiting for a
     /// RECONFIGURE (the setup read's filter) and refuses rather than apply them, as Create Catalog refuses (CONFIGURATION_PENDING).</summary>
-    internal const string ClrOff = "IF EXISTS (SELECT 1 FROM sys.configurations AS c WHERE c.is_dynamic = 1 AND c.value <> c.value_in_use AND c.name <> N'clr enabled' "
-        + "AND NOT (c.name = N'min server memory (MB)' AND CONVERT(int, c.value) = 0))\n"
+    internal const string ClrOff = "IF " + SsisCreateSql.PendingList + " IS NOT NULL\n"
         + "    RAISERROR(N'Other configuration changes wait for RECONFIGURE, so CLR integration was left enabled.', 16, 1);\n"
         + "ELSE IF EXISTS (SELECT 1 FROM sys.configurations AS c WHERE c.name = N'clr enabled' AND CONVERT(int, c.value_in_use) = 1)\n"
         + "BEGIN\n"
@@ -193,6 +197,8 @@ internal static class SsisCreateLiveChecks
             var marked = await sql("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", db);
             if (marked.Status != "completed") throw new InvalidOperationException("The dry run's database could not be marked: " + marked.Error);
         }
+        // The hook runs before the master key step even after a Stop, so the database is marked before its removal begins.
+        async Task MarkAfterRestore(string title) { if (title == Titles[2]) await Mark(); }
         async Task<string?> State() => (await sql("SELECT CONCAT(d.state, ' ', d.is_read_only) FROM sys.databases AS d WHERE d.name = " + Literal(db) + ";", "master")).Scalar;
         // A database left RESTORING admits no ALTER DATABASE, only the DROP.
         async Task Drop()
@@ -228,7 +234,7 @@ internal static class SsisCreateLiveChecks
         // The product's restore and master key, with the dry run's name for the database.
         await Guarded("the dry run restores the catalog backup and creates its master key", async () =>
         {
-            options.BeforeCreateStep = async title => { if (title == Titles[2]) await Mark(); };
+            options.BeforeCreateStep = MarkAfterRestore;
             var created = await CreateAsync(service, info.Id, password);
             var files = await sql("SELECT f.physical_name FROM sys.master_files AS f WHERE f.database_id = DB_ID(" + Literal(db) + ") ORDER BY f.type, f.file_id;", "master");
             var key = await sql("SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##';", db);
@@ -337,6 +343,7 @@ internal static class SsisCreateLiveChecks
         {
             using var stop = new CancellationTokenSource();
             var requestId = Guid.NewGuid().ToString();
+            options.BeforeCreateStep = MarkAfterRestore;
             var running = CreateAsync(service, info.Id, password, stop.Token, requestId: requestId);
             var restoring = false;
             for (var tries = 0; tries < 400 && !running.IsCompleted && !restoring; tries++)
@@ -358,11 +365,47 @@ internal static class SsisCreateLiveChecks
                 "Stop during the restore lets the restore end, then stops Create Catalog before the master key and removes the database it restored: " + Dump(stopped));
         });
 
+        // Stop past RestoreStop (1 ms here): SQL Server is asked to end the restore too, and the database it left restoring goes. A
+        // restore that ends before SQL Server takes the attention is stopped at the master key instead, or named if it is left online.
+        await Guarded("Stop past RestoreStop during the restore", async () =>
+        {
+            options.RestoreStop = TimeSpan.FromMilliseconds(1);
+            try
+            {
+                using var stop = new CancellationTokenSource();
+                var requestId = Guid.NewGuid().ToString();
+                options.BeforeCreateStep = MarkAfterRestore;
+                var running = CreateAsync(service, info.Id, password, stop.Token, requestId: requestId);
+                if (!await Restoring(requestId, running))
+                {
+                    Console.WriteLine("Stop past RestoreStop is not checked: the restore ended before it could be seen running (" + Dump((await running).Steps) + ").");
+                    return;
+                }
+                await stop.CancelAsync();
+                var stopped = await running;
+                var statuses = Statuses(stopped);
+                var cleanup = "done " + SsisCatalog.Current.CleanupStep;
+                // Cancelled at the restore step: the RESTORE itself (the database left restoring), or, when the restore ended just as
+                // RestoreStop passed, its switch to read-write, which then never starts.
+                var cancelled = statuses.SequenceEqual(["cancelled " + Titles[1], "skipped " + Titles[2], cleanup]);
+                var midRestore = cancelled && stopped.Error?.Message.Contains("SQL Server cancelled the restore", StringComparison.Ordinal) == true;
+                var endedFirst = statuses.SequenceEqual(["done " + Titles[1], "cancelled " + Titles[2], cleanup]);
+                var named = stopped.Error?.Message.Contains("the " + db + " database is online", StringComparison.Ordinal) == true;
+                var left = await State();
+                check(stopped is { Error.Code: "CANCELLED" } && ((cancelled || endedFirst) && left is null || named && left is not null) && service.SsisActions.ActiveJobs == 0,
+                    "Stop during the restore asks SQL Server to end it once RestoreStop has passed, then removes the database it left restoring (or the one it restored, or names one "
+                    + "left online): " + Dump(stopped) + " " + left);
+                if (!midRestore) Console.WriteLine("Stop past RestoreStop: the restore ended before SQL Server could cancel it, so a RESTORE cancelled part way is not checked live (" + Dump(stopped.Steps) + ").");
+            }
+            finally { options.RestoreStop = new SsisOptions().RestoreStop; }
+        });
+
         // A backend that shuts down during the restore (stdin EOF: ProtocolHost cancels everything, then drains): the restore ends, the
         // removal runs before DrainCommitted returns, and the request still answers what it removed.
         await Guarded("a shutdown during the restore", async () =>
         {
             var requestId = Guid.NewGuid().ToString();
+            options.BeforeCreateStep = MarkAfterRestore;
             var running = CreateAsync(service, info.Id, password, requestId: requestId);
             if (!await Restoring(requestId, running))
             {
@@ -457,6 +500,32 @@ internal static class SsisCreateLiveChecks
         });
         check(await ServerObjectsAsync(sql) == objects && service.SsisActions.ActiveJobs == 0,
             "the dry run never touched CLR, the assembly trust, sp_ssis_startup, the SSIS jobs or their logins, and every job ended");
+    }
+
+    /// <summary>VARIA_TEST_SSIS=1 on a Windows server that has an SSISDB (the owner's, created with Varia or SSMS): read only, the catalog and
+    /// what Create Catalog leaves on the server are what SSMS's Create leaves, so a catalog made by Varia's Create Catalog is checked even
+    /// where the destructive check cannot run (it never drops a catalog it did not create).</summary>
+    private static async Task ExistingAsync(Action<bool, string> check, Func<string, string, Task<SqlRun>> sql, int major)
+    {
+        var server = await sql("SELECT (SELECT CONVERT(int, c.value_in_use) FROM sys.configurations AS c WHERE c.name = N'clr enabled'), "
+            + "(SELECT COUNT(*) FROM master.sys.procedures AS p WHERE p.name = N'sp_ssis_startup'), "
+            + "(SELECT CONVERT(int, l.is_disabled) FROM sys.server_principals AS l WHERE l.name = N'##MS_SSISServerCleanupJobLogin##'), "
+            + "(SELECT COUNT(*) FROM sys.server_permissions AS p JOIN sys.server_principals AS l ON l.principal_id = p.grantee_principal_id WHERE l.name = N'##MS_SSISServerCleanupJobLogin##' AND p.permission_name = N'VIEW SERVER STATE' AND p.state = 'G'), "
+            + "(SELECT COUNT(*) FROM msdb.dbo.sysjobs AS j JOIN msdb.dbo.sysjobsteps AS s ON s.job_id = j.job_id WHERE j.name = N'SSIS Server Maintenance Job'), "
+            + "(SELECT COUNT(*) FROM msdb.dbo.sysjobs AS j JOIN msdb.dbo.sysjobschedules AS js ON js.job_id = j.job_id JOIN msdb.dbo.sysschedules AS sc ON sc.schedule_id = js.schedule_id "
+            + "WHERE j.name = N'SSIS Server Maintenance Job' AND sc.name = N'SSISDB Scheduler' AND sc.freq_type = 4), "
+            + "(SELECT SUSER_SNAME(j.owner_sid) FROM msdb.dbo.sysjobs AS j WHERE j.name = N'SSIS Server Maintenance Job'), "
+            + "(SELECT d.state FROM sys.databases AS d WHERE d.name = N'SSISDB');", "master");
+        var trusted = major >= 14 ? (await sql("SELECT COUNT(*) FROM sys.trusted_assemblies WHERE description LIKE N'%" + SsisCatalog.Current.AssemblyFile + "';", "master")).Scalar : "1";
+        var inside = await sql("SELECT (SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = N'##MS_DatabaseMasterKey##'), (SELECT COUNT(*) FROM [catalog].[catalog_properties] WHERE property_name = N'SCHEMA_VERSION'), "
+            + "(SELECT COUNT(*) FROM sys.database_permissions AS p JOIN sys.database_principals AS u ON u.principal_id = p.grantee_principal_id "
+            + "WHERE u.name = N'##MS_SSISServerCleanupJobUser##' AND p.permission_name = N'EXECUTE'), (SELECT COUNT(*) FROM sys.assemblies WHERE name = N'ISSERVER');", "SSISDB");
+        var row = server.Status == "completed" ? server.Sets[0][0] : [];
+        var within = inside.Status == "completed" ? inside.Sets[0][0] : [];
+        check(row is ["1", "1", "1", "1", "2", "1", "##MS_SSISServerCleanupJobLogin##", "0"] && trusted is not (null or "0") && within is ["1", "1", "2", "1"],
+            "this server's SSISDB is what SSMS's Create leaves: online, its master key, schema version and ISSERVER assembly, CLR in use, sp_ssis_startup, the trusted Integration Services assembly, "
+            + "the disabled cleanup login with VIEW SERVER STATE and its user's two grants, and the SSIS Server Maintenance Job (two steps, daily, owned by that login): "
+            + Dump(row) + " " + trusted + " " + Dump(within) + " " + server.Error + inside.Error);
     }
 
     /// <summary>VARIA_TEST_SSIS_CREATE=1 on a server without SSISDB only: Varia's Create Catalog for real (no startup procedure), what SSMS's

@@ -371,28 +371,35 @@ never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a 
 
 **Create Catalog** (docs/integration-services.md#create-catalog). `ssis.catalogSetup { connectionId, requestId }` answers
 `{ setup?: { catalog, clrEnabled, startupDefault, backupFile, dataFile, logFile }, elapsedMs, error? }` from one read on the
-SSIS read pool (in the login's own database), refusing before it connects on SQL Server before 2016, on Linux, and on Azure
-SQL Database and Managed Instance (`NOT_SUPPORTED`), then without sysadmin (`PERMISSION_DENIED`), while the catalog exists
+SSIS read pool (in the login's own database), refusing before it connects on Azure SQL Database, Managed Instance and the
+explorer catalogue's other cloud editions, on SQL Server before 2016 and on Linux (`NOT_SUPPORTED`), then without sysadmin (`PERMISSION_DENIED`), while the catalog exists
 (`CATALOG_EXISTS`), and without the Integration Services catalog backup or a free place for its files (`NOT_SUPPORTED`).
 `ssis.execute { connectionId, requestId, action: { verb: 'createCatalog', password, enableClr, startupProcedure } }`
 (`password` 1 to 128 UTF-16 code units, no U+0000, no lone surrogate; both booleans required; no `revision`) is the same sensitive write:
 its own connection, in `master`, a SQL Server login allowed as in SSMS. Its preflight repeats the setup read and
-`RESTORE FILELISTONLY` (within 25 s), answers `CLR_REQUIRED` when CLR integration is off and `enableClr` is false (read from the facts, before anything changes), then runs
+`RESTORE FILELISTONLY` (within 25 s), answers `CLR_REQUIRED` when CLR integration is off and `enableClr` is false (read from the facts, before anything changes; the steps come only from `SsisCreate.Plan`), then runs
 SSMS 22's steps from `SsisCreateSql`'s constant commands (values as parameters; the password reaches SQL only through the
 server's own quoting in the master key's `EXEC`): CLR, the restore (never `WITH REPLACE`), the master key, the assembly
 trust (the hash read before a statement of its own adds it, so an add cut short is still removed) and `sp_ssis_startup`, and the maintenance job. Stop cancels the running statement (a lock wait included), except the
-restore and its switch to read-write, which run without the request's token: Stop during them takes effect when they end.
-From the start of the restore the reply, after the usual 10 s grace, waits for the job, after a disconnect too. A step after
+restore and its switch to read-write, which get 30 s more (`restoreStopMs`) before SQL Server is asked to end them too (a
+restore cancelled part way leaves its database restoring, which the removal drops). From the start of the restore the reply,
+after the usual 10 s grace, waits up to 120 s more (`createDrainMs`) for the job, after a disconnect too, then answers
+`CANCELLED` saying the outcome is not known yet while the job goes on. A step after
 the restore that fails or is stopped adds the step "Remove the incomplete catalog" (its message, naming what failed, clipped to
 2,048 characters), which ends a transaction the cancelled statement left open and drops what this request made, waiting at
 most 30 s for each lock (a database left restoring only while it still is and no other session holds it), as SSMS's
-DropCatalog does; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
-A backend whose stdin ends (a quit, a closed window, a renderer reload, Restart Backend) cancels everything as usual, then
+DropCatalog does; when a part of it fails, the message names only what is left to delete; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
+The renderer refuses to close the window or quit while Create Catalog runs (`CreateCatalogService.closeRefusal`, checked by
+`FileService.closeWindow`): its unload would cancel the request, which past the restore is a Stop. A backend whose stdin ends
+anyway (a renderer reload, Restart Backend, a crashed renderer) cancels everything as usual, then
 waits up to 120 s (`createDrainMs`) for a Create Catalog past its restore to finish or remove what it made before it exits, and
 main, which sees the pending request, waits 130 s (`createCatalogDrainMs`) instead of 2 s before it kills that generation. Only
 a kill or crash inside that window leaves an incomplete `SSISDB`, which Create Catalog then refuses (`CATALOG_EXISTS`).
-When CLR integration is off and other dynamic `sp_configure` changes wait for a `RECONFIGURE`, both methods answer
-`CONFIGURATION_PENDING` (naming them), because enabling CLR would apply them too.
+When other dynamic `sp_configure` changes wait for a `RECONFIGURE`, CLR in use or not, both methods answer
+`CONFIGURATION_PENDING` (naming them), because enabling CLR runs `RECONFIGURE` and `sys.sp_procoption` (marking the startup
+procedure, removing an earlier `sp_ssis_startup`, the removal after a failure) ends with `RECONFIGURE WITH OVERRIDE`; each of
+those statements also runs behind a guard in its own batch (`SsisCreateSql.PendingGuard`, error 50000 state 42) that refuses a
+change staged after the preflight the same way.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers

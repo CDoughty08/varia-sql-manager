@@ -263,8 +263,12 @@ export const ssisLimits = {
   /** How long a stopped write's reply waits for SQL Server to end its statement, then answers CANCELLED (outcome unknown). */
   stopGraceMs: 10_000,
   /** How long a backend that is shutting down (stdin ended: a quit, a closed window, a reload or Restart Backend) waits for a
-   *  Create Catalog past its restore to finish or remove what it created; main's grace for that generation is longer. */
+   *  Create Catalog past its restore to finish or remove what it created; main's grace for that generation is longer. A Stop or
+   *  a disconnect waits as long past stopGraceMs, then answers that the outcome is not known yet. */
   createDrainMs: 120_000,
+  /** How long Create Catalog's restore runs on after a Stop, a disconnect or a shutdown before SQL Server is asked to end it too
+   *  (then the removal drops the database it left restoring): a restore waiting on a lock must not hold the dialog for ever. */
+  restoreStopMs: 30_000,
   /** Create Catalog's encryption password, in UTF-16 code units; the server's password policy applies too. */
   catalogPassword: 128,
   /** A path Create Catalog reads on the server (the catalog backup, the assembly, the database files). */

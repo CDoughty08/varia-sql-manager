@@ -282,13 +282,14 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
    * Asks about each unsaved query, then once about every open transaction and running query, then closes the window. A close or quit that arrives while a file task runs (a Script
    * As File… waiting behind another dialog) waits for it rather than being dropped, so the app exits once the dialogs
    * are answered; requests made meanwhile are the same close. A close that ends without closing tells main, which
-   * otherwise hands a close it asked for to the next page if this one reloads or crashes first.
+   * otherwise hands a close it asked for to the next page if this one reloads or crashes first. `refusal` names work that closing would
+   * cut short (a running Create Catalog): the close is then refused with that message, before anything is asked and again before it closes.
    */
-  closeWindow(beforeClose: () => Promise<void>): Promise<void> {
+  closeWindow(beforeClose: () => Promise<void>, refusal: () => string | undefined = () => undefined): Promise<void> {
     this.closing ??= (async () => {
       try {
         while (!this.disposed && this.documents.getSnapshot().busy) await this.idle()
-        await this.closeDocuments(beforeClose)
+        await this.closeDocuments(beforeClose, refusal)
       } finally {
         this.closing = undefined
         if (!this.exiting && !this.disposed) this.api.closeWindowCancelled()
@@ -296,8 +297,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     })()
     return this.closing
   }
-  private async closeDocuments(beforeClose: () => Promise<void>): Promise<void> {
+  private async closeDocuments(beforeClose: () => Promise<void>, refusal: () => string | undefined): Promise<void> {
     await this.perform(async () => {
+      const refuse = () => { const reason = refusal(); if (reason) throw new Error(reason) }
+      refuse()
       // Each document's revision as approved: a text document's model version, a designer's own revision.
       const approved = new Map<string, number>()
       for (const document of this.documents.getSnapshot().documents) {
@@ -306,6 +309,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       }
       const plan = await this.queries.confirmSessions('exit', [...approved.keys()])
       if (!plan || this.disposed) return
+      refuse()
       await beforeClose()
       if (this.disposed) return
       const current = this.documents.getSnapshot().documents

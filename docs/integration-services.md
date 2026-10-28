@@ -83,19 +83,30 @@ What the checks prove:
   `SsisCreateSql.ServerCommands` lists for it, and every command passes its lint, which rejects the password or a parameter
   concatenated into SQL or wrapped in anything but `QUOTENAME` or the server's quote escape (`REPLACE` in
   `Latin1_General_BIN2`), the password anywhere but once in the master key, unquoted dynamic text, a `WITH REPLACE`
-  restore, a restore, drop or `ROLLBACK IMMEDIATE` outside their own commands, format placeholders, unknown variables and
+  restore, a restore, drop or `ROLLBACK IMMEDIATE` outside Create Catalog's own commands (those instances, for that verb
+  only, so Delete Catalog cannot reuse them unchecked; literals included, where text that runs would hide them),
+  `RECONFIGURE` or `sp_procoption` before the pending-configuration guard, format placeholders, unknown variables and
   the shell (each caught case is in its mutation list); the commands keep SSMS 22's reads, restore, master key quoting, version test for the
   assembly (whose hash is read before a statement of its own adds it), startup procedure and maintenance job; the refusals come in SSMS's
-  order and words, then `CONFIGURATION_PENDING` when enabling CLR would apply other pending configuration changes, `CLR_REQUIRED` when
-  CLR is off and the request did not agree (`SsisCreate.ClrRefusal`), Azure, Managed Instance, Linux and servers before 2016 before
-  connecting; the startup choice reaches `sp_procoption` as chosen; the removal after a Stop or failure lists exactly what was made, in
-  DropCatalog's order, and its step's message is clipped to 2,048 characters; Stop's reply (`AfterStopAsync`) is the job's answer
-  within the grace, waits past it for a job that answers Stop itself and otherwise answers `CANCELLED`; a backend that shuts down
+  order and words, then `CONFIGURATION_PENDING` while other configuration changes wait, CLR in use or not, and every statement that
+  reconfigures the server (enabling CLR, each `sp_procoption`) carries the guard whose error is told apart from the server's;
+  Azure, Managed Instance, the other cloud editions (6, 9, 11, 12), Linux and servers before 2016 are refused before connecting;
+  the plan the write follows after its preflight (`SsisCreate.Plan`: `CLR_REQUIRED` with no step when CLR is off and the request
+  did not agree, CLR enabled first only when it is off, agreed and not a dry run, and the steps in order) is checked, but not
+  that `CreateCatalogAsync` follows it: no offline check gets past opening a connection, so only the live dry run's
+  `CLR_REQUIRED` case (Windows, CLR off) runs the write's own wiring; the startup choice reaches `sp_procoption` as chosen; the
+  removal after a Stop or failure lists exactly what was made, in DropCatalog's order, its step's message is clipped to 2,048
+  characters, and a failed removal's message names only what is left (the trusted assembly and the 2016 loading login
+  included) and that CLR stays enabled; Stop's reply (`AfterStopAsync`, which a disconnect of a committed job uses too) is the job's
+  answer within the grace, waits past it up to `createDrainMs` for a job that answers Stop itself (a job that never ends answers
+  `CANCELLED` as not known yet) and otherwise answers `CANCELLED`; a backend that shuts down
   waits, within `createDrainMs`, for committed jobs only (`CommittedJobs`, and `HostChecks`: stdin EOF drains before the service is
   disposed); main lets a closing generation with a pending Create Catalog run `createCatalogDrainMs` before the kill, and others the
   usual 2 s (`tests/backend-connection.test.ts`); requests validate in zod and C# alike (UTF-16 lengths, no lone surrogate); the
   request's records never print the password; the dialog's state never holds it, refuses a broken password, and cancels its setup
-  read when it closes while loading; and the command is disabled on a lost node or server.
+  read when it closes while loading, sends the startup box as left (checked by default or by hand), shows a Stop whose removal
+  failed as an alert, and refuses a window close while it runs (and `FileService.closeWindow` refuses before asking anything);
+  and the command is disabled on a lost node or server, and hidden from a lost server's context menu.
 - **Create Catalog, live** (`SsisCreateLiveChecks`): every live run reads `ssis.catalogSetup` and compares it with an
   independent read (CLR in use, scan for startup procs, the catalog backup from the registry's `DTSPath`, the files
   beside `master.mdf`, or the refusal), and checks that it left what only Create Catalog makes as it was, within the read's own budget. With `VARIA_TEST_SQL_SCRATCH=1` on Windows
@@ -108,10 +119,15 @@ What the checks prove:
   (`CATALOG_EXISTS`, no removal step) and stays online, and the destructive check's guarded drop leaves it alone unless its
   recorded identity matches; the removal after a failed restore drops a database still RESTORING and keeps an online one; a
   step that fails after the restore (the database made read-only from another session) removes the database; Stop during
-  the restore lets it end and then removes the database; a shutdown during the restore (`CancelAll` then `DrainCommitted`,
+  the restore lets it end (within `restoreStopMs`) and then removes the database; a shutdown during the restore (`CancelAll` then `DrainCommitted`,
   as `ProtocolHost` does on stdin EOF) returns only after the removal, and the request still answers its steps; Stop while
   the master key waits for another session's lock answers within the grace with the database removed; Stop before the
-  restore creates nothing; and the server's CLR, assembly trust, `sp_ssis_startup`, SSIS jobs and logins are as before. With
+  restore creates nothing; and the server's CLR, assembly trust, `sp_ssis_startup`, SSIS jobs and logins are as before. Every
+  case that restores marks the database right after its restore, before a Stop's removal begins, so a run killed before its
+  removal leaves one the scratch sweep drops. With `VARIA_TEST_SSIS=1` on a Windows server that has an `SSISDB`, a read-only
+  check compares it and what it left on the server with what SSMS's Create leaves (online, master key, schema version, the
+  `ISSERVER` assembly, CLR in use, `sp_ssis_startup`, the trusted assembly from 2017, the disabled cleanup login with
+  `VIEW SERVER STATE`, its user's two grants, the maintenance job with two steps and its daily schedule, owned by that login). With
   `VARIA_TEST_SSIS_CREATE=1` only (never set by default; a server whose owner allows it) and only on a server without
   `SSISDB`, the destructive check creates the catalog with Varia, checks what SSMS's Create leaves (online, read-write, master
   key opening with the password, CLR in use, `sp_ssis_startup` not at startup when not chosen, the disabled cleanup login and
@@ -290,12 +306,15 @@ procedure), the Integration Services folder from the registry value
 the catalog backup in its `Binn` folder (`SSISDBBackup.bak` from 2016: the one name SSMS 22's `Catalog.Create` passes for every version) and `Microsoft.SqlServer.IntegrationServices.Server.dll`
 beside it, whether the backup exists (`xp_fileexist`), the database files' folder (the master database's, from `SERVERPROPERTY('MasterFile')`,
 where SSMS puts them) and that `SSISDB.mdf` and `SSISDB.ldf` are not there yet, and the backup's logical files (`RESTORE FILELISTONLY`).
-It is refused before it connects on SQL Server before 2016, on Linux, and on Azure SQL Database and Managed Instance (an Azure-SSIS
-integration runtime creates that catalog); then without sysadmin (`PERMISSION_DENIED`), when the catalog exists (`CATALOG_EXISTS`),
-when the backup or the folders cannot be found or the files exist (`NOT_SUPPORTED`, in SSMS's words), and when CLR integration is
-off and the request did not agree to enable it (`CLR_REQUIRED`), or when CLR integration is off and other dynamic `sp_configure` changes
-wait for a `RECONFIGURE` (`CONFIGURATION_PENDING`, naming them; `min server memory (MB)` at 0 never counts, because SQL Server always
-shows it in use as 16): the user agreed to CLR integration, not to them. Then, in order:
+It is refused before it connects on Azure SQL Database and Managed Instance (an Azure-SSIS integration runtime creates that catalog),
+on the explorer catalogue's other cloud editions (Synapse, Azure SQL Edge, SQL database in Fabric), on SQL Server before 2016 and on
+Linux; then without sysadmin (`PERMISSION_DENIED`), when the catalog exists (`CATALOG_EXISTS`), when the backup or the folders cannot
+be found or the files exist (`NOT_SUPPORTED`, in SSMS's words), when CLR integration is off and the request did not agree to enable it
+(`CLR_REQUIRED`), and, CLR in use or not, when other dynamic `sp_configure` changes wait for a `RECONFIGURE` (`CONFIGURATION_PENDING`,
+naming them; `min server memory (MB)` at 0 never counts, because SQL Server always shows it in use as 16): enabling CLR runs
+`RECONFIGURE`, and `sys.sp_procoption` (the startup procedure, an earlier `sp_ssis_startup`'s removal, the removal after a failure)
+ends with `RECONFIGURE WITH OVERRIDE`, and the user agreed to CLR integration, not to them. Each of those statements runs behind a
+guard in its own batch that refuses the same way when a change was staged after the preflight. Then, in order:
 
 1. **Enable CLR integration** (only when it is off): `sp_configure 'clr enabled', 1` and `RECONFIGURE`, as SMO does for SSMS's dialog.
 2. **Restore the catalog database**: `RESTORE DATABASE` with the name, the backup, the logical names and the new files as parameters,
@@ -310,26 +329,31 @@ shows it in use as 16): the user agreed to CLR integration, not to them. Then, i
    decides it) the assembly's SHA2_512 hash with `sys.sp_add_trusted_assembly`, read (and kept for the removal) in one statement
    before another adds it, so an add that Stop or a lost reply cuts short is still removed; before, the asymmetric key
    `MS_SQLEnableSystemAssemblyLoadingKey`, its login and `UNSAFE ASSEMBLY`. Then `master.dbo.sp_ssis_startup` (SSMS's text), and
-   `sp_procoption` when the startup procedure was chosen.
+   `sp_procoption` when the startup procedure was chosen. An `sp_ssis_startup` that was there before is dropped first, and is not
+   this request's to remove.
 5. **Create the maintenance job**: `##MS_SSISServerCleanupJobLogin##` with a random password the server generates, disabled, its user
    in the catalog with EXECUTE on the two cleanup procedures, `VIEW SERVER STATE`, and the `SSIS Server Maintenance Job` (two T-SQL
    steps, daily at 00:00), as SSMS's CreateCleanupJobLogin.sql and CreateMaintenanceJob.sql do. Like SSMS it creates no
    `SSIS Failover Monitor Job`: that belongs to Always On support.
 
 When a step after the restore fails or is stopped, Create Catalog does what SSMS does after a failure and adds the step "Remove the incomplete catalog":
-it ends a transaction the cancelled statement left open, then drops what this request made: the trusted assembly hash it added,
-`sp_ssis_startup`, both SSIS jobs and the cleanup login, and then the database it restored, so the server is as before (CLR stays
-enabled, as in SSMS). Its statements wait at most 30 s for a lock, because nothing can stop them. A refused restore (the database
+it ends a transaction the cancelled statement left open, then drops what this request made: the trusted assembly hash it added (or,
+before 14.0.800.11, the assembly loading login), `sp_ssis_startup`, both SSIS jobs and the cleanup login, and then the database it
+restored, so the server is as before (CLR stays enabled, as in SSMS, and the message says so). Its statements wait at most 30 s for a
+lock, because nothing can stop them; when one fails, the message names only what is left to delete. A refused restore (the database
 appeared meanwhile) removes nothing, and a database left restoring by a failed restore is dropped only while no other session holds a
-lock on it (another restore of the same name holds an exclusive one). Stop ends Create Catalog at any statement but the restore
-itself (and its switch to read-write), because a half-restored catalog is worse than waiting: Stop during the restore lets it end,
-then removes what it created; Stop at a later statement, waiting for a lock or not, has SQL Server cancel it and removes what was
-created. Its reply waits for that, past the usual grace, a disconnect included, and lists the steps (the removal's own failures
-clipped to 2,048 characters). A backend that shuts down (a quit, a closed window, a renderer reload, Restart Backend) waits up to
+lock on it (another restore of the same name holds an exclusive one). Stop ends any statement after the restore at once, waiting for
+a lock or not; the restore itself (and its switch to read-write) gets 30 s more to end, because a half-restored catalog is worse than
+waiting, and only a restore still running then (waiting for a lock on msdb's backup history, say) is cancelled too, the database it left
+restoring dropped (one that turns out online is named for the user to delete). Then what was created is removed. The reply waits for
+that past the usual grace, up to 120 s more, a disconnect included, and lists the steps (the removal's own failures clipped to
+2,048 characters); past that it answers `CANCELLED` as not known yet, and the job goes on. Closing the window or quitting is
+refused while Create Catalog runs. A backend that shuts down anyway (a renderer reload, Restart Backend) waits up to
 120 s for a Create Catalog past its restore to finish or remove what it made, and main lets that generation run 130 s after its
 stdin ends (2 s otherwise) before it kills it; only a kill or a crash in that window leaves an incomplete catalog, which Create Catalog then
 refuses as `CATALOG_EXISTS` until its database is dropped. The CLR agreement is checked from the server's facts before any step, in a
-dry run too. The password is a parameter only, well-formed UTF-16 (a lone surrogate would reach the server as U+FFFD): it is never in
+dry run too, and the steps come only from one pure plan of those facts (`SsisCreate.Plan`). The password is a parameter only,
+well-formed UTF-16 (a lone surrogate would reach the server as U+FFFD): it is never in
 SQL text Varia builds, in messages, in logs or on disk, and the request's frame is zeroed on both sides.
 
 ### Code tables
@@ -478,6 +502,7 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `preflightLockTimeoutMs` | 10,000 | LOCK_TIMEOUT of a write's preflight, in ms (`BLOCKED`) |
 | `preflightMs` | 25,000 | A write's preflight budget, in ms, answered as `TIMEOUT` |
 | `stopGraceMs` | 10,000 | How long a stopped write's reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown) |
-| `createDrainMs` | 120,000 | How long a backend that is shutting down waits for a Create Catalog past its restore to finish, or to remove what it created, in ms |
+| `createDrainMs` | 120,000 | How long a backend that is shutting down waits for a Create Catalog past its restore to finish, or to remove what it created, in ms; a Stop or a disconnect waits as long past `stopGraceMs` |
+| `restoreStopMs` | 30,000 | How long Create Catalog's restore runs on after a Stop, a disconnect or a shutdown before SQL Server is asked to end it too, in ms |
 | `catalogPassword` | 128 | UTF-16 code units in Create Catalog's encryption password (at least 1; the server's password policy applies too) |
 | `serverPath` | 1,024 | Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files) |

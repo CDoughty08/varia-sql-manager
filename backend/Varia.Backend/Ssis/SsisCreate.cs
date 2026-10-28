@@ -29,14 +29,19 @@ internal sealed class CreatedObjects
 /// refuse alike. Messages are SSMS's own where it has one; none carries the password, SQL text or a connection string.</summary>
 internal static class SsisCreate
 {
-    /// <summary>What no server of this kind can do, answered before connecting: no catalog before 2016 or on Linux, and on Azure SQL
-    /// Database (5) and Managed Instance (8) an Azure-SSIS integration runtime creates the catalog (SSMS hides the verb there).</summary>
+    /// <summary>What no server of this kind can do, answered before connecting: on Azure SQL Database (5) and Managed Instance (8) an
+    /// Azure-SSIS integration runtime creates the catalog (SSMS hides the verb there); the explorer catalogue's other cloud editions
+    /// (Synapse, Azure SQL Edge, SQL database in Fabric) host none; and there is none before 2016 or on Linux. The platform first: a
+    /// cloud server's version says nothing of the catalog.</summary>
     public static SsisError? Unsupported(SsisCatalog catalog, ExplorerProfile served, int engineEdition, bool ignoreLinux)
     {
-        if (served.Band < 13) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later.");
-        if (served.Linux && !ignoreLinux) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux.");
         if (engineEdition is 5 or 8)
             return SsisErrors.Create(catalog, "NOT_SUPPORTED", "Create Catalog is not available on Azure SQL Database or Azure SQL Managed Instance: an Azure-SSIS integration runtime in Azure Data Factory creates that catalog.");
+        if (served.Cloud)
+            return SsisErrors.Create(catalog, "NOT_SUPPORTED", "Create Catalog is not available on this platform (engine edition " + engineEdition.ToString(CultureInfo.InvariantCulture)
+                + "): the SSIS Catalog runs on SQL Server 2016 or later on Windows, or in an Azure-SSIS integration runtime.");
+        if (served.Band < 13) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog needs SQL Server 2016 or later.");
+        if (served.Linux && !ignoreLinux) return SsisErrors.Create(catalog, "NOT_SUPPORTED", "The SSIS Catalog isn't supported on SQL Server on Linux.");
         return null;
     }
 
@@ -99,18 +104,41 @@ internal static class SsisCreate
         var limit = catalog.Limit("serverPath");
         if (new[] { facts.BackupFile, facts.AssemblyFile, facts.DataFile, facts.LogFile }.Any(path => path.Length > limit))
             return Error("NOT_SUPPORTED", "A path of the catalog's files is longer than " + limit.ToString("N0", CultureInfo.InvariantCulture) + " characters.");
-        // Enabling CLR ends with RECONFIGURE, which applies every pending change; the user agreed to CLR integration only.
-        if (!facts.ClrEnabled && facts.PendingConfiguration is { Length: > 0 } pending)
-            return Error("CONFIGURATION_PENDING", "Enabling CLR integration runs RECONFIGURE, which would also apply these pending server configuration changes: " + pending
-                + ". Apply them (RECONFIGURE) or undo them (sp_configure) first, or enable CLR integration yourself, then create the catalog.");
+        // Enabling CLR ends with RECONFIGURE, and sys.sp_procoption (the startup procedure, an earlier one's removal, the removal after
+        // a failure) with RECONFIGURE WITH OVERRIDE, which apply every pending change: the user agreed to none of them.
+        if (facts.PendingConfiguration is { Length: > 0 } pending) return Pending(catalog, pending);
         return null;
     }
+
+    /// <summary>CONFIGURATION_PENDING, naming the changes (from the setup read, or the guard's error in a step).</summary>
+    public static SsisError Pending(SsisCatalog catalog, string pending) => SsisErrors.Create(catalog, "CONFIGURATION_PENDING",
+        "Create Catalog reconfigures the server (RECONFIGURE to enable CLR integration, and sys.sp_procoption's RECONFIGURE WITH OVERRIDE for its startup procedure), which would also apply "
+        + "these pending server configuration changes: " + pending + ". Apply them (RECONFIGURE) or undo them (sp_configure) first, then create the catalog.");
+
+    /// <summary>Whether a step's error is the pending-configuration guard's (SsisCreateSql.PendingGuard), not the server's own.</summary>
+    public static bool IsPendingGuard(int number, byte state) => number == 50000 && state == SsisCreateSql.PendingState;
 
     /// <summary>Create Catalog's agreement to enable CLR integration, read from the facts whatever else runs (a dry run too): CLR_REQUIRED
     /// when it is off and the request did not agree, before anything changes.</summary>
     public static SsisError? ClrRefusal(SsisCatalog catalog, CatalogFacts facts, SsisActionDto action) => !facts.ClrEnabled && action.EnableClr != true
         ? SsisErrors.Create(catalog, "CLR_REQUIRED", "Integration Services uses CLR stored procedures. Enable CLR integration to create the catalog.")
         : null;
+
+    /// <summary>What Create Catalog does once its preflight passed (<see cref="Plan"/>): a refusal, or whether it enables CLR and its
+    /// steps in order. The steps Create Catalog runs come only from here.</summary>
+    internal sealed record CreatePlan(SsisError? Refusal, bool EnableClr, IReadOnlyList<string> Steps);
+
+    /// <summary>The decisions after the preflight, as one pure function the write follows: CLR_REQUIRED when CLR is off and the request
+    /// did not agree, with no step; CLR enabled first only when it is off and the request agreed (never in a dry run, which runs only
+    /// the restore and the master key); then the restore, the master key, and outside a dry run the assembly and startup procedure
+    /// and the maintenance job.</summary>
+    public static CreatePlan Plan(SsisCatalog catalog, CatalogFacts facts, SsisActionDto action, bool dryRun)
+    {
+        var titles = catalog.Action("createCatalog")!.Steps;
+        if (ClrRefusal(catalog, facts, action) is { } refused) return new(refused, false, []);
+        var enableClr = !facts.ClrEnabled && !dryRun;
+        return new(null, enableClr, [.. enableClr ? [titles[0]] : Array.Empty<string>(), titles[1], titles[2], .. dryRun ? Array.Empty<string>() : [titles[3], titles[4]]]);
+    }
 
     /// <summary>Whether text is well-formed UTF-16: every surrogate in a pair. A lone one cannot cross the wire (UTF-8) unchanged.</summary>
     public static bool WellFormed(string text)
@@ -144,6 +172,29 @@ internal static class SsisCreate
         if (created.Jobs) plan.Add((SsisCreateSql.DropJobs, []));
         if (created.Restored) plan.Add((SsisCreateSql.DropDatabase, [Name("@catalog", name), new SqlParameter("@restoring", SqlDbType.Bit) { Value = restoring }]));
         return plan;
+    }
+
+    /// <summary>What a removal command that failed leaves for the user to delete.</summary>
+    public static string Leftover(SsisCatalog catalog, SsisCreateCommand command, string name) => command.Id switch
+    {
+        "dropTrusted" => "the trusted assembly Create Catalog added for " + catalog.AssemblyFile + " (sys.sp_drop_trusted_assembly with its hash from sys.trusted_assemblies)",
+        "dropLoadingLogin" => "the ##MS_SQLEnableSystemAssemblyLoadingUser## login",
+        "dropStartup" => "master.dbo.sp_ssis_startup",
+        "dropJobs" => "the SSIS Server Maintenance Job and the ##MS_SSISServerCleanupJobLogin## login",
+        "dropDatabase" => "the " + name + " database",
+        _ => throw new InvalidOperationException("Not a removal command: " + command.Id + ".")
+    };
+
+    /// <summary>The end of a stopped or failed Create Catalog's message: what the removal did, or, naming only what is left (the
+    /// <paramref name="left"/> commands of <see cref="Removal"/>, in order), what to delete by hand; and that CLR integration stays
+    /// enabled when this request enabled it, either way.</summary>
+    public static string Outcome(SsisCatalog catalog, string name, IReadOnlyList<SsisCreateCommand> left, string? failure, bool clrEnabled)
+    {
+        var clr = clrEnabled ? " CLR integration stays enabled." : "";
+        if (left.Count == 0) return " Varia removed what Create Catalog had created, so the catalog does not exist." + clr;
+        var items = left.Select(command => Leftover(catalog, command, name)).ToList();
+        var list = items.Count == 1 ? items[0] : string.Join(", ", items[..^1]) + " and " + items[^1];
+        return " Removing what Create Catalog had created failed too (" + failure + "): delete " + list + " before you try again." + clr;
     }
 
     /// <summary>The backup's logical files (RESTORE FILELISTONLY), or why it cannot serve: unreadable, or not the files a catalog

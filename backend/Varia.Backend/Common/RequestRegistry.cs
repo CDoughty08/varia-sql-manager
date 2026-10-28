@@ -14,14 +14,10 @@ internal sealed class RequestRegistry(int capacity, string noun)
         public string ConnectionId { get; } = connectionId;
         /// <summary>A disconnect or shutdown cancelled it; the request answers CANCELLED rather than its own timeout.</summary>
         public bool Forgotten { get; private set; }
-        private readonly CancellationTokenSource forgotten = new();
-        /// <summary>Cancelled by a disconnect or shutdown only, never by Stop: what a reply that outlives Stop still waits on.</summary>
-        public CancellationToken ForgottenToken => forgotten.Token;
 
         public void Forget()
         {
             Forgotten = true;
-            forgotten.Cancel();
             try { source.Cancel(); } catch (ObjectDisposedException) { /* Finished concurrently. */ }
         }
     }

@@ -317,13 +317,17 @@ try {
   await expect(clr).not.toBeChecked()
   await expect(clr).toBeEnabled()
   await expect(password).toBeDisabled()
-  await expect(createDialog().getByLabel('Enable automatic execution of Integration Services stored procedure at SQL Server startup', { exact: true })).toBeDisabled()
+  const startup = createDialog().getByLabel('Enable automatic execution of Integration Services stored procedure at SQL Server startup', { exact: true })
+  await expect(startup).toBeDisabled()
   await expect(createDialog().getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
   await expect(createDialog().getByText(String.raw`C:\Program Files\Microsoft SQL Server\170\DTS\Binn\SSISDBBackup.bak`, { exact: true })).toBeVisible()
   await expect(createDialog().locator('.create-catalog-steps li')).toHaveText(['Enable CLR integration', 'Restore the catalog database', 'Create the master key',
     'Register the Integration Services assembly and startup procedure', 'Create the maintenance job'])
   await clr.check()
   await expect(password).toBeEnabled()
+  // The startup box as the user leaves it reaches the request.
+  await expect(startup).not.toBeChecked()
+  await startup.check()
   await page.screenshot({ path: resolve('artifacts', 'object-actions-create-catalog-dark.png') })
   const secret = "Pa'ss]--w0rd ünï"
   await password.fill(secret)
@@ -334,7 +338,7 @@ try {
   await retype.fill(secret)
   await createDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(createDialog()).toHaveCount(0)
-  expect(await stubCalls('ssis.execute')).toEqual([expect.objectContaining({ action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: false } })])
+  expect(await stubCalls('ssis.execute')).toEqual([expect.objectContaining({ action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: true } })])
   await expect(explorerTree(page)).toBeFocused()
   await expandExplorerPath(page, ...catalogs)
   await expect(await explorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()

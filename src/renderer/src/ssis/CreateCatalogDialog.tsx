@@ -55,7 +55,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
     trapFocus(event)
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!executing) close() }
   }
-  const status = open.phase === 'loading' ? 'Reading the server…' : executing ? (open.stopping ? 'Stopping… A restore that has started runs to its end; then Create Catalog removes what it created.' : 'Creating the catalog…') : ''
+  const status = open.phase === 'loading' ? 'Reading the server…' : executing ? (open.stopping ? `Stopping… A restore that has started gets up to ${ssisLimits.restoreStopMs / 1000} s more to end; then Create Catalog removes what it created.` : 'Creating the catalog…') : ''
   const steps = open.steps ?? []
   const describedBy = open.problem ? 'create-catalog-problem' : undefined
   return <div className="modal-backdrop"><form ref={form} className="connection-modal create-catalog-dialog" role="dialog" aria-modal="true" aria-labelledby="create-catalog-title" noValidate tabIndex={-1}
