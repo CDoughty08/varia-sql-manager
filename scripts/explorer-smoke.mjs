@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
-import { copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerLabel, explorerToolbar, messages, outputView, part, quickInput, serverRows, primaryAction, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
+import { activeServerRows, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount, messages, outputView, part, quickInput, serverRows, primaryAction, staleBadge, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -42,6 +42,7 @@ const editorText = () => editorTextOf(page)
 const tabs = () => documentTabs(page).getByRole('tab')
 const toolbarButton = name => explorerToolbar(page).getByRole('button', { name, exact: true })
 const menu = name => page.getByRole('menu', { name, exact: true })
+const filterBox = () => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
 const isFolder = (params, folder) => params.node.type === 'folder' && params.node.folder === folder
 /** The row `aria-activedescendant` names, as a screen reader finds it. */
 const active = () => page.evaluate(text => {
@@ -192,10 +193,10 @@ try {
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'true')
   await press('NumpadSubtract', 'Databases')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'false')
-  await press('End', 'Server Objects')
+  await press('End', 'Integration Services Catalogs')
   expect((await active()).level).toBe(2)
   await press('Home', 'server-a')
-  await press('PageDown', 'Server Objects')
+  await press('PageDown', 'Integration Services Catalogs')
   await press('PageUp', 'server-a')
   await page.keyboard.type('sec')
   await expect.poll(async () => (await active())?.label).toBe('Security')
@@ -263,12 +264,16 @@ try {
   // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Shift+Tab')
+  await expect(filterBox()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
   for (let step = 0; step < 6 && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
   expect(await focusedTool()).toBe('Stop')
   await page.keyboard.press('Enter')
   await expect(stopped).toBeVisible()
   await expect(toolbarButton('Stop')).toBeDisabled()
   await expect.poll(focusedTool).toBe('Filter Settings')
+  await page.keyboard.press('Tab')
+  await expect(filterBox()).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
@@ -361,7 +366,7 @@ try {
     expect(await activeInView()).toBe(true)
     await phase('End and Home')
     await press('End')
-    await expect.poll(async () => (await active())?.label).toBe('Server Objects')
+    await expect.poll(async () => (await active())?.label).toBe('Integration Services Catalogs')
     expect((await active()).level).toBe(2)
     await expect.poll(rowsInView).toBeGreaterThan(5)
     rows = Math.max(rows, await renderedRows())
@@ -563,9 +568,10 @@ try {
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  // The toolbar is one tab stop: Shift+Tab from the tree reaches it, the arrows, Home and End move between its enabled
-  // buttons (wrapping), Tab goes on to the tree, and the toolbar remembers the button last used.
+  // The toolbar is one tab stop: Shift+Tab from the tree reaches it past the filter box, the arrows, Home and End move
+  // between its enabled buttons (wrapping), Tab goes on to the box and the tree, and the toolbar remembers the button last used.
   await tree().focus()
+  await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   const tools = await enabledTools(), first = tools.indexOf(await focusedTool())
   expect(first).toBeGreaterThanOrEqual(0)
@@ -580,12 +586,209 @@ try {
   await page.keyboard.press('End')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
+  await expect(filterBox()).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
   await page.keyboard.press('Shift+Tab')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: Ctrl+N on a database, F8, Filter Settings in the palette, and the toolbar\'s arrow keys.')
+
+  // 10b. The server row, item counts, the footer's freshness and the Filter loaded objects box.
+  await setStub({ tables: 3 })
+  await expandExplorerPath(page, 'server-a', 'Databases', 'AppData', 'Tables')
+  await select('server-a', 'Databases', 'AppData', 'Tables')
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
+  const serverRow = await explorerRow(page, 'server-a'), tablesFolder = await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables')
+  // Servers are 30 px rows with their version and login in brief and a filled dot; other rows are 22 px, in 13 px text.
+  expect(await serverRow.evaluate(row => row.getBoundingClientRect().height)).toBe(30)
+  expect(await tablesFolder.evaluate(row => row.getBoundingClientRect().height)).toBe(22)
+  await expect(explorerLabel(tablesFolder)).toHaveCSS('font-size', '13px')
+  await expect(explorerSublabel(serverRow)).toHaveText('16.0 · sa')
+  await expect(serverRow).toHaveAttribute('title', /^server-a \(SQL Server 16\.0\.4135\.4 - sa\)/)
+  await expect(connectionDot(serverRow)).toHaveAttribute('data-state', 'online')
+  // One server, the active query's, ends with the accent glyph; no tint marks it, so it never passes for a selected or hovered row.
+  await expect(activeServerRows(page)).toHaveCount(1)
+  await expect(activeServerRows(page)).toHaveAttribute('aria-selected', 'false')
+  const fills = await activeServerRows(page).evaluate(row => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--varia-sideBar-background)'
+    document.body.append(probe)
+    const sideBar = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { row: row.matches(':hover') ? 'hovered' : getComputedStyle(row).backgroundColor, sideBar }
+  })
+  expect(fills.row).toBe(fills.sideBar)
+  // The row below a server row starts where it ends.
+  const gap = await page.evaluate(selector => {
+    const [server, next] = [...document.querySelectorAll(selector + ' [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+    return next.getBoundingClientRect().top - server.getBoundingClientRect().bottom
+  }, part.explorerTree)
+  expect(gap).toBe(0)
+  // Tables lists 3 objects after its static folders; the count is muted and right-aligned, and the tooltip says it.
+  await expect(itemCount(tablesFolder)).toHaveText('3')
+  await expect(tablesFolder).toHaveAttribute('title', /\n3 items/)
+  await expect(tablesFolder).toHaveAttribute('aria-description', '3 items')
+  const ends = await tablesFolder.evaluate((row, selector) => ({ count: row.querySelector(selector).getBoundingClientRect().right, row: row.getBoundingClientRect().right }), part.explorerCount)
+  expect(ends.row - ends.count).toBeLessThan(16)
+  // The footer: the selected folder's listing was just loaded, and a row is described by the listing it is in.
+  await expect(explorerFreshness(page)).toHaveText(/^Tables·Updated (just now|\d+ s ago)$/)
+  await select('server-a', 'Databases', 'AppData', 'Tables', 'dbo.table1')
+  await expect(explorerFreshnessScope(page)).toHaveText('Tables')
+  await expect(explorerServerCount(page)).toHaveText('2 connected servers')
+  // Typing narrows the tree to loaded matches with their parents, bold where they match, without asking the backend.
+  const requested = (await stubCalls()).length
+  await filterBox().click()
+  // The field shows the controls' 2 px ring at 2 px, around the field rather than the input.
+  expect(await explorerFilterField(page).evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineOffset] })).toEqual(['solid', '2px', '2px'])
+  await page.keyboard.type('ORD')
+  // dbo.Orders matches, so its expanded rows show as they are (an earlier step left Columns open); the selected
+  // dbo.table1 stays listed, so nothing acts on a row out of sight.
+  const ordLines = ['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [true]', '5 dbo.Orders [true]', '6 Columns [true]', '7 Id', '7 CustomerName',
+    '6 Keys [false]', '6 Constraints [false]', '6 Triggers [false]', '6 Indexes [false]', '6 Statistics [false]', '5 dbo.table1 [false]', '1 server-b [true]']
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines)
+  await expect(explorerMatches(page)).toHaveText(['Ord'])
+  await expect(liveRegion()).toHaveText('Filter: 1 loaded item matches')
+  // Tables shows 2 of its 3 rows (the match and the selection), so it leaves its count out, on screen and in words.
+  await expect(itemCount(tablesFolder)).toHaveCount(0)
+  await expect(tablesFolder).not.toHaveAttribute('aria-description', /items?$/)
+  await expect(tablesFolder).not.toHaveAttribute('title', /\n3 items/)
+  expect((await stubCalls()).length).toBe(requested)
+  // ↓ moves to the first match in the tree; Escape in the box clears it and shows the selection in context again.
+  await page.keyboard.press('ArrowDown')
+  await expect(tree()).toBeFocused()
+  await expect.poll(async () => (await active())?.label).toBe('dbo.Orders')
+  // Collapsing Tables, shown only for the match below it, keeps it listed, selected and in view; expanding it shows the match again.
+  await press('ArrowLeft', 'dbo.Orders')
+  await press('ArrowLeft', 'Tables')
+  await press('ArrowLeft', 'Tables')
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [false]', '1 server-b [true]'])
+  expect(await activeInView()).toBe(true)
+  await press('ArrowRight', 'Tables')
+  await press('ArrowRight', 'dbo.Orders')
+  await press('ArrowRight', 'dbo.Orders')
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
+  // Text that matches nothing says so under the box, with Clear filter; the selection stays in view.
+  await filterBox().fill('zzz')
+  const noMatch = explorerNoMatch(page)
+  await expect(emptyStateDetail(noMatch)).toHaveText('No loaded objects match “zzz”')
+  await expect(liveRegion()).toHaveText('Filter: no loaded items match')
+  expect(await activeInView()).toBe(true)
+  // Tab passes Clear filter to the tree, whose active row is the selection the text left listed.
+  await page.keyboard.press('Tab')
+  await expect(noMatch.getByRole('button', { name: 'Clear filter', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(tree()).toBeFocused()
+  expect(await active()).toMatchObject({ label: 'dbo.Orders', selected: 'true' })
+  await noMatch.getByRole('button', { name: 'Clear filter', exact: true }).click()
+  await expect(filterBox()).toHaveValue('')
+  await expect(filterBox()).toBeFocused()
+  await expect(noMatch).toHaveCount(0)
+  await page.keyboard.type('ORD')
+  await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
+  await filterBox().focus()
+  await page.keyboard.press('Escape')
+  await expect(filterBox()).toHaveValue('')
+  await expect(filterBox()).toBeFocused()
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  await expect(explorerMatches(page)).toHaveCount(0)
+  await expect(itemCount(tablesFolder)).toHaveText('3')
+  await page.keyboard.press('Escape')
+  await expect(tree()).toBeFocused()
+  expect(await activeInView()).toBe(true)
+  if (process.platform !== 'darwin') {
+    // The palette's Filter Loaded Objects focuses the box.
+    await page.keyboard.press('F1')
+    await page.keyboard.type('filter loaded')
+    await expect(quickInput(page).getByRole('option', { name: /^Object Explorer: Filter Loaded Objects/ })).toHaveCount(1)
+    await page.keyboard.press('Enter')
+    await expect(filterBox()).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(tree()).toBeFocused()
+  }
+  // Forced colors: the dot keeps its shape, in the system's text colour.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const dot = await connectionDot(serverRow).evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(dot.background).toBe(dot.border)
+  expect(dot.background).not.toBe('rgba(0, 0, 0, 0)')
+  // A refresh that fails keeps the old rows: the footer says since when they are stale, at the height it had, and the
+  // lost connection turns the server's dot into a ring, in forced colors too. The next load clears both.
+  await select('server-a', 'Databases', 'AppData', 'Tables')
+  const footer = explorerFooter(page), footerHeight = () => footer.evaluate(element => element.getBoundingClientRect().height)
+  const freshHeight = await footerHeight()
+  await setStub({ tablesError: 'CONNECTION_LOST' })
+  await press('F5')
+  await expect(staleBadge(footer)).toHaveText(/^Stale since /)
+  await expect(staleBadge(footer)).toHaveAttribute('data-stale', '')
+  expect(await footerHeight()).toBe(freshHeight)
+  await expect(connectionDot(serverRow)).toHaveAttribute('data-state', 'error')
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
+  await page.emulateMedia({ forcedColors: 'active' })
+  const ring = await connectionDot(serverRow).evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(ring.background).not.toBe(ring.border)
+  expect(ring.border).not.toBe('rgba(0, 0, 0, 0)')
+  await setStub({ tablesError: undefined })
+  await refreshTo('tables', ['server-a', 'Databases', 'AppData', 'Tables'], ['dbo.Orders', 'dbo.table1', 'dbo.table2'])
+  await expect(explorerFreshness(page)).toHaveText(/^Tables·Updated (just now|\d+ s ago)$/)
+  await expect(connectionDot(serverRow)).toHaveAttribute('data-state', 'online')
+  expect(await footerHeight()).toBe(freshHeight)
+  // Later steps start from what they found before: AppData collapsed (which also brings Server Objects into view).
+  await select('server-a', 'Databases', 'AppData')
+  await press('ArrowLeft', 'AppData')
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toHaveAttribute('aria-expanded', 'false')
+  // The footer never shows a fragment: the server count shows whole beside a long listing name, or not at all, at the
+  // default width and in a 200 px pane, where only the listing's name may give way.
+  const serverObjects = await explorerRow(page, 'server-a', 'Server Objects'), wasExpanded = await serverObjects.getAttribute('aria-expanded')
+  await expandExplorerPath(page, 'server-a', 'Server Objects')
+  await select('server-a', 'Server Objects')
+  await expect(explorerFreshnessScope(page)).toHaveText('Server Objects')
+  const footerFit = () => page.evaluate(part => {
+    const footer = document.querySelector(part.explorerFooter), box = footer.getBoundingClientRect(), bottom = box.bottom - parseFloat(getComputedStyle(footer).paddingBottom)
+    const count = footer.querySelector(part.explorerServers), servers = count.getBoundingClientRect(), clipped = element => element.scrollWidth > element.clientWidth
+    return {
+      servers: servers.top >= bottom ? 'hidden' : servers.bottom <= bottom && servers.right <= box.right && !clipped(count) ? 'whole' : 'fragment',
+      clipped: [...footer.querySelectorAll(`${part.explorerFreshnessScope}, ${part.staleBadge}`)].filter(clipped).map(element => element.className)
+    }
+  }, part)
+  const pane = explorerFooter(page).locator('..')
+  for (const width of [undefined, 200]) {
+    if (width) await pane.evaluate((element, value) => { element.style.width = value }, `${width}px`)
+    const fit = await footerFit()
+    expect(fit.servers).not.toBe('fragment')
+    if (!width) expect(fit.clipped).toEqual([])
+  }
+  await pane.evaluate(element => { element.style.width = '' })
+  // RowEnd's slot holds E2's environment tag (later E3's chips): with the tag's own markup and rules, a custom label shows
+  // whole where there is room, and in a 200 px pane gives way (ellipsized) while the dot stays inside the row.
+  const tagFit = text => serverRow.evaluate((row, { text, part }) => {
+    const tag = document.createElement('span'), pill = document.createElement('span'), label = document.createElement('span')
+    tag.className = part.environmentTag.slice(1)
+    tag.dataset.place = 'explorer'
+    pill.className = part.statusPill.slice(1) + ' tag small'
+    pill.dataset.tone = 'neutral'
+    label.className = part.statusPillLabel.slice(1)
+    label.textContent = text
+    pill.append(label)
+    tag.append(pill)
+    row.querySelector(part.explorerEnd).prepend(tag)
+    const result = { whole: label.scrollWidth <= label.clientWidth, dotInside: row.querySelector(part.explorerDot).getBoundingClientRect().right <= row.getBoundingClientRect().right, label: row.querySelector(part.explorerLabel).getBoundingClientRect().width }
+    tag.remove()
+    return result
+  }, { text, part })
+  expect(await tagFit('PRODUCTION')).toMatchObject({ whole: true, dotInside: true })
+  await pane.evaluate(element => { element.style.width = '200px' })
+  const narrow = await tagFit('PRODUCTION EU WEST')
+  await pane.evaluate(element => { element.style.width = '' })
+  expect(narrow).toMatchObject({ whole: false, dotInside: true })
+  expect(narrow.label).toBeGreaterThan(0)
+  if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
+  await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts (left out while filtered), the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

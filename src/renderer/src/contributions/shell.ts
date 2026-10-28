@@ -56,7 +56,7 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, explorer }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'explorer'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
   const lostNode = (args: CommandArgs | undefined) => {
@@ -69,6 +69,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
+    // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.
+    commands.register('explorer.filterLoaded', { run: () => { host.reveal('explorer'); explorer.focusQuickFilter() } }),
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     commands.register('window.output', { run: () => host.reveal('output') }),
     // SSMS's Ctrl+R: hiding the results puts focus in the query editor; showing them leaves focus where it is.

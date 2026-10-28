@@ -733,8 +733,13 @@
         },
         "objectExplorer.activeConnectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row of the active query's server. Default $accentSurface (Dark #232842, Light #dde1f9).",
-          "markdownDescription": "(Varia) Row of the active query's server. Default `$accentSurface` (Dark `#232842`, Light `#dde1f9`)."
+          "description": "(Varia) Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). Default $sideBar (Dark #111317, Light #f7f8fa).",
+          "markdownDescription": "(Varia) Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). Default `$sideBar` (Dark `#111317`, Light `#f7f8fa`)."
+        },
+        "objectExplorer.activeConnectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Glyph at the end of the active query's server row. Default $accent (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(Varia) Glyph at the end of the active query's server row. Default `$accent` (Dark `#8f9cff`, Light `#4453d0`)."
         },
         "objectExplorer.headingForeground": {
           "$ref": "#/definitions/value",
@@ -748,8 +753,8 @@
         },
         "objectExplorer.countForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) The (filtered) marker and loading progress next to folder labels. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(Varia) The (filtered) marker and loading progress next to folder labels. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(Varia) Item counts at the end of folder rows, the (filtered) marker and loading progress. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) Item counts at the end of folder rows, the (filtered) marker and loading progress. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "objectExplorer.chevronForeground": {
           "$ref": "#/definitions/value",
@@ -770,6 +775,21 @@
           "$ref": "#/definitions/value",
           "description": "(Varia) Object Explorer toolbar icons. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
           "markdownDescription": "(Varia) Object Explorer toolbar icons. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
+        },
+        "objectExplorer.connectedIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Dot at the end of a connected server's row. Default $success (Dark #74d19c, Light #146f3b).",
+          "markdownDescription": "(Varia) Dot at the end of a connected server's row. Default `$success` (Dark `#74d19c`, Light `#146f3b`)."
+        },
+        "objectExplorer.connectionErrorIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Ring at the end of a server's row while its connection fails to load. Default @errorForeground (Dark #f39a9a, Light #b42229).",
+          "markdownDescription": "(Varia) Ring at the end of a server's row while its connection fails to load. Default `@errorForeground` (Dark `#f39a9a`, Light `#b42229`)."
+        },
+        "objectExplorer.disconnectedIndicator": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Ring at the end of a server's row once its connection was lost with the SQL backend. Default $textMuted (Dark #9298a4, Light #5c6370).",
+          "markdownDescription": "(Varia) Ring at the end of a server's row once its connection was lost with the SQL backend. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
         },
         "editorGroupHeader.tabsBackground": {
           "$ref": "#/definitions/value",

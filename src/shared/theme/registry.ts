@@ -94,14 +94,18 @@ const groups = {
     'list.focusHighlightForeground': ['V', '@quickInputList.focusForeground', 'Matching characters on the focused row of the editor\'s suggestions. The row\'s own text color by default, as the command palette\'s active row does: the match color is faint on that fill.', 'monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
     'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
-    'objectExplorer.activeConnectionBackground': ['X', '$accentSurface', 'Row of the active query\'s server.', 'css'],
+    'objectExplorer.activeConnectionBackground': ['X', '$sideBar', 'Row of the active query\'s server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection).', 'css'],
+    'objectExplorer.activeConnectionForeground': ['X', '$accent', 'Glyph at the end of the active query\'s server row.', 'css'],
     'objectExplorer.headingForeground': ['X', '$text', 'Folder row labels.', 'css'],
     'objectExplorer.sublabelForeground': ['X', '$textSecondary', 'Text after a row\'s label, such as a column\'s type or a database\'s state.', 'css'],
-    'objectExplorer.countForeground': ['X', '$textMuted', 'The (filtered) marker and loading progress next to folder labels.', 'css'],
+    'objectExplorer.countForeground': ['X', '$textMuted', 'Item counts at the end of folder rows, the (filtered) marker and loading progress.', 'css'],
     'objectExplorer.chevronForeground': ['X', '$iconMuted', 'Expand and collapse chevrons.', 'css'],
     'objectExplorer.folderIconForeground': ['X', '$iconFolder', 'Folder glyphs.', 'css'],
     'objectExplorer.objectIconForeground': ['X', '$icon', 'Glyphs of tables and other objects.', 'css'],
-    'objectExplorer.actionForeground': ['X', '$textTertiary', 'Object Explorer toolbar icons.', 'css']
+    'objectExplorer.actionForeground': ['X', '$textTertiary', 'Object Explorer toolbar icons.', 'css'],
+    'objectExplorer.connectedIndicator': ['X', '$success', 'Dot at the end of a connected server\'s row.', 'css'],
+    'objectExplorer.connectionErrorIndicator': ['X', '@errorForeground', 'Ring at the end of a server\'s row while its connection fails to load.', 'css'],
+    'objectExplorer.disconnectedIndicator': ['X', '$textMuted', 'Ring at the end of a server\'s row once its connection was lost with the SQL backend.', 'css']
   },
   'Dock and docking compass': {
     'editorGroupHeader.tabsBackground': ['V', '$chrome', 'Tab strip of dock groups, including floating groups.', 'css'],

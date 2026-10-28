@@ -7,10 +7,10 @@ import { EventBus } from '../src/renderer/src/core/events'
 import type { Timers } from '../src/renderer/src/core/timers'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService } from '../src/renderer/src/services/connections'
-import { ExplorerService, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
-import { RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
+import { rowIndex, RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
@@ -132,7 +132,9 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   events.subscribe(event => emitted.push(event))
   const clock = steppedTimers()
   let ids = 0
-  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits })
+  // The wall clock listings are stamped with; tests move it by hand.
+  const wall = { now: 1_800_000_000_000 }
+  const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
   disposals.push(() => explorer.dispose())
   const connect = (name = 'server-a') => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa' }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
@@ -150,7 +152,50 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
     return under!
   }
   const calls = () => backend.sent.map(entry => entry.params)
-  return { ...backend, backend, explorer, connections, events, emitted, clock, connect, rows, labels, find, open, calls }
+  return { ...backend, backend, explorer, connections, events, emitted, clock, wall, connect, rows, labels, find, open, calls }
+}
+
+/** Measure reconciliation's work, not a shared runner's GC pauses or setTimeout(0) wakeup time. Old refs count matching
+ *  work; table reads catch a scan of every pending load for each unchanged leaf. Flattening visits the visible nodes
+ *  directly, so it does not charge a table lookup for every visible row. */
+async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, matches: (params: ExplorerChildrenParams) => boolean = isFolder('tables')) {
+  let refs = 0, lookups = 0
+  const table = f.explorer.table, get = table.get
+  table.get = function(id) { lookups++; return get.call(this, id) }
+  for (const child of f.explorer.node(tables)!.children!) {
+    const ref = child.ref
+    Object.defineProperty(child, 'ref', { configurable: true, enumerable: true, get: () => { refs++; return ref } })
+  }
+  let pages = 0
+  try {
+    for (;;) {
+      const pending = f.sent.filter(entry => !entry.settled && matches(entry.params))
+      if (!pending.length) break
+      expect(pending).toHaveLength(1)
+      const offset = pending[0].params.cursor ? Number(pending[0].params.cursor.split('.')[2]) : 0
+      const count = Math.min(f.state.pageSize, f.state.tables.length - offset) + (offset === 0 ? 1 : 0)
+      const version = f.explorer.getSnapshot().version
+      refs = lookups = 0
+      f.release(matches)
+      // The next page stays unanswered across this event-loop turn: its predecessor must be published independently.
+      await settle()
+      // Work grows with the arriving page, rather than the old folder or the unrelated pending-load queue per row.
+      const budget = count * 16
+      expect(refs, `page ${pages + 1}: old-node identity reads`).toBeLessThanOrEqual(budget)
+      expect(lookups, `page ${pages + 1}: node-table reads`).toBeLessThanOrEqual(budget)
+      const loaded = Math.min(offset + f.state.pageSize, f.state.tables.length)
+      expect(f.explorer.node(tables)!.children![loaded].label).toBe(f.state.tables[loaded - 1])
+      expect(f.explorer.getSnapshot().version).toBeGreaterThan(version)
+      const next = f.sent.filter(entry => !entry.settled && matches(entry.params))
+      expect(next).toHaveLength(loaded < f.state.tables.length ? 1 : 0)
+      // A user selection is still applied while the next page waits, rather than waiting for the entire folder.
+      const selected = pages % 2 ? tables : f.explorer.node(tables)!.children![1].id
+      f.explorer.select(selected)
+      expect(f.explorer.getSnapshot().selected).toBe(selected)
+      pages++
+    }
+    return pages
+  } finally { table.get = get }
 }
 
 describe('ExplorerService: loading', () => {
@@ -880,7 +925,7 @@ describe('ExplorerService: reconcile', () => {
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added')
     expect(f.emitted.slice(events).filter(event => event.type === 'explorer.refreshed')).toEqual([])
   })
-  it('reconciles a folder of 99,000 rows page by page, each page within the budget', async () => {
+  it('reconciles 99,000 rows with bounded matching work and publishes each page before the next', async () => {
     const f = fixture()
     const names = Array.from({ length: 99_000 }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names
@@ -893,21 +938,12 @@ describe('ExplorerService: reconcile', () => {
     f.state.tables = [...names.slice(1), 'dbo.Extra']
     f.hold(isFolder('tables'))
     f.explorer.reconcile(tables)
-    const durations: number[] = []
-    while (f.sent.some(entry => !entry.settled)) {
-      const start = performance.now()
-      f.release()
-      await settle()
-      durations.push(performance.now() - start)
-    }
-    expect(durations).toHaveLength(50)
+    expect(await reconcilePages(f, tables)).toBe(50)
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.node(tables)!.children!.at(-1)!.label).toBe('dbo.Extra')
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
-    // A garbage collection can land in any page.
-    expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
   })
-  it('reconciles 99,000 rows without chevrons page by page within the budget while 300 loads wait on another server', async () => {
+  it('reconciles 99,000 leaves with bounded work while 300 loads wait on another server', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 300 }, (_, index) => `dbo.Wait${index}`)
     f.connect('server-a')
@@ -928,18 +964,10 @@ describe('ExplorerService: reconcile', () => {
     const isA = (params: ExplorerChildrenParams) => params.connectionId === cid('server-a') && isFolder('tables')(params)
     f.hold(isA)
     f.explorer.reconcile(tables)
-    const durations: number[] = []
-    while (f.sent.some(entry => !entry.settled && isA(entry.params))) {
-      const start = performance.now()
-      f.release(isA)
-      await settle()
-      durations.push(performance.now() - start)
-    }
-    expect(durations).toHaveLength(50)
+    expect(await reconcilePages(f, tables, isA)).toBe(50)
     expect(f.explorer.node(tables)!.children).toHaveLength(99_001)
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Tables: 1 added, 1 removed')
     expect(f.explorer.context.getSnapshot().explorerLoading).toBe(true)
-    expect(durations.filter(ms => ms >= 25).length, durations.map(ms => ms.toFixed(1)).join(' ')).toBeLessThanOrEqual(2)
   })
 })
 
@@ -1363,26 +1391,37 @@ describe('ExplorerService: memory and speed', () => {
     expect(id.ref.object.parent).toBe(name.ref.object.parent)
     expect(id.ref.object.parent).toEqual({ kind: 'table', schema: 'dbo', name: 'T0' })
   })
-  it('merges a 2,000-node page and republishes within the budget', async () => {
+  it('shares a folder\'s owner only when every identity field matches, SSIS folder and project included', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const appData: ObjectRef = { kind: 'database', name: 'AppData' }
+    const databases = await f.open('Databases')
+    f.state.failNext = { ok: true, value: { nodes: [folder({ ...appData, ssisFolder: 'Finance' }, 'tables'), folder({ ...appData, ssisProject: 'Loads' }, 'views'), folder(appData, 'synonyms')], elapsedMs: 1, total: 3 } }
+    await f.open('AppData')
+    const database = f.explorer.node(f.find('AppData', databases))!
+    const [tables, views, synonyms] = database.children!
+    if (database.ref.type !== 'object' || tables.ref.type !== 'folder' || views.ref.type !== 'folder' || synonyms.ref.type !== 'folder') throw new Error('Unexpected refs.')
+    expect(tables.ref.owner).toEqual({ ...appData, ssisFolder: 'Finance' })
+    expect(views.ref.owner).toEqual({ ...appData, ssisProject: 'Loads' })
+    expect(synonyms.ref.owner).toBe(database.ref.object)
+    expect(new Set([tables, views, synonyms].map(node => f.explorer.keyOf(node.id))).size).toBe(3)
+  })
+  it('merges a 2,000-node page with bounded matching work and republishes it', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 2000 }, (_, index) => `dbo.Table${index}`)
     f.connect()
     await settle()
     const tables = await f.open('Databases', 'AppData', 'Tables')
-    let best = Infinity
-    for (let run = 0; run < 3; run++) {
-      f.hold(isFolder('tables'))
-      f.explorer.refresh(tables)
-      const start = performance.now()
-      f.release()
-      await settle()
-      best = Math.min(best, performance.now() - start)
-    }
+    const before = f.explorer.node(tables)!.children!.slice()
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    expect(await reconcilePages(f, tables)).toBe(1)
     expect(f.explorer.node(tables)!.children).toHaveLength(2001)
+    expect(f.explorer.node(tables)!.children!.every((child, index) => child === before[index])).toBe(true)
     expect(f.rows().count).toBeGreaterThan(2000)
-    expect(best).toBeLessThan(25)
   })
-  it('refreshes a folder of 100,000 rows to 2,000 within the budget, deleting the old rows later', async () => {
+  it('refreshes a folder of 100,000 rows to 2,000 with bounded matching work before deleting the old rows', async () => {
     const f = fixture()
     const names = (count: number) => Array.from({ length: count }, (_, index) => `dbo.Table${index}`)
     f.state.tables = names(100_000)
@@ -1390,48 +1429,65 @@ describe('ExplorerService: memory and speed', () => {
     f.connect()
     await settle()
     const tables = await f.open('Databases', 'AppData', 'Tables')
-    const durations: number[] = []
-    for (let run = 0; run < 3; run++) {
-      f.state.tables = names(2000)
-      f.explorer.refresh(tables)
-      const start = performance.now()
-      await settle()
-      durations.push(performance.now() - start)
-      expect(f.explorer.node(tables)!.children).toHaveLength(2001)
-      expect(f.explorer.size).toBeLessThan(3000)
-      while (f.clock.step()) { /* the old rows' deletion slices */ }
-      f.state.tables = names(100_000)
-      f.explorer.refresh(tables)
-      await settle()
-    }
-    // Best of three runs: a garbage collection can land in any of them.
-    expect(Math.min(...durations)).toBeLessThan(25)
+    const before = f.explorer.node(tables)!.children!.slice(), removed = before.at(-1)!
+    f.state.tables = names(2000)
+    f.hold(isFolder('tables'))
+    f.explorer.refresh(tables)
+    expect(await reconcilePages(f, tables)).toBe(1)
+    expect(f.explorer.node(tables)!.children).toHaveLength(2001)
+    expect(f.explorer.node(tables)!.children!.every((child, index) => child === before[index])).toBe(true)
+    expect(f.explorer.size).toBeLessThan(3000)
+    expect(Array.from(f.rows().ids)).not.toContain(removed.id)
+    // The replacement page is visible and selectable before any old node is physically deleted.
+    expect(f.explorer.table.get(removed.id)).toBe(removed)
+    const selected = before[2000].id
+    f.explorer.select(selected)
+    expect(f.explorer.getSnapshot().selected).toBe(selected)
+    let slices = 0
+    while (f.clock.step()) slices++
+    expect(slices).toBeGreaterThan(1)
+    expect(f.explorer.table.get(removed.id)).toBeUndefined()
+    expect(f.explorer.node(selected)).toBe(before[2000])
   })
-  it('deletes a 100,000-node subtree in slices of 10,000 that each stay within the budget', async () => {
+  it('deletes a 100,000-node subtree in slices of at most 10,000 while the surviving server stays usable', async () => {
     const f = fixture()
     f.state.tables = Array.from({ length: 100_000 }, (_, index) => `dbo.Table${index}`)
     f.state.pageSize = 100_000
-    const longest: number[] = []
-    for (const name of ['server-a', 'server-b', 'server-c']) {
-      f.connect(name)
-      await settle()
-      const root = f.find(`${name}.example`)
-      await f.open('Databases', 'AppData', 'Tables')
-      expect(f.explorer.size).toBeGreaterThan(100_000)
-      f.connections.remove(cid(name))
-      expect(f.rows().count).toBe(0)
-      const slices: number[] = []
-      for (;;) {
-        const start = performance.now()
-        if (!f.clock.step()) break
-        slices.push(performance.now() - start)
+    f.connect()
+    await settle()
+    const root = f.find('server-a.example')
+    await f.open('Databases', 'AppData', 'Tables')
+    const removedCount = f.explorer.size
+    expect(removedCount).toBeGreaterThan(100_000)
+    f.connect('server-b')
+    await settle()
+    const survivor = f.find('server-b.example'), security = f.find('Security', survivor)
+    const table = f.explorer.table as Map<number, unknown>, remove = table.delete
+    let deleted = 0
+    table.delete = function(id) { deleted++; return remove.call(this, id) }
+    try {
+      f.connections.remove(cid('server-a'))
+      expect(f.rows().count).toBe(4)
+      expect(deleted).toBe(0)
+      expect(table.get(root)).toBeDefined()
+      let slices = 0, previous = 0
+      while (f.clock.step()) {
+        const removed = deleted - previous
+        expect(removed).toBeGreaterThan(0)
+        expect(removed).toBeLessThanOrEqual(10_000)
+        // Selection still publishes between deletion slices, and the other server's nodes stay attached.
+        const selected = slices % 2 ? survivor : security
+        f.explorer.select(selected)
+        expect(f.explorer.getSnapshot().selected).toBe(selected)
+        expect(table.get(selected)).toBeDefined()
+        previous = deleted
+        slices++
       }
-      expect(slices.length).toBeGreaterThanOrEqual(10)
-      expect(f.explorer.table.get(root)).toBeUndefined()
-      longest.push(Math.max(...slices))
-    }
-    // Best of three runs: a garbage collection can land in any slice.
-    expect(Math.min(...longest)).toBeLessThan(25)
+      expect(slices).toBeGreaterThanOrEqual(Math.ceil(removedCount / 10_000))
+      expect(deleted).toBe(removedCount)
+      expect(table.get(root)).toBeUndefined()
+      expect(table.size).toBe(4)
+    } finally { table.delete = remove }
   })
 })
 
@@ -1451,5 +1507,185 @@ describe('ExplorerService: lifecycle', () => {
     await settle()
     expect(listener).not.toHaveBeenCalled()
     expect(rowKindOf(syntheticId(3, RowKind.Paused))).toBe(RowKind.Paused)
+  })
+})
+
+describe('ExplorerService: Filter loaded objects, server rows and freshness', () => {
+  it('narrows the rows to loaded matches with their ancestors, announces the count once, and shows the selection again when cleared', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases', 'AppData', 'Tables')
+    f.connect('server-b')
+    await settle()
+    f.explorer.collapse(f.find('server-b.example'))
+    const before = f.labels(), requests = f.calls().length
+    const t1 = f.find('dbo.T1')
+    f.explorer.select(t1)
+    f.explorer.setQuickFilter('  T1 ')
+    // Servers always show; the match keeps Databases › AppData › Tables above it, and nothing else of theirs.
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 't1', matches: 1 })
+    // The folders above the match show only it, so their counts are left out; the other server shows alone.
+    expect([...f.explorer.getSnapshot().filter!.partial].map(id => f.explorer.node(id)?.label).sort()).toEqual(['AppData', 'Databases', 'Tables', 'server-a.example', 'server-b.example'])
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: 1 loaded item matches')
+    // Positions count the siblings that show.
+    const rows = f.rows(), at = Array.from(rows.ids).indexOf(t1)
+    expect([rows.posinset[at], rows.setsize[at]]).toEqual([1, 1])
+    // It asks the backend for nothing, and a later tick does not announce it again.
+    expect(f.calls()).toHaveLength(requests)
+    const announced = f.explorer.getSnapshot().announcement
+    f.explorer.expand(f.find('server-b.example'))
+    expect(f.explorer.getSnapshot().announcement).toBe(announced)
+    f.explorer.collapse(f.find('server-b.example'))
+    // A folder that matches shows its expanded rows as usual; a collapsed folder is not searched.
+    f.explorer.setQuickFilter('tables')
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        System Tables', '        dbo.T0', '        dbo.T1', '        dbo.T2', 'server-b.example'])
+    // The selection shows whatever the text, so nothing acts on a row out of sight.
+    f.explorer.setQuickFilter('zzz')
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 'zzz', matches: 0 })
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: no loaded items match')
+    const reveal = f.explorer.getSnapshot().reveal ?? 0
+    f.explorer.setQuickFilter('')
+    expect(f.labels()).toEqual(before)
+    expect(f.explorer.getSnapshot().filter).toBeUndefined()
+    expect(f.explorer.getSnapshot().selected).toBe(t1)
+    expect(f.explorer.getSnapshot().reveal).toBe(reveal + 1)
+    expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter cleared')
+    // The text is bounded.
+    f.explorer.setQuickFilter('x'.repeat(500))
+    expect(f.explorer.quickFilter.getSnapshot().input).toHaveLength(128)
+  })
+  it('keeps the selected row and its ancestors while filtering, so collapsing a folder shown for its matches keeps it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables'), security = f.find('Security')
+    f.explorer.setQuickFilter('T1')
+    f.explorer.select(tables)
+    f.explorer.collapse(tables)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables'])
+    expect(rowIndex(f.rows(), f.explorer.getSnapshot().selected)).toBeGreaterThanOrEqual(0)
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 't1', matches: 0 })
+    // Expanding it again shows the match; text the selection does not match keeps the selection in view too.
+    f.explorer.expand(tables)
+    await settle()
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1'])
+    f.explorer.select(security)
+    f.explorer.setQuickFilter('zzz')
+    expect(f.labels()).toEqual(['server-a.example', '  Security'])
+    expect(rowIndex(f.rows(), f.explorer.getSnapshot().selected)).toBeGreaterThanOrEqual(0)
+  })
+  it('hands focus to the box once per Filter Loaded Objects, even when the box mounts later', () => {
+    const f = fixture()
+    expect(f.explorer.takeQuickFilterFocus()).toBe(false)
+    f.explorer.focusQuickFilter()
+    expect(f.explorer.takeQuickFilterFocus()).toBe(true)
+    expect(f.explorer.takeQuickFilterFocus()).toBe(false)
+  })
+  it('gives a server row its version and login in brief, keeping SSMS\'s text for its name and tooltip', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const root = f.explorer.node(f.find('server-a.example'))!
+    expect([root.brief, root.sublabel]).toEqual(['16.0 · sa', '(SQL Server 16.0.4135.4 - sa)'])
+    expect(serverBrief({ serverVersion: '15.00.2000', productVersion: undefined, login: undefined })).toBe('15.0')
+    // A Windows login shows without its domain or machine, which the tooltip keeps.
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'CONTOSO\\dba' })).toBe('17.0 · dba')
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('17.0 · user')
+    expect(serverSublabel({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'MACHINE\\user' })).toBe('(SQL Server 17.0.1000.7 - MACHINE\\user)')
+    expect(serverBrief({ serverVersion: '17.00.1000', productVersion: '17.0.1000.7', login: 'dba@contoso.com' })).toBe('17.0 · dba@contoso.com')
+  })
+  it('stamps each listing when its first page arrives, and marks the rows a failed refresh kept stale until a load succeeds', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const loaded = f.wall.now
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const t1 = f.find('dbo.T1')
+    // A row is described by the listing it is in; an expanded folder by its own.
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(f.find('Security'))).toEqual({ label: 'server-a.example', updatedAt: loaded })
+    expect(f.explorer.listingFreshness(undefined)).toBeUndefined()
+    f.wall.now += 60_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded, staleSince: loaded + 60_000 })
+    // A second failure keeps the time the rows first went stale.
+    f.wall.now += 5_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded, staleSince: loaded + 60_000 })
+    f.wall.now += 5_000
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded + 70_000 })
+    // A collapsed folder that is not loaded yet has no listing of its own: its parent's describes it.
+    expect(f.explorer.listingFreshness(f.find('Views'))).toEqual({ label: 'AppData', updatedAt: loaded })
+  })
+  it('dates no listing of a lost server, nor one whose server was removed while its rows wait to be dropped', async () => {
+    const f = fixture()
+    f.connect('server-a')
+    await settle()
+    // A removed server's rows stay in the table until the sweep drops them; none of them is dated meanwhile.
+    await f.open('Databases', 'AppData', 'Tables')
+    const t1 = f.find('dbo.T1')
+    expect(f.explorer.listingFreshness(t1)).toMatchObject({ label: 'Tables' })
+    f.connections.remove(cid('server-a'))
+    await settle()
+    expect(f.explorer.node(t1)).toBeDefined()
+    expect(f.explorer.listingFreshness(t1)).toBeUndefined()
+    // A server lost with the backend keeps its row, which no listing dates.
+    f.connect('server-b')
+    await settle()
+    const root = f.find('server-b.example')
+    expect(f.explorer.listingFreshness(root)).toMatchObject({ label: 'server-b.example' })
+    f.connections.markLostBefore(2)
+    await settle()
+    expect(f.explorer.node(root)).toMatchObject({ lost: true })
+    expect(f.explorer.listingFreshness(root)).toBeUndefined()
+  })
+  it('forgets a listing\'s date when its rows are dropped, and dates the listing again when its first page arrives', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    const t1 = await f.open('dbo.T1'), opened = f.wall.now
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'dbo.T1', updatedAt: opened })
+    // A new subtype drops dbo.T1's folders to list them again; until they arrive, Tables' new listing describes it.
+    f.wall.now += 60_000
+    f.state.subtypes['dbo.T1'] = 'systemVersioned'
+    f.hold(params => params.node.type === 'object' && params.node.object.kind === 'table')
+    f.explorer.reconcile(tables)
+    await settle()
+    expect(f.explorer.node(t1)).toMatchObject({ expanded: true, load: 'loading' })
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: opened + 60_000 })
+    f.wall.now += 5_000
+    f.unhold()
+    f.release()
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'dbo.T1', updatedAt: opened + 65_000 })
+  })
+  it('forgets a listing\'s date when Filter Settings replaces it, and dates the filtered one when it arrives', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const loaded = f.wall.now
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.wall.now += 120_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.setFilter(tables, { name: { op: 'contains', value: 'T' } })
+    // While the filtered list loads, and after it failed, Tables has no listing of its own: AppData's describes it.
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'AppData', updatedAt: loaded })
+    await settle()
+    expect(f.explorer.node(tables)!.load).toBe('error')
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'AppData', updatedAt: loaded })
+    f.explorer.setFilter(tables, undefined)
+    await settle()
+    expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded + 120_000 })
   })
 })

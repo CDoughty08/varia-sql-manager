@@ -135,17 +135,42 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .dock-move { height: 24px; padding: 0 3px; margin-right: 4px; font-size: var(--varia-size-xs); width: 68px; border-color: transparent; background: transparent; }
 .dock-move:focus-visible { outline-offset: -2px; }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; }
-.explorer-toolbar { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 1px; padding: 0 6px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-toolbar { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 1px; padding: 0 6px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Filter loaded objects: one field, the search glyph and the clear button inside its border. */
+.explorer-filter { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); margin: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); padding: 0 var(--varia-space-0) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+/* The field takes the controls' ring (2 px at 2 px), drawn around the field rather than the borderless input inside it. */
+.explorer-filter:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.explorer-filter input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: var(--varia-size-sm); }
+.explorer-filter input:focus-visible { outline: none; }
+.explorer-filter .icon-button { width: 20px; height: 20px; color: var(--varia-objectExplorer-actionForeground); }
+/* Filter text that matches nothing: one compact line under the box rather than a centred empty pane. */
+.explorer-no-match.empty-state { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); text-align: left; }
+.explorer-no-match .empty-state-icon { margin-bottom: 0; }
+.explorer-no-match .empty-state-detail { min-width: 0; overflow-wrap: anywhere; }
+.explorer-no-match .empty-state-actions { margin-top: 0; }
+/*
+ * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
+ * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
+ * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
+ * footer's height clips (each server row has its dot).
+ */
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
+.explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+/* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
+.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
-.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; cursor: default; }
-.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
+/* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
+.explorer-row.server { height: 30px; }
+/* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
@@ -164,13 +189,29 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
 /* The sublabel takes only the space the label leaves (basis 0), so a label that fits never ellipsizes for its sublabel. */
-.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
+.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--varia-size-sm); color: var(--varia-objectExplorer-sublabelForeground); }
+.oe-match { font-weight: 600; color: var(--varia-list-highlightForeground); }
 .oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
-.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button { color: inherit; }
+.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button, .explorer-row[aria-selected="true"] .oe-match, .explorer-row[aria-selected="true"] .oe-count { color: inherit; }
 .oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
-.oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
+/*
+ * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes at
+ * most 60% of the row and never shrinks for the label, so the count and dot always show; a chip or tag in it gives way
+ * instead (flex: 0 1 auto; min-width: 0) under a cap such as 12em, or a share of the row in cqw (each row is an inline-size
+ * container). A percentage cap would resolve against this content-sized box and clamp the tag to a share of its own width.
+ */
+.oe-end { display: flex; flex: none; min-width: 0; max-width: 60%; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
+.oe-end:empty { display: none; }
+.oe-count { flex: none; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.oe-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 var(--varia-space-1); border: 2px solid var(--varia-objectExplorer-connectedIndicator); border-radius: 50%; background: var(--varia-objectExplorer-connectedIndicator); }
+.oe-dot[data-state="error"] { border-color: var(--varia-objectExplorer-connectionErrorIndicator); background: transparent; }
+.oe-dot[data-state="lost"] { border-color: var(--varia-objectExplorer-disconnectedIndicator); background: transparent; }
+/* The active query's server: a small accent glyph, on every row state (the dot says the connection, the weight a server). */
+.oe-active { flex: none; display: grid; place-items: center; color: var(--varia-objectExplorer-activeConnectionForeground); }
+.oe-active > .codicon { font-size: var(--varia-glyph-sm); }
+.oe-actions { display: flex; gap: 2px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
@@ -271,6 +312,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
   .explorer-row[aria-selected="true"] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  /* The connection dot keeps its shape: filled while connected, a ring otherwise. */
+  .oe-dot { forced-color-adjust: none; border-color: CanvasText; background: CanvasText; }
+  .oe-dot[data-state="error"], .oe-dot[data-state="lost"] { border-color: CanvasText; background: Canvas; }
+  .explorer-row[aria-selected="true"] .oe-dot { border-color: HighlightText; background: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-dot[data-state="error"], .explorer-row[aria-selected="true"] .oe-dot[data-state="lost"] { border-color: HighlightText; background: Highlight; }
+  .explorer-row[aria-selected="true"] .oe-count, .explorer-row[aria-selected="true"] .oe-active { color: HighlightText; }
   /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
@@ -716,7 +763,11 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-.environment-tag[data-place="explorer"] { max-width: min(40%, 12em); margin-left: var(--varia-space-1); }
+/* In a server row's end (.oe-end), which is sized from its content: the tag gives way to the count and dot, at most 40% of
+   the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+.environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
+/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
+.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }

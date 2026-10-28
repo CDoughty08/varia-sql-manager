@@ -85,6 +85,25 @@ export const part = {
   explorerErrorRow: '.explorer-row.error',
   explorerSyntheticRow: '.explorer-row.synthetic',
   explorerError: '.explorer-error',
+  /** A row's end (RowEnd): indicators (the environment tag, later state chips), the item count, the connection dot. */
+  explorerEnd: '.oe-end',
+  explorerCount: '.oe-count',
+  /** A server's connection dot; data-state says online, error or lost (the row's name and tooltip say it in words). */
+  explorerDot: '.oe-dot',
+  /** The glyph that marks the active query's server. */
+  explorerActive: '.oe-active',
+  /** The part of a label that matches the Filter loaded objects text. */
+  explorerMatch: '.oe-match',
+  /** The Filter loaded objects field around its input, and the line under it when nothing matches. */
+  explorerFilter: '.explorer-filter',
+  explorerNoMatch: '.explorer-no-match',
+  /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
+  explorerFooter: '.explorer-footer',
+  explorerFreshness: '.explorer-freshness',
+  explorerFreshnessScope: '.explorer-freshness-scope',
+  explorerServers: '.explorer-servers',
+  /** The states kit's "Updated …" or, with data-stale, "Stale since …" (src/renderer/src/kit/LivePill.tsx). */
+  staleBadge: '.stale-badge',
   // Menus and the quick input
   menuLayer: '.menu-layer',
   menuMnemonic: '.menu-mnemonic',
@@ -283,6 +302,20 @@ export const explorerTree = page => page.getByRole('tree', { name: 'Object Explo
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
 export const lostServerRows = page => explorerTree(page).getByRole('treeitem', { name: /\(connection lost\)$/ })
 export const explorerLabel = row => row.locator(part.explorerLabel)
+export const explorerSublabel = row => row.locator(part.explorerSublabel)
+export const itemCount = row => row.locator(part.explorerCount)
+export const connectionDot = row => row.locator(part.explorerDot)
+/** The server rows marked as the active query's server (at most one). */
+export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
+export const explorerMatches = page => explorerTree(page).locator(part.explorerMatch)
+export const explorerFilterBox = page => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
+export const explorerFilterField = page => page.locator(part.explorerFilter)
+export const explorerNoMatch = page => page.locator(part.explorerNoMatch)
+export const explorerFooter = page => page.locator(part.explorerFooter)
+export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)
+export const explorerFreshnessScope = page => explorerFooter(page).locator(part.explorerFreshnessScope)
+export const explorerServerCount = page => explorerFooter(page).locator(part.explorerServers)
+export const staleBadge = scope => scope.locator(part.staleBadge)
 /** The inline Rename box (F2) in a row. */
 export const renameBox = page => explorerTree(page).getByRole('textbox', { name: /^Rename / })
 

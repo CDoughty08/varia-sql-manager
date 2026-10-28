@@ -420,7 +420,8 @@ try {
   const tree = explorerTree(page)
   const loads = async () => (await calls()).filter(call => call.method === 'explorer.children').map(call => [call.params.connectionId === idA ? 'a' : 'b', call.params.node.type === 'folder' ? call.params.node.folder : call.params.node.object.kind])
   expect(await loads()).toEqual([['a', 'server'], ['b', 'server']])
-  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]'])
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]',
+    '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]'])
   // The keyboard: one tab stop whose active descendant is the selected row; arrows, Home and End move, Right and Left
   // expand and step in and out, Enter toggles, Numpad minus and plus collapse and expand, and typing selects by name.
   const selectedLabel = () => tree.evaluate((element, label) => element.querySelector('#' + CSS.escape(element.getAttribute('aria-activedescendant') ?? ''))?.querySelector(label)?.textContent ?? null, part.explorerLabel)
@@ -441,8 +442,27 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('End')
-  await expect.poll(selectedLabel).toBe('Server Objects')
-  await expect(await explorerRow(page, 'server-b', 'Server Objects')).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(selectedLabel).toBe('Integration Services Catalogs')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-selected', 'true')
+  // The SSIS Catalog (S1b): the catalog lists its folders directly, a folder its Projects and Environments, a project its
+  // Packages; every SSIS ref crosses main's schemas with its folder and project.
+  for (const path of [['Integration Services Catalogs'], ['Integration Services Catalogs', 'SSISDB'], ['Integration Services Catalogs', 'SSISDB', 'Finance'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects'], ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages']]) {
+    const row = await explorerRow(page, 'server-b', ...path)
+    await row.click()
+    await page.keyboard.press('ArrowRight')
+    await expect(row).toHaveAttribute('aria-expanded', 'true')
+  }
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Environments')).toBeVisible()
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Daily.dtsx')).toBeVisible()
+  const child = await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Child.dtsx')
+  await expect(child.locator('.codicon-symbol-file')).toHaveCount(1)
+  const packagesLoad = (await calls()).find(call => call.method === 'explorer.children' && call.params.node.type === 'folder' && call.params.node.folder === 'ssisPackages')
+  expect(packagesLoad?.params.node.owner).toEqual({ kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' })
+  await (await explorerRow(page, 'server-b', 'Integration Services Catalogs')).click()
+  await page.keyboard.press('ArrowLeft')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('Home')
   await page.keyboard.press('NumpadSubtract')
   await expect(await explorerRow(page, 'server-a')).toHaveAttribute('aria-expanded', 'false')

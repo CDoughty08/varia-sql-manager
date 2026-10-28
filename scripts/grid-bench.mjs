@@ -3,7 +3,7 @@ import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
-import { connectLive, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
+import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
@@ -393,6 +393,9 @@ try {
     const saveRows = 1_000_000, file = join(saves, 'grid-bench.csv')
     await run(liveRowsSql(saveRows), 180000)
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
+    // Copy above uses the default without headers; this export measures a CSV with its column names included.
+    expect(await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true })))
+      .toMatchObject({ ok: true, value: { values: { 'queryResults.grid.includeColumnHeaders': true } } })
     await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, file)
     await cell(0, 0).click()
     const saveStarted = performance.now()
@@ -403,6 +406,10 @@ try {
     let lineCount = 0
     for (let index = saved.indexOf(10); index !== -1; index = saved.indexOf(10, index + 1)) lineCount++
     if (lineCount !== saveRows + 1) throw new Error(`The saved CSV has ${lineCount} lines, not ${saveRows + 1}.`)
+    const csvField = value => value === null ? '' : value === '' || /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+    const csvLine = values => values.map(csvField).join(',') + '\r\n'
+    expect(saved.subarray(0, 4096).toString('utf8').startsWith('\uFEFF' + csvLine(liveColumns) + csvLine(liveRow(1)))).toBe(true)
+    expect(saved.subarray(saved.lastIndexOf(10, saved.length - 2) + 1).toString('utf8')).toBe(csvLine(liveRow(saveRows)))
     record('grid.live.saveMs', saveMs, 'ms', `${saveRows.toLocaleString('en-US')} rows × 8 columns as CSV, ${(saved.length / 1e6).toFixed(0)} MB`)
     await close()
   }

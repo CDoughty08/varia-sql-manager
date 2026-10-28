@@ -1,0 +1,57 @@
+import { randomUUID } from 'node:crypto'
+import { describe, expect, it } from 'vitest'
+import { validateRequest, requestSchemas } from '../src/main/validation'
+import { ssisCancelSchema, ssisDescribeSchema } from '../src/shared/ssis/schema'
+import { describeTargets, describeViews } from '../src/shared/ssis/catalog'
+import type { ObjectRef } from '../src/shared/explorer/refs'
+
+const ids = () => ({ connectionId: randomUUID(), requestId: randomUUID() })
+const targets: { readonly [V in typeof describeViews[number]]: ObjectRef } = {
+  catalog: { kind: 'ssisCatalog', name: 'SSISDB' },
+  folder: { kind: 'ssisFolder', name: 'F]in\'an"ce -- /*' },
+  project: { kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' },
+  package: { kind: 'ssisPackage', ssisFolder: 'Finance', ssisProject: 'Loads', name: 'p'.repeat(260) },
+  environment: { kind: 'ssisEnvironment', ssisFolder: 'Finance', name: ' ' }
+}
+const accepts = (value: unknown) => expect(ssisDescribeSchema.safeParse(value).success, JSON.stringify(value)).toBe(true)
+const rejects = (value: unknown) => expect(ssisDescribeSchema.safeParse(value).success, JSON.stringify(value)).toBe(false)
+
+describe('ssis.describe requests', () => {
+  it('accepts each view with a ref of the kind it describes, names verbatim', () => {
+    for (const view of describeViews) {
+      const request = { ...ids(), view, target: targets[view] }
+      accepts(request)
+      expect(targets[view].kind).toBe(describeTargets[view])
+      expect(validateRequest('ssis.describe', request)).toEqual(request)
+    }
+  })
+  it('refuses a ref of another kind, an unknown view, extra members and bad ids', () => {
+    rejects({ ...ids(), view: 'folder', target: targets.project })
+    rejects({ ...ids(), view: 'catalog', target: { kind: 'database', name: 'SSISDB' } })
+    rejects({ ...ids(), view: 'run', target: targets.package })
+    rejects({ ...ids(), view: 'folder', target: targets.folder, extra: 1 })
+    rejects({ ...ids(), view: 'folder', target: { ...targets.folder, extra: 1 } })
+    rejects({ ...ids(), connectionId: 'server-a', view: 'folder', target: targets.folder })
+    rejects({ connectionId: randomUUID(), view: 'folder', target: targets.folder })
+    expect(() => validateRequest('ssis.describe', { ...ids(), view: 'configure', target: targets.project })).toThrow('Invalid request')
+  })
+  it('bounds names: folders, projects and environments at 128, packages at 260, never U+0000 or a split surrogate', () => {
+    rejects({ ...ids(), view: 'package', target: { ...targets.package, name: 'p'.repeat(261) } })
+    rejects({ ...ids(), view: 'package', target: { ...targets.package, ssisProject: 'x'.repeat(129) } })
+    rejects({ ...ids(), view: 'project', target: { ...targets.project, name: 'x'.repeat(129) } })
+    rejects({ ...ids(), view: 'folder', target: { kind: 'ssisFolder', name: 'a\u0000b' } })
+    rejects({ ...ids(), view: 'folder', target: { kind: 'ssisFolder', name: '' } })
+    rejects({ ...ids(), view: 'environment', target: { kind: 'ssisEnvironment', name: 'Env' } })
+    rejects({ ...ids(), view: 'package', target: { kind: 'ssisPackage', ssisFolder: 'F', name: 'p.dtsx' } })
+    accepts({ ...ids(), view: 'folder', target: { kind: 'ssisFolder', name: '𝒜'.repeat(64) } })
+    rejects({ ...ids(), view: 'folder', target: { kind: 'ssisFolder', name: '𝒜'.repeat(64) + 'a' } })
+  })
+  it('is one of the renderer\'s methods, and its cancel takes 1-64 distinct ids', () => {
+    expect(requestSchemas['ssis.describe']).toBe(ssisDescribeSchema)
+    expect(ssisCancelSchema.safeParse({ requestIds: [randomUUID()] }).success).toBe(true)
+    expect(ssisCancelSchema.safeParse({ requestIds: Array.from({ length: 64 }, () => randomUUID()) }).success).toBe(true)
+    expect(ssisCancelSchema.safeParse({ requestIds: Array.from({ length: 65 }, () => randomUUID()) }).success).toBe(false)
+    const id = randomUUID()
+    for (const value of [{ requestIds: [] }, { requestIds: [id, id] }, { requestIds: ['x'] }, { requestIds: [randomUUID()], extra: 1 }]) expect(ssisCancelSchema.safeParse(value).success).toBe(false)
+  })
+})

@@ -108,7 +108,7 @@ Module preflights find the object by these `sys.objects.type` codes: `view`: V; 
 
 Deferred, with no Script submenu yet (key material, binaries or external integrations): `cryptographicProvider`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `externalDataSource`, `externalFileFormat`, `table` (`droppedLedger`), `view` (`droppedLedger`), `procedure` (`extended`), `procedure` (`replicationFilter`).
 
-Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`.
+Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`.
 
 ## Options
 

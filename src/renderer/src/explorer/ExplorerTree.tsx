@@ -6,7 +6,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
-import { computeWindow, renderedIndices, rowIndex, RowKind, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
+import { layoutWindow, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -33,8 +33,9 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   const typing = useMemo(() => new TypeAheadBuffer(), [])
   const { rows, selected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
-  const latest = useRef({ rows, selectedIndex })
-  latest.current = { rows, selectedIndex }
+  const layout = useMemo(() => rowLayout(rows), [rows])
+  const latest = useRef({ rows, selectedIndex, layout })
+  latest.current = { rows, selectedIndex, layout }
 
   // Scrolling and resizing re-window on the next frame (or soon after, when frames are throttled).
   useLayoutEffect(() => {
@@ -61,12 +62,13 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     return () => clearTimeout(timer)
   }, [snapshot.announcement])
 
-  const ensureVisible = useCallback((index: number) => {
+  /** Scrolls row `index` of `rows` into view; rows published since the last render are laid out on the spot. */
+  const ensureVisible = useCallback((rows: VisibleRows, index: number) => {
     const tree = element.current
     if (!tree || index < 0) return
-    const top = index * rowHeight, bottom = top + rowHeight
-    if (top < tree.scrollTop) tree.scrollTop = top
-    else if (bottom > tree.scrollTop + tree.clientHeight) tree.scrollTop = bottom - tree.clientHeight
+    const at: RowLayout = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
+    const scrollTop = revealScroll(at, index, tree.scrollTop, tree.clientHeight)
+    if (scrollTop !== undefined) tree.scrollTop = scrollTop
   }, [])
   // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them. A
   // selection made outside the tree (Filter Settings closing) asks for the same through the snapshot's `reveal`.
@@ -76,7 +78,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     revealed.current = snapshot.reveal
     const id = reveal.current ?? (requested ? selected : undefined)
     reveal.current = undefined
-    if (id !== undefined) ensureVisible(rowIndex(rows, id))
+    if (id !== undefined) ensureVisible(rows, rowIndex(rows, id))
   })
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
@@ -119,7 +121,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     switch (action.type) {
       case 'select': {
         const id = current.ids[action.index]
-        if (explorer.getSnapshot().selected === id) ensureVisible(rowIndex(explorer.getSnapshot().rows, id))
+        if (explorer.getSnapshot().selected === id) { const now = explorer.getSnapshot().rows; ensureVisible(now, rowIndex(now, id)) }
         else { reveal.current = id; explorer.select(id) }
         return
       }
@@ -171,17 +173,18 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
 
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
   const environments = useMemo(() => new Map(servers.map(server => [server.id, server.options.environment])), [servers])
-  const indices = renderedIndices(computeWindow(view.top, view.height, rows.count), selectedIndex)
+  const indices = renderedIndices(layoutWindow(view.top, view.height, layout), selectedIndex)
+  const match = snapshot.filter?.text, partial = snapshot.filter?.partial
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
   return <><div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
     aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
-    <div className="explorer-spacer" style={{ height: rows.count * rowHeight }}>
+    <div className="explorer-spacer" style={{ height: layout.total }}>
       {indices.map(index => {
         const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
-        return <ExplorerRow key={rowId} rowId={rowId} kind={kind} index={index} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
+        return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
           node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
           active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
-          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} />
+          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} match={kind === RowKind.Node ? match : undefined} partial={kind === RowKind.Node && !!partial?.has(rowId)} />
       })}
     </div>
   </div>
