@@ -13,6 +13,10 @@ internal interface IRequestDispatcher : IDisposable
     /// <summary>Every method name, announced in HELLO so main can detect a stale build.</summary>
     IReadOnlyList<string> Methods { get; }
     RequestLane LaneOf(string method);
+    /// <summary>Whether Stop (CANCEL reason 1) is answered by the handler, with what it completed, rather than by the host at once.</summary>
+    bool AnswersStop(string method);
+    /// <summary>Whether a request's frame may carry a secret (methodPolicies' sensitive): its body and JSON buffer are zeroed after parsing.</summary>
+    bool Sensitive(string method);
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
@@ -234,10 +238,10 @@ internal sealed class ProtocolHost
         try
         {
             JsonElement parameters;
-            var sensitive = context.Method is "connections.connect" or "connections.databases" or "connections.preview";
+            var sensitive = dispatcher!.Sensitive(context.Method);
             try { parameters = JsonBridge.ParseControl(body.AsSpan(start, length), sensitive); }
             catch (ProtocolException) { throw new RequestException("INVALID_PARAMS", "Invalid request parameters."); }
-            // The frame body holds the password in clear text; managed strings made from it cannot be zeroed.
+            // The frame body holds the secret in clear text; managed strings made from it cannot be zeroed.
             finally { if (sensitive) Array.Clear(body); }
             var lane = context.Lane switch { RequestLane.Metadata => metadataSlots, RequestLane.Results => resultSlots, _ => null };
             if (lane is not null)
@@ -272,11 +276,11 @@ internal sealed class ProtocolHost
 
     /// <summary>A unary request answers as soon as it is cancelled or its deadline passes; work that ignores the token
     /// keeps running and its late result is discarded. Queries answer with their summary, and streams after their
-    /// current page. Stop on an object action (actions lane, reason 1) answers with the action's steps once SQL Server has
-    /// ended its statement, within the action service's grace, so the user learns what the DDL completed.</summary>
+    /// current page. Stop (reason 1) on an object action or an SSIS write (AnswersStop) answers with the action's steps once SQL
+    /// Server has ended its statement, within the service's grace, so the user learns what the write completed.</summary>
     private void Cancelled(RequestContext context)
     {
-        if (context.Lane == RequestLane.Query || context.IsStream || context.Lane == RequestLane.Actions && context.Reason == CancelReason.User) return;
+        if (context.Lane == RequestLane.Query || context.IsStream || context.Reason == CancelReason.User && dispatcher?.AnswersStop(context.Method) == true) return;
         Respond(context, CancelledError(context));
     }
 

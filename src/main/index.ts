@@ -710,10 +710,10 @@ app.whenReady().then(async () => {
       const prepared = await prepareConnection(method, validated, context, { savedPasswords })
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      // An Object Explorer load, a script, an object action, an SSIS Catalog read, a session's Details or a connect with a
-      // requestId is registered before it is sent, so its cancel channel can always find it.
+      // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
+      // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'activity.details']['params']).requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'activity.details']['params']).requestId)
       let result: unknown
       let outcome: Settled
       try {

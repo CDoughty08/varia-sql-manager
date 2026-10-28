@@ -8,13 +8,13 @@ export type MethodKind = 'unary' | 'stream'
  *  one of 16 read slots, and explorer runs at once under Object Explorer's own gates (4 per connection, 8 in all; static
  *  folders need none), and actions runs object action DDL at once under the action service's own gates (1 per connection,
  *  2 in all), so a DROP waiting on a lock never holds a metadata slot; Kill Process runs there under gates of its own, so
- *  it never queues behind such a DROP. ssis runs SSIS Catalog reads at once under the SSIS service's own gates (2 per
- *  connection, 4 in all), so a read waiting on SSISDB never holds a metadata slot either. Main reserves 32 extra pending
- *  requests for the control lane. A Microsoft Entra MFA connect or Load databases holds its metadata slot while the user
- *  signs in in the web browser, for up to 3 minutes; those sign-ins run one at a time. A live subscription (lane live)
- *  takes no slot: its own task samples on its own schedule, one tick at a time. Its statements, and those of a unary
- *  method on lane live, run under the live gates (2 per connection, 8 in all, each waited for at most the statement's
- *  budget, then BUSY). */
+ *  it never queues behind such a DROP. ssis runs SSIS Catalog reads and writes at once under the SSIS services' own gates
+ *  (reads 2 per connection, 4 in all; writes 1 and 2), so a request waiting on SSISDB never holds a metadata slot either.
+ *  Main reserves 32 extra pending requests for the control lane. A Microsoft Entra MFA connect or Load databases holds its
+ *  metadata slot while the user signs in in the web browser, for up to 3 minutes; those sign-ins run one at a time. A live
+ *  subscription (lane live) takes no slot: its own task samples on its own schedule, one tick at a time. Its statements,
+ *  and those of a unary method on lane live, run under the live gates (2 per connection, 8 in all, each waited for at most
+ *  the statement's budget, then BUSY). */
 export type MethodLane = 'control' | 'metadata' | 'query' | 'results' | 'explorer' | 'actions' | 'live' | 'ssis'
 
 export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
@@ -76,6 +76,9 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
+  // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) always ends them. Sensitive,
+  // because later verbs carry sensitive parameter and variable values.
+  'ssis.execute': { kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true },
   // Activity Monitor's session actions. Details answers its own 10 s budget as an error: TIMEOUT value, inside this deadline;
   // main cancels it from the renderer (varia:activity-cancel). Kill answers its own 25 s budget the same way, with the
   // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.

@@ -143,9 +143,11 @@ properties are omitted, as in JSON; `undefined` in an array is an error. The C# 
 
 The backend transcodes REQUEST params to a `JsonElement` and results from System.Text.Json output (`JsonBridge`), so the
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
-become float64, which TypeScript accepts. Requests that carry a password (`connections.connect`, `.databases`,
-`.preview`) are encoded into buffers that are zeroed after use on both sides; the JavaScript and .NET strings they came
-from cannot be zeroed.
+become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
+`.databases`, `.preview`, and `ssis.execute`) are encoded into buffers that are zeroed after use on both sides; the
+JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
+`sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
+`tests/validation.test.ts` keeps the two lists equal.
 
 ## Handshake
 
@@ -200,8 +202,8 @@ own task, and its statements, like those of a unary method on lane `live` (`acti
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
 statement's budget, and for Details at most its 10 s budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
 never pile up).
-`ssis` runs SSIS Catalog reads at once under the SSIS service's own gates (2 per connection, 4 in all, waited for at
-most 30 s, then `BUSY`), so a read waiting on SSISDB never holds a metadata slot either.
+`ssis` runs SSIS Catalog reads and writes at once under the SSIS services' own gates (reads 2 per connection and 4 in all,
+writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds a metadata slot either.
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -230,6 +232,7 @@ most 30 s, then `BUSY`), so a read waiting on SSISDB never holds a metadata slot
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent |
 | `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
 | `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
@@ -349,6 +352,33 @@ waits on a pending change to a role's members; a sysadmin's are not evaluated). 
 and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA` and `SQL_ERROR`. **SSIS cancellation**
 works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
 routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.
+
+**SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId }, revision? }`
+(`operationId` 1 to 2^53 − 1; `revision`, 64 lowercase hex characters, only for a verb that takes one, which Stop Operation
+does not; the verbs, their steps and the procedures they may call are `ssisActions` in `src/shared/ssis/catalog.ts`) answers
+`{ steps: { status: done | failed | skipped | cancelled, message? }[], elapsedMs, error? }`. Its policy is sensitive, so the
+frame is zeroed once written, because later verbs carry sensitive values. Before it connects, the backend refuses a server
+older than 2016 or on Linux (`NOT_SUPPORTED`) and, for a verb SSISDB refuses to SQL Server logins (error 27123, every verb
+that changes the catalog), a connection that signed in with SQL Server authentication to a box server
+(`WINDOWS_AUTH_REQUIRED`; Azure SQL Database and Managed Instance excepted). It then takes the SSIS write gates (1 per
+connection, 2 in all; 64 registered) and opens a connection of its own: unpooled, never retried, no command timeout,
+Initial Catalog the catalog's database, under the program name plus " - Integration Services Actions". There it runs the
+verb's preflight at READ COMMITTED with `LOCK_TIMEOUT 10000` (`BLOCKED`) within 25 s (`TIMEOUT`), then its steps in
+order, each one constant template from `SsisSql` with values as parameters, waiting for locks as SSMS does
+(`LOCK_TIMEOUT -1`), with no outer transaction. Stop Operation's preflight reads `catalog.operations`: no row answers
+`NOT_FOUND`, a type other than an execution or validation (200, 300, 301) `NOT_SUPPORTED`, an ended or stopping one
+`ALREADY_FINAL` (information, not a failure), and a created execution nobody started (it never runs) `NOT_STARTED` (not
+retryable); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or 27126 the operation is read again:
+`ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it is pending, and the catalog's own
+refusal, with the step failed, if that second look fails. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission
+error `PERMISSION_DENIED` naming the action. A connection lost before the step is sent answers `CONNECTION_LOST` saying
+nothing changed; lost during the step, that the outcome is unknown. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
+answer to the handler (`IRequestDispatcher.AnswersStop`, as for `actions.execute`), which waits up to 10 s for SQL Server to
+end the statement and answers `CANCELLED` with the step `cancelled`, or, before any step, "stopped before it changed
+anything"; past the grace the outcome is unknown. `catalog.stop_operation` commits its own Stop operation (type 202,
+Running) before its transaction, and a cancelled statement never reaches its error path, so Stop during Stop Operation's
+step rolls the stop back but may leave that row Running until SQL Server restarts; the `CANCELLED` message says so (SSMS
+never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a connection's writes. Nothing is logged.
 
 **Activity Monitor session actions** (docs/activity-monitor.md, Session actions) name a session by its id and its login
 time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters; main checks the form, and the backend also
@@ -1320,8 +1350,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
-| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 characters; error messages ≤ 2,048 | zod and backend |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered | backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048 | zod and backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; snapshot revisions ≤ 10,000 rows, append segments 200,000 rows or 32 MiB (2 segments' worth kept, at most 8 results a table), ≤ 10,000 new append rows a tick; 64 MiB of tables per subscription, all live tables ≤ 25 % of the result budget; facets 7 columns × 100 values × 128 characters, ≤ 32 KiB of facet text a tick; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |

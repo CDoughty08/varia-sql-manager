@@ -10,7 +10,7 @@ import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
-import type { SsisDescribeRequest, SsisDescribeResult } from './ssis/schema.ts'
+import type { SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -268,6 +268,9 @@ export interface RpcMethods {
   'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
   /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
   'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
+  /** Changes the SSIS Catalog (Stop Operation) on its own unpooled connection after a preflight; never re-sent, and only Stop
+   *  (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
+  'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
   /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
@@ -406,6 +409,8 @@ export interface VariaApi {
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
   describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
+  /** Runs an SSIS Catalog action (Stop Operation). Refusals and failures come back as `result.error` with the steps that ran. */
+  executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
