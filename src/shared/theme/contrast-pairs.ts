@@ -153,6 +153,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
   // A server's connection dot keeps its color on every row state; its shape (dot or ring) and the row's words say the same.
   ...graphic(['objectExplorer.connectedIndicator', 'objectExplorer.connectionErrorIndicator', 'objectExplorer.disconnectedIndicator'], sideBar, treeHover, treeServer, treeActive, treeInactive),
+  // So does the active query's server glyph, which is all that marks that row.
+  ...graphic(['objectExplorer.activeConnectionForeground'], sideBar, treeHover, treeServer, treeActive, treeInactive),
   // Characters that match the Filter loaded objects box (selected rows draw them in the row's own color, in bold).
   ...text(['list.highlightForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),

@@ -168,8 +168,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
 /* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
 .explorer-row.server { height: 30px; }
-.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+/* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
@@ -207,6 +208,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 var(--varia-space-1); border: 2px solid var(--varia-objectExplorer-connectedIndicator); border-radius: 50%; background: var(--varia-objectExplorer-connectedIndicator); }
 .oe-dot[data-state="error"] { border-color: var(--varia-objectExplorer-connectionErrorIndicator); background: transparent; }
 .oe-dot[data-state="lost"] { border-color: var(--varia-objectExplorer-disconnectedIndicator); background: transparent; }
+/* The active query's server: a small accent glyph, on every row state (the dot says the connection, the weight a server). */
+.oe-active { flex: none; display: grid; place-items: center; color: var(--varia-objectExplorer-activeConnectionForeground); }
+.oe-active > .codicon { font-size: var(--varia-glyph-sm); }
 .oe-actions { display: flex; gap: 2px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
@@ -313,7 +317,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .oe-dot[data-state="error"], .oe-dot[data-state="lost"] { border-color: CanvasText; background: Canvas; }
   .explorer-row[aria-selected="true"] .oe-dot { border-color: HighlightText; background: HighlightText; }
   .explorer-row[aria-selected="true"] .oe-dot[data-state="error"], .explorer-row[aria-selected="true"] .oe-dot[data-state="lost"] { border-color: HighlightText; background: Highlight; }
-  .explorer-row[aria-selected="true"] .oe-count { color: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-count, .explorer-row[aria-selected="true"] .oe-active { color: HighlightText; }
   /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
@@ -762,6 +766,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* In a server row's end (.oe-end), which is sized from its content: the tag gives way to the count and dot, at most 40% of
    the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
+/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
+.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }

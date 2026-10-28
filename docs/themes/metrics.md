@@ -74,7 +74,7 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | Token | px | Use | Sized with it |
 | --- | --- | --- | --- |
 | `--varia-glyph-badge` | 9 | The status mark at a tree icon's corner. | `.oe-icon .oe-badge` |
-| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.editor-status .codicon`, `.status-pill > .codicon`, `.status-pill > .icon`, `.chip > .codicon`, `.chip > .icon`, `.live-pill > .codicon`, `.stale-badge > .codicon`, `.tile-caption > .codicon` |
+| `--varia-glyph-sm` | 12 | Glyphs in status bars and tab strips, beside xs and sm text. | `.tab-close .codicon`, `.tab-select .tab-readonly`, `.connection-save-actions .codicon`, `.query-status-state .codicon`, `.memory-indicator .codicon`, `.oe-active > .codicon`, `.editor-status .codicon`, `.status-pill > .codicon`, `.status-pill > .icon`, `.chip > .codicon`, `.chip > .icon`, `.live-pill > .codicon`, `.stale-badge > .codicon`, `.tile-caption > .codicon` |
 | `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
 | `--varia-glyph-lg` | 24 | Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies). |  |
 

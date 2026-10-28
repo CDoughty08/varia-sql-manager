@@ -104,6 +104,12 @@ describe('Object Explorer row visuals', () => {
     expect(markup).toContain('<span class="oe-end"><span class="oe-count" aria-hidden="true">1,234</span></span>')
     expect(rowTooltip(tables({ total: 2, staticCount: 1 }))).toBe('Tables\n1 item')
     expect(rowDescription(tables({ total: 1_235, staticCount: 1 }))).toBe('1,234 items')
+    // While Filter loaded objects shows only some of its rows, the folder says no count, to the eye or in words.
+    const partial = render(tables({ total: 1_235, staticCount: 1 }), { match: 'ord', partial: true })
+    expect(partial).toContain('<span class="oe-end"></span>')
+    expect(partial).not.toContain('1,234')
+    expect(partial).toContain('title="Tables"')
+    expect(rowDescription(tables({ total: 1_235, staticCount: 1 }), false)).toBeUndefined()
     // Placed by its offset, so rows below a taller server row sit lower; a row with nothing at its end has an empty one.
     expect(markup).toContain('transform:translateY(52px)')
     expect(render(node())).toContain('<span class="oe-end"></span>')
@@ -121,6 +127,8 @@ describe('Object Explorer row visuals', () => {
     // Later indicators come first, then the count and dot, then a lost server's buttons.
     expect(end({ connection: 'lost', count: 3, children: createElement('i', null, 'PROD'), actions: createElement('b', null, 'Reconnect') }))
       .toBe('<span class="oe-end"><i>PROD</i><span class="oe-count" aria-hidden="true">3</span><span class="oe-dot" data-state="lost" title="Connection lost" aria-hidden="true"></span><b>Reconnect</b></span>')
+    // The active query's server is marked by a glyph before its dot, not by a fill that would pass for a selection.
+    expect(end({ connection: 'online', active: true })).toBe('<span class="oe-end"><span class="oe-active" title="Server of the active query" aria-hidden="true"><span class="codicon codicon-file-code" data-icon="file-code" aria-hidden="true"></span></span><span class="oe-dot" data-state="online" title="Connected" aria-hidden="true"></span></span>')
   })
   it('mark the part of the label that matches the filter, keeping the label\'s text whole', () => {
     expect(render(node(), { match: 'ord' })).toContain('<bdi class="oe-label">dbo.<span class="oe-match">Ord</span>ers</bdi>')

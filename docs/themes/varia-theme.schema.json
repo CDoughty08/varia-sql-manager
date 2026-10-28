@@ -733,8 +733,13 @@
         },
         "objectExplorer.activeConnectionBackground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Row of the active query's server. Default $accentSurface (Dark #232842, Light #dde1f9).",
-          "markdownDescription": "(Varia) Row of the active query's server. Default `$accentSurface` (Dark `#232842`, Light `#dde1f9`)."
+          "description": "(Varia) Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). Default $sideBar (Dark #111317, Light #f7f8fa).",
+          "markdownDescription": "(Varia) Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). Default `$sideBar` (Dark `#111317`, Light `#f7f8fa`)."
+        },
+        "objectExplorer.activeConnectionForeground": {
+          "$ref": "#/definitions/value",
+          "description": "(Varia) Glyph at the end of the active query's server row. Default $accent (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(Varia) Glyph at the end of the active query's server row. Default `$accent` (Dark `#8f9cff`, Light `#4453d0`)."
         },
         "objectExplorer.headingForeground": {
           "$ref": "#/definitions/value",

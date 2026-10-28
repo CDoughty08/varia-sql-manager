@@ -81,7 +81,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon',
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.oe-active > .codicon', '.editor-status .codicon',
     '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.tile-caption > .codicon'
   ],
   md: ['.icon'],

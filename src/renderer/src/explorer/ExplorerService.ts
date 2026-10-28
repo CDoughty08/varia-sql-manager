@@ -25,8 +25,11 @@ export interface ExplorerSnapshot {
   readonly announcement?: Announcement
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
-  /** The Filter loaded objects box narrows `rows`: its text as rows match it (`filterText`), and how many nodes match. */
-  readonly filter?: { readonly text: string; readonly matches: number }
+  /**
+   * The Filter loaded objects box narrows `rows`: its text as rows match it (`filterText`), how many nodes match, and
+   * the nodes that show only some of their children (`FilteredRows.partial`), whose item counts are left out.
+   */
+  readonly filter?: { readonly text: string; readonly matches: number; readonly partial: ReadonlySet<number> }
 }
 /** The box's text as typed, and a count that changes when Filter Loaded Objects asks the box to take focus. */
 export interface QuickFilterState { readonly input: string; readonly focus: number }
@@ -1257,7 +1260,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
     this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
-      ...(this.reveals ? { reveal: this.reveals } : {}), ...(filtered ? { filter: { text: filter, matches: filtered.matches } } : {}) })
+      ...(this.reveals ? { reveal: this.reveals } : {}), ...(filtered ? { filter: { text: filter, matches: filtered.matches, partial: filtered.partial } } : {}) })
     this.updateContext()
   }
   private updateContext(): void {

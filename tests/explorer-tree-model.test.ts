@@ -390,6 +390,19 @@ describe('Filter loaded objects', () => {
     })
     expect(filtered(t, 'nothing')).toEqual({ rows: [['server-a', 1, 1, 2], ['server-b', 1, 2, 2]], matches: 0 })
   })
+  it('names the nodes shown only for rows below them, whose item counts would misread, and not a match or its subtree', () => {
+    const t = sample(12)
+    t.add(t.tables.id, 'Columns', { folder: 'columns' })
+    const partial = (text: string, pinned?: number) => [...flattenFiltered(t.nodes, t.roots, filterText(text), 64, pinned).partial].map(id => t.nodes.get(id)!.label)
+    // Tables shows 3 of its 13 rows, so it is partial, as are its ancestors and the server.
+    expect(partial('table1')).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
+    // Tables matches, so it shows whole with its count; only its ancestors are partial.
+    expect(partial('tables')).toEqual(['AppData', 'Databases', 'server-a'])
+    // A server that matches nothing shows alone; the pinned selection's folder, collapsed, shows none of its rows.
+    expect(partial('nothing')).toEqual(['server-a'])
+    t.tables.expanded = false
+    expect(partial('nothing', t.tables.id)).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
+  })
   it('shows a match\'s expanded rows as they are, and searches only expanded nodes', () => {
     const t = sample(2)
     // Below a collapsed folder, a loaded match stays hidden: the filter narrows what is open.

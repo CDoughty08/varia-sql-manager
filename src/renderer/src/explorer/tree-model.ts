@@ -175,8 +175,12 @@ export function flatten(nodes: NodeTable, roots: readonly number[], capacityHint
   return out.rows()
 }
 
-/** The rows a filter leaves, and how many of their nodes match it. */
-export interface FilteredRows { readonly rows: VisibleRows; readonly matches: number }
+/**
+ * The rows a filter leaves, how many of their nodes match it, and the nodes shown only for rows below them or as the
+ * selection (`partial`: neither a match nor inside a match's subtree). Those list only some of their children, so a
+ * folder's item count would misread beside them.
+ */
+export interface FilteredRows { readonly rows: VisibleRows; readonly matches: number; readonly partial: ReadonlySet<number> }
 /**
  * `flatten` narrowed to the nodes whose label contains `filter` (from `filterText`). It walks expanded nodes only, so it
  * searches what has been loaded and opened, and never asks for more. A match keeps its ancestors (servers always show)
@@ -192,6 +196,7 @@ export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filt
   const keep = new Set<number>()
   for (let node = pinned === undefined ? undefined : nodes.get(pinned); node; node = node.parent ? nodes.get(node.parent) : undefined) keep.add(node.id)
   let matches = 0
+  const partial = new Set<number>()
   /** A node's synthetic rows around its children, as `flatten` places them; `each` emits one child. */
   const visitChildren = (node: TreeNode, each: (child: TreeNode, index: number, size: number) => void) => {
     const level = node.level + 1, children = node.children
@@ -228,13 +233,14 @@ export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filt
     }
     if (!shown.length && !server && !keep.has(node.id)) { out.truncate(mark); return false }
     for (let index = 0; index < shown.length; index++) { out.posinset[shown[index]] = index + 1; out.setsize[shown[index]] = shown.length }
+    partial.add(node.id)
     return true
   }
   for (let index = 0; index < roots.length; index++) {
     const root = nodes.get(roots[index])
     if (root) visit(root, index + 1, roots.length, true)
   }
-  return { rows: out.rows(), matches }
+  return { rows: out.rows(), matches, partial }
 }
 
 /**

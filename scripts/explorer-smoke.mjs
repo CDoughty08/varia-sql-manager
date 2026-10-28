@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
-import { connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount, messages, outputView, part, quickInput, serverRows, primaryAction, staleBadge, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
+import { activeServerRows, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount, messages, outputView, part, quickInput, serverRows, primaryAction, staleBadge, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -610,6 +610,18 @@ try {
   await expect(explorerSublabel(serverRow)).toHaveText('16.0 · sa')
   await expect(serverRow).toHaveAttribute('title', /^server-a \(SQL Server 16\.0\.4135\.4 - sa\)/)
   await expect(connectionDot(serverRow)).toHaveAttribute('data-state', 'online')
+  // One server, the active query's, ends with the accent glyph; no tint marks it, so it never passes for a selected or hovered row.
+  await expect(activeServerRows(page)).toHaveCount(1)
+  await expect(activeServerRows(page)).toHaveAttribute('aria-selected', 'false')
+  const fills = await activeServerRows(page).evaluate(row => {
+    const probe = document.createElement('span')
+    probe.style.backgroundColor = 'var(--varia-sideBar-background)'
+    document.body.append(probe)
+    const sideBar = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { row: row.matches(':hover') ? 'hovered' : getComputedStyle(row).backgroundColor, sideBar }
+  })
+  expect(fills.row).toBe(fills.sideBar)
   // The row below a server row starts where it ends.
   const gap = await page.evaluate(selector => {
     const [server, next] = [...document.querySelectorAll(selector + ' [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
@@ -619,6 +631,7 @@ try {
   // Tables lists 3 objects after its static folders; the count is muted and right-aligned, and the tooltip says it.
   await expect(itemCount(tablesFolder)).toHaveText('3')
   await expect(tablesFolder).toHaveAttribute('title', /\n3 items/)
+  await expect(tablesFolder).toHaveAttribute('aria-description', '3 items')
   const ends = await tablesFolder.evaluate((row, selector) => ({ count: row.querySelector(selector).getBoundingClientRect().right, row: row.getBoundingClientRect().right }), part.explorerCount)
   expect(ends.row - ends.count).toBeLessThan(16)
   // The footer: the selected folder's listing was just loaded, and a row is described by the listing it is in.
@@ -639,6 +652,10 @@ try {
   await expect.poll(() => explorerLines(page)).toEqual(ordLines)
   await expect(explorerMatches(page)).toHaveText(['Ord'])
   await expect(liveRegion()).toHaveText('Filter: 1 loaded item matches')
+  // Tables shows 2 of its 3 rows (the match and the selection), so it leaves its count out, on screen and in words.
+  await expect(itemCount(tablesFolder)).toHaveCount(0)
+  await expect(tablesFolder).not.toHaveAttribute('aria-description', /items?$/)
+  await expect(tablesFolder).not.toHaveAttribute('title', /\n3 items/)
   expect((await stubCalls()).length).toBe(requested)
   // ↓ moves to the first match in the tree; Escape in the box clears it and shows the selection in context again.
   await page.keyboard.press('ArrowDown')
@@ -678,6 +695,7 @@ try {
   await expect(filterBox()).toBeFocused()
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData', 'Tables', 'dbo.table2')).toBeVisible()
   await expect(explorerMatches(page)).toHaveCount(0)
+  await expect(itemCount(tablesFolder)).toHaveText('3')
   await page.keyboard.press('Escape')
   await expect(tree()).toBeFocused()
   expect(await activeInView()).toBe(true)
@@ -770,7 +788,7 @@ try {
   expect(narrow.label).toBeGreaterThan(0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
-  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot, muted item counts, the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
+  console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts (left out while filtered), the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
 
   // 11. Disconnecting a server while one of its folders streams cancels the load and removes its rows.
   await setStub({ tables: 120_000, pageDelayMs: 250 })

@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (236)
+## Color keys (237)
 
 ### Base
 
@@ -166,7 +166,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Row of the active query's server. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$sideBar` | `#111317` | `#f7f8fa` | Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). |
+| `objectExplorer.activeConnectionForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Glyph at the end of the active query's server row. |
 | `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
 | `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text after a row's label, such as a column's type or a database's state. |
 | `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Item counts at the end of folder rows, the (filtered) marker and loading progress. |

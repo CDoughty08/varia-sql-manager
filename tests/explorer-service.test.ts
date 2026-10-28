@@ -1525,7 +1525,9 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     f.explorer.setQuickFilter('  T1 ')
     // Servers always show; the match keeps Databases › AppData › Tables above it, and nothing else of theirs.
     expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
-    expect(f.explorer.getSnapshot().filter).toEqual({ text: 't1', matches: 1 })
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 't1', matches: 1 })
+    // The folders above the match show only it, so their counts are left out; the other server shows alone.
+    expect([...f.explorer.getSnapshot().filter!.partial].map(id => f.explorer.node(id)?.label).sort()).toEqual(['AppData', 'Databases', 'Tables', 'server-a.example', 'server-b.example'])
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: 1 loaded item matches')
     // Positions count the siblings that show.
     const rows = f.rows(), at = Array.from(rows.ids).indexOf(t1)
@@ -1542,7 +1544,7 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     // The selection shows whatever the text, so nothing acts on a row out of sight.
     f.explorer.setQuickFilter('zzz')
     expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables', '        dbo.T1', 'server-b.example'])
-    expect(f.explorer.getSnapshot().filter).toEqual({ text: 'zzz', matches: 0 })
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 'zzz', matches: 0 })
     expect(f.explorer.getSnapshot().announcement?.text).toBe('Filter: no loaded items match')
     const reveal = f.explorer.getSnapshot().reveal ?? 0
     f.explorer.setQuickFilter('')
@@ -1565,7 +1567,7 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     f.explorer.collapse(tables)
     expect(f.labels()).toEqual(['server-a.example', '  Databases', '    AppData', '      Tables'])
     expect(rowIndex(f.rows(), f.explorer.getSnapshot().selected)).toBeGreaterThanOrEqual(0)
-    expect(f.explorer.getSnapshot().filter).toEqual({ text: 't1', matches: 0 })
+    expect(f.explorer.getSnapshot().filter).toMatchObject({ text: 't1', matches: 0 })
     // Expanding it again shows the match; text the selection does not match keeps the selection in view too.
     f.explorer.expand(tables)
     await settle()
@@ -1612,12 +1614,40 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     f.explorer.refresh(tables)
     await settle()
     expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded, staleSince: loaded + 60_000 })
+    // A second failure keeps the time the rows first went stale.
+    f.wall.now += 5_000
+    f.state.failNext = failure('BLOCKED', 'Another session holds a lock on this metadata.')
+    f.explorer.refresh(tables)
+    await settle()
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded, staleSince: loaded + 60_000 })
     f.wall.now += 5_000
     f.explorer.refresh(tables)
     await settle()
-    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded + 65_000 })
+    expect(f.explorer.listingFreshness(t1)).toEqual({ label: 'Tables', updatedAt: loaded + 70_000 })
     // A collapsed folder that is not loaded yet has no listing of its own: its parent's describes it.
     expect(f.explorer.listingFreshness(f.find('Views'))).toEqual({ label: 'AppData', updatedAt: loaded })
+  })
+  it('dates no listing of a lost server, nor one whose server was removed while its rows wait to be dropped', async () => {
+    const f = fixture()
+    f.connect('server-a')
+    await settle()
+    // A removed server's rows stay in the table until the sweep drops them; none of them is dated meanwhile.
+    await f.open('Databases', 'AppData', 'Tables')
+    const t1 = f.find('dbo.T1')
+    expect(f.explorer.listingFreshness(t1)).toMatchObject({ label: 'Tables' })
+    f.connections.remove(cid('server-a'))
+    await settle()
+    expect(f.explorer.node(t1)).toBeDefined()
+    expect(f.explorer.listingFreshness(t1)).toBeUndefined()
+    // A server lost with the backend keeps its row, which no listing dates.
+    f.connect('server-b')
+    await settle()
+    const root = f.find('server-b.example')
+    expect(f.explorer.listingFreshness(root)).toMatchObject({ label: 'server-b.example' })
+    f.connections.markLostBefore(2)
+    await settle()
+    expect(f.explorer.node(root)).toMatchObject({ lost: true })
+    expect(f.explorer.listingFreshness(root)).toBeUndefined()
   })
   it('forgets a listing\'s date when its rows are dropped, and dates the listing again when its first page arrives', async () => {
     const f = fixture()
