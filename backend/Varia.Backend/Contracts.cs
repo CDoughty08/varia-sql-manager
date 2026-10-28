@@ -103,6 +103,10 @@ internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] 
 /// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
 internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
     int? LateEvery = null, JsonElement? Start = null);
+/// <summary>ssis.operations' args (src/shared/ssis/schema.ts SsisOperationsArgs): the Operations view's filters, each absent one
+/// no filter. Live/SsisOperations.cs re-checks every member and bound.</summary>
+internal sealed record SsisOperationsLiveArgs(string[]? Kinds = null, int[]? Statuses = null, string? Folder = null, string? Project = null, string? Package = null, bool? Prefix = null,
+    string? Caller = null, int? WindowHours = null, int? Limit = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,

@@ -1,6 +1,7 @@
 // What a live view's pill and stale badge say (the states kit draws them): from a LiveHandle's snapshot and the time, so
 // "Updated 12 s ago" moves on with a ticker while nothing new arrives. It never claims more than the snapshot shows.
 import type { LiveProbeId } from '../../../shared/live/catalog'
+import type { LiveStatus as PillStatus } from '../kit/format'
 import type { LiveProbeSnapshot, LiveSnapshot } from './LiveService'
 
 export type LiveTone = 'connecting' | 'live' | 'slowed' | 'stale' | 'paused' | 'lost' | 'ended'
@@ -62,4 +63,20 @@ export function liveIndicator(snapshot: LiveSnapshot, now: number, shown?: reado
   if (failing) return { tone: 'stale', label: 'Live', detail: [updated, failing.error?.message, reason].filter(Boolean).join(' · ') || 'Waiting for the first sample' }
   const every = running.length ? Math.min(...running.map(probe => probe.intervalMs)) : undefined
   return { tone: 'live', label: every === undefined ? 'Live' : `Live · every ${formatInterval(every)}`, ...noted(updated) }
+}
+
+/**
+ * The states kit's LivePill for one probe of a view: the view's status, slowed while the server stretched the interval, who
+ * paused it, and why it ended. A probe the view does not run reads as the view does, at the catalogue's default.
+ */
+export function pillStatus(snapshot: LiveSnapshot, probe: LiveProbeId, defaultMs: number): PillStatus {
+  const entry = snapshot.probes[probe]
+  const intervalMs = entry?.intervalMs ?? defaultMs
+  const ended = snapshot.ended?.ended
+  switch (snapshot.status) {
+    case 'live': return entry && entry.effectiveIntervalMs > entry.intervalMs ? { state: 'slowed', intervalMs, effectiveMs: entry.effectiveIntervalMs } : { state: 'live', intervalMs }
+    case 'paused': return { state: 'paused', intervalMs, ...snapshot.pausedBy ? { pausedBy: snapshot.pausedBy } : {} }
+    case 'ended': return { state: 'ended', intervalMs, ...ended ? { ended } : {} }
+    default: return { state: snapshot.status, intervalMs }
+  }
 }

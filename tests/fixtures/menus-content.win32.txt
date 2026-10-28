@@ -86,6 +86,8 @@ View
     &Open Themes Folder  ++++
     &Reload Themes  ++++
   ---
+  I&ntegration Services Operations  -+++
+  ---
   Zoom &In  Ctrl+=  ++++
   Zoom &Out  Ctrl+-  ++++
   Reset &Zoom  Ctrl+0  ++++

@@ -90,6 +90,8 @@
     {"id":"theme.openFolder","label":"Open Themes Folder","click":[["openThemesFolder"]]}
     {"id":"theme.reload","label":"Reload Themes","click":[["reloadThemes"]]}
   {"type":"separator"}
+  {"id":"ssis.allOperations","label":"Integration Services Operations","registerAccelerator":false,"type":"normal","click":[["command","ssis.allOperations"]]}
+  {"type":"separator"}
   {"accelerator":"Ctrl+=","id":"view.zoomIn","label":"Zoom In","role":"zoomIn"}
   {"accelerator":"Ctrl+Shift+=","role":"zoomIn","visible":false}
   {"accelerator":"Ctrl+-","id":"view.zoomOut","label":"Zoom Out","role":"zoomOut"}

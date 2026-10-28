@@ -98,6 +98,8 @@ internal static class SsisLiveChecks
         await SsisCatalogLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S-A: ssis.execute (Stop Operation), against the same fake catalog.
         await SsisActionLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
+        // S3: the ssis.operations live source (the Operations document), against the same fake catalog.
+        await SsisOperationsLiveChecks.RunAsync(check, service, info, json, scratch.Ssis, Sql);
     }
 
     private static void Write(ManifestFile? manifest, CatalogShape? shape, string path)

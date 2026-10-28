@@ -48,6 +48,8 @@ import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { ssisContribution } from '../contributions/ssis'
+import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -121,6 +123,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
+  readonly operations: SsisOperationsService
   readonly theme: ThemeService
 }
 /**
@@ -179,6 +183,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
+  const operations = new SsisOperationsService({
+    api, documents, panes, live, connections, settings,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -196,6 +204,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recentFiles,
     recovery,
     designer: designers.context,
+    ssis: operations.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -255,6 +264,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    operations,
     theme,
     dispose: () => {
       if (disposed) return
@@ -273,6 +283,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      operations.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       live.dispose()
       resultClient.dispose()
@@ -315,6 +327,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    ssisContribution(workbench),
     settingsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.

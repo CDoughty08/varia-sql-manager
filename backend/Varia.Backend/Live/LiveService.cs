@@ -26,6 +26,10 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>The SSIS Catalog's database, which SSISDB sources open: SSISDB, or the checks' fake catalog.</summary>
+    string SsisCatalog => Ssis.SsisCatalog.Current.CatalogDatabase;
+    /// <summary>The checks' fake catalog runs on SQL Server on Linux (CI) too, where no real catalog can exist.</summary>
+    bool SsisIgnoresLinux => false;
 }
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
@@ -441,6 +445,9 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
 
+    /// <summary>The SSIS Catalog's operations (the Operations document), read by SsisOperationsReader.</summary>
+    internal const string SsisOperationsSource = "ssis.operations";
+
     /// <summary>Gives live tables their share of the host's result budget (limits.live.budgetShare).</summary>
     private static LiveCatalog Shared(ILiveHost host, LiveCatalog catalog)
     {
@@ -680,6 +687,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
         _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql),
+        SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
+            new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
         _ => throw Invalid("Unknown live source.")
     };
 
@@ -745,6 +754,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             return source.Id switch
             {
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };
         }

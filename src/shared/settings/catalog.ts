@@ -6,6 +6,7 @@ import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
+import { integrationServicesSettings } from './integration-services'
 import { liveDataSettings } from './live-data'
 import { objectExplorerSettings, scriptingSettingPrefix } from './object-explorer'
 import { settingPages as pages } from './pages'
@@ -26,7 +27,8 @@ const settingAreas = [
   queryExecutionSettings,
   queryResultsSettings,
   objectExplorerSettings,
-  liveDataSettings
+  liveDataSettings,
+  integrationServicesSettings
 ] as const
 
 type Def = typeof settingAreas[number][number]

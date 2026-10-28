@@ -29,6 +29,12 @@
 // an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
 // the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
 // count as protocol violations.
+// live.subscribe for ssis.operations shows each connection's fake SSIS catalog (`ssisCatalogOf`): eight operations, and a
+// new running execution every fourth sample (none while ssis-quiet is in the control directory); its args filter them as the real source's do (kinds, statuses, names exactly
+// or by prefix, caller, limit), and new args replace the old ones whole. ssis.execute's stopOperation turns a running or
+// pending execution or validation Stopping (stopped by FAKE\smoke) and the next sample Canceled; anything else answers as the
+// real preflight does (ALREADY_FINAL, NOT_STARTED, NOT_SUPPORTED, NOT_FOUND). A connection to server 'no-ssisdb' has no
+// catalog: its first tick reports CATALOG_MISSING, and the subscription ends failed.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -46,6 +52,8 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { liveProbes } from '../../src/shared/live/catalog.ts'
+import { openStatuses, operationKindSpecs, operationStatuses, operationTiles, operationTypes } from '../../src/shared/ssis/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -536,27 +544,30 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
-/** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
+/** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves, and for ssis.operations. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
-  if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  const ssis = params.source === 'ssis.operations'
+  if ((params.source !== 'debug.synthetic' && !ssis) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (params.probes.some(probe => !(ssis ? [ssisOperationsProbe] : syntheticProbes).includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {
-    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
+    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, source: params.source, initial: credit, available: credit, args: { ...params.args }, paused: false,
     probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
-    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0,
+    // As the real source does when the catalog's database does not exist: its first tick reports it, and the view ends.
+    missing: ssis && workbenchConnections.get(params.connectionId)?.server === 'no-ssisdb'
   }
   live.grant = more => { live.available += more; wakeLive(live) }
-  live.end = ended => {
+  live.end = (ended, error) => {
     clearTimeout(live.timer)
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
-    respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
+    respond(id, { ended, ...error, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, opened([...live.probes.keys()]))
+  sendLive(live, ssis ? { ...opened([...live.probes.keys()]), source: 'ssis.operations', isolation: 'readUncommitted', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: 1000, maxIntervalMs: 60_000, state: 'ok' })) } : opened([...live.probes.keys()]))
   wakeLive(live)
 }
 function sendLive(live, value) {
@@ -586,6 +597,8 @@ function wakeLive(live) {
     probe.resumed = false
     const n = ++probe.samples
     if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, code: 'CATALOG_MISSING', message: ssisMissing, retryInMs: 0, terminal: true })
+    else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
@@ -594,6 +607,7 @@ function wakeLive(live) {
   sendLive(live, { type: 'live.tick', seq: ++live.seq, sampledAt: live.sampledAt, samples, ...(errors.length ? { errors } : {}) })
   live.ticks++
   if (live.args.endAfterTicks && live.ticks >= live.args.endAfterTicks) { lives.delete(live.id); return live.end('sourceEnded') }
+  if (live.missing) { lives.delete(live.id); return live.end('failed', { code: 'CATALOG_MISSING', message: ssisMissing }) }
   wakeLive(live)
 }
 /** One snapshot revision: ids n … n + rows − 1, sorted as asked (the id breaks ties), stored as a result. */
@@ -612,6 +626,70 @@ function liveTable(live, probe, n) {
   const tracked = track && { seq: track.seq, rows: track.keys.map(key => rows.findIndex(row => String(row.id) === key)) }
   return { table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
 }
+const ssisOperationsProbe = 'ssis.operations.list'
+const ssisMissing = 'This server has no SSIS Catalog (it may have been deleted).'
+const ssisColumns = liveProbes[ssisOperationsProbe].tables[0].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
+const ssisCatalogs = new Map()
+const ssisTime = date => date.toISOString().replace('T', ' ').replace('Z', '0000 +00:00')
+/** A connection's fake catalog: eight operations of every kind, newest last; a running execution, a pending validation. */
+function ssisCatalogOf(connectionId) {
+  let catalog = ssisCatalogs.get(connectionId)
+  if (catalog) return catalog
+  const at = minutes => ssisTime(new Date(Date.UTC(2026, 9, 27, 9, 0) + minutes * 60_000))
+  const operation = (id, type, status, folder, project, name, started, minutes, caller = 'CORP\\etl') => ({ id, type, status, folder, project, package: name, object: project, start: at(started), end: openStatuses.includes(status) ? null : at(started + minutes), caller, stoppedBy: null })
+  catalog = { next: 109, samples: 0, operations: [
+    operation(101, 101, 7, null, 'Loads', null, 0, 1, 'CORP\\dba'), operation(102, 200, 7, 'Finance', 'Loads', 'Daily.dtsx', 5, 3), operation(103, 200, 4, 'Finance', 'Loads', 'Daily.dtsx', 10, 2),
+    operation(104, 300, 7, 'Finance', 'Loads', null, 15, 1), operation(105, 200, 3, 'Finance', 'Loads', 'Hourly.dtsx', 20, 4), operation(106, 1000, 7, null, 'SSISDB', null, 25, 1, 'CORP\\dba'),
+    operation(107, 301, 5, 'Finance', 'Loads', 'Daily.dtsx', 30, 0), operation(108, 200, 2, 'Finance', 'Loads', 'Daily.dtsx', 35, 0)
+  ] }
+  ssisCatalogs.set(connectionId, catalog)
+  return catalog
+}
+const ssisLabel = (codes, code) => codes.find(item => item.code === code)?.label ?? `Unknown (${code})`
+const ssisKindOf = type => Object.entries(operationKindSpecs).find(([, spec]) => spec.types.includes(type))?.[0] ?? 'other'
+function ssisPasses(args, operation) {
+  const name = (filter, value) => filter === undefined || (value !== null && (args.prefix ? value.startsWith(filter) : value === filter))
+  return (!args.kinds || args.kinds.includes(ssisKindOf(operation.type))) && (!args.statuses || args.statuses.includes(operation.status))
+    && name(args.folder, operation.folder) && name(args.project, operation.project) && name(args.package, operation.package) && (args.caller === undefined || operation.caller === args.caller)
+}
+/** One sample: stops on their way end Canceled, every fourth sample starts a new execution, then the window as a snapshot, the tiles and the newest id. */
+function ssisSample(live, probe, n) {
+  const catalog = ssisCatalogOf(live.connectionId)
+  catalog.samples++
+  for (const operation of catalog.operations) if (operation.status === 8 && operation.stopSample < catalog.samples) { operation.status = 3; operation.end = operation.start }
+  // ssis-quiet in the control directory stops the arrivals, so a test can click a row that stays put.
+  if (catalog.samples % 4 === 0 && !(controlDirectory && existsSync(join(controlDirectory, 'ssis-quiet')))) catalog.operations.push({ id: catalog.next++, type: 200, status: 2, folder: 'Finance', project: 'Loads', package: 'Hourly.dtsx', object: 'Loads', start: ssisTime(new Date()), end: null, caller: 'CORP\\etl', stoppedBy: null })
+  const rows = catalog.operations.filter(operation => ssisPasses(live.args, operation)).sort((a, b) => b.id - a.id).slice(0, live.args.limit ?? 1000)
+  const tone = status => operationStatuses.find(item => item.code === status)?.tone ?? null
+  const text = operation => [String(operation.id), ssisLabel(operationTypes, operation.type), ssisLabel(operationStatuses, operation.status), operation.folder, operation.project, operation.package,
+    operation.object, operation.start, operation.end, operation.end ? '0:01:00.000' : '0:00:30.000', operation.caller, operation.stoppedBy, 'SQL01', 'SQL01', tone(operation.status)]
+  const result = storeResult({ columns: ssisColumns, rows: rows.map(text) }, 0)
+  live.revisions.push(result.resultId)
+  const retired = live.revisions.length > 2 ? [live.revisions.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  const current = new Map(rows.map(operation => [operation.id, operation.status]))
+  const diff = { added: [...current.keys()].filter(key => !live.previous.has(key)).length, removed: [...live.previous.keys()].filter(key => !current.has(key)).length, changed: [...current].filter(([key, value]) => live.previous.has(key) && live.previous.get(key) !== value).length }
+  live.previous = current
+  const track = probe.tracks.get(0)
+  const tracked = track && { seq: track.seq, rows: track.keys.map(key => rows.findIndex(operation => String(operation.id) === key)) }
+  const counts = operationTiles.map(tile => catalog.operations.filter(operation => tile.statuses.includes(operation.status)).length)
+  return { metrics: counts, status: [{ id: 'newest', value: rows[0]?.id ?? 0 }], tables: [{ table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }] }
+}
+/** ssis.execute's stopOperation against the fake catalog, as SsisActionService's preflight and the catalog answer. */
+function ssisExecute(params) {
+  const operationId = params.action.operationId, subject = `Operation ${operationId}`
+  const error = (code, message) => ({ steps: [], elapsedMs: 1, error: { code, message, retryable: false } })
+  const catalog = ssisCatalogOf(params.connectionId)
+  const operation = catalog.operations.find(item => item.id === operationId)
+  if (!operation) return error('NOT_FOUND', subject + ' does not exist, or you may not read it.')
+  if (![200, 300, 301].includes(operation.type)) return error('NOT_SUPPORTED', subject + ' cannot be stopped: only executions and validations can be stopped.')
+  if (operation.status === 8) return error('ALREADY_FINAL', subject + ' is already stopping.')
+  if (!openStatuses.includes(operation.status)) return error('ALREADY_FINAL', subject + ' has already ended (' + ssisLabel(operationStatuses, operation.status) + ').')
+  if (operation.status === 1) return error('NOT_STARTED', subject + ' was created but has not been started, so there is nothing to stop.')
+  // Stopping for the next sample, which shows it; Canceled from the one after.
+  Object.assign(operation, { status: 8, stoppedBy: 'FAKE\\smoke', stopSample: catalog.samples + 1 })
+  return { steps: [{ status: 'done' }], elapsedMs: 1 }
+}
 function liveUpdate(id, params) {
   const live = [...lives.values()].find(item => item.subscriptionId === params.subscriptionId && item.grant && item.probes)
   if (!live) return fail(id, 'NOT_FOUND', 'This live view has ended.')
@@ -626,7 +704,7 @@ function liveUpdate(id, params) {
     if (patch.clear?.includes('sort')) probe.sort = undefined
   }
   for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
-  if (params.args) live.args = { ...live.args, ...params.args }
+  if (params.args) live.args = live.source === 'ssis.operations' ? { ...params.args } : { ...live.args, ...params.args }
   if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
   if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
   respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
@@ -735,6 +813,7 @@ async function workbench(id, method, params, credit) {
     case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)

@@ -109,11 +109,12 @@ internal static class LiveSchedulerChecks
             && LiveSql.UncommittedPrologue.Contains("SET LOCK_TIMEOUT " + LiveSql.LockTimeoutMs + ";", StringComparison.Ordinal) && LiveSql.UncommittedPrologue.Contains("SET DEADLOCK_PRIORITY LOW;", StringComparison.Ordinal),
             "server DMVs read uncommitted; SSISDB reads committed only with READ_COMMITTED_SNAPSHOT on; both wait 1 s for a lock and lose any deadlock");
         ServerProfile Profile(int major, int edition) => new(major, null, edition, null, false, true, false);
-        check(LiveConnections.Pool("server") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb") == ("SSISDB", " - Integration Services")
+        check(LiveConnections.Pool("server", "SSISDB") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb", "SSISDB") == ("SSISDB", " - Integration Services")
+            && LiveConnections.Pool("ssisdb", "VariaScratch_x_ssis") == ("VariaScratch_x_ssis", " - Integration Services")
             && LiveConnections.Band(Profile(16, 3)) == 16 && LiveConnections.Band(Profile(12, 8)) == LiveSql.MaxBand && LiveConnections.Band(Profile(18, 3)) == LiveSql.MaxBand
             && LiveConnections.Band(Profile(12, 3)) == 12 && LiveConnections.ServerStatePermission(Profile(16, 2)) == "VIEW SERVER PERFORMANCE STATE"
             && LiveConnections.ServerStatePermission(Profile(15, 2)) == "VIEW SERVER STATE" && LiveConnections.ServerStatePermission(Profile(12, 8)) == "VIEW SERVER STATE",
-            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one; Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
+            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one, in the catalog's database (or the checks' fake); Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
     }
 
     private static LiveRawSample Raw(long? ms, long? start, double?[] values, double?[]? bases = null) => new(ms, start, values, bases ?? new double?[values.Length]);

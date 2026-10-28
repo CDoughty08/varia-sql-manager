@@ -113,10 +113,11 @@ export const defaultSnapshotRows = 5000
 export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
 
-export const liveSourceIds = ['debug.synthetic', 'activity'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'ssis.operations'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
-  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview'
+  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview',
+  'ssis.operations.list'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -128,6 +129,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   activity: {
     id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
     description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
+  },
+  'ssis.operations': {
+    id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
+    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
   }
 }
 
@@ -180,6 +185,28 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
       { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
       { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
     ]
+  },
+  'ssis.operations.list': {
+    id: 'ssis.operations.list', source: 'ssis.operations', label: 'Operations', intervalMs: { default: 2000, min: 1000, max: 60_000 }, budgetMs: { min: 500, max: 10_000 },
+    description: 'The window\'s operations, newest first, as the backend keeps them: each sample reads the operations above the newest id it has settled (an id settles 2 samples and 5 s after it was first seen, since an id is assigned before its row commits) and the open ones it holds again (at most 256 a sample, in turn), and drops what left the window or the status filter; every 30 s it counts the last 24 hours by status. The counts, like Running and Pending, cover every operation the login may see, whatever the filters; row-level security shows a login only the operations it may read.',
+    series: [
+      { id: 'running', unit: 'count', label: 'Running', counter: 'gauge' },
+      { id: 'pending', unit: 'count', label: 'Pending', counter: 'gauge' },
+      { id: 'failed24h', unit: 'count', label: 'Failed (24 h)', counter: 'gauge' },
+      { id: 'succeeded24h', unit: 'count', label: 'Succeeded (24 h)', counter: 'gauge' },
+      { id: 'canceled24h', unit: 'count', label: 'Canceled (24 h)', counter: 'gauge' }
+    ],
+    status: ['newest'],
+    tables: [{
+      id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true,
+      columns: [
+        { id: 'operationId', name: 'ID', dataType: 'bigint' }, { id: 'type', name: 'Type', dataType: 'nvarchar' }, { id: 'status', name: 'Status', dataType: 'nvarchar' },
+        { id: 'folder', name: 'Folder', dataType: 'nvarchar' }, { id: 'project', name: 'Project', dataType: 'nvarchar' }, { id: 'package', name: 'Package', dataType: 'nvarchar' },
+        { id: 'object', name: 'Object', dataType: 'nvarchar' }, { id: 'start', name: 'Start', dataType: 'datetimeoffset' }, { id: 'end', name: 'End', dataType: 'datetimeoffset' },
+        { id: 'duration', name: 'Duration', dataType: 'nvarchar' }, { id: 'caller', name: 'Caller', dataType: 'nvarchar' }, { id: 'stoppedBy', name: 'Stopped by', dataType: 'nvarchar' },
+        { id: 'server', name: 'Server', dataType: 'nvarchar' }, { id: 'machine', name: 'Machine', dataType: 'nvarchar' }, toneColumn
+      ]
+    }]
   }
 }
 

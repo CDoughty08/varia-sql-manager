@@ -3,7 +3,7 @@
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
-  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, type CodeLabel
+  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, operationKinds, operationKindSpecs, groupedOperationTypes, type CodeLabel
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
 
@@ -40,7 +40,13 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   registeredWrites: 'SSIS writes registered at once',
   preflightLockTimeoutMs: 'LOCK_TIMEOUT of a write\'s preflight, in ms (`BLOCKED`)',
   preflightMs: 'A write\'s preflight budget, in ms, answered as `TIMEOUT`',
-  stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)'
+  stopGraceMs: 'How long a stopped write\'s reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown)',
+  operationsRows: 'The most operations the Operations view\'s window holds (its `limit`)',
+  operationsDefaultRows: 'The operations it holds unless told otherwise',
+  operationsRefresh: 'Open operations one sample reads again; more take turns',
+  operationsWindowHours: 'The longest window, in hours (`windowHours`)',
+  operationsDefaultWindowHours: 'The window unless told otherwise, in hours',
+  operationsCountMs: 'How often the 24-hour counts are read, in ms'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -121,6 +127,25 @@ export function renderSsisDocs(): string {
     'its outcome is unknown. The catalog records its stop operation as Running before its own transaction, and a cancelled statement',
     'never reaches its error path, so Stop during `catalog.stop_operation` (waiting on a lock) rolls the stop back but may leave that',
     'Stop operation Running until SQL Server restarts and the catalog\'s startup procedure ends it; the `CANCELLED` reply says so.',
+    '',
+    '### Operations (the `ssis.operations` live source)',
+    '',
+    'The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of',
+    'the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the',
+    'document\'s filters; new args read the window again. The backend keeps the window: the newest `limit` operations that pass the',
+    'filters and are still open or were created in the last `windowHours` (an open one of any age stays, so Active Operations finds',
+    'a long run), and the open ones the status filter hides, followed unseen since they can end in a status it shows. Each sample',
+    'reads the operations above the newest id it has settled (2 samples and 5 s after it was first seen: an id is assigned before',
+    `its row commits), refreshes the open ones it holds (at most ${ssisLimits.operationsRefresh} a sample, in turn), and drops what it neither shows nor`,
+    `follows; every ${ssisLimits.operationsCountMs / 1000} s it counts the last 24 hours by status. A row a refresh no longer finds (removed by the`,
+    'retention cleanup, or a dirty read rolled back) leaves the window.',
+    '',
+    table(['Kind', 'Label', 'Operation types'], operationKinds.map(kind => [code(kind), operationKindSpecs[kind].label,
+      kind === 'other' ? `every type but ${groupedOperationTypes.map(code).join(', ')}` : operationKindSpecs[kind].types.map(code).join(', ')])),
+    '',
+    'A row\'s tone follows its status (none for one that succeeded or completed):',
+    '',
+    table(['Status', 'Meaning', 'Tone'], operationStatuses.map(item => [code(item.code), item.label, item.tone ?? '—'])),
     '',
     '### Code tables',
     '',

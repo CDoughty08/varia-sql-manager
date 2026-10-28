@@ -8,18 +8,19 @@ using Varia.Backend.Explorer;
 namespace Varia.Backend.Live;
 
 /// <summary>The pool and the prologue of a live scope (docs/ipc.md, Live subscriptions). Server DMVs read on the
-/// connection's " - Activity Monitor" pool in the login's own initial catalog; SSISDB reads (the SSIS sources, later) use
-/// the " - Integration Services" pool with Initial Catalog SSISDB, which the SSIS tree and dialogs share with their own
-/// prologue. Each scope's pool keeps its SET options away from query tabs, Object Explorer and scripting.</summary>
+/// connection's " - Activity Monitor" pool in the login's own initial catalog; SSISDB reads (the SSIS sources) use the
+/// " - Integration Services" pool with Initial Catalog the catalog's database (SSISDB, or the checks' fake catalog), which
+/// the SSIS tree and ssis.describe share with their own prologues. Each scope's pool keeps its SET options away from query
+/// tabs, Object Explorer and scripting.</summary>
 internal static class LiveConnections
 {
     public const string ServerSuffix = " - Activity Monitor";
     public const string SsisSuffix = " - Integration Services";
 
-    public static (string? Database, string Suffix) Pool(string scope) => scope switch
+    public static (string? Database, string Suffix) Pool(string scope, string catalogDatabase) => scope switch
     {
         "server" => (null, ServerSuffix),
-        "ssisdb" => ("SSISDB", SsisSuffix),
+        "ssisdb" => (catalogDatabase, SsisSuffix),
         _ => throw new InvalidOperationException("This live scope reads no SQL Server.")
     };
 
@@ -49,16 +50,23 @@ internal sealed record LiveTestSql(Func<string, int, LiveQuery?> Queries, string
 /// Timeout may be 0 (none). Failures are values: a lock wait (BLOCKED), the budget or the connect bound (TIMEOUT), a lost
 /// connection (reopened on the next due tick under back-off), a sign-in that fails, a permission error (terminal). The
 /// constructor acquires nothing; OpenAsync connects once to read the session id and the permission (unless every probe
-/// starts paused: no SQL while paused), and a failure there is reported by the first tick instead.</summary>
+/// starts paused: no SQL while paused), and a failure there is reported by the first tick instead. A source with several
+/// statements per probe (an ILiveSqlReader, the Activity Monitor's) runs them through the reader on the same connection, under
+/// the same gate and budget, and its own session probe replaces LiveSql.Session. An SSISDB source whose connection cannot open
+/// the catalog's database reads why on a connection in the login's own database: no catalog (CATALOG_MISSING, terminal), one
+/// that is unavailable (retried) or one the login may not open (PERMISSION_DENIED).</summary>
 internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscriptionId, string connectionId, LiveSourceJson source, LiveLimitsJson limits,
-    Func<string, string, string>? testText, LiveTestSql? test = null) : ILiveSampler
+    Func<string, string, string>? testText, LiveTestSql? test = null, ILiveSqlReader? sourceReader = null) : ILiveSampler
 {
     /// <summary>The session probe's own budget (D-live: 2 s for the permission probe).</summary>
     private const int SessionBudgetMs = 2000;
     private readonly Dictionary<string, LiveDeltas> deltas = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> lastAt = new(StringComparer.Ordinal);
     private readonly Dictionary<string, LiveQuery> queries = new(StringComparer.Ordinal);
+    /// <summary>The probes a reader runs (a source with several statements per probe).</summary>
+    private readonly HashSet<string> readable = new(StringComparer.Ordinal);
     private readonly string prologue = test?.ReadCommitted == true ? LiveSql.CommittedPrologue : LiveSql.Prologue(source.Scope, readCommittedSnapshot: false);
+    private readonly bool ssisdb = source.Scope == "ssisdb";
     private readonly LiveTableSet tables = new(host.Store, subscriptionId, limits);
     private IReadOnlyList<LiveCursor> resume = [];
     private SqlConnection? connection;
@@ -104,25 +112,39 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         {
             var spec = probe.Spec;
             var gated = spec.Gates is { } gates && (band < gates.MinMajor || !gates.Editions.Contains(profile.EngineEdition));
-            var query = gated ? null : test is not null ? test.Queries(spec.Id, band) : LiveSql.For(spec.Id, band);
-            // A query that does not fit its catalogue entry is a bug in LiveSql, never a sample.
-            if (query?.Problems(spec) is { Count: > 0 }) throw new RequestException("BACKEND_ERROR", "A live query does not match its catalogue entry.");
-            if (query is not null) queries[spec.Id] = query;
+            (string Reason, string Note)? unavailable = gated ? ("NOT_SUPPORTED", LiveErrors.UnsupportedMessage) : null;
+            if (!gated && sourceReader is not null)
+            {
+                unavailable = sourceReader.Unavailable(spec, profile);
+                if (unavailable is null) readable.Add(spec.Id);
+            }
+            else if (!gated)
+            {
+                var query = test is not null ? test.Queries(spec.Id, band) : LiveSql.For(spec.Id, band);
+                // A query that does not fit its catalogue entry is a bug in LiveSql, never a sample.
+                if (query?.Problems(spec) is { Count: > 0 }) throw new RequestException("BACKEND_ERROR", "A live query does not match its catalogue entry.");
+                if (query is not null) queries[spec.Id] = query;
+                else unavailable = ("NOT_SUPPORTED", LiveErrors.UnsupportedMessage);
+            }
             deltas[spec.Id] = new([.. spec.Series.Select(series => series.Counter)]);
             LiveOpenedProbe State(string state, string? reason = null, string? note = null) => new(spec.Id, probe.IntervalMs, spec.IntervalMs.Min, spec.IntervalMs.Max, state, reason, note);
-            states.Add(query is null ? State("unavailable", "NOT_SUPPORTED", LiveErrors.UnsupportedMessage)
+            states.Add(unavailable is { } why ? State("unavailable", why.Reason, why.Note)
                 : spec.Permission == "serverState" && permitted is false ? State("unavailable", "PERMISSION_DENIED", LiveErrors.PermissionMessage)
                 : State("ok"));
         }
-        return new(states, band, spid, LiveSql.Isolation(prologue));
+        return new(states, band, spid, LiveSql.Isolation(Prologue));
     }
+
+    /// <summary>The prologue the probes run with: a reader's own once its session probe chose one (SSISDB's isolation follows
+    /// the catalog's READ_COMMITTED_SNAPSHOT), else the scope's.</summary>
+    private string Prologue => sourceReader?.Prologue ?? prologue;
 
     /// <summary>Opens a connection when none is open, within <see cref="ConnectBudgetMs"/> (TimeoutException past it).</summary>
     private async Task ConnectAsync(CancellationToken token)
     {
         if (connection is { State: ConnectionState.Open }) return;
         Drop();
-        var (database, suffix) = LiveConnections.Pool(source.Scope);
+        var (database, suffix) = LiveConnections.Pool(source.Scope, host.SsisCatalog);
         var opening = host.PoolConnection(connectionId, test?.Database ?? database, suffix);
         connection = opening;
         sessionRead = false;
@@ -144,14 +166,18 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         bool allowed;
         try
         {
-            await using var command = connection!.CreateCommand();
-            command.CommandTimeout = 0;
-            command.CommandText = prologue + LiveSql.Session;
-            command.Parameters.Add(new SqlParameter("@permission", SqlDbType.NVarChar, 128) { Value = permission });
-            await using var reader = await command.ExecuteReaderAsync(budget.Token).ConfigureAwait(false);
-            if (!await reader.ReadAsync(budget.Token).ConfigureAwait(false)) throw new InvalidOperationException("The session probe returned no row.");
-            session = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
-            allowed = Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) == 1;
+            if (sourceReader is not null) (session, allowed) = await sourceReader.SessionAsync(connection!, prologue, permission, budget.Token).ConfigureAwait(false);
+            else
+            {
+                await using var command = connection!.CreateCommand();
+                command.CommandTimeout = 0;
+                command.CommandText = prologue + LiveSql.Session;
+                command.Parameters.Add(new SqlParameter("@permission", SqlDbType.NVarChar, 128) { Value = permission });
+                await using var row = await command.ExecuteReaderAsync(budget.Token).ConfigureAwait(false);
+                if (!await row.ReadAsync(budget.Token).ConfigureAwait(false)) throw new InvalidOperationException("The session probe returned no row.");
+                session = Convert.ToInt32(row.GetValue(0), CultureInfo.InvariantCulture);
+                allowed = Convert.ToInt32(row.GetValue(1), CultureInfo.InvariantCulture) == 1;
+            }
         }
         catch (Exception error) when (budget.IsCancellationRequested && !token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {
@@ -175,7 +201,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         foreach (var item in due)
         {
             var id = item.Probe.Spec.Id;
-            if (!queries.TryGetValue(id, out var query))
+            var byReader = readable.Contains(id);
+            if (!queries.TryGetValue(id, out var query) && !byReader)
             {
                 errors.Add(LiveErrors.Create(id, "NOT_SUPPORTED", LiveErrors.UnsupportedMessage));
                 continue;
@@ -201,8 +228,15 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 if (!sessionRead) await SessionAsync(token).ConfigureAwait(false);
                 budget.CancelAfter(item.BudgetMs);
                 var started = Stopwatch.GetTimestamp();
-                var read = await ReadAsync(query, item, budget.Token).ConfigureAwait(false);
+                var read = byReader ? await sourceReader!.ReadAsync(connection!, Prologue, item, testText, budget.Token).ConfigureAwait(false) : await ReadAsync(query!, item, budget.Token).ConfigureAwait(false);
                 var cost = (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+                if (!read.Sampled)
+                {
+                    // Nothing was read: the probe failed (it backs off), and its first error says why.
+                    errors.Add(read.Errors[0]);
+                    if (connection is not { State: ConnectionState.Open }) Drop(baseline: true);
+                    continue;
+                }
                 var now = Stopwatch.GetTimestamp();
                 long? clientElapsed = lastAt.TryGetValue(id, out var before) ? (long)Stopwatch.GetElapsedTime(before, now).TotalMilliseconds : null;
                 lastAt[id] = now;
@@ -215,9 +249,10 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                     (metrics, elapsed, gap) = (result.Values, result.ElapsedMs, result.Gap);
                 }
                 var (snapshots, appends, full) = Store(item, read.Tables);
-                samples.Add(new LiveSample(id, cost, item.EffectiveIntervalMs, elapsed, gap, item.Skipped, metrics, snapshots.Count > 0 ? snapshots : null, appends.Count > 0 ? appends : null));
+                samples.Add(new LiveSample(id, cost, item.EffectiveIntervalMs, elapsed, gap, item.Skipped, metrics, snapshots.Count > 0 ? snapshots : null, appends.Count > 0 ? appends : null,
+                    read.Status is { Count: > 0 } status ? status : null));
                 if (full.Count > 0) errors.Add(LiveErrors.Create(id, "BUDGET", LiveErrors.BudgetMessage) with { Tables = [.. full] });
-                if (read.Failure is { } partial)
+                foreach (var partial in read.Errors)
                 {
                     errors.Add(partial);
                     if (LiveErrors.Breaks(partial.Code) || connection is not { State: ConnectionState.Open }) Drop(baseline: partial.Code == "CONNECTION_LOST");
@@ -234,9 +269,15 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 Drop();
                 failure = LiveErrors.Create(id, "TIMEOUT", LiveErrors.TimeoutMessage);
             }
+            catch (SqlException error) when (ssisdb && !connected && LiveErrors.OpensNoDatabase(error))
+            {
+                Drop();
+                failure = await CatalogFailureAsync(id, item.BudgetMs, token).ConfigureAwait(false) ?? LiveErrors.From(id, error);
+            }
             catch (SqlException error)
             {
                 failure = LiveErrors.From(id, error);
+                if (ssisdb && failure.Code == "PERMISSION_DENIED") failure = failure with { Message = LiveErrors.CatalogAccessMessage };
                 if (LiveErrors.Breaks(failure.Code) || connection is not { State: ConnectionState.Open }) Drop(baseline: failure.Code == "CONNECTION_LOST");
             }
             catch (InvalidOperationException)
@@ -260,13 +301,59 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         return new(samples, errors, reopened, cursors.Count > 0 ? cursors : null);
     }
 
-    /// <summary>What one batch returned: the metrics row (null without series), the rows of each table it read (in order), and
-    /// the error of a statement that failed after earlier ones returned, naming the tables it left unread.</summary>
-    private sealed record LiveRead(LiveRawSample? Raw, List<(int Table, List<LiveRow> Rows, long More)> Tables, LiveProbeError? Failure);
+    /// <summary>Why an SSISDB source's connection could not open the catalog's database, read in the login's own database on the
+    /// same pool's connection (under a live gate and the probe's budget); null when that read fails too, so the open's own
+    /// error is reported. A subscription that ends during the read is an OperationCanceledException, however SqlClient words it.</summary>
+    private async Task<LiveProbeError?> CatalogFailureAsync(string probe, int budgetMs, CancellationToken token)
+    {
+        SqlConnection? server = null;
+        try
+        {
+            server = host.PoolConnection(connectionId, null, LiveConnections.SsisSuffix);
+            using (var bound = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                bound.CancelAfter(ConnectBudgetMs);
+                await host.OpenAsync(server, bound.Token).ConfigureAwait(false);
+            }
+            using var lease = await gates.WaitAsync(connectionId, budgetMs, token).ConfigureAwait(false);
+            if (lease is null) return null;
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(token);
+            budget.CancelAfter(budgetMs);
+            await using var command = server.CreateCommand();
+            command.CommandTimeout = 0;
+            command.CommandText = LiveSql.UncommittedPrologue + LiveSql.CatalogState;
+            command.Parameters.Add(new SqlParameter("@catalog", SqlDbType.NVarChar, 128) { Value = host.SsisCatalog });
+            await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, budget.Token).ConfigureAwait(false);
+            return await reader.ReadAsync(budget.Token).ConfigureAwait(false)
+                ? LiveErrors.Catalog(probe, Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture))
+                : LiveErrors.Catalog(probe, null, null);
+        }
+        catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
+        {
+            // As in SampleAsync: the cancel in SqlClient's words ends the subscription cancelled, and a connection cancelled
+            // mid-statement goes back to no pool.
+            if (server is not null)
+            {
+                try { SqlConnection.ClearPool(server); }
+                catch (InvalidOperationException) { /* Never opened: nothing pooled. */ }
+            }
+            throw new OperationCanceledException(token);
+        }
+        catch (Exception error) when (error is SqlException or InvalidOperationException or OperationCanceledException
+            || error is RequestException { Code: "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA" })
+        {
+            return null;
+        }
+        finally
+        {
+            if (server is not null) await server.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Starts each append table that has not started, or whose predicate (a restart filter) changed, then runs the
-    /// probe's batch: the metrics row, then each table's result set.</summary>
-    private async Task<LiveRead> ReadAsync(LiveQuery query, LiveDue item, CancellationToken token)
+    /// probe's batch: the metrics row, then each table's result set. A statement that failed after earlier ones returned is
+    /// an error naming the tables it left unread.</summary>
+    private async Task<LiveReaderSample> ReadAsync(LiveQuery query, LiveDue item, CancellationToken token)
     {
         var spec = item.Probe.Spec;
         var pattern = query.Filtered && item.Filter?.Text is { Length: > 0 } text ? Pattern(text) : null;
@@ -303,7 +390,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 raw = await MetricsAsync(query, item, reader, token).ConfigureAwait(false);
                 if (query.Tables.Length > 0 && !await reader.NextResultAsync(token).ConfigureAwait(false)) throw new RequestException("BACKEND_ERROR", "A live query returned fewer result sets than it declares.");
             }
-            var results = new List<(int, List<LiveRow>, long)>();
+            var results = new List<LiveReaderTable>();
             for (var at = 0; at < query.Tables.Length; at++)
             {
                 try
@@ -313,16 +400,17 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                     var catalogTable = spec.Tables[table.Table];
                     var cap = catalogTable.Mode == "append" ? tables.Append(spec, table.Table).ReadRows : limits.SnapshotRows;
                     var (rows, more) = await RowsAsync(reader, catalogTable, cap, token).ConfigureAwait(false);
-                    results.Add((table.Table, rows, more));
+                    var view = item.View is { } chosen && table.View is { } predicate ? row => predicate(chosen, row) : (Func<LiveRow, bool>?)null;
+                    results.Add(new(table.Table, rows, more, view));
                 }
                 catch (SqlException error) when (!token.IsCancellationRequested && (raw is not null || results.Count > 0))
                 {
                     // One statement failed after earlier ones returned: those tables arrive, and the error names the rest.
                     partial = LiveErrors.From(spec.Id, error) with { Tables = [.. query.Tables.Skip(at).Select(table => table.Table)] };
-                    return new(raw, results, partial);
+                    return new(raw, results, [partial]);
                 }
             }
-            return new(raw, results, null);
+            return new(raw, results, []);
         }
         finally
         {
@@ -436,18 +524,16 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
 
     /// <summary>Writes each table read: a snapshot as its next revision (sorted, filtered and viewed as the probe asks), an
     /// append table by its new rows. Returns the samples and the tables the budget cut.</summary>
-    private (List<LiveSnapshotSample> Snapshots, List<LiveAppendSample> Appends, List<int> Full) Store(LiveDue item, List<(int Table, List<LiveRow> Rows, long More)> read)
+    private (List<LiveSnapshotSample> Snapshots, List<LiveAppendSample> Appends, List<int> Full) Store(LiveDue item, List<LiveReaderTable> read)
     {
         var spec = item.Probe.Spec;
-        var query = queries[spec.Id];
         var snapshots = new List<LiveSnapshotSample>();
         var appends = new List<LiveAppendSample>();
         var full = new List<int>();
-        foreach (var (index, rows, more) in read)
+        foreach (var (index, rows, more, view) in read)
         {
             if (spec.Tables[index].Mode == "snapshot")
             {
-                var view = item.View is { } chosen && query.Tables.FirstOrDefault(table => table.Table == index)?.View is { } predicate ? row => predicate(chosen, row) : (Func<LiveRow, bool>?)null;
                 var write = tables.Snapshot(spec, index).Write(rows, new(item.Sort, spec.FilterMode == "memory" ? item.Filter : null, view, item.Tracks.GetValueOrDefault(index)), more);
                 if (write.Sample is { } sample) snapshots.Add(sample);
                 if (write.Budget) full.Add(index);
@@ -467,7 +553,11 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     private void Drop(bool baseline = false, bool healthy = false)
     {
         // After a lost connection, which may have reached another server (a failover), rates start again.
-        if (baseline) foreach (var probe in deltas.Values) probe.Reset();
+        if (baseline)
+        {
+            foreach (var probe in deltas.Values) probe.Reset();
+            sourceReader?.Reset();
+        }
         if (connection is not { } held) return;
         connection = null;
         if (!healthy)
@@ -480,7 +570,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
 
     public void Idle() => Drop(healthy: true);
 
-    public void Apply(object args) { }
+    public void Apply(object args) => sourceReader?.Apply(args);
     public uint[] Keep() => tables.Keep(limits.Kept);
     public void Release() => tables.Release();
     public void Dispose() => Drop(healthy: true);

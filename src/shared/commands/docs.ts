@@ -10,7 +10,7 @@ import {
 } from './menus'
 
 // A Record so that a new Category cannot be left out of the document: its commands would otherwise vanish from it.
-const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, Preferences: true, Developer: true, Help: true }
+const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, 'Integration Services': true, Preferences: true, Developer: true, Help: true }
 const categories: readonly (Category | undefined)[] = [...Object.keys(categoryOrder) as Category[], undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {
@@ -18,7 +18,8 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   'file.recent': 'File › Recent Files', 'edit.findReplace': 'Edit › Find and Replace', 'edit.advanced': 'Edit › Advanced', 'edit.bookmarks': 'Edit › Bookmarks', 'edit.intellisense': 'Edit › IntelliSense',
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu', 'explorer.new': 'Object Explorer context menu › New',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
-  'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu'
+  'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
+  'ssisOperations.context': 'Integration Services Operations context menu'
 }
 /** How each context menu opens, and what its items act on. */
 const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
@@ -28,6 +29,7 @@ const contextMenuUses: Readonly<Record<ContextMenuId, string>> = {
   'documentTab.context': 'Right-click a query tab, or press Shift+F10 or the context-menu key on a focused tab. Items act on that tab\'s query.',
   'output.context': 'Right-click the results grid or Messages, or press Shift+F10 or the context-menu key where it has focus. A right-click outside the grid\'s selection selects that cell first.',
   'dockTab.context': 'Right-click a panel\'s tab (Object Explorer, Query editor, or Query output), or press Shift+F10 or the context-menu key on a focused tab.',
+  'ssisOperations.context': 'Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document\'s rows.',
   'input.context': 'Right-click a text field, including those in dialogs and the editor\'s find widget, or press Shift+F10 or the context-menu key in it. It is the only menu that opens while a dialog is open; the command palette\'s field has none.'
 }
 // The theme items need no real theme list: only their fixed labels and commands are documented.

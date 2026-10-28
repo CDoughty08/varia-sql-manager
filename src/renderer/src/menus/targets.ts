@@ -45,17 +45,20 @@ export type MenuTarget =
   | { readonly kind: 'documentTab'; readonly tabId: string }
   /** A table designer's grid; its commands act on the designer's selected columns. */
   | { readonly kind: 'tableDesigner'; readonly tabId: string }
+  /** An Integration Services Operations grid; its commands act on the selected operation. */
+  | { readonly kind: 'ssisOperations'; readonly tabId: string }
   | OutputTarget
   | { readonly kind: 'dockTab'; readonly pane: PaneId; readonly floating: boolean }
   | InputTarget
 
 export const menuForTarget: Readonly<Record<MenuTarget['kind'], ContextMenuId>> = {
-  editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context'
+  editor: 'editor.context', explorer: 'explorer.context', tableDesigner: 'tableDesigner.context', documentTab: 'documentTab.context', output: 'output.context', dockTab: 'dockTab.context', input: 'input.context',
+  ssisOperations: 'ssisOperations.context'
 }
 /** Each context menu's accessible name. */
 export const contextMenuLabels: Readonly<Record<ContextMenuId, string>> = {
   'editor.context': 'Query editor', 'explorer.context': 'Object Explorer', 'tableDesigner.context': 'Table Designer', 'documentTab.context': 'Query tab', 'output.context': 'Query output',
-  'dockTab.context': 'Panel tab', 'input.context': 'Text field'
+  'dockTab.context': 'Panel tab', 'input.context': 'Text field', 'ssisOperations.context': 'Integration Services Operations'
 }
 
 /** A folder whose objects Filter Settings can narrow (Tables, Views, Databases, Logins…). */
@@ -75,7 +78,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
 }
 /** The arguments a context menu's commands run with: the target, and the tab it is about, so the File commands act on that tab. */
 export function argsFor(target: MenuTarget): CommandArgs {
-  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' ? target.tabId : undefined
+  const tabId = target.kind === 'editor' || target.kind === 'documentTab' || target.kind === 'output' || target.kind === 'tableDesigner' || target.kind === 'ssisOperations' ? target.tabId : undefined
   return { target, ...(tabId ? { tabId } : {}) }
 }
 export const inputOf = (args: CommandArgs | undefined): InputTarget | undefined => args?.target?.kind === 'input' ? args.target : undefined

@@ -851,7 +851,12 @@ the column, and each column is named once per table (or once for all). A view mu
 (`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
 errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }`, a sampling period below the 1 s
 minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
-error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. A source
+error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start.
+`ssis.operations` takes the Integration Services Operations document's filters, `{ kinds?: ('execution' | 'validation' |
+'deploy' | 'other')[1..4], statuses?: (1..9)[1..9], folder?: str 1..128, project?: str 1..128, package?: str 1..260, prefix?:
+boolean, caller?: str 1..128, windowHours?: 1..8,760, limit?: 1..10,000 }` (kinds and statuses distinct and from the SSIS
+catalogue; `Live/SsisOperations.cs` checks the same bounds again); new args replace the old ones whole (an absent member
+does not filter) and read the window again. A source
 whose append tables can start elsewhere than their first row takes `start` (`liveStartSchema`): `'beginning'`,
 `{ tail: 1..200,000 }` (the last rows) or `{ before: 1..2^53−1 }` (the rows before an id, ending there). Tracking names a keyed
 snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F, and `linger` says how many
@@ -1031,8 +1036,9 @@ checks drive it on a fake clock):
 **SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source): one pooled connection per subscription
 from the connection's own **" - Activity Monitor"** pool (registered with the connection's pools, so a disconnect clears
 it), held while it samples so its session id is known (`live.opened`'s `spid`; a tick carries `spid` when it reopened).
-SSISDB sources (later) use the **" - Integration Services"** pool in `SSISDB` with their own prologue
-(`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
+SSISDB sources (scope `ssisdb`, the `ssis.operations` source) use the **" - Integration Services"** pool, Initial Catalog the
+catalog's database (`SSISDB`, or the checks' fake catalog through the internal `SsisOptions.CatalogDatabase`), which the
+SSIS tree and `ssis.describe` share with their own prologues (`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
 state: `SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;`
 for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Connecting takes
 no live gate (a server that stopped answering a login never holds one that views on other servers need) and has its own
@@ -1064,6 +1070,32 @@ from its parenthesis still counts. Values are read by the column's declared posi
 result's columns against the declaration (names, order, count, numeric types); a mismatch is a bug, which ends the view
 `failed` with `BACKEND_ERROR` rather than put one series' value in another's. The live checks also run every query at the
 server's band and compare its columns.
+
+**Readers.** A source whose probe runs several statements and builds its rows in C# (`ILiveSqlReader`,
+`Live/LiveSqlReader.cs`) keeps everything else of a SQL source: the pooled connection, the live gates, one budget for all
+of a probe's statements, the delta engine, the table writers, back-off and error mapping. Its own session probe replaces
+the one above, and it may choose the prologue its statements run with. A statement error that breaks the connection or the
+budget fails the probe as a batch's would; one that concerns a single statement is a value in the sample, naming the tables
+or series it feeds. `ssis.operations` (`Live/SsisOperations.cs`) is one: its session probe reads `@@SPID` and whether the
+catalog's database has `READ_COMMITTED_SNAPSHOT` on (`sys.databases`, the name a parameter), which picks `READ COMMITTED`
+or `READ UNCOMMITTED` (owner decision 4); catalog views need no server permission, since row-level security shows a login
+only what it may read. Its one probe, `ssis.operations.list`, keeps the window in backend state (a snapshot table
+materialised from it, not from one result set): a baseline, after the first sample, new args or a lost connection, reads
+the newest `2 × limit` operations of the scope that are open or were created in the window and pass the status filter (an
+open one the status filter hides is read too and followed unseen, since it can still end in a status the filter shows);
+each later sample reads the operations above the newest id it has settled (an id settles 2 samples and 5 s after it was
+first seen, since SQL Server assigns an identity before its row commits, so a lower id can appear after a higher one; a row
+read twice replaces itself) and the open ones it holds again by id (an `xml` list `@open`, at most 256 a sample, in turn
+when there are more; a row no longer found leaves: the catalog's retention cleanup removed it, or a dirty read was rolled
+back), then drops what it neither shows nor follows and keeps the newest `limit`. Every 30 s (and with each baseline) the
+same batch counts the last 24 hours by final status; samples in between repeat those counts, while Running and Pending
+count what the window holds. Lists go in as `xml` parameters read with `.nodes('/i')` (any compatibility level), names
+as `LIKE` patterns with their wildcards escaped (`ESCAPE N'\'`, a trailing `%` for a prefix), times stay
+`datetimeoffset`, and the SQL passes both the live lint and the SSIS lint. A connection that cannot open the catalog's
+database (4060 or 916) reads why on the same pool in the login's own database: no `sys.databases` row is
+`CATALOG_MISSING` (terminal), one that is not online or is single-user or restricted is `DATABASE_UNAVAILABLE` (retried),
+and an online one the login may not open is `PERMISSION_DENIED` (terminal). A server on Linux, or one older than SQL Server
+2016, opens the probe `unavailable` `NOT_SUPPORTED`.
 
 **Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
 `PERMISSION_DENIED` and 207 and 208 `NOT_SUPPORTED` (both terminal; so are an SSIS source's `CATALOG_MISSING` and `NOT_FOUND`); 4060, 911, 942, 952 and the other offline,

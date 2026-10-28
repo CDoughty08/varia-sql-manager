@@ -25,6 +25,27 @@ internal static class LiveErrors
     public const string LoginFailedMessage = "SQL Server refused this view's sign-in (the password may have changed, or the login is locked or disabled). Refresh or reconnect to sign in again.";
     public const string BusyMessage = "Too many live views are reading this server at once. It tries again.";
     public const string BudgetMessage = "The result memory budget is full. Close some results, and the view continues.";
+    public const string CatalogMissingMessage = "This server has no SSIS Catalog (it may have been deleted).";
+    public const string CatalogAccessMessage = "This login cannot read the SSIS Catalog. Ask for access to the catalog's database, or connect with a login that has it.";
+
+    /// <summary>Opening a connection in a database failed without saying why (4060 cannot open it, 916 no access), so its
+    /// sys.databases row must tell: it does not exist, is unavailable, or is closed to the login. An error that already says
+    /// the database is unavailable (offline, recovering, a secondary replica that cannot be read…) is not looked up: it stays
+    /// DATABASE_UNAVAILABLE and retries, whatever the row reads by then.</summary>
+    public static bool OpensNoDatabase(SqlException error)
+    {
+        var numbers = error.Errors.Cast<SqlError>().Select(item => item.Number).Append(error.Number).ToList();
+        return numbers.Any(number => number is 4060 or 916) && !numbers.Any(number => number != 4060 && Unavailable.Contains(number));
+    }
+
+    /// <summary>Why an SSISDB source cannot open the catalog's database, from its sys.databases row (state and user_access;
+    /// null when there is none): no catalog (terminal), an unavailable one (offline, restoring, recovering or suspect; single-
+    /// user, or restricted to db_owner, dbcreator and sysadmin for maintenance: it can come back, so it retries), or an online
+    /// one the login may not open (terminal).</summary>
+    public static LiveProbeError Catalog(string probe, int? state, int? userAccess) =>
+        state is null ? Create(probe, "CATALOG_MISSING", CatalogMissingMessage)
+        : state != 0 || userAccess is 1 or 2 ? Create(probe, "DATABASE_UNAVAILABLE", UnavailableMessage)
+        : Create(probe, "PERMISSION_DENIED", CatalogAccessMessage);
 
     /// <summary>The live error code of a SQL Server error number and severity.</summary>
     public static string Classify(int number, byte severity) => number switch

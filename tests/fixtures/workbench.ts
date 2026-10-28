@@ -49,6 +49,9 @@ import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialog
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
+import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
+import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
@@ -208,6 +211,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], elapsedMs: 1 } })),
+    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async () => ({ ok: true, value: { cancelled: 0 } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
@@ -286,6 +291,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
+  const live = fakeLive()
+  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const context = new ContextKeyService({
     platform,
@@ -304,6 +311,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    ssis: operations.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -356,7 +364,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
-    designers
+    designers,
+    operations
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -376,6 +385,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    ssisContribution(workbench),
     settingsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
@@ -405,6 +415,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     designers.dispose()
+    operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
@@ -431,6 +442,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
+    operations,
+    live,
     focusEditor,
     queries,
     files,

@@ -77,6 +77,15 @@ What the checks prove:
   `PERMISSION_DENIED` without EXECUTE, and the catalog's own 27123 answers `WINDOWS_AUTH_REQUIRED`; a missing catalog
   answers `CATALOG_MISSING`; and no actions session is left behind. On CI's SQL Server authentication the internal
   `SsisOptions.IgnoreSqlAuthentication` lets them run.
+- **Operations against the fake** (`SsisOperationsLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`): the `ssis.operations` source
+  shows the fake catalog's operations newest first on the SSIS read pool at READ UNCOMMITTED, in the catalog's words, with
+  their times' offsets, durations and tones; the tiles count the running operations and the last 24 hours' failures; a new
+  execution appears, turns Running when started, Stopping with its stopper when Stop Operation stops it, and Canceled when it
+  ends; new args read the window again under a status filter, a kind, and a folder whose name holds LIKE's wildcards by its
+  prefix; with READ_COMMITTED_SNAPSHOT on the catalog's database the source reads committed rows; and a catalog that does
+  not exist ends the view `CATALOG_MISSING`. Offline (`SsisOperationsChecks`), the window's state machine is driven without
+  SQL Server: settling ids that commit out of order, open operations refreshed in turns of 256, rows a refresh no longer
+  finds, followed operations a status filter hides, open operations older than the window, and the limit.
 - **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
@@ -231,6 +240,39 @@ its outcome is unknown. The catalog records its stop operation as Running before
 never reaches its error path, so Stop during `catalog.stop_operation` (waiting on a lock) rolls the stop back but may leave that
 Stop operation Running until SQL Server restarts and the catalog's startup procedure ends it; the `CANCELLED` reply says so.
 
+### Operations (the `ssis.operations` live source)
+
+The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of
+the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the
+document's filters; new args read the window again. The backend keeps the window: the newest `limit` operations that pass the
+filters and are still open or were created in the last `windowHours` (an open one of any age stays, so Active Operations finds
+a long run), and the open ones the status filter hides, followed unseen since they can end in a status it shows. Each sample
+reads the operations above the newest id it has settled (2 samples and 5 s after it was first seen: an id is assigned before
+its row commits), refreshes the open ones it holds (at most 256 a sample, in turn), and drops what it neither shows nor
+follows; every 30 s it counts the last 24 hours by status. A row a refresh no longer finds (removed by the
+retention cleanup, or a dirty read rolled back) leaves the window.
+
+| Kind | Label | Operation types |
+| --- | --- | --- |
+| `execution` | Executions | `200` |
+| `validation` | Validations | `300`, `301` |
+| `deploy` | Deployments | `101` |
+| `other` | Other | every type but `200`, `300`, `301`, `101` |
+
+A row's tone follows its status (none for one that succeeded or completed):
+
+| Status | Meaning | Tone |
+| --- | --- | --- |
+| `1` | Created | muted |
+| `2` | Running | running |
+| `3` | Canceled | muted |
+| `4` | Failed | error |
+| `5` | Pending | running |
+| `6` | Ended unexpectedly | error |
+| `7` | Succeeded | — |
+| `8` | Stopping | warning |
+| `9` | Completed | — |
+
 ### Code tables
 
 Operation types (`catalog.operations.operation_type`):
@@ -377,3 +419,9 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `preflightLockTimeoutMs` | 10,000 | LOCK_TIMEOUT of a write's preflight, in ms (`BLOCKED`) |
 | `preflightMs` | 25,000 | A write's preflight budget, in ms, answered as `TIMEOUT` |
 | `stopGraceMs` | 10,000 | How long a stopped write's reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown) |
+| `operationsRows` | 10,000 | The most operations the Operations view's window holds (its `limit`) |
+| `operationsDefaultRows` | 1,000 | The operations it holds unless told otherwise |
+| `operationsRefresh` | 256 | Open operations one sample reads again; more take turns |
+| `operationsWindowHours` | 8,760 | The longest window, in hours (`windowHours`) |
+| `operationsDefaultWindowHours` | 24 | The window unless told otherwise, in hours |
+| `operationsCountMs` | 30,000 | How often the 24-hour counts are read, in ms |

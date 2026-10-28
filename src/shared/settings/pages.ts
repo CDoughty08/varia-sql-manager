@@ -28,5 +28,6 @@ export const settingPages = [
   { id: 'queryResults.sqlServer.grid', title: 'Results to Grid', parent: 'queryResults.sqlServer', layout: 'form' },
   { id: 'objectExplorer', title: 'SQL Server Object Explorer' },
   { id: 'objectExplorer.commands', title: 'Commands', parent: 'objectExplorer', layout: 'propertyGrid' },
-  { id: 'objectExplorer.scripting', title: 'Scripting', parent: 'objectExplorer', layout: 'propertyGrid' }
+  { id: 'objectExplorer.scripting', title: 'Scripting', parent: 'objectExplorer', layout: 'propertyGrid' },
+  { id: 'integrationServices', title: 'SQL Server Integration Services', layout: 'form', description: 'How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.' }
 ] as const satisfies readonly SettingPage[]

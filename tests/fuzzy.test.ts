@@ -51,7 +51,7 @@ describe('fuzzy matching', () => {
       ['disc', 'Edit: Comment Selection'], ['tree', 'Edit: Replace'], ['exe', 'View: Next Query']]) {
       expect(palette(query), query).not.toContain(label)
     }
-    expect(palette('refresh')).toEqual(['Object Explorer: Refresh'])
+    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Integration Services: Refresh Operations'])
     expect(palette('go to')[0]).toBe('Go to Query…')
     // The last capital of an acronym starts the next word.
     expect(highlight('q1', 'SQLQuery1.sql')).toEqual(['Q', '1'])

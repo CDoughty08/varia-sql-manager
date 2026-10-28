@@ -7,6 +7,7 @@ import { z } from 'zod'
 import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
+import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -37,7 +38,10 @@ export const liveArgsSchemas = {
     start: liveStartSchema.optional()
   }).strict(),
   // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
-  activity: z.never()
+  activity: z.never(),
+  // The Operations document's filters. Each args replaces the last whole (an absent member is no filter), and new args read
+  // the window again.
+  'ssis.operations': ssisOperationsArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

@@ -4,7 +4,7 @@ import { findConflicts, focusSamples } from '../src/shared/commands/conflicts'
 import { contextKeyNames, contextKeys, contextRecord, isContextKey, keysOfScope, targetKeyMenu, whenProblems } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
 import { assignMnemonics, buildMenuModel, contextMenuIds, maxSubmenuDepth, menubarIds, menuIds, menuRoots, menuTitle, mnemonicIndex, submenuIds, submenus, type MenuId } from '../src/shared/commands/menus'
-import { parseWhen, referencedKeys } from '../src/shared/commands/when'
+import { comparisons, evaluateWhen, parseWhen, referencedKeys, type ContextRecord } from '../src/shared/commands/when'
 import { themeMenuModel } from '../src/shared/theme/menu'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
 import { isIconId } from '../src/shared/icons'
@@ -16,12 +16,44 @@ import { scriptAsTitleKeys, scriptCommandIds, scriptVerbContextKey, scriptVerbs 
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
+/**
+ * The sets of a context menu's items that can show at once: their `when` clauses evaluated over every combination of the
+ * values those clauses compare (a key compared with strings may also hold none of them; any other key is true or false).
+ * The menu assigns access keys among the items it shows (src/renderer/src/menus/resolve.ts), so only these must differ.
+ */
+function shownTogether(whens: readonly (string | undefined)[]): number[][] {
+  const clauses = whens.map(when => when === undefined ? undefined : parseWhen(when))
+  const domains = new Map<string, Set<boolean | string>>()
+  for (const clause of clauses) {
+    if (!clause) continue
+    for (const key of referencedKeys(clause)) if (!domains.has(key)) domains.set(key, new Set())
+    for (const { key, value } of comparisons(clause)) domains.get(key)!.add(value)
+  }
+  for (const values of domains.values()) {
+    const strings = [...values].some(value => typeof value === 'string')
+    values.clear()
+    if (!strings) { values.add(true); values.add(false) }
+  }
+  for (const clause of clauses) if (clause) for (const { key, value } of comparisons(clause)) if (typeof value === 'string') domains.get(key)!.add(value)
+  for (const values of domains.values()) if ([...values].some(value => typeof value === 'string')) { values.add(''); values.add('another value') }
+  const keys = [...domains.keys()], sets = new Map<string, number[]>()
+  const visit = (at: number, context: ContextRecord) => {
+    if (at === keys.length) {
+      const shown = clauses.flatMap((clause, index) => !clause || evaluateWhen(clause, context) ? [index] : [])
+      sets.set(shown.join(','), shown)
+      return
+    }
+    for (const value of domains.get(keys[at])!) visit(at + 1, { ...context, [keys[at]]: value })
+  }
+  visit(0, {})
+  return [...sets.values()]
+}
 
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 99 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel.
-    expect(commandIds).toHaveLength(144)
+    // 99 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, Integration Services Operations' nine, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel.
+    expect(commandIds).toHaveLength(153)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -126,25 +158,29 @@ describe('command catalogue', () => {
     for (const platform of platforms) for (const menu of menuIds) expect(buildMenuModel(menu, platform).length, menu).toBeLessThanOrEqual(200)
   })
   // macOS menus show no access keys, so "Reveal in Finder" may lack the letter of "&Open Containing Folder".
-  it.each(['win32', 'linux'] as const)('gives every menu item a mnemonic, unique in its menu, with explicit ones in their titles on %s', platform => {
+  it.each(['win32', 'linux'] as const)('gives every menu item a mnemonic, unique among the items its menu shows at once, with explicit ones in their titles on %s', platform => {
     // View › Theme's fixed theme items share its level with the catalogue's.
     const themeItems = themeMenuModel({ preference: { version: 1, mode: 'dark', darkTheme: 'varia-dark', lightTheme: 'varia-light' }, themes: [] })
     for (const menu of menuIds) {
       const items = [
         ...commandIds.flatMap(id => (commandDescriptor(id).menus ?? []).filter(placement => placement.menu === menu && (!placement.platforms || placement.platforms.includes(platform)))
-          .map(placement => ({ title: menuTitle(id, platform, placement.title), mnemonic: placement.mnemonic }))),
-        ...submenuIds.flatMap(id => submenus[id].placements.filter(placement => placement.menu === menu).map(placement => ({ title: submenus[id].title, mnemonic: placement.mnemonic }))),
-        ...(menu === 'theme' ? themeItems.flatMap(item => item.kind === 'separator' ? [] : [{ title: item.label, mnemonic: item.mnemonic }]) : [])
+          .map(placement => ({ title: menuTitle(id, platform, placement.title), mnemonic: placement.mnemonic, when: placement.when }))),
+        ...submenuIds.flatMap(id => submenus[id].placements.filter(placement => placement.menu === menu).map(placement => ({ title: submenus[id].title, mnemonic: placement.mnemonic, when: placement.when }))),
+        ...(menu === 'theme' ? themeItems.flatMap(item => item.kind === 'separator' ? [] : [{ title: item.label, mnemonic: item.mnemonic, when: undefined as string | undefined }]) : [])
       ]
       for (const { title, mnemonic } of items) {
         if (mnemonic === undefined) continue
         expect(mnemonic, `${menu}: ${title}`).toMatch(/^[a-z0-9]$/)
         expect(mnemonicIndex(title, mnemonic), `${menu}: ${title} has no "${mnemonic}"`).toBeGreaterThanOrEqual(0)
       }
-      const assigned = assignMnemonics(items)
-      expect(assigned.every(index => index >= 0), `${menu}: ${assigned.join(' ')}`).toBe(true)
-      const letters = assigned.map((index, position) => items[position].title[index].toLowerCase())
-      expect(new Set(letters).size, `${menu}: ${letters.join(' ')}`).toBe(letters.length)
+      // A context menu shows only the items whose clauses hold (an SSISDB node never shows a server's Connect); a menubar menu shows every item.
+      for (const set of contextMenuIds.includes(menu as typeof contextMenuIds[number]) ? shownTogether(items.map(item => item.when)) : [items.map((_, index) => index)]) {
+        const shown = set.map(index => items[index])
+        const assigned = assignMnemonics(shown)
+        expect(assigned.every(index => index >= 0), `${menu}: ${assigned.join(' ')}`).toBe(true)
+        const letters = assigned.map((index, position) => shown[position].title[index].toLowerCase())
+        expect(new Set(letters).size, `${menu}: ${shown.map((item, position) => item.title + '=' + letters[position]).join(' ')}`).toBe(letters.length)
+      }
     }
   })
   it('places commands in named groups, once per menu, in a fixed order', () => {

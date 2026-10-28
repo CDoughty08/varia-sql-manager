@@ -117,9 +117,10 @@ internal static partial class SsisSql
         + "CASE WHEN op.sensitive = 1 THEN NULL ELSE op.default_value END, op.value_type, op.value_set, op.referenced_variable_name FROM [catalog].[object_parameters] AS op "
         + "WHERE op.project_id = @project_id AND op.object_type = " + objectType + " AND op.object_name = " + objectName + " ORDER BY op.parameter_name;";
 
-    /// <summary>The names the profile looks up, the roles it checks, and a LIKE filter's wildcard and escape: the only string literals SSIS statements may hold.</summary>
+    /// <summary>The names the profile looks up, the roles it checks, a LIKE filter's wildcard and escape, and how a list
+    /// parameter is read (an xml parameter's /i nodes as int or bigint, D-ssis 4.6): the only string literals SSIS statements may hold.</summary>
     private static readonly HashSet<string> Literals = ["N'%'", "N'\\'","N'catalog'", "N'customized_logging_levels'", "N'worker_agents'", "N'event_messages'", "N'event_message_guid'", "N'executions'",
-        "N'executed_count'", "N'get_operation_log_size'", "N'check_schema_version'", "N'sysadmin'", "N'ssis_admin'", "N'ssis_logreader'"];
+        "N'executed_count'", "N'get_operation_log_size'", "N'check_schema_version'", "N'sysadmin'", "N'ssis_admin'", "N'ssis_logreader'", "'.'", "'/i'", "'int'", "'bigint'"];
     /// <summary>Metadata functions ignore the isolation level and LOCK_TIMEOUT (D-ssis 1.6).</summary>
     private static readonly string[] Builtins = [.. CatalogSql.Builtins, "OBJECT_ID(", "DB_ID(", "DB_NAME(", "COL_LENGTH(", "HAS_DBACCESS(", "HAS_PERMS_BY_NAME(", "SCHEMA_ID(", "TYPE_ID("];
     private static readonly string[] Writes = ["INSERT", "UPDATE", "DELETE", "MERGE", "EXEC", "EXECUTE", "CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "DENY", "REVOKE", "INTO", "WAITFOR"];

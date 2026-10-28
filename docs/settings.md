@@ -33,6 +33,7 @@ from Microsoft's documentation, so Varia keeps its own.
 - SQL Server Object Explorer
   - Commands (`objectExplorer.commands`)
   - Scripting (`objectExplorer.scripting`)
+- SQL Server Integration Services (`integrationServices`)
 
 A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
 page titles, setting labels, descriptions and keywords.
@@ -198,6 +199,17 @@ A property grid: True/False lists, values that differ from their default in bold
 | `objectExplorer.scripting.targetEngineType` | Script for database engine type | One of `standalone` (Stand-alone instance) | Stand-alone instance |  | All | At once | The database engine type the script is for. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 | `objectExplorer.scripting.targetServerVersion` | Script for server version | One of `130` (SQL Server 2016), `140` (SQL Server 2017), `150` (SQL Server 2019), `160` (SQL Server 2022), `170` (SQL Server 2025) | SQL Server 2022 |  | All | At once | The SQL Server version the script is for; features it lacks cannot be scripted. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 
+### SQL Server Integration Services
+
+How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `integrationServices.operationsRefreshSeconds` | Update Operations every | Integer 1–60 seconds | 2 seconds |  | All | At once | How often an open Integration Services Operations document reads the catalog for new operations and the open ones' status. It pauses while the document is hidden. A busy catalog on a busy server may want a longer interval. Not in SSMS. |
+| `integrationServices.operationsWindowHours` | Show operations created in the last | Integer 1–8,760 hours | 24 hours |  | All | At once | The window a new Operations document opens on. Its Window filter changes it for that document only. The catalog keeps operations for its own retention period (365 days by default), so a longer window shows nothing older than that. Not in SSMS. |
+| `integrationServices.operationsLimit` | Show at most | Integer 100–10,000 operations | 1,000 operations |  | All | At once | The most operations an Operations document holds: the newest ones of its window that pass its filters. The tiles count every operation whatever this limit is. Not in SSMS. |
+| `integrationServices.confirmStop` | Ask before Stop Operation | Boolean | True |  | All | At once | Asks before Stop Operation ends a running package or validation. The package stops after its current work; the catalog then lists it as Stopping, and Canceled once it has ended. While it is False, Stop Operation stops at once. Not in SSMS. |
+
 ## Storage
 
 - `<userData>/settings.json` holds `{ "version": 1, "values": { ... } }`: only the values that differ from their
@@ -228,4 +240,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (73 today).

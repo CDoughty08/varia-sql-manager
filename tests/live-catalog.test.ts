@@ -110,7 +110,16 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity'])
+    expect(productionSourceIds).toEqual(['activity', 'ssis.operations'])
+    // SSIS Operations: the catalog's own pool and prologue, 2 s by default (owner decision 12), settable from 1 to 60 s, one
+    // snapshot table keyed by operation id whose selected row lingers, its tone column last.
+    expect(liveSources['ssis.operations']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.operations.list'] })
+    const operations = liveProbes['ssis.operations.list']
+    expect(operations).toMatchObject({ intervalMs: { default: 2000, min: 1000, max: 60_000 }, status: ['newest'] })
+    expect(operations.series!.map(series => [series.id, series.counter])).toEqual([['running', 'gauge'], ['pending', 'gauge'], ['failed24h', 'gauge'], ['succeeded24h', 'gauge'], ['canceled24h', 'gauge']])
+    expect(operations.tables).toHaveLength(1)
+    expect(operations.tables![0]).toMatchObject({ id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true })
+    expect(operations.tables![0].columns.at(-1)).toMatchObject({ id: 'tone', role: 'tone' })
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview'] })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })

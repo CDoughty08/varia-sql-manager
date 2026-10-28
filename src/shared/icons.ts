@@ -38,7 +38,7 @@ export const codiconIcons = [
   'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'error', 'file', 'file-code', 'filter',
   'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph', 'history', 'info', 'insert', 'json', 'law',
   'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock', 'milestone', 'multiple-windows', 'new-file', 'output',
-  'package', 'pass', 'person', 'play', 'plug', 'project', 'redo', 'references', 'refresh', 'remote', 'remove', 'replace', 'save', 'save-all',
+  'package', 'pass', 'person', 'play', 'plug', 'project', 'pulse', 'redo', 'references', 'refresh', 'remote', 'remove', 'replace', 'save', 'save-all',
   'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty', 'star-full', 'symbol-color', 'symbol-constant',
   'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric', 'symbol-operator', 'symbol-parameter',
   'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'tag', 'tools', 'trash', 'triangle-right', 'type-hierarchy', 'verified',
