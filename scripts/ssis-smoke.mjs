@@ -2,11 +2,12 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentNotice, documentStaleBadge, documentStatePill, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentNotice, documentStaleBadge, documentStatePill, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, toolbarButton } from './fixtures/ui.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
-// which each tab keeps across switches, list and content; Refresh with F5; Close cancelling a read in flight; an object deleted elsewhere.
+// which each tab keeps across switches, list and content; Refresh with F5; Close cancelling a read in flight; a failed read
+// and Retry, with the header the same height in every state; an object deleted elsewhere.
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'ssis-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'ssis-control-'))
@@ -37,6 +38,8 @@ const headingShown = (title, section) => sectionColumn(frame(title), title).eval
   const view = column.getBoundingClientRect(), box = heading?.getBoundingClientRect()
   return { shown: !!box && box.top >= view.top - 1 && box.bottom <= view.bottom + 1, scrolled: column.scrollTop > 0 }
 }, section)
+/** The header row's height: the same whichever state it shows (F9a keeps the header one row tall). */
+const headerHeight = title => documentHeader(frame(title)).evaluate(header => header.getBoundingClientRect().height)
 const objectMenu = () => page.getByRole('menu', { name: 'Object Explorer', exact: true })
 
 async function connect(server) {
@@ -147,9 +150,11 @@ try {
 
   // 5. F5 in the document refreshes it (and runs no query); the model stays while the read is held, and Close cancels it.
   await frameSection(frame('Finance'), 'General').click()
+  const fresh = await headerHeight('Finance')
   await writeFile(join(control, 'hold', 'ssis.describe'), '')
   await page.keyboard.press('F5')
   await expect(documentStatePill(frame('Finance'))).toHaveText('Refreshing')
+  expect(await headerHeight('Finance')).toBe(fresh)
   await expect(fact('Finance', 'Description')).toHaveText('Nightly finance loads')
   expect((await lines('calls.jsonl')).some(call => call.method === 'query.execute')).toBe(false)
   await closeDocumentButton(page, 'Folder Properties - Finance').click()
@@ -158,20 +163,38 @@ try {
   await rm(join(control, 'hold', 'ssis.describe'))
   console.log('SSIS checks: F5 refreshes the document and keeps its model while it reads; closing it cancels the read.')
 
-  // 6. An object deleted elsewhere: Refresh says so over the last model, and Close is the way out.
+  // 6. A read that fails keeps the last model under the failure, the header says since when it is stale (without growing),
+  // and Retry reads it again.
   await tab('Package Properties - Daily.dtsx').click()
+  await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveText(/^Updated /)
+  const daily = await headerHeight('Daily.dtsx')
+  await writeFile(join(control, 'ssis', 'fail'), '')
+  await frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true }).click()
+  await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveAttribute('data-stale', '')
+  await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveText(/^Stale since /)
+  await expect(documentNotice(frame('Daily.dtsx')).getByRole('alert')).toHaveText('The SSIS Catalog did not answer in time.')
+  await expect(fact('Daily.dtsx', 'Version')).toHaveText('1.0.7')
+  expect(await headerHeight('Daily.dtsx')).toBe(daily)
+  await rm(join(control, 'ssis', 'fail'))
+  await documentNotice(frame('Daily.dtsx')).getByRole('button', { name: 'Retry', exact: true }).click()
+  await expect(documentNotice(frame('Daily.dtsx'))).toHaveCount(0)
+  await expect(documentStaleBadge(frame('Daily.dtsx'))).not.toHaveAttribute('data-stale', '')
+  console.log('SSIS checks: a failed read keeps the model, marks the header stale at the same height, and Retry reads it again.')
+
+  // 7. An object deleted elsewhere: Refresh says so over the last model, and Close is the way out.
   await writeFile(join(control, 'ssis', 'missing'), '')
   await frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true }).click()
   await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Not found')
   const notice = documentNotice(frame('Daily.dtsx'))
   await expect(notice.getByRole('alert')).toHaveText('The package Daily.dtsx no longer exists in the SSIS Catalog.')
   await expect(fact('Daily.dtsx', 'Version')).toHaveText('1.0.7')
+  expect(await headerHeight('Daily.dtsx')).toBe(daily)
   await rm(join(control, 'ssis', 'missing'))
   await notice.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(tab('Package Properties - Daily.dtsx')).toHaveCount(0)
   console.log('SSIS checks: an object deleted elsewhere says so over the last model, and Close closes it.')
 
-  // 7. Light theme, and still no page-wide horizontal scroll.
+  // 8. Light theme, and still no page-wide horizontal scroll.
   await tab('Project Properties - Loads').click()
   await page.evaluate(() => window.varia.setThemePreference({ mode: 'light' }))
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.themeType)).toBe('light')
@@ -180,7 +203,7 @@ try {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
 
   expect(failures).toEqual([])
-  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
+  console.log('SSIS checks passed: Properties from the menu, the palette, Enter and a double-click; sections, facts and lists; tab state; F5; Close cancelling a read; a failed read and Retry; a deleted object; Dark and Light (artifacts/ssis-project-dark.png, ssis-project-light.png).')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'ssis-failure.png') }).catch(() => {})
   throw error

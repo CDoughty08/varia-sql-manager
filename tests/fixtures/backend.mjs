@@ -16,6 +16,8 @@
 //   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
+//   ssis/fail           ssis.describe answers a retryable TIMEOUT
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
@@ -636,8 +638,8 @@ function liveUpdate(id, params) {
 // The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
 // entry point Daily.dtsx and Child.dtsx) and its environment Test. Times keep the catalog's own offset (+02:00), and a
 // sensitive parameter or variable has no value, as the backend never reads one. ssis/missing makes every object
-// NOT_FOUND, as when it was deleted elsewhere; hold/ssis.describe holds a read until the file goes or a CANCEL frame ends
-// it (logged to cancels.jsonl).
+// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; hold/ssis.describe
+// holds a read until the file goes or a CANCEL frame ends it (logged to cancels.jsonl).
 const ssisTime = '2026-10-21T14:05:06.1234567+02:00'
 const ssisParameter = (name, fields = {}) => ({ name, dataType: 'String', required: false, sensitive: false, valueType: 'V', valueSet: false, ...fields })
 const ssisModels = {
@@ -666,6 +668,7 @@ async function ssisDescribe(id, { view, target }) {
     }
     await sleep(25)
   }
+  if (await controlled(join('ssis', 'fail'))) return respond(id, { elapsedMs: 1, error: { code: 'TIMEOUT', message: 'The SSIS Catalog did not answer in time.', retryable: true } })
   if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
   return respond(id, { model: ssisModels[view](target), revision: 'a'.repeat(64), elapsedMs: 1 })
 }
