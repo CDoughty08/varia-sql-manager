@@ -70,6 +70,8 @@ export const part = {
   errorCount: '.error-count',
   resultItem: '.rs-item',
   resultStack: '.rs-stack',
+  /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
+  liveGrid: '.live-grid',
   // Object Explorer
   explorerLabel: '.oe-label',
   explorerText: '.oe-text',
@@ -168,8 +170,15 @@ export const gridPart = {
   activeCell: '.rg-c.is-act',
   truncatedCell: '.rg-c.is-trunc',
   linkCell: '.rg-c.is-link',
-  borderHover: '.rg-border-hover'
+  borderHover: '.rg-border-hover',
+  /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
+  toneError: '.tone-error',
+  toneWarning: '.tone-warning',
+  toneRunning: '.tone-running',
+  toneMuted: '.tone-muted'
 }
+/** A live grid's row tones by name, for page code that reads which tone a row has. */
+export const gridTones = { error: gridPart.toneError, warning: gridPart.toneWarning, running: gridPart.toneRunning, muted: gridPart.toneMuted }
 /** The data cell at a row and column, both from 0, inside a results grid. */
 export const gridCellSelector = (row, column) => `[role="rowgroup"] > [role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${column + 2}"]`
 
@@ -274,6 +283,21 @@ export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
+
+// Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
+
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+ *  for page code. */
+export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const liveGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
+export const liveGridFrame = (page, name) => page.locator(part.liveGrid).filter({ has: liveGrid(page, name) })
+/** What the frame says over the rows once they are gone (stopped, lost). */
+export const liveGridOverlay = frame => frame.locator(gridPart.overlay)
+/** The error strip under the rows: a failed copy, rows that could not be drawn or loaded. */
+export const liveGridStrip = frame => frame.locator(gridPart.strip)
+/** The "n new rows · Jump to latest" button of a log scrolled up from its tail. */
+export const liveGridNewRows = frame => frame.getByRole('button', { name: /new rows? · Jump to latest$/ })
 
 // Object Explorer
 

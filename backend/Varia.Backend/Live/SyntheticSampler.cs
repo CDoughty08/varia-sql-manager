@@ -6,7 +6,7 @@ namespace Varia.Backend.Live;
 /// <summary>debug.synthetic (VARIA_BACKEND_TEST_HOOKS=1 only): generated values that exercise the live protocol and the live
 /// tables without SQL Server. Its metrics probe counts samples and draws a wave; its table probe stores a snapshot per
 /// sample whose rows move on by one id each time; its status probe reports the phase and sample count. Its grid probe
-/// writes two snapshot tables from one sample (items, with a view, facets and departed rows, and their groups, built from
+/// writes two snapshot tables from one sample (items, with a view, facets, departed rows and a row tone, and their groups, built from
 /// the source's own state); its log probe grows an append table from an in-memory log, with late rows (an id that becomes
 /// visible after higher ones), a start position, and a restart when its filter or level changes; its wide probe is the
 /// 23-column snapshot the churn benchmark stores. Args set the row counts, a sampling period below the 1 s minimum (tickMs),
@@ -175,7 +175,7 @@ internal sealed class SyntheticSampler : ILiveSampler
         var n = ++gridSamples;
         var items = Enumerable.Range(0, current.Rows ?? 3).Select(offset => n + offset)
             .Select(id => new LiveRow([LiveCell.Of(id), LiveCell.Of("G" + (id % 5).ToString(CultureInfo.InvariantCulture)), LiveCell.Of("Item " + id.ToString(CultureInfo.InvariantCulture)),
-                LiveCell.Of(id * 37 % 100 + n % 7)])).ToList();
+                LiveCell.Of(id * 37 % 100 + n % 7), GroupTone(id)])).ToList();
         Func<LiveRow, bool>? view = item.View == "even" ? row => row.Cells[0].Value is long id && id % 2 == 0 : null;
         var snapshots = new List<LiveSnapshotSample>();
         var budget = new List<int>();
@@ -228,12 +228,18 @@ internal sealed class SyntheticSampler : ILiveSampler
         {
             var resumed = table.Started ? null : resume.FirstOrDefault(cursor => cursor.Probe == spec.Id && cursor.Table == 0);
             var (after, below, earlier) = resumed is not null ? (resumed.SettledId, null, 0) : Resolve(Matches);
-            table.Start(after, below, earlier > 0 ? new LiveRow([LiveCell.Null, LiveCell.Null, LiveCell.Of(LiveStart.Note(earlier))]) : null, predicate);
+            table.Start(after, below, earlier > 0 ? new LiveRow([LiveCell.Null, LiveCell.Null, LiveCell.Of(LiveStart.Note(earlier)), LiveCell.Null]) : null, predicate);
         }
         var rows = log.Where(row => row.Id > table.SettledId && (table.Before is not { } end || row.Id < end) && Matches(row)).OrderBy(row => row.Id).Take(table.ReadRows)
-            .Select(row => new LiveRow([LiveCell.Of(row.Id), LiveCell.Of(row.Level), LiveCell.Of(row.Text)])).ToList();
+            .Select(row => new LiveRow([LiveCell.Of(row.Id), LiveCell.Of(row.Level), LiveCell.Of(row.Text), LevelTone(row.Level)])).ToList();
         return table.Append(rows, Environment.TickCount64);
     }
+
+    /// <summary>The items' row tone (the catalogue's tone column): G0 error, G1 warning, G2 running, the others none.</summary>
+    internal static LiveCell GroupTone(long id) => (id % 5) switch { 0 => LiveCell.Of("error"), 1 => LiveCell.Of("warning"), 2 => LiveCell.Of("running"), _ => LiveCell.Null };
+
+    /// <summary>The log's row tone: level 3 error, level 2 warning.</summary>
+    internal static LiveCell LevelTone(int level) => level switch { 3 => LiveCell.Of("error"), 2 => LiveCell.Of("warning"), _ => LiveCell.Null };
 
     /// <summary>Where the log starts: the id the table reads after, the id it ends before, and how many earlier rows are left out.</summary>
     private (long After, long? Below, long Earlier) Resolve(Func<(long Id, int Level, string Text), bool> matches)

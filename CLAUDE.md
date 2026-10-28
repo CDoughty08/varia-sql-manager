@@ -62,7 +62,8 @@ pages, limits, error codes, display formats, benchmarks).
   cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
   holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
   `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
-  the synthetic live source and stands in for a hidden window, and `window.__variaTestShellFault()`, which makes the
+  the synthetic live source, stands in for a hidden window and mounts a `LiveGridPane` over one (`mountGrid`, `grid`,
+  `sortGrid`, `saveGrid`, `unmountGrid`), and `window.__variaTestShellFault()`, which makes the
   workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
@@ -94,7 +95,9 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/` and `live/`); no React per row or cell, and frames stay O(visible cells).
+  Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
+  tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.

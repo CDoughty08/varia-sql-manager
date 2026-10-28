@@ -602,7 +602,7 @@ app.whenReady().then(async () => {
   void recent.load()
   recent.onDidChange(() => { buildMenu(); publishRecentFiles() })
   const jobs = resultsJobs = new ResultsJobHost({
-    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
+    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), liveNewest: (generation, resultId) => results.liveNewest(generation, resultId), platform: process.platform,
     writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
     showSaveDialog: options => pageDialog<{ canceled: boolean; filePath?: string }>(window => dialog.showSaveDialog(window, options), { canceled: true }),
     progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) },

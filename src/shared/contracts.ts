@@ -107,7 +107,8 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector'
+  /** `tone`: a live table's row tone (src/shared/live/catalog.ts), hidden by the grid and left out of Copy and Save. */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'tone'
   maxLength?: number
   precision?: number
   scale?: number

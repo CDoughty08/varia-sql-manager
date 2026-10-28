@@ -30,7 +30,10 @@ export const liveServiceLimits = {
   ringBytes: 32 * MiB,
   settingsDebounceMs: 150,
   /** An update refused for now (too many requests, busy, timed out) is sent again after 1 s, doubling to 30 s. */
-  retryMs: { first: 1000, max: 30_000 }
+  retryMs: { first: 1000, max: 30_000 },
+  /** Track lists kept per table for the samples that answer them: well above what one sample can span (a list per row
+   *  of a held arrow key, one update in flight at a time, samples of at most 5 s). */
+  trackHistory: 64
 } as const
 
 /** What a live view belongs to: its visibility pauses the view, and its end ends it. */
@@ -104,7 +107,14 @@ export interface LiveTable {
   readonly revision?: number
   readonly segment?: number
   readonly diff?: { readonly added: number; readonly removed: number; readonly changed: number }
-  readonly tracked?: { readonly seq: number; readonly rows: readonly number[] }
+  /** Where each tracked key went (-1: gone), in the order of the track list with this seq; `keys` is that list when the
+   *  view still knows it (every list since the newest one answered), so a grid can map its rows without asking again. */
+  readonly tracked?: { readonly seq: number; readonly rows: readonly number[]; readonly keys?: readonly string[] }
+  /** Rows of this revision that left the source and stay one revision because they were tracked (LiveGrid mutes them). */
+  readonly departed?: readonly number[]
+  /** Append: the segment this one rolled on from, and whether the table started again (a new filter or args). */
+  readonly rolledFrom?: number
+  readonly restarted?: boolean
 }
 export interface AppliedTick { readonly subscriptionId: string; readonly tick: LiveTick }
 export interface LiveFrames { readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number }
@@ -124,8 +134,11 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   setUserPaused(paused: boolean): void
   /** Refresh now: every running probe samples at once (a dormant view subscribes again). */
   refresh(): void
-  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F). */
-  track(probe: LiveProbeId, keys: readonly string[], table?: number): void
+  /** A probe's settings as the view wants them (what setProbe last set), read only; undefined for a probe it does not run. */
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined
+  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F).
+   *  `linger`: how many of the first keys (the selected rows) stay one revision when they leave; all of them by default. */
+  track(probe: LiveProbeId, keys: readonly string[], table?: number, linger?: number): void
   /** A metrics probe's history, for charts; read only. */
   ring(probe: LiveProbeId): MetricRing | undefined
   table(probe: LiveProbeId, index?: number): LiveTable | undefined
@@ -163,7 +176,7 @@ export function documentPage(target: Pick<Document, 'visibilityState' | 'addEven
 
 const tooMany = 'Too many live views are open in this window. Close one and retry.'
 const invalidSpec = 'This live view names probes its source does not have.'
-const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending)
+export const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending && key.table === right![at].table)
 const sameFilter = (left?: LiveFilter, right?: LiveFilter) => left === right || (!!left && !!right && left.text === right.text && (left.columns ?? []).join('\u001f') === (right.columns ?? []).join('\u001f') && !!left.columns === !!right.columns)
 const lostCodes: ReadonlySet<ErrorCode> = new Set(['BACKEND_LOST', 'RESULT_UNAVAILABLE', 'BACKEND_UNAVAILABLE'])
 /** Errors of an update to a stream that is ending: its end reports what happened. Updates wait for live.opened, so a
@@ -364,7 +377,10 @@ class Handle implements LiveHandle {
   private readonly runtime = new Map<LiveProbeId, ProbeRuntime>()
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
-  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
+  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number; linger?: number }>()
+  /** The track lists sent per table since the newest one a sample answered, by seq: a sample names the list it answers by
+   *  seq alone, and while one sample runs the grid may send many (each active row of a held Down arrow). */
+  private readonly trackHistory = new Map<string, { seq: number; keys: readonly string[] }[]>()
   private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
   private snapshot: LiveSnapshot
@@ -553,8 +569,19 @@ class Handle implements LiveHandle {
         for (const retired of entry.retired ?? []) record.results.delete(retired)
         record.results.set(entry.descriptor.resultId, { generation: entry.descriptor.generation, resultId: entry.descriptor.resultId })
       }
-      for (const entry of sample.tables ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision, ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: entry.tracked } : {} })
-      for (const entry of sample.append ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment })
+      for (const entry of sample.tables ?? []) {
+        const keys = entry.tracked && this.answered(sample.probe + '/' + entry.table, entry.tracked.seq)
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision,
+          ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: { ...entry.tracked, ...keys ? { keys } : {} } } : {}, ...entry.departed ? { departed: entry.departed } : {}
+        })
+      }
+      for (const entry of sample.append ?? []) {
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment,
+          ...entry.rolledFrom !== undefined ? { rolledFrom: entry.rolledFrom } : {}, ...entry.restarted ? { restarted: true } : {}
+        })
+      }
     }
     for (const error of tick.errors ?? []) {
       const runtime = this.runtime.get(error.probe)
@@ -803,7 +830,8 @@ class Handle implements LiveHandle {
         const wanted = this.desired()
         const patch = this.patchFor(record.sent, wanted)
         const tracks = [...this.tracks].filter(([key, track]) => record.tracked.get(key) !== track.seq).slice(0, limits.live.probes)
-        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys] })) } : patch
+        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys], ...track.linger !== undefined ? { linger: track.linger } : {} })) } : patch
+        for (const [key, track] of tracks) this.remember(key, track.seq, track.keys)
         if (!update) {
           // The view came back to what the backend runs: a refusal no longer matters.
           if (record.refused) this.accepted(record)
@@ -920,11 +948,39 @@ class Handle implements LiveHandle {
     })
   }
 
-  track(probe: LiveProbeId, keys: readonly string[], table = 0): void {
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined {
+    const settings = this.settings.get(probe)
+    return settings && { ...settings, ...settings.sort ? { sort: settings.sort.map(key => ({ ...key })) } : {} }
+  }
+
+  track(probe: LiveProbeId, keys: readonly string[], table = 0, linger?: number): void {
     if (this.disposed || !this.settings.has(probe)) return
-    const list = keys.filter(key => key.length <= limits.live.keyCharacters).slice(0, limits.live.trackedKeys)
-    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq })
+    // A key too long to send is left out, and so is its place among the lingering ones.
+    const fits = (key: string) => key.length <= limits.live.keyCharacters
+    const list = keys.filter(fits).slice(0, limits.live.trackedKeys)
+    const lingering = linger === undefined ? undefined : Math.min(list.length, keys.slice(0, Math.max(0, linger)).filter(fits).length)
+    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq, ...lingering !== undefined ? { linger: lingering } : {} })
     this.queueSync()
+  }
+
+  /** Keeps a track list as it is sent, for the samples that answer it by seq: every list since the newest answered one
+   *  (answered), at most liveServiceLimits.trackHistory per table. */
+  private remember(key: string, seq: number, keys: readonly string[]): void {
+    const history = this.trackHistory.get(key) ?? []
+    // A list sent again (after a refusal) is the same list.
+    if (history.at(-1)?.seq === seq) return
+    history.push({ seq, keys })
+    if (history.length > liveServiceLimits.trackHistory) history.shift()
+    this.trackHistory.set(key, history)
+  }
+  /** The keys of the list a sample answers. The backend accepts lists in seq order and answers the one it held when the
+   *  sample came due, so once a sample answers a seq, no later sample answers an older one: those lists go. */
+  private answered(key: string, seq: number): readonly string[] | undefined {
+    const history = this.trackHistory.get(key)
+    const index = history?.findIndex(item => item.seq === seq) ?? -1
+    if (!history || index < 0) return undefined
+    history.splice(0, index)
+    return history[0].keys
   }
 
   ring(probe: LiveProbeId): MetricRing | undefined { return this.rings.get(probe) }

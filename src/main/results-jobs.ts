@@ -73,6 +73,8 @@ export interface JobHostDeps {
   backend: JobsBackend
   /** ResultsPortHost.owns: the current generation holds the result for this renderer. */
   owns(generation: number, resultId: number): boolean
+  /** ResultsPortHost.liveNewest: for a live snapshot table's revision, what names the table's newest revision later. */
+  liveNewest?(generation: number, resultId: number): (() => number | undefined) | undefined
   writeClipboard(text: string): void
   showSaveDialog: SaveDialog
   documentsDir(): string
@@ -187,6 +189,7 @@ export class ResultsJobHost {
     let writing: { path: string; temporaryId: string } | undefined
     try {
       this.check(request.generation, request.resultId)
+      const newest = this.deps.liveNewest?.(request.generation, request.resultId)
       const requested = request.format ?? this.lastFormat ?? 'csv'
       // '{tab}-Result{n}' (ResultsService.suggestedName): a long tab name gives way, never the number that tells sets apart.
       const [, base, suffix] = /^([\s\S]*?)(-Result\d+)?$/.exec(request.suggestedName)!
@@ -201,10 +204,13 @@ export class ResultsJobHost {
       const path = selection.filePath
       fileName = basename(path)
       const format = formatFromPath(path) ?? requested, headers = await this.deps.exportHeaders()
-      this.check(request.generation, request.resultId, jobSentences.closedBeforeSave)
+      // A live table retires each revision two samples on, sooner than most dialogs close: its newest revision is saved,
+      // the one the grid shows now. Any other result must still be there.
+      const resultId = newest?.() ?? request.resultId
+      this.check(request.generation, resultId, jobSentences.closedBeforeSave)
       const job = this.saving = new Job(request.jobId, 'save', request.generation, this.deps, fileName)
       writing = { path, temporaryId: randomUUID().replaceAll('-', '') }
-      const result = await this.deps.backend.export(request.generation, { resultId: request.resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
+      const result = await this.deps.backend.export(request.generation, { resultId, path, format, headers, nullText: exportDefaults.nullText[format], temporaryId: writing.temporaryId },
         { onProgress: event => job.progress(event), onSent: id => job.sent(id) })
       this.lastDir = dirname(path)
       this.lastFormat = format

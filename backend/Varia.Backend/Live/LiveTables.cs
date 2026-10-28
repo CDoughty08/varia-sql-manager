@@ -238,9 +238,10 @@ internal sealed class LiveTableSet(ResultStore store, string subscriptionId, Liv
         store.Release(ids);
     }
 
-    /// <summary>The result columns of a catalogue table: every cell is text, as its display.</summary>
+    /// <summary>The result columns of a catalogue table: every cell is text, as its display; a tone column keeps its role, so the grid
+    /// hides it and Copy and Save leave it out.</summary>
     internal static (List<ResultColumn> Columns, WireKind[] Wires) Shape(LiveTableJson spec) =>
-        ([.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", Nullable: true))], [.. spec.Columns.Select(_ => WireKind.Text)]);
+        ([.. spec.Columns.Select(column => new ResultColumn(column.Name, column.DataType, "text", column.Role, Nullable: true))], [.. spec.Columns.Select(_ => WireKind.Text)]);
 
     /// <summary>Writes one row; false when the set stores nothing more (released, or out of budget).</summary>
     internal static bool Write(ResultSetBuffer set, LiveRow row)
@@ -316,17 +317,21 @@ internal sealed class LiveSnapshotTable
         foreach (var row in source) if ((settings.View?.Invoke(row) ?? true) && filter(row)) rows.Add((row, false, rows.Count));
         if (lingers)
         {
-            // A tracked row that left the source (not one the view or filter hides) stays one revision, at the row it had.
-            foreach (var tracked in settings.Track!.Keys.Distinct(StringComparer.Ordinal))
+            // A tracked row that left the source (not one the view or filter hides) stays one revision, at the row it had: the
+            // list's first Linger keys (the grid's selected rows), not the rows it follows only to place the selection.
+            var track = settings.Track!;
+            foreach (var tracked in track.Keys.Take(Math.Clamp(track.Linger ?? track.Keys.Length, 0, track.Keys.Length)).Distinct(StringComparer.Ordinal))
             {
                 if (present.Contains(tracked) || previousDeparted.Contains(tracked) || !previousRows.TryGetValue(tracked, out var at) || at.Index >= previousList.Count) continue;
                 rows.Insert(Math.Min(at.Index, rows.Count), (previousList[at.Index], true, 0));
             }
             for (var i = 0; i < rows.Count; i++) rows[i] = rows[i] with { At = i };
         }
-        if (settings.Sort is { Length: > 0 } sort)
+        // The sort keys for this table: a key naming another table, or a column this table lacks, leaves its order alone.
+        var columns = (settings.Sort ?? []).Where(item => item.Table is null || item.Table == index)
+            .Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0).ToArray();
+        if (columns.Length > 0)
         {
-            var columns = sort.Select(item => (Index: spec.Columns.FindIndex(column => column.Id == item.Column), item.Descending)).Where(item => item.Index >= 0).ToArray();
             rows.Sort((a, b) =>
             {
                 foreach (var (column, descending) in columns)
@@ -436,8 +441,9 @@ internal sealed class LiveSnapshotTable
         if (filter?.Text is not { Length: > 0 } text) return _ => true;
         // Named columns of another of the probe's tables leave this one unfiltered.
         int[] columns = filter.Columns is { Length: > 0 } named
-            ? [.. named.Select(id => spec.Columns.FindIndex(column => column.Id == id)).Where(at => at >= 0)]
-            : [.. Enumerable.Range(0, spec.Columns.Count)];
+            ? [.. named.Select(id => spec.Columns.FindIndex(column => column.Id == id && LiveColumnJson.IsData(column))).Where(at => at >= 0)]
+            // The hidden tone column is not data: text the user cannot see never matches.
+            : [.. Enumerable.Range(0, spec.Columns.Count).Where(at => LiveColumnJson.IsData(spec.Columns[at]))];
         if (columns.Length == 0) return _ => true;
         return row => columns.Any(column => row.Cells[column].Text?.Contains(text, StringComparison.OrdinalIgnoreCase) == true);
     }
