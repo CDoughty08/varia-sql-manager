@@ -1,7 +1,7 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
-import { emptyLayoutState, hidesHeader, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
+import { dockReference, emptyLayoutState, hidesHeader, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
 import Icon from './Icon'
@@ -134,9 +134,11 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   function dockAt(id: PaneId, side: DockSide) {
     const api = apiRef.current, panel = api?.getPanel(id)
     if (!api || !panel) return
-    const reference = api.getPanel(id === 'editor' ? 'explorer' : 'editor') ?? api.panels.find(item => item.id !== id)
-    if (reference) panel.api.moveTo({ group: reference.group, position: side })
-    else panel.group.api.moveTo({ position: side })
+    const reference = dockReference(id, api.panels.map(item => ({ id: item.id, location: item.api.location.type, panel: item })))?.panel
+    if (reference) { panel.api.moveTo({ group: reference.group, position: side }); return }
+    // Nothing else is docked: a group of its own at the grid's edge, leaving any panels it floated with behind.
+    const group = api.addGroup({ direction: side === 'top' ? 'above' : side === 'bottom' ? 'below' : side })
+    panel.api.moveTo({ group, position: 'center' })
   }
   function tabWith(id: PaneId, other: PaneId) {
     const panel = apiRef.current?.getPanel(id), target = apiRef.current?.getPanel(other)

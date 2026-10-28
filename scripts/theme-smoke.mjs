@@ -100,6 +100,16 @@ try {
   await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
   // The header's search box has its own colours (commandCenter.*) on the title bar's.
   expect(await searchBox(page).evaluate(box => { const style = getComputedStyle(box); return [style.backgroundColor, style.color] })).toEqual([await colorOf('commandCenter.background'), await colorOf('commandCenter.foreground')])
+  // Hovered, the search box takes its own hover fill, and a primary button (Execute) keeps its text colour: the plain
+  // hover rule would give it the secondary buttons' hover text.
+  const paint = locator => locator.evaluate(element => { const style = getComputedStyle(element); return [style.backgroundColor, style.color] })
+  await searchBox(page).hover()
+  expect(await paint(searchBox(page))).toEqual([await colorOf('commandCenter.activeBackground'), await colorOf('commandCenter.foreground')])
+  const execute = toolbarButton(page, 'Execute')
+  await expect(execute).toBeEnabled()
+  await execute.hover()
+  expect(await paint(execute)).toEqual([await colorOf('button.hoverBackground'), await colorOf('button.foreground')])
+  await page.mouse.move(0, 500)
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.

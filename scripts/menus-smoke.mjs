@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -556,16 +556,24 @@ try {
   await expect.poll(clipboard).toBe(savedPath)
   console.log('Menus checks: query tab menus close other queries, save, copy the path, and open the folder.')
 
-  // 9. A panel's ⋯ button opens its menu: the moves that replaced the "Move…" list, Float, Close, and Panel Tabs. Enter
-  // opens it with its first item focused, and Escape returns to the button.
+  // 9. A panel's ⋯ button opens its menu: the moves that replaced the "Move…" list, Float, Close, and Panel Tabs. A click
+  // opens it as a pointer menu (no item active, access keys not underlined); Enter opens it with its first item focused
+  // and access keys shown, and Escape returns to the button. The button says whether its menu is open.
   const panelMenu = menu('Panel tab')
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
   await outputButton.click(fast)
   await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
+  await expect(activeMenuItem(page)).toHaveCount(0)
+  await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'hidden')
   await page.keyboard.press('Escape')
   await expect(panelMenu).toHaveCount(0)
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
   await outputButton.focus()
   await page.keyboard.press('Enter')
   await expect(panelMenu.getByRole('menuitem', { name: 'Dock Left', exact: true })).toBeFocused()
+  await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'visible')
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
   await page.keyboard.press('Escape')
   await expect(outputButton).toBeFocused()
   // Show Panel Tabs brings the dock tabs back, and stays on for the rest of the suite. Panel tab menus replace

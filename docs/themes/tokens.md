@@ -113,8 +113,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `titleBar.iconForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Application icon in the title bar. |
 | `titleBar.controlsForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
 | `commandCenter.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Search box in the title bar (the command centre). |
-| `commandCenter.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Search box text, icon and key. |
-| `commandCenter.activeBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Search box while hovered. |
+| `commandCenter.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Search box text, icon and key. |
+| `commandCenter.activeBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Search box while hovered. |
 | `commandCenter.border` | VS Code | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of the search box. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the open title-bar menu. |

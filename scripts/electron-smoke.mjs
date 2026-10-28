@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -227,6 +227,17 @@ try {
   await activeDocument(page).hover()
   expect([await closeGlyph(), await unsavedMark(activeDocument(page)).evaluate(mark => getComputedStyle(mark).opacity)]).toEqual(['visible', '0'])
   await page.mouse.move(0, 300)
+  // Under forced colours the dot is drawn in a system colour, not Canvas on Canvas: with the X hidden it is all there is.
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await unsavedMark(activeDocument(page)).evaluate(mark => {
+    const probe = document.body.appendChild(document.createElement('div'))
+    probe.style.cssText = 'background: Canvas; forced-color-adjust: none'
+    const canvas = getComputedStyle(probe).backgroundColor, style = getComputedStyle(mark)
+    probe.remove()
+    return { drawn: style.backgroundColor !== canvas && style.backgroundColor !== 'rgba(0, 0, 0, 0)', opacity: style.opacity }
+  })).toEqual({ drawn: true, opacity: '1' })
+  expect(await closeGlyph()).toBe('hidden')
+  await page.emulateMedia({ forcedColors: null })
   await page.keyboard.press('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -585,8 +596,28 @@ try {
   expect(alignment.overflow).toBe(false)
   expect(alignment.titleBarFits).toBe(true)
   await page.screenshot({ path: artifact('workbench-compact.png') })
+  // With a connected query's facts in the status bar, every other segment still fits whole; only the facts give way,
+  // and they ellipsize. The search box shows as much of its label as fits, never a label cut short.
+  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await expect(queryStatus(page)).toContainText('server-a')
+  const clipped = () => page.evaluate(part => {
+    const cut = element => element.scrollWidth > element.clientWidth + 0.5
+    const bar = document.querySelector(part.statusBar), right = bar.getBoundingClientRect().right
+    const status = [...bar.children].filter(segment => !segment.matches(part.queryStatus) && (cut(segment) || segment.getBoundingClientRect().right > right + 0.5)).map(segment => segment.className)
+    const box = document.querySelector(part.titleBar + ' button[aria-label="Search"]')
+    const search = [...box.children].filter(child => child instanceof HTMLElement && getComputedStyle(child).display !== 'none' && cut(child)).map(child => child.textContent)
+    return { status, search }
+  }, part)
+  expect(await clipped()).toEqual({ status: [], search: [] })
+  // Windows shrinks a window to fit a small display (1024x768 on CI), so only the widths that fit are tried.
+  const workWidth = await application.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize.width)
+  for (const width of [1100, 1280, 1440].filter(width => width + 16 <= workWidth)) {
+    await application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setContentSize(value, 700), width)
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    expect(await clipped(), String(width)).toEqual({ status: [], search: [] })
+  }
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
+  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, alignment, the unsaved dot under forced colours, and whole status bar segments and search box labels from 1024 px up.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})

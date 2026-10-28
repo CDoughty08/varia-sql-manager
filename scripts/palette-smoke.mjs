@@ -353,8 +353,18 @@ try {
   await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toBeVisible()
   await page.keyboard.press('ArrowLeft')
   await textbox().focus()
+  // View › Search (and Ctrl+Q) opens Search where F1 opens the palette, centred at the top; the search box drops it down
+  // below itself.
+  const centre = box => box.x + box.width / 2
+  await clickMenu('workbench.search')
+  await expect(combobox('Search')).toBeFocused()
+  expect(Math.abs(centre(await widget().boundingBox()) - await page.evaluate(() => window.innerWidth / 2))).toBeLessThan(1)
+  await page.keyboard.press('Escape')
+  await expect(widget()).toHaveCount(0)
   await searchBox(page).click()
   await expect(combobox('Search')).toBeFocused()
+  const [dropped, box] = [await widget().boundingBox(), await searchBox(page).boundingBox()]
+  expect([Math.abs(centre(dropped) - centre(box)) < 1, dropped.y >= box.y + box.height, dropped.y - (box.y + box.height) < 8]).toEqual([true, true, true])
   await page.keyboard.insertText('AppData')
   const found = quickInputRows(page).filter({ hasText: 'server-a › Databases' })
   await expect(found).toHaveCount(1)
@@ -363,7 +373,7 @@ try {
   const appData = await explorerRow(page, 'server-a', 'Databases', 'AppData')
   await expect(appData).toHaveAttribute('aria-selected', 'true')
   await expect(explorerTree(page)).toBeFocused()
-  console.log('Palette checks: the header\'s search box finds a loaded Object Explorer object and brings it forward.')
+  console.log('Palette checks: the header\'s search box drops Search down below itself, finds a loaded Object Explorer object and brings it forward.')
 
   // 13. Behind a modal dialog, workbench keys neither run nor are consumed, and Edit › Undo (how ⌘Z arrives on macOS)
   // does not reach into the editor behind it.

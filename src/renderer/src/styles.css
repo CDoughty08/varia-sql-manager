@@ -45,18 +45,24 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 /* macOS only, where the native menu bar leaves the header room for the document's name. */
 .title-bar-caption { max-width: 320px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; font-size: var(--varia-size-xs); color: var(--varia-titleBar-activeForeground); pointer-events: none; }
 .title-bar-left { min-width: 0; }
-.title-bar-center { flex: 1 1 0; min-width: var(--varia-control); display: flex; justify-content: center; }
+/* A size container, so the search box shows as much of its label as fits in the room the toolbar leaves it. */
+.title-bar-center { flex: 1 1 0; min-width: var(--varia-control); display: flex; justify-content: center; container-type: inline-size; }
 .title-bar-actions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; }
 .command-centre { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 440px; min-width: var(--varia-control); height: var(--varia-control); padding: 0 8px; overflow: hidden; background: var(--varia-commandCenter-background); color: var(--varia-commandCenter-foreground); border: 1px solid var(--varia-commandCenter-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); -webkit-app-region: no-drag; }
 .command-centre:hover:not(:disabled) { background: var(--varia-commandCenter-activeBackground); color: var(--varia-commandCenter-foreground); }
-.command-centre-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: start; }
+.command-centre-text, .command-centre-short { flex: 1; min-width: 0; overflow: hidden; text-align: start; }
 .command-centre kbd { color: inherit; border-color: var(--varia-commandCenter-border); }
 .header-toolbar { display: flex; align-items: center; gap: 2px; min-width: 0; -webkit-app-region: no-drag; }
 .header-context { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0 4px; }
 .header-context select { flex: 0 1 160px; width: 160px; min-width: 88px; height: var(--varia-control); padding: 0 6px; }
 .header-toolbar .execute { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; }
-/* Narrow windows keep every control: the search box and Execute keep their icons, and the lists give up width first. */
-@media (max-width: 1100px) { .command-centre-text, .command-centre kbd, .header-toolbar .execute-label { display: none; } .command-centre { width: auto; justify-content: center; } }
+/* Narrow windows keep every control: Execute keeps its icon, and the lists give up width first. The search box shows its
+   whole label where it fits (Segoe UI needs about 300 px; the rest is room for wider fonts), else "Search", else only its
+   icon, never a label cut short. */
+@media (max-width: 1100px) { .header-toolbar .execute-label { display: none; } }
+.command-centre-text { display: none; }
+@container (min-width: 320px) { .command-centre-text { display: block; } .command-centre-short { display: none; } }
+@container (max-width: 159px) { .command-centre-short, .command-centre kbd { display: none; } .command-centre { justify-content: center; } }
 /* Forced colours keep the search box apart from the title bar by its outline. */
 @media (forced-colors: active) { .command-centre { border-color: CanvasText; } }
 :root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
@@ -93,6 +99,8 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
 .status-dot { background: var(--varia-statusBar-idleIndicator); }
 .dirty-dot { background: var(--varia-documentTabs-modifiedIndicator); }
+/* Forced colours would paint the dot Canvas on Canvas, and the X it stands in for is hidden. */
+@media (forced-colors: active) { .dirty-dot { background: CanvasText; forced-color-adjust: none; } }
 .status-dot.online { background: var(--varia-statusBar-onlineIndicator); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 44px; padding: 7px 12px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); flex-shrink: 0; }
 .toolbar-actions { display: flex; align-items: center; gap: 4px; }
@@ -467,7 +475,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The active query's facts, after the backend's state: its run, then server, login (SPID) and database, time and rows. */
 .status-bar > .query-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
 .query-status .query-status-segments { margin-left: 0; }
-.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin: 0 12px; }
+/* The editor's facts are short and keep their size: the query's facts give way (and ellipsize) first. */
+.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin: 0 12px; }
 .editor-status-position { display: flex; gap: 10px; }
 .editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }

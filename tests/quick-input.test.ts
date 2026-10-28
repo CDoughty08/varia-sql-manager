@@ -742,6 +742,30 @@ describe('Search', () => {
     quickInput.filter('')
     expect(view()).toMatchObject({ ariaLabel: 'Go to Query' })
   })
+  it('says when there are more loaded objects than it can search', async () => {
+    const { key, view, explorer, quickInput } = palette()
+    const loaded = vi.spyOn(explorer, 'loadedObjects').mockImplementation(limit => Array.from({ length: limit }, (_, index) => ({ id: index + 1, label: `dbo.T${index}`, path: 'server-a › Databases › AppData › Tables', icon: 'table' as const })))
+    await key('workbench.search')
+    expect(view().message).toEqual({ text: `Only the first ${quickInputLimits.items.toLocaleString('en-US')} items can be searched`, severity: 'info' })
+    loaded.mockImplementation(() => [])
+    quickInput.hide('cancel')
+    await key('workbench.search')
+    expect(view().message).toBeUndefined()
+  })
+  it('drops down from the search box it was opened from, in every mode, and opens where F1 does from a key', async () => {
+    const { key, commands, quickInput, view } = palette()
+    const box = { getBoundingClientRect: () => ({ left: 400, right: 840, bottom: 33 }) } as unknown as Element
+    await key('workbench.search')
+    expect(view().anchor).toBeUndefined()
+    quickInput.hide('cancel')
+    await commands.execute('workbench.search', { anchor: box }, 'toolbar')
+    expect(view()).toMatchObject({ ariaLabel: 'Search', anchor: box })
+    quickInput.filter('>')
+    expect(view()).toMatchObject({ ariaLabel: 'Command Palette', anchor: box })
+    quickInput.hide('cancel')
+    await key('workbench.showCommands')
+    expect(view().anchor).toBeUndefined()
+  })
 })
 
 describe('server and database pickers', () => {

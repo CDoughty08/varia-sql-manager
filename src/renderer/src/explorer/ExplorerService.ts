@@ -404,7 +404,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /**
    * The objects already loaded in the tree, in tree order, each with the path of the server, folders and objects above
    * it, for the header's search. Folders are left out (their names repeat under every database), and so is anything not
-   * loaded: searching never queries a server. At most `limit` nodes.
+   * loaded: listing them never queries a server. At most `limit` nodes.
    */
   loadedObjects(limit: number): { readonly id: number; readonly label: string; readonly path: string; readonly icon: TreeNode['icon'] }[] {
     const found: { id: number; label: string; path: string; icon: TreeNode['icon'] }[] = []
@@ -418,7 +418,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const id of this.roots) { const root = this.nodes.get(id); if (root && this.attached(root) && !walk(root, '')) break }
     return found
   }
-  /** Shows a loaded node: expands its collapsed ancestors, outermost first, then selects it and scrolls it into view. */
+  /**
+   * Shows a loaded node: expands its collapsed ancestors, outermost first, as clicks on them would (so a folder whose
+   * loading a collapse interrupted carries on loading), then selects it and scrolls it into view.
+   */
   reveal(id: number): boolean {
     const node = this.nodes.get(id)
     if (!node || !this.attached(node)) return false

@@ -233,6 +233,26 @@ try {
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   expect((await pane('explorer').boundingBox()).x).toBeLessThan((await pane('editor').boundingBox()).x)
   await expect(layoutError(page)).toHaveCount(0)
+  // Dock Left beside a floating panel docks in the window's grid, not in the floating window; a floating panel's ⋯ menu
+  // offers Dock in place of Float, and docks it.
+  // Panel content renders in an overlay above its group, so a floating window is known by the dock tab it holds.
+  const floating = id => page.locator('.dv-resize-container').filter({ has: paneTab(page, id) }).count()
+  await movePane(page, 'explorer', 'float')
+  await expect.poll(() => floating('explorer')).toBe(1)
+  await movePane(page, 'editor', 'left')
+  await expect.poll(async () => [await floating('editor'), await floating('explorer')]).toEqual([0, 1])
+  await expect(pane('editor')).toBeVisible()
+  await expect.poll(async () => await x('editor') < await x('output')).toBe(true)
+  await paneMenuButton(page, 'explorer').click()
+  await expect(page.getByRole('menu').getByRole('menuitem', { name: 'Float', exact: true })).toHaveCount(0)
+  await page.getByRole('menu').getByRole('menuitem', { name: 'Dock', exact: true }).click()
+  await expect.poll(() => floating('explorer')).toBe(0)
+  await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
+  await manage()
+  await page.getByRole('button', { name: 'Reset default layout', exact: true }).click()
+  await expect(page.getByRole('dialog').getByRole('status')).toContainText('Default layout restored.')
+  await done()
+  console.log('Layout checks: Dock at a side never lands in a floating window, and a floating panel docks through its ⋯ menu.')
   // Closing every panel is a valid, persisted layout; Window can recover each one.
   for (const id of ['explorer', 'output', 'editor']) {
     await closePaneButton(page, id).click()

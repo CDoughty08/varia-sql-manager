@@ -28,6 +28,8 @@ export type HideReason = 'accept' | 'cancel' | 'blur' | 'replace'
 export type QuickInputMove = 'next' | 'previous' | 'pageNext' | 'pagePrevious' | 'first' | 'last'
 export type ValueSelection = 'end' | 'afterPrefix' | 'all'
 export interface QuickInputMessage { readonly text: string; readonly severity: 'info' | 'error' }
+/** What the widget opens below, centred on it, instead of the top of the window: the element the user opened it from. */
+export interface QuickInputAnchor { getBoundingClientRect(): { readonly left: number; readonly right: number; readonly bottom: number } }
 export interface QuickPickOptions<T extends QuickPickItem> {
   readonly ariaLabel: string
   readonly placeholder: string
@@ -50,6 +52,7 @@ export interface QuickPickOptions<T extends QuickPickItem> {
   readonly recentIds?: readonly string[]
   /** False keeps the widget open after an accept, for rows that switch mode. */
   readonly hideOnAccept?: boolean
+  readonly anchor?: QuickInputAnchor
   onDidChangeValue?(value: string): void
   onDidChangeActive?(item: T | undefined): void
   onDidAccept(item: T): void | Promise<void>
@@ -77,6 +80,7 @@ export interface QuickInputView {
   readonly loading: boolean
   readonly message?: QuickInputMessage
   readonly input: QuickInputValue
+  readonly anchor?: QuickInputAnchor
 }
 
 /**
@@ -407,7 +411,8 @@ export class QuickInputService extends SnapshotStore<QuickInputView> implements 
     const { options } = session
     this.publish({
       visible: true, session: session.id, ariaLabel: options.ariaLabel, placeholder: options.placeholder, title: options.title, noun: options.noun, prefix: options.prefix ?? '',
-      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy, loading: session.loading, message: session.hint ?? session.loadMessage ?? session.truncation, input: this.input
+      rows: session.rows, activeIndex: session.activeIndex, busy: session.busy, loading: session.loading, message: session.hint ?? session.loadMessage ?? session.truncation, input: this.input,
+      ...options.anchor ? { anchor: options.anchor } : {}
     })
   }
 }

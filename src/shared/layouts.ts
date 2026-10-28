@@ -124,6 +124,16 @@ export function hidesHeader(group: { readonly location: string; readonly panels:
   return !panelTabs && group.location === 'grid' && group.panels === 1
 }
 /**
+ * The panel a ⋯ menu's Dock Left/Right/Top/Bottom docks `id` beside: the editor (the explorer, for the editor), else any
+ * other panel, as long as it is docked in the grid; beside a floating panel the move would split the floating window
+ * instead. Undefined when no other panel is docked: `id` then goes to the grid's own edge.
+ */
+export function dockReference<T extends { readonly id: string; readonly location: string }>(id: PaneId, panels: readonly T[]): T | undefined {
+  const docked = panels.filter(panel => panel.id !== id && panel.location === 'grid')
+  const preferred = id === 'editor' ? 'explorer' : 'editor'
+  return docked.find(panel => panel.id === preferred) ?? docked[0]
+}
+/**
  * The layout without hidden-header state. Which headers hide follows `hidesHeader`, not the layout, so a saved or exported
  * layout leaves it out and shows the same panels however Panel Tabs is set when it is loaded.
  */

@@ -439,6 +439,17 @@ describe('context menus', () => {
     expect(titles(level(menus).items)).toEqual(['Insert Snippet…', 'Surround With…', '-', 'Connection', '-', 'Execute', 'Cancel Executing Query', '-', 'Cut', 'Copy', 'Paste', '-', 'Command Palette…'])
     expect(menus.openForElement(null, { keyboard: true })).toBe(false)
   })
+  it('opens a menu button\'s menu below it as a pointer menu from a click, and names what the open menu is for', () => {
+    const { menus, one, doc } = setup()
+    doc.activeElement = one.button
+    expect(menus.menuFor.getSnapshot()).toBeUndefined()
+    expect(menus.openForElement(one.button.dom, { keyboard: false })).toBe(true)
+    expect(menus.controller.view.mnemonics).toBe(false)
+    expect(level(menus)).toMatchObject({ active: -1, anchor: { kind: 'below', rect: { left: 108, top: 40, right: 200, bottom: 68 } } })
+    expect(menus.menuFor.getSnapshot()).toBe(one.tab.dom)
+    menus.close('escape')
+    expect(menus.menuFor.getSnapshot()).toBeUndefined()
+  })
   it('opens a tree\'s menu from the keyboard for its active row, below that row, with focus left on the tree', async () => {
     const { menus, doc, fixture, targets } = setup()
     fixture.api.push(readyBackend())

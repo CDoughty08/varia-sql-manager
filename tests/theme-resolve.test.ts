@@ -25,7 +25,7 @@ icon.foreground #a3a9b5 #4d5461|widget.shadow #00000085 #10182824|widget.border 
 sash.hoverBorder #8f9cff #4453d0|scrollbarSlider.background #9298a466 #5c637066|scrollbarSlider.hoverBackground #9298a48c #5c63708c
 scrollbarSlider.activeBackground #9298a4b3 #5c6370b3|titleBar.activeBackground #111317 #f7f8fa|titleBar.activeForeground #9298a4 #5c6370
 titleBar.inactiveBackground #111317 #f7f8fa|titleBar.inactiveForeground #9298a4 #5c6370|titleBar.border #262a31 #e3e6eb
-titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #9298a4 #5c6370|commandCenter.activeBackground #262a32 #dfe2e7|commandCenter.border #6b728673 #878e9b73|menubar.selectionBackground #30343e #d6dae0
+titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #a3a9b5 #4d5461|commandCenter.activeBackground #30343e #d6dae0|commandCenter.border #6b728673 #878e9b73|menubar.selectionBackground #30343e #d6dae0
 menubar.selectionForeground #f5f6f8 #0a0c10|menubar.selectionBorder #8f9cff00 #4453d000|menu.background #1d2026 #ffffff
 menu.foreground #d9dce3 #1c1f26|menu.selectionBackground #30343e #d6dae0|menu.selectionForeground #f5f6f8 #0a0c10
 menu.selectionBorder #8f9cff00 #4453d000|menu.separatorBackground #30343c #dcdfe5|menu.border #6b7286 #d4d8df|toolbar.background #111317 #f7f8fa

@@ -518,13 +518,13 @@
         },
         "commandCenter.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Search box text, icon and key. Default $textMuted (Dark #9298a4, Light #5c6370).",
-          "markdownDescription": "(VS Code) Search box text, icon and key. Default `$textMuted` (Dark `#9298a4`, Light `#5c6370`)."
+          "description": "(VS Code) Search box text, icon and key. Default $textTertiary (Dark #a3a9b5, Light #4d5461).",
+          "markdownDescription": "(VS Code) Search box text, icon and key. Default `$textTertiary` (Dark `#a3a9b5`, Light `#4d5461`)."
         },
         "commandCenter.activeBackground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Search box while hovered. Default $hover (Dark #262a32, Light #dfe2e7).",
-          "markdownDescription": "(VS Code) Search box while hovered. Default `$hover` (Dark `#262a32`, Light `#dfe2e7`)."
+          "description": "(VS Code) Search box while hovered. Default $active (Dark #30343e, Light #d6dae0).",
+          "markdownDescription": "(VS Code) Search box while hovered. Default `$active` (Dark `#30343e`, Light `#d6dae0`)."
         },
         "commandCenter.border": {
           "$ref": "#/definitions/value",

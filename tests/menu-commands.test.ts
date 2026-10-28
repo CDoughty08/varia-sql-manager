@@ -98,6 +98,19 @@ describe('results pane toggle', () => {
     expect(listener).toHaveBeenCalledOnce()
     expect(panes.getSnapshot()).toEqual({ explorer: true, editor: true, output: false })
   })
+  it('keeps where each panel is, without notifying, for a ⋯ menu to choose Float or Dock', () => {
+    const { panes } = setup()
+    const listener = vi.fn()
+    panes.subscribe(listener)
+    expect(panes.location('output')).toBe('closed')
+    panes.set({ explorer: true, editor: true, output: true }, { explorer: 'grid', editor: 'grid', output: 'grid' })
+    panes.set({ explorer: true, editor: true, output: true }, { explorer: 'grid', editor: 'grid', output: 'floating' })
+    expect([panes.location('explorer'), panes.location('output')]).toEqual(['grid', 'floating'])
+    expect(listener).toHaveBeenCalledOnce()
+    // Visibility alone leaves the locations as they were.
+    panes.set({ explorer: true, editor: false, output: true })
+    expect(panes.location('output')).toBe('floating')
+  })
 })
 
 describe('connection and document commands', () => {

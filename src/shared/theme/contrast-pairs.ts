@@ -179,8 +179,9 @@ export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
   // The highlighted menu item follows the pointer and the keyboard alike.
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
-  // The search box stands out from the title bar by its outline, and shows the pointer by its fill.
-  ...pairs(1.2, ['commandCenter.border', 'commandCenter.activeBackground'], titleBar)
+  // The search box stands out from the title bar by its outline, and shows the pointer by a fill that changes from its own.
+  ...pairs(1.2, ['commandCenter.border'], titleBar),
+  ...pairs(1.2, ['commandCenter.activeBackground'], titleBar, ['titleBar.activeBackground', 'commandCenter.background'])
 ]
 
 /** Foreground keys that are deliberately not checked, with the reason. */
