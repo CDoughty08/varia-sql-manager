@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chmod, chown, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileCheckLimits, fileKinds, isReadOnly, saveDocument, saveFileSchema, SqlFileStore, type SavePrompts } from '../src/main/sql-files'
@@ -432,18 +432,20 @@ describe('changes made outside', () => {
     // A share that answers after the check gave up on it, as a slow network drive does.
     let slow = true, answered!: () => void
     const late = new Promise<void>(resolve => { answered = resolve })
-    const store = new SqlFileStore({ stat: async path => { if (slow) await late; return stat(path) } })
+    // Once it answers, the late comparison still takes a while to settle, as a loaded machine's file system does.
+    const store = new SqlFileStore({ stat: async path => { if (slow) { await late; await new Promise(resolve => setTimeout(resolve, 50)) } return stat(path) } })
     const path = join(directory, 'slow.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
     await writeFile(path, 'SELECT 2')
     await utimes(path, later(10), later(10))
     expect(await store.check({ concurrency: 8, timeoutMs: 20 })).toEqual([])
-    // Its answer arrives after the check ended and changes nothing: the change is reported by the next check.
+    // Its answer arrives after the check ended and changes nothing: the change is reported by a check once it settles.
+    // Until then checks skip the file, so the wait polls them; had the late answer moved the stamp, none would report it.
     answered()
-    await new Promise(resolve => setTimeout(resolve, 20))
     slow = false
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    await vi.waitFor(async () => expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 10_000, interval: 20 })
+    expect(await store.check()).toEqual([])
   })
   it('does not compare a file again while its last comparison hangs, and lets at most two hang', async () => {
     // A share that never answers (a hard NFS mount, an unplugged VPN): each call would hold one of libuv's four threads.
@@ -464,7 +466,8 @@ describe('changes made outside', () => {
     let answered!: () => void
     const late = new Promise<void>(resolve => { answered = resolve })
     let calls = 0
-    const store = new SqlFileStore({ stat: async path => { if (++calls === 1) await late; return stat(path) } })
+    // Once it answers, the first comparison still takes a while to settle, as a loaded machine's file system does.
+    const store = new SqlFileStore({ stat: async path => { if (++calls === 1) { await late; await new Promise(resolve => setTimeout(resolve, 50)) } return stat(path) } })
     const path = join(directory, 'late.sql')
     await writeFile(path, 'SELECT 1')
     const opened = await store.read(path)
@@ -473,9 +476,9 @@ describe('changes made outside', () => {
     expect(await store.check({ concurrency: 2, timeoutMs: 20 })).toEqual([])
     expect(await store.check({ concurrency: 2, timeoutMs: 20 })).toEqual([])
     expect(calls).toBe(1)
+    // Checks skip the file until its comparison settles, then compare it once more.
     answered()
-    await new Promise(resolve => setTimeout(resolve, 20))
-    expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }])
+    await vi.waitFor(async () => expect(await store.check()).toEqual([{ fileId: opened.id, change: 'modified' }]), { timeout: 10_000, interval: 20 })
     expect(calls).toBe(2)
   })
   it('hashes a saved value larger than a query may be in full, so touching it is no change', async () => {
