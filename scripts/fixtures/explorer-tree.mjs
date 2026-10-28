@@ -64,7 +64,8 @@ export async function revealExplorerRow(page, ...path) {
  */
 export async function expandExplorerPath(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}
-  const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 5000)
+  // Room for a lost click, the 2 s that notice it and a second click, on slow Linux runners too (CI ran out at 5 s).
+  const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 10000)
   for (let length = 1; length <= path.length; length++) {
     const row = await explorerRow(page, ...path.slice(0, length), options)
     if (await row.getAttribute('aria-expanded') !== 'false') {
