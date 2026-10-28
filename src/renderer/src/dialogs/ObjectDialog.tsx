@@ -44,10 +44,10 @@ function ScriptButton({ disabled, onScript }: { disabled: boolean; onScript(dest
     event.stopPropagation()
   }
   return <div className="object-dialog-script">
-    <button type="button" className="object-dialog-script-main" disabled={disabled} onClick={() => onScript('newQuery')}><span className="codicon codicon-file-code" aria-hidden="true" />Script</button>
+    <button type="button" className="object-dialog-script-main" disabled={disabled} onClick={() => onScript('newQuery')}><Icon name="file-code" />Script</button>
     <button ref={arrow} type="button" className="object-dialog-script-arrow" aria-label="Script options" aria-haspopup="listbox" aria-expanded={open} disabled={disabled}
       aria-activedescendant={open ? `object-dialog-script-${scriptDestinations[active]}` : undefined} onClick={() => { setActive(0); setOpen(value => !value) }} onKeyDown={keyDown}
-      onBlur={() => setOpen(false)}><span className="codicon codicon-chevron-down" aria-hidden="true" /></button>
+      onBlur={() => setOpen(false)}><Icon name="chevron-down" /></button>
     {open && <ul className="object-dialog-script-list" role="listbox" aria-label="Script">
       {scriptDestinations.map((destination, index) => <li key={destination} id={`object-dialog-script-${destination}`} role="option" aria-selected={index === active}
         onMouseDown={event => event.preventDefault()} onMouseEnter={() => setActive(index)} onClick={() => choose(destination)}>{scriptActionTitles[destination]}</li>)}
@@ -120,7 +120,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         <nav ref={nav} className="object-dialog-pages" aria-label="Select a page" onKeyDown={pageKeyDown}>
           <div className="object-dialog-caption">Select a page</div>
           {spec.pages.map(page => <button key={page.id} type="button" data-page={page.id} aria-current={page.id === open.page ? 'page' : undefined} onClick={() => dialogs.setPage(page.id)}>
-            <span className={`codicon codicon-${page.icon}`} aria-hidden="true" />{page.title}</button>)}
+            <Icon name={page.icon} />{page.title}</button>)}
         </nav>
         <section className="object-dialog-box" aria-labelledby="object-dialog-connection">
           <div className="object-dialog-caption" id="object-dialog-connection">Connection</div>
@@ -128,14 +128,14 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         </section>
         <section className="object-dialog-box" aria-labelledby="object-dialog-progress">
           <div className="object-dialog-caption" id="object-dialog-progress">Progress</div>
-          <div className="object-dialog-progress" role="status">{busy && <span className="codicon codicon-loading object-dialog-spinner" aria-hidden="true" />}{progress}</div>
+          <div className="object-dialog-progress" role="status">{busy && <Icon name="loading" className="object-dialog-spinner" />}{progress}</div>
         </section>
       </div>
       <div className="object-dialog-main">
         <div className="object-dialog-toolbar"><ScriptButton disabled={busy || !usable} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
-          <span className={`codicon codicon-${open.phase === 'stopped' ? 'info' : 'error'}`} aria-hidden="true" /><span>{open.error.message}</span></div>}
-        {!open.error && open.notice && <div className="object-dialog-message info" role="status"><span className="codicon codicon-info" aria-hidden="true" /><span>{open.notice}</span></div>}
+          <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
+        {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         <div className="object-dialog-page">{Page && <Page open={open} editable={usable && !busy} />}</div>
       </div>
     </div>

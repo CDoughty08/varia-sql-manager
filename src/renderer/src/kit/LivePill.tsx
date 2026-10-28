@@ -1,4 +1,5 @@
 import { useTicker } from '../core/useTicker'
+import Icon from '../Icon'
 import { liveIcon, liveLabel, staleLabel, updatedLabel, type LiveStatus } from './format'
 
 /**
@@ -9,7 +10,7 @@ import { liveIcon, liveLabel, staleLabel, updatedLabel, type LiveStatus } from '
 export function LivePill(status: LiveStatus) {
   const icon = liveIcon(status)
   return <span className="live-pill" data-state={status.state}>
-    {icon ? <span className={`codicon codicon-${icon}`} aria-hidden="true" /> : <span className="live-dot" aria-hidden="true" />}
+    {icon ? <Icon name={icon} /> : <span className="live-dot" aria-hidden="true" />}
     <span>{liveLabel(status)}</span>
   </span>
 }
@@ -29,7 +30,7 @@ export function StaleBadge({ updatedAt, stale, now }: StaleProps) {
   const time = now ?? clock
   if (stale) {
     return <span className="stale-badge" data-stale="">
-      <span className="codicon codicon-warning" aria-hidden="true" />
+      <Icon name="warning" />
       <span>{staleLabel(stale.since, time, stale.retryAt)}</span>
     </span>
   }

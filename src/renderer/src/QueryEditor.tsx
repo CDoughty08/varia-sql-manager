@@ -12,6 +12,8 @@ export default function QueryEditor() {
       // Tools › Options: font size, word wrap, line numbers, drag and drop, current-line highlight. Indentation is the model's.
       ...workbench.editorOptions.monacoOptions(),
       fontFamily: editorFontFamily,
+      // Cascadia Code's ligatures would join SQL's <=, <> and != into one glyph.
+      fontLigatures: false,
       minimap: { enabled: false },
       automaticLayout: true,
       scrollBeyondLastLine: false,

@@ -1,33 +1,39 @@
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import { commandDescriptor } from '../../../shared/commands/catalog'
+import type { Platform } from '../../../shared/commands/keybindings'
+import { menuTitle } from '../../../shared/commands/menus'
+import type { IconId } from '../../../shared/icons'
+import { commandTitle, type SettingsValues } from '../../../shared/settings/catalog'
 import { nextFrame } from '../core/frame'
 import type { CommandArgs, CommandId } from '../core/types'
 import { useCommandsEnabled, useCommandsToggled } from '../core/useCommand'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
+import Icon from '../Icon'
 import { revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
 import ScriptDrawer, { type ScriptDrawerProps } from './ScriptDrawer'
 
 /** One step of the path to the document's object: the server (connection), a folder, a database. Its tooltip is `title`, or the label, which may be cut. */
 export interface Crumb { readonly label: string; readonly title?: string }
-/** A fact in the line under the header ("Folder Warehouse", "Started 22:41:07 +01:00"). */
+/** A fact in the line under the header ("Folder Warehouse", "Started 22:41:07 +01:00"). Its tooltip is `title`, or the fact itself, whose value may be cut. */
 export interface Fact { readonly label: string; readonly value: string; readonly title?: string }
 /**
- * A header button, always a catalogue command, so the palette, menus and keys offer the same verb. `primary` is the
- * document's one filled button (Save, Execute); `danger` is outlined in the error colour (Stop execution, Kill session…).
+ * A header button, always a catalogue command, so the palette, menus and keys offer the same verb. Verbs are borderless
+ * by default; `primary` is the document's one filled button (Save, Execute), `outline` gives a secondary verb a border,
+ * and `danger` draws its words in the error colour inside that border (Stop execution, Kill session…).
  */
 export interface Verb {
   readonly command: CommandId
   readonly args?: CommandArgs
-  /** The words on the button; the command's catalogue title by default. */
+  /** The words on the button; by default the command's title as the menus and palette give it on this platform. */
   readonly label?: string
-  readonly icon?: string
-  readonly emphasis?: 'primary' | 'danger'
+  readonly icon?: IconId
+  readonly emphasis?: 'primary' | 'outline' | 'danger'
 }
 /**
  * A verb as the header draws it, with its state and its key worked out. `pressed` is set for a command with a `toggled`
  * condition (Split View), whose button then says whether it is on (`aria-pressed`).
  */
-export interface HeaderVerb { readonly key: string; readonly label: string; readonly title: string; readonly icon?: string; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly pressed?: boolean; readonly run: () => void }
+export interface HeaderVerb { readonly key: string; readonly label: string; readonly title: string; readonly icon?: IconId; readonly emphasis?: Verb['emphasis']; readonly disabled: boolean; readonly pressed?: boolean; readonly run: () => void }
 export interface FrameSection extends SectionInfo {
   readonly content: ReactNode
   /** Its heading opens and closes it; a collapsed section's content is not rendered. */
@@ -57,27 +63,28 @@ export function DocumentHeader({ id, title, crumbs = [], subtitle, state, tools,
     <div className="document-heading">
       {crumbs.length > 0 && <nav className="document-crumbs" aria-label="Location">
         <ol>{crumbs.map((crumb, index) => <li key={index} title={crumb.title ?? crumb.label}>
-          <span className="document-crumb">{crumb.label}</span><span className="codicon codicon-chevron-right" aria-hidden="true" />
+          <span className="document-crumb">{crumb.label}</span><Icon name="chevron-right" />
         </li>)}</ol>
       </nav>}
-      <h1 className="document-title" id={`${id}-title`}>{title}</h1>
+      {/* The title is cut on one line where the header is narrow, so its tooltip is the whole of it. */}
+      <h1 className="document-title" id={`${id}-title`} title={title}>{title}</h1>
       {subtitle && <span className="document-subtitle">{subtitle}</span>}
       {state}
     </div>
     {(tools || verbs.length > 0) && <div className="document-actions" role="group" aria-label={`${title} actions`}>
       {tools}
-      {verbs.map((verb, index) => <button key={verb.key} type="button" className={index === primary ? 'document-verb primary' : verb.emphasis === 'danger' ? 'document-verb danger' : 'document-verb'}
+      {verbs.map((verb, index) => <button key={verb.key} type="button" className={index === primary ? 'document-verb primary' : verb.emphasis && verb.emphasis !== 'primary' ? `document-verb ${verb.emphasis}` : 'document-verb'}
         title={verb.title} aria-pressed={verb.pressed} disabled={verb.disabled} onClick={verb.run}>
-        {verb.icon && <span className={`codicon codicon-${verb.icon}`} aria-hidden="true" />}{verb.label}
+        {verb.icon && <Icon name={verb.icon} />}{verb.label}
       </button>)}
     </div>}
   </header>
 }
 
-/** The fact line under the header, label and value pairs that wrap. */
+/** The fact line under the header, label and value pairs that wrap; a long value is cut, so each pair has a tooltip. */
 export function FactLine({ facts }: { readonly facts: readonly Fact[] }) {
   return <dl className="document-facts">
-    {facts.map((fact, index) => <div key={index} title={fact.title}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+    {facts.map((fact, index) => <div key={index} title={fact.title ?? `${fact.label} ${fact.value}`}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
   </dl>
 }
 
@@ -108,7 +115,8 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
     if (event.key === 'Tab') {
       // Tab goes into the section the list shows, as SSMS's page list tabs into its page: every section is in one column,
-      // so the browser's next stop would be the first section's first control, scrolling away from the one chosen.
+      // so the browser's stops after the column's own would start at the first section, scrolling away from the one
+      // chosen. A section with nothing to focus leaves Tab to the browser, which stops at the column (PageDown pages it).
       const target = firstTabbable(nav.current?.ownerDocument.getElementById(sectionDomId(id, current)))
       if (!target) return
       event.preventDefault()
@@ -128,9 +136,10 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
   const stop = sections.some(section => section.id === current) ? current : sections[0]?.id
   return <nav ref={nav} className="document-nav" aria-label="Sections" onKeyDown={keyDown}>
     {sections.map(section => <button key={section.id} type="button" className="document-nav-item" data-section={section.id} tabIndex={section.id === stop ? 0 : -1} aria-current={section.id === current ? 'location' : undefined}
-      aria-label={section.problem ? sectionLabel(section) : undefined} aria-controls={sectionDomId(id, section.id)} onClick={() => onChoose(section.id)}>
+      aria-label={section.problem ? sectionLabel(section) : undefined} title={sectionLabel(section)} aria-controls={sectionDomId(id, section.id)} onClick={() => onChoose(section.id)}>
+      {/* A long title is cut to the list's width (Transaction Log Shipping), so the tooltip carries it whole. */}
       <span className="document-nav-title">{section.title}</span>
-      {section.problem && <span className="codicon codicon-error" aria-hidden="true" />}
+      {section.problem && <Icon name="error" />}
     </button>)}
   </nav>
 }
@@ -147,15 +156,19 @@ function firstTabbable(root: HTMLElement | null | undefined): HTMLElement | unde
   return undefined
 }
 
-/** A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. */
+/**
+ * A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. A
+ * named group, not a region: a document of ten pages would otherwise add ten landmarks, where its headings and the list
+ * already lead to each one.
+ */
 export function FrameSectionView({ id, section, collapsed, onToggle }: { readonly id: string; readonly section: FrameSection; readonly collapsed: boolean; readonly onToggle: () => void }) {
   const domId = sectionDomId(id, section.id), headingId = `${domId}-heading`, bodyId = `${domId}-body`
   const open = !section.collapsible || !collapsed
-  return <section className="document-section" id={domId} aria-labelledby={headingId} data-section={section.id}>
+  return <section className="document-section" id={domId} role="group" aria-labelledby={headingId} data-section={section.id}>
     <div className="document-section-head">
       <h2 className="document-section-title" id={headingId}>
         {section.collapsible
-          ? <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}><span className={`codicon codicon-chevron-${open ? 'down' : 'right'}`} aria-hidden="true" />{section.title}</button>
+          ? <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}><Icon name={open ? 'chevron-down' : 'chevron-right'} />{section.title}</button>
           : section.title}
       </h2>
       {section.aside}
@@ -195,7 +208,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
     {banner && <div className="document-banner">{banner}</div>}
-    {sections && frame ? <SectionedBody id={id} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
+    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
     {hint}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}
@@ -207,7 +220,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
  * section in view, checked once a frame. Near the end, where the last sections cannot reach the top, the one chosen
  * stays marked (`spySection`).
  */
-function SectionedBody({ id, sections, frame, onFrame }: { readonly id: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void }) {
+function SectionedBody({ id, title, sections, frame, onFrame }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void }) {
   const content = useRef<HTMLDivElement>(null)
   // The latest frame and handler for the scroll callback, which runs a frame after the render that set it up.
   const latest = useRef({ frame, onFrame, sections })
@@ -249,19 +262,32 @@ function SectionedBody({ id, sections, frame, onFrame }: { readonly id: string; 
   }
   return <div className="document-body">
     {sections.length > 1 && <SectionNav id={id} sections={sections} current={frame.section} onChoose={choose} />}
-    <div className="document-content document-sections" ref={content} onScroll={scrolled}>
+    {/* A tab stop of its own, so PageDown, PageUp and Space page through a section taller than the view; the list's keys
+        only go from heading to heading. */}
+    <div className="document-content document-sections" ref={content} onScroll={scrolled} role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}
     </div>
   </div>
 }
 
+/** What a header needs of the workbench to draw its verbs: each verb's state, in order, and the platform and settings that word them. */
+export interface VerbState {
+  readonly platform: Platform
+  readonly settings: SettingsValues
+  readonly enabled: readonly boolean[]
+  readonly toggled: readonly boolean[]
+  readonly keyOf: (id: CommandId) => { readonly text: string } | undefined
+  readonly execute: (id: CommandId, args: CommandArgs | undefined) => void
+}
+
 /**
- * Header verbs from catalogue commands: the catalogue's title and icon unless the document names its own, whether each
- * can run now, its key in the tooltip, and running it as the toolbar does.
+ * Header verbs from catalogue commands: the title the menus and palette give the command on this platform (with its
+ * setting filled in, "Select Top 500 Rows") and its icon, unless the document names its own; whether each can run now,
+ * its key in the tooltip, and running it as the toolbar does.
  */
-export function headerVerbs(verbs: readonly Verb[], enabled: readonly boolean[], toggled: readonly boolean[], keyOf: (id: CommandId) => { readonly text: string } | undefined, execute: (id: CommandId, args: CommandArgs | undefined) => void): HeaderVerb[] {
+export function headerVerbs(verbs: readonly Verb[], { platform, settings, enabled, toggled, keyOf, execute }: VerbState): HeaderVerb[] {
   return verbs.map((verb, index) => {
-    const descriptor = commandDescriptor(verb.command), label = verb.label ?? descriptor.title
+    const descriptor = commandDescriptor(verb.command), label = verb.label ?? commandTitle(verb.command, settings, menuTitle(verb.command, platform))
     return {
       key: `${verb.command}-${index}`, label, title: verbTooltip(label, keyOf(verb.command)), icon: verb.icon ?? descriptor.icon, emphasis: verb.emphasis,
       disabled: !enabled[index], ...(descriptor.toggled === undefined ? {} : { pressed: !!toggled[index] }), run: () => execute(verb.command, verb.args)
@@ -274,7 +300,8 @@ export function useHeaderVerbs(verbs: readonly Verb[]): readonly HeaderVerb[] {
   const workbench = useWorkbench()
   const enabled = useCommandsEnabled(verbs.map(verb => ({ id: verb.command, args: verb.args })))
   const toggled = useCommandsToggled(verbs.map(verb => verb.command))
-  return headerVerbs(verbs, enabled, toggled, id => workbench.keybindings.lookup(id), (id, args) => void workbench.commands.execute(id, args, 'toolbar'))
+  const { values } = useServiceSnapshot(workbench.settings)
+  return headerVerbs(verbs, { platform: workbench.platform, settings: values, enabled, toggled, keyOf: id => workbench.keybindings.lookup(id), execute: (id, args) => void workbench.commands.execute(id, args, 'toolbar') })
 }
 
 export interface DocumentFrameProps extends Omit<DocumentFrameViewProps, 'verbs'> { readonly verbs?: readonly Verb[] }

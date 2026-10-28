@@ -1,6 +1,8 @@
 import { useMemo, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { scriptDestinations, scriptDestinationSpecs, type ScriptDestination } from '../../../shared/scripting/catalog.ts'
 import { frameLimits, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey } from './document-frame'
+import type { IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 import type { ErrorReport } from './format'
 import InlineError from './InlineError'
 import Skeleton from './Skeleton'
@@ -16,8 +18,10 @@ export type ScriptContent =
   | { readonly state: 'failed'; readonly error: ErrorReport }
 
 /** The drawer's ways out, the destinations Script As and the object dialogs' Script button deliver to, worded and drawn as the catalogue says. */
-export const scriptDrawerActions: readonly { readonly destination: ScriptDestination; readonly label: string; readonly icon: string }[] =
+export const scriptDrawerActions: readonly { readonly destination: ScriptDestination; readonly label: string; readonly icon: IconId }[] =
   scriptDestinations.map(destination => ({ destination, label: scriptDestinationSpecs[destination].drawerTitle, icon: scriptDestinationSpecs[destination].icon }))
+
+const dragEnds = ['pointerup', 'pointercancel', 'lostpointercapture'] as const
 
 export interface ScriptDrawerProps {
   /** The document's id, for the drawer's element ids. */
@@ -45,14 +49,22 @@ export default function ScriptDrawer({ id, open, size, content, onToggle, onResi
   const note = ready ? scriptPreviewNote(preview) : undefined
   const bodyId = `${id}-script`, headId = `${id}-script-head`
   const drag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
     const frame = event.currentTarget.closest('.document-frame')?.getBoundingClientRect()
     if (!frame || frame.height <= 0) return
-    event.currentTarget.setPointerCapture(event.pointerId)
-    const target = event.currentTarget
-    const move = (moved: PointerEvent) => onResize((frame.bottom - moved.clientY) / frame.height)
-    const up = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', up) }
+    // No text selection starts under the drag; the stylesheet's touch-action keeps a touch drag from becoming a pan.
+    event.preventDefault()
+    const target = event.currentTarget, pointer = event.pointerId
+    target.setPointerCapture(pointer)
+    const move = (moved: PointerEvent) => { if (moved.pointerId === pointer) onResize((frame.bottom - moved.clientY) / frame.height) }
+    // A cancelled touch or pen drag ends with pointercancel and no pointerup; either way the drag's listeners go.
+    const end = (ended: PointerEvent) => {
+      if (ended.pointerId !== pointer) return
+      target.removeEventListener('pointermove', move)
+      for (const type of dragEnds) target.removeEventListener(type, end)
+    }
     target.addEventListener('pointermove', move)
-    target.addEventListener('pointerup', up)
+    for (const type of dragEnds) target.addEventListener(type, end)
   }
   const key = (event: KeyboardEvent<HTMLDivElement>) => {
     const next = scriptSizeKey(size, event.key)
@@ -65,13 +77,13 @@ export default function ScriptDrawer({ id, open, size, content, onToggle, onResi
       aria-valuenow={Math.round(size * 100)} aria-valuemin={Math.round(frameLimits.scriptMinimum * 100)} aria-valuemax={Math.round(frameLimits.scriptMaximum * 100)} onPointerDown={drag} onKeyDown={key} />}
     <div className="document-script-head">
       <button type="button" id={headId} className="document-script-toggle" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}>
-        <span className={`codicon codicon-chevron-${open ? 'down' : 'right'}`} aria-hidden="true" />Script
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} />Script
       </button>
       {ready && <span className="document-script-lines">{scriptLinesLabel(preview)}</span>}
       <span className="document-script-notice" role="status">{notice}</span>
       <div className="document-script-actions" role="group" aria-label="Script">
         {scriptDrawerActions.map(action => <button key={action.destination} type="button" className="icon-button" aria-label={action.label} title={action.label} disabled={!ready}
-          data-destination={action.destination} onClick={() => onDeliver(action.destination)}><span className={`codicon codicon-${action.icon}`} aria-hidden="true" /></button>)}
+          data-destination={action.destination} onClick={() => onDeliver(action.destination)}><Icon name={action.icon} /></button>)}
       </div>
     </div>
     {open && <div className="document-script-body" id={bodyId}>

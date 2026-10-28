@@ -6,6 +6,7 @@ import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { draftValue, greyNotes, modelValue, optionChoices, optionGroups, optionState, ownerState, setOption, type DatabaseDraft } from '../dialogs/database-properties'
 import SubDialog from '../dialogs/SubDialog'
+import Icon from '../Icon'
 import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
 import InlineError from '../kit/InlineError'
 import PropertyField, { FactList, FieldHints, FieldHintStrip, fieldAria } from '../kit/PropertyField'
@@ -204,12 +205,12 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   const recovery = (state.stale || state.phase === 'loadFailed') && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
     : state.stale && properties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => properties.discard(state.id) }] : []
   const banner = <>
-    {phaseLabel && <p className="document-status" role="status"><span className="codicon codicon-loading" aria-hidden="true" />{phaseLabel}</p>}
+    {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
     {state.error && <InlineError message={state.error.message} code={state.error.code} role={stopped ? 'status' : 'alert'} context={`Database Properties - ${state.label} on ${state.server}`}
       actions={recovery} />}
-    {!state.error && state.notice && <p className="document-status" role="status"><span className="codicon codicon-pass" aria-hidden="true" />{state.notice}</p>}
-    {model?.readOnlyReason && <p className="document-status"><span className="codicon codicon-lock" aria-hidden="true" />{model.readOnlyReason}</p>}
-    {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><span className="codicon codicon-lock" aria-hidden="true" />{greyNotes.readOnlyDatabase}</p>}
+    {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
+    {model?.readOnlyReason && <p className="document-status"><Icon name="lock" />{model.readOnlyReason}</p>}
+    {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><Icon name="lock" />{greyNotes.readOnlyDatabase}</p>}
   </>
   return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
     state={pill && <StatusPill tone={pill.tone} label={pill.label} size="small" />} verbs={verbs} banner={banner} sections={sections} frame={state.frame}

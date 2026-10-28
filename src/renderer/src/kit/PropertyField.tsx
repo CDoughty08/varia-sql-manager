@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState, type FocusEvent, type ReactNode } from 'react'
+import Icon from '../Icon'
 
 /** The parts of a field besides its control: what it does, why it is greyed, and what is wrong with its value. */
 export interface FieldText { readonly description?: string; readonly note?: string; readonly error?: string }
@@ -92,8 +93,8 @@ export default function PropertyField({ id, label, changed, labelFor = true, des
     </div>
     <div className="property-field-control">{children}</div>
     {description && <p className="property-field-description" id={`${id}-description`} hidden>{description}</p>}
-    {note && <p className="property-field-note" id={`${id}-note`}><span className="codicon codicon-info" aria-hidden="true" />{note}</p>}
-    {error && <p className="property-field-error" id={`${id}-error`}><span className="codicon codicon-error" aria-hidden="true" />{error}</p>}
+    {note && <p className="property-field-note" id={`${id}-note`}><Icon name="info" />{note}</p>}
+    {error && <p className="property-field-error" id={`${id}-error`}><Icon name="error" />{error}</p>}
   </div>
 }
 

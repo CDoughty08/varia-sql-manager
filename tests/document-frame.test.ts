@@ -1,7 +1,11 @@
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
-import { DocumentFrameView, DocumentHeader, FactLine, headerVerbs, type FrameSection, type HeaderVerb } from '../src/renderer/src/kit/DocumentFrame'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { Platform } from '../src/shared/commands/keybindings'
+import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import DocumentFrame, { DocumentFrameView, DocumentHeader, FactLine, headerVerbs, useHeaderVerbs, type FrameSection, type HeaderVerb, type Verb } from '../src/renderer/src/kit/DocumentFrame'
 import { frameLimits, initialFrameState, resizeScript, revealBy, scriptLinesLabel, scriptPreview, scriptPreviewNote, scriptSizeKey, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, verbTooltip, type FrameState } from '../src/renderer/src/kit/document-frame'
 import ScriptDrawer, { scriptDrawerActions, type ScriptContent } from '../src/renderer/src/kit/ScriptDrawer'
 import { scriptDestinations, scriptDestinationSpecs } from '../src/shared/scripting/catalog'
@@ -10,6 +14,7 @@ import { densityUse } from '../src/shared/theme/metrics'
 import { colorRegistry } from '../src/shared/theme/registry'
 import { computed } from './fixtures/css-cascade'
 import { stylesheetRules } from './fixtures/css-rules'
+import { workbenchFixture } from './fixtures/workbench'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
 const rules = stylesheetRules()
@@ -116,26 +121,31 @@ describe('document frame markup', () => {
     const markup = html(createElement(DocumentHeader, {
       id: 'doc-1', title: 'AdventureWorks', crumbs: [{ label: 'localhost', title: 'localhost (SQL Server 17.0)' }, { label: 'Databases' }], subtitle: 'Database',
       state: createElement('span', { className: 'status-pill' }, 'Unsaved changes'), tools: createElement('button', { type: 'button' }, 'Every 2 s'),
-      verbs: [verb('Stop', { emphasis: 'danger', icon: 'debug-stop' }), verb('Save', { emphasis: 'primary', title: 'Save (Ctrl+S)' }), verb('Apply', { emphasis: 'primary', disabled: true })]
+      verbs: [verb('Stop', { emphasis: 'danger', icon: 'debug-stop' }), verb('Refresh', { emphasis: 'outline', icon: 'refresh' }), verb('Split View'), verb('Save', { emphasis: 'primary', title: 'Save (Ctrl+S)' }), verb('Apply', { emphasis: 'primary', disabled: true })]
     }))
     expect(markup).toBe('<header class="document-header"><div class="document-heading">'
       + '<nav class="document-crumbs" aria-label="Location"><ol>'
-      + '<li title="localhost (SQL Server 17.0)"><span class="document-crumb">localhost</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></li>'
+      + '<li title="localhost (SQL Server 17.0)"><span class="document-crumb">localhost</span><span class="codicon codicon-chevron-right" data-icon="chevron-right" aria-hidden="true"></span></li>'
       // A crumb is cut at 32 characters, so its tooltip is its label when the document gives no other.
-      + '<li title="Databases"><span class="document-crumb">Databases</span><span class="codicon codicon-chevron-right" aria-hidden="true"></span></li></ol></nav>'
-      + '<h1 class="document-title" id="doc-1-title">AdventureWorks</h1><span class="document-subtitle">Database</span><span class="status-pill">Unsaved changes</span></div>'
+      + '<li title="Databases"><span class="document-crumb">Databases</span><span class="codicon codicon-chevron-right" data-icon="chevron-right" aria-hidden="true"></span></li></ol></nav>'
+      // So is the title, on one line where the header is narrow.
+      + '<h1 class="document-title" id="doc-1-title" title="AdventureWorks">AdventureWorks</h1><span class="document-subtitle">Database</span><span class="status-pill">Unsaved changes</span></div>'
       + '<div class="document-actions" role="group" aria-label="AdventureWorks actions"><button type="button">Every 2 s</button>'
-      + '<button type="button" class="document-verb danger" title="Stop"><span class="codicon codicon-debug-stop" aria-hidden="true"></span>Stop</button>'
+      + '<button type="button" class="document-verb danger" title="Stop"><span class="codicon codicon-debug-stop" data-icon="debug-stop" aria-hidden="true"></span>Stop</button>'
+      + '<button type="button" class="document-verb outline" title="Refresh"><span class="codicon codicon-refresh" data-icon="refresh" aria-hidden="true"></span>Refresh</button>'
+      + '<button type="button" class="document-verb" title="Split View">Split View</button>'
       // Only the first primary verb is filled.
       + '<button type="button" class="document-verb primary" title="Save (Ctrl+S)">Save</button>'
       + '<button type="button" class="document-verb" title="Apply" disabled="">Apply</button></div></header>')
     // No crumbs, no controls: the title alone.
-    expect(html(createElement(DocumentHeader, { id: 'd', title: 'Activity Monitor' }))).toBe('<header class="document-header"><div class="document-heading"><h1 class="document-title" id="d-title">Activity Monitor</h1></div></header>')
+    expect(html(createElement(DocumentHeader, { id: 'd', title: 'Activity Monitor' }))).toBe('<header class="document-header"><div class="document-heading"><h1 class="document-title" id="d-title" title="Activity Monitor">Activity Monitor</h1></div></header>')
   })
   it('makes verbs of catalogue commands, with the catalogue\'s words and icon unless the document names its own', () => {
     const ran: unknown[] = []
-    const verbs = headerVerbs([{ command: 'file.save', emphasis: 'primary' }, { command: 'query.cancel', label: 'Stop', icon: 'debug-stop', emphasis: 'danger', args: { tabId: 't1' } }, { command: 'view.toggleResultsPane' }, { command: 'view.toggleResultsPane' }],
-      [true, false, true, true], [true, true, true, false], id => id === 'file.save' ? { text: 'Ctrl+S' } : undefined, (id, args) => ran.push([id, args]))
+    const verbs = headerVerbs([{ command: 'file.save', emphasis: 'primary' }, { command: 'query.cancel', label: 'Stop', icon: 'debug-stop', emphasis: 'danger', args: { tabId: 't1' } }, { command: 'view.toggleResultsPane' }, { command: 'view.toggleResultsPane' }], {
+      platform: 'win32', settings: defaultSettings, enabled: [true, false, true, true], toggled: [true, true, true, false],
+      keyOf: id => id === 'file.save' ? { text: 'Ctrl+S' } : undefined, execute: (id, args) => ran.push([id, args])
+    })
     expect(verbs.map(({ run: _run, ...verb }) => verb)).toEqual([
       { key: 'file.save-0', label: 'Save', title: 'Save (Ctrl+S)', icon: 'save', emphasis: 'primary', disabled: false },
       { key: 'query.cancel-1', label: 'Stop', title: 'Stop', icon: 'debug-stop', emphasis: 'danger', disabled: true },
@@ -150,9 +160,16 @@ describe('document frame markup', () => {
     expect(markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane" aria-pressed="false">')
     expect(html(createElement(DocumentHeader, { id: 'd', title: 'x', verbs: verbs.slice(0, 1) }))).not.toContain('aria-pressed')
   })
-  it('lists facts as terms and values', () => {
+  it('names a verb as the menus and palette do on this platform, with its setting filled in', () => {
+    const label = (command: Verb['command'], platform: Platform, settings = defaultSettings) =>
+      headerVerbs([{ command }], { platform, settings, enabled: [true], toggled: [false], keyOf: () => undefined, execute: () => {} })[0].label
+    expect([label('file.revealInFolder', 'darwin'), label('file.revealInFolder', 'win32')]).toEqual(['Reveal in Finder', 'Open Containing Folder'])
+    expect(label('explorer.selectTopRows', 'win32', { ...defaultSettings, 'objectExplorer.selectTopRows': 500 })).toBe('Select Top 500 Rows')
+    expect(label('explorer.selectTopRows', 'linux')).toBe(`Select Top ${defaultSettings['objectExplorer.selectTopRows']} Rows`)
+  })
+  it('lists facts as terms and values, each with a tooltip, since a long value is cut', () => {
     expect(html(createElement(FactLine, { facts: [{ label: 'Folder', value: 'Warehouse' }, { label: 'Started', value: '22:41:07 +01:00', title: '2026-10-22 22:41:07 +01:00' }] })))
-      .toBe('<dl class="document-facts"><div><dt>Folder</dt><dd>Warehouse</dd></div><div title="2026-10-22 22:41:07 +01:00"><dt>Started</dt><dd>22:41:07 +01:00</dd></div></dl>')
+      .toBe('<dl class="document-facts"><div title="Folder Warehouse"><dt>Folder</dt><dd>Warehouse</dd></div><div title="2026-10-22 22:41:07 +01:00"><dt>Started</dt><dd>22:41:07 +01:00</dd></div></dl>')
   })
   it('draws sections in one column with their list, the current one marked and collapsed ones closed', () => {
     const frameSections: FrameSection[] = [
@@ -165,40 +182,43 @@ describe('document frame markup', () => {
     const markup = html(createElement(DocumentFrameView, { id: 'doc-2', title: 'AdventureWorks', sections: frameSections, frame, attributes: { 'data-designer': 'doc-2' } }))
     expect(markup.startsWith('<div class="document-frame" role="region" aria-labelledby="doc-2-title" data-document-frame="doc-2" data-designer="doc-2">')).toBe(true)
     expect(markup).toContain('<nav class="document-nav" aria-label="Sections">'
-      + '<button type="button" class="document-nav-item" data-section="general" tabindex="-1" aria-controls="doc-2-section-general"><span class="document-nav-title">General</span></button>'
-      + '<button type="button" class="document-nav-item" data-section="files" tabindex="0" aria-current="location" aria-label="Files (needs attention)" aria-controls="doc-2-section-files"><span class="document-nav-title">Files</span><span class="codicon codicon-error" aria-hidden="true"></span></button>'
-      + '<button type="button" class="document-nav-item" data-section="messages" tabindex="-1" aria-controls="doc-2-section-messages">')
+      // A title is cut to the list's width, so each item's tooltip carries it whole, and says when it needs attention.
+      + '<button type="button" class="document-nav-item" data-section="general" tabindex="-1" title="General" aria-controls="doc-2-section-general"><span class="document-nav-title">General</span></button>'
+      + '<button type="button" class="document-nav-item" data-section="files" tabindex="0" aria-current="location" aria-label="Files (needs attention)" title="Files (needs attention)" aria-controls="doc-2-section-files"><span class="document-nav-title">Files</span><span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span></button>'
+      + '<button type="button" class="document-nav-item" data-section="messages" tabindex="-1" title="Messages" aria-controls="doc-2-section-messages">')
     // The list is one tab stop, on the current section, or the first when the current one is not in the list.
-    expect(markup.match(/tabindex="0"/g)).toHaveLength(1)
+    expect(markup.match(/data-section="\w+" tabindex="0"/g)).toEqual(['data-section="files" tabindex="0"'])
     const lost = html(createElement(DocumentFrameView, { id: 'doc-2', title: 'x', sections: frameSections, frame: { ...frame, section: 'gone' } }))
     expect(lost.match(/data-section="\w+" tabindex="0"/g)).toEqual(['data-section="general" tabindex="0"'])
-    expect(markup).toContain('<div class="document-content document-sections">')
-    expect(markup).toContain('<section class="document-section" id="doc-2-section-general" aria-labelledby="doc-2-section-general-heading" data-section="general"><div class="document-section-head">'
+    // The column is a tab stop of its own, so the page keys scroll a section taller than the view.
+    expect(markup).toContain('<div class="document-content document-sections" role="region" aria-label="AdventureWorks sections" tabindex="0">')
+    // A section is a named group, not a landmark: ten pages would add ten regions to the landmark list.
+    expect(markup).toContain('<section class="document-section" id="doc-2-section-general" role="group" aria-labelledby="doc-2-section-general-heading" data-section="general"><div class="document-section-head">'
       + '<h2 class="document-section-title" id="doc-2-section-general-heading">General</h2></div><div class="document-section-body" id="doc-2-section-general-body"><p>facts</p></div></section>')
     expect(markup).toContain('<h2 class="document-section-title" id="doc-2-section-files-heading">Files</h2><span class="aside">2 files</span>')
     // A collapsible section's heading is a disclosure button; a collapsed one renders no body (a live one stops drawing).
     expect(markup).toContain('<h2 class="document-section-title" id="doc-2-section-messages-heading"><button type="button" aria-expanded="true" aria-controls="doc-2-section-messages-body">'
-      + '<span class="codicon codicon-chevron-down" aria-hidden="true"></span>Messages</button></h2></div><div class="document-section-body" id="doc-2-section-messages-body"><p>log</p></div>')
-    expect(markup).toContain('<button type="button" aria-expanded="false" aria-controls="doc-2-section-parameters-body"><span class="codicon codicon-chevron-right" aria-hidden="true"></span>Parameters</button></h2></div></section>')
+      + '<span class="codicon codicon-chevron-down" data-icon="chevron-down" aria-hidden="true"></span>Messages</button></h2></div><div class="document-section-body" id="doc-2-section-messages-body"><p>log</p></div>')
+    expect(markup).toContain('<button type="button" aria-expanded="false" aria-controls="doc-2-section-parameters-body"><span class="codicon codicon-chevron-right" data-icon="chevron-right" aria-hidden="true"></span>Parameters</button></h2></div></section>')
     expect(markup).not.toContain('<p>parameters</p>')
     expect(markup).not.toContain('document-script')
     // One section needs no list.
     expect(html(createElement(DocumentFrameView, { id: 'one', title: 'Folder', sections: frameSections.slice(0, 1), frame: initialFrameState(frameSections.slice(0, 1)) }))).not.toContain('document-nav')
     // Without sections the document draws its own body under the header (the Activity Monitor's tiles and grids).
     expect(html(createElement(DocumentFrameView, { id: 'am', title: 'Activity Monitor', facts: [{ label: 'Server', value: 'localhost' }], children: createElement('div', { className: 'tiles' }) })))
-      .toBe('<div class="document-frame" role="region" aria-labelledby="am-title" data-document-frame="am"><header class="document-header"><div class="document-heading"><h1 class="document-title" id="am-title">Activity Monitor</h1></div></header>'
-        + '<dl class="document-facts"><div><dt>Server</dt><dd>localhost</dd></div></dl><div class="document-content"><div class="tiles"></div></div></div>')
+      .toBe('<div class="document-frame" role="region" aria-labelledby="am-title" data-document-frame="am"><header class="document-header"><div class="document-heading"><h1 class="document-title" id="am-title" title="Activity Monitor">Activity Monitor</h1></div></header>'
+        + '<dl class="document-facts"><div title="Server localhost"><dt>Server</dt><dd>localhost</dd></div></dl><div class="document-content"><div class="tiles"></div></div></div>')
   })
   it('keeps the Script drawer\'s bar when it is closed, and shows each state of the script when it is open', () => {
     const drawer = (open: boolean, content: ScriptContent, notice?: string) => html(createElement(ScriptDrawer, { id: 'doc-3', open, size: 0.4, content, notice, onToggle: () => {}, onResize: () => {}, onDeliver: () => {} }))
     const closed = drawer(false, { state: 'ready', text: 'ALTER DATABASE [x] SET READ_ONLY\nGO\n' })
     expect(closed).toBe('<section class="document-script" aria-labelledby="doc-3-script-head"><div class="document-script-head">'
-      + '<button type="button" id="doc-3-script-head" class="document-script-toggle" aria-expanded="false" aria-controls="doc-3-script"><span class="codicon codicon-chevron-right" aria-hidden="true"></span>Script</button>'
+      + '<button type="button" id="doc-3-script-head" class="document-script-toggle" aria-expanded="false" aria-controls="doc-3-script"><span class="codicon codicon-chevron-right" data-icon="chevron-right" aria-hidden="true"></span>Script</button>'
       + '<span class="document-script-lines">2 lines</span><span class="document-script-notice" role="status"></span><div class="document-script-actions" role="group" aria-label="Script">'
       // Script As's destinations, in its order and with its icons.
-      + '<button type="button" class="icon-button" aria-label="Open in Query Window" title="Open in Query Window" data-destination="newQuery"><span class="codicon codicon-file-code" aria-hidden="true"></span></button>'
-      + '<button type="button" class="icon-button" aria-label="Save Script As…" title="Save Script As…" data-destination="file"><span class="codicon codicon-save-as" aria-hidden="true"></span></button>'
-      + '<button type="button" class="icon-button" aria-label="Copy" title="Copy" data-destination="clipboard"><span class="codicon codicon-clippy" aria-hidden="true"></span></button></div></div></section>')
+      + '<button type="button" class="icon-button" aria-label="Open in Query Window" title="Open in Query Window" data-destination="newQuery"><span class="codicon codicon-file-code" data-icon="file-code" aria-hidden="true"></span></button>'
+      + '<button type="button" class="icon-button" aria-label="Save Script As…" title="Save Script As…" data-destination="file"><span class="codicon codicon-save-as" data-icon="save-as" aria-hidden="true"></span></button>'
+      + '<button type="button" class="icon-button" aria-label="Copy" title="Copy" data-destination="clipboard"><span class="codicon codicon-clippy" data-icon="clippy" aria-hidden="true"></span></button></div></div></section>')
     const open = drawer(true, { state: 'ready', text: 'ALTER DATABASE [x] SET READ_ONLY\nGO\n' }, 'Script copied to the clipboard.')
     expect(open).toContain('<section class="document-script" aria-labelledby="doc-3-script-head" data-open="" style="flex-basis:40%">'
       + '<div class="document-script-splitter" role="separator" aria-orientation="horizontal" aria-label="Resize Script" tabindex="0" aria-valuenow="40" aria-valuemin="15" aria-valuemax="70"></div>')
@@ -231,6 +251,51 @@ describe('document frame markup', () => {
   })
 })
 
+describe('document frame verbs in a workbench', () => {
+  const cleanups: (() => void)[] = []
+  afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+  /** The real command, context key and keybinding services, and the frame as documents use it (its default export). */
+  function setup(options: { platform?: Platform; modal?: () => boolean; settings?: Partial<SettingsValues> } = {}) {
+    const fixture = workbenchFixture(options)
+    cleanups.push(fixture.dispose)
+    const workbench = { ...fixture, platform: options.platform ?? 'win32' } as unknown as Workbench
+    const render = (verbs: readonly Verb[]) => {
+      let drawn: readonly HeaderVerb[] = []
+      function Probe() { drawn = useHeaderVerbs(verbs); return null }
+      const markup = html(createElement(WorkbenchProvider, { workbench, children: [createElement(DocumentFrame, { key: 'frame', id: 'doc', title: 'Doc', verbs }), createElement(Probe, { key: 'probe' })] }))
+      return { markup, verbs: drawn }
+    }
+    return { ...fixture, render }
+  }
+  it('draws each verb as its command stands: enabled or not, toggled as its context key says, with its key, run as the toolbar runs it', async () => {
+    let modal = false
+    const { render, panes, host, commands } = setup({ modal: () => modal })
+    const verbs: Verb[] = [{ command: 'file.save', emphasis: 'primary' }, { command: 'view.toggleResultsPane' }]
+    const first = render(verbs)
+    // No document is open: Save cannot run, and the results pane is hidden.
+    expect(first.markup).toContain('<button type="button" class="document-verb primary" title="Save (Ctrl+S)" disabled="">')
+    expect(first.markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane (Ctrl+R)" aria-pressed="false">')
+    panes.set({ explorer: true, editor: true, output: true })
+    const shown = render(verbs)
+    expect(shown.markup).toContain('<button type="button" class="document-verb" title="Toggle Results Pane (Ctrl+R)" aria-pressed="true">')
+    const execute = vi.spyOn(commands, 'execute')
+    shown.verbs[1].run()
+    expect(execute).toHaveBeenLastCalledWith('view.toggleResultsPane', undefined, 'toolbar')
+    await expect(execute.mock.results[0].value).resolves.toBe(true)
+    expect(host.closePane).toHaveBeenCalledWith('output')
+    // A verb is a user's action, so an open dialog holds it back, as it does the toolbar's.
+    modal = true
+    shown.verbs[1].run()
+    await expect(execute.mock.results[1].value).resolves.toBe(false)
+    expect(host.closePane).toHaveBeenCalledOnce()
+  })
+  it('words its verbs for the workbench\'s platform and settings', () => {
+    const verbs: Verb[] = [{ command: 'file.revealInFolder' }, { command: 'explorer.selectTopRows' }]
+    expect(setup({ platform: 'darwin', settings: { 'objectExplorer.selectTopRows': 500 } }).render(verbs).verbs.map(verb => verb.label)).toEqual(['Reveal in Finder', 'Select Top 500 Rows'])
+    expect(setup().render(verbs).verbs.map(verb => verb.label)).toEqual(['Open Containing Folder', `Select Top ${defaultSettings['objectExplorer.selectTopRows']} Rows`])
+  })
+})
+
 describe('document frame styles and colors', () => {
   it('marks the current section by more than its fill, at once, hovered or not, and in the selection colors under forced colors', () => {
     const current = ['button', '.document-nav-item', '[aria-current="location"]', ':not(:disabled)']
@@ -255,12 +320,28 @@ describe('document frame styles and colors', () => {
     expect(valueOf('.document-script-text:focus-visible', 'outline')).toBe('1px solid var(--varia-focusBorder)')
     expect(valueOf('.document-script-splitter:hover, .document-script-splitter:focus-visible', 'background')).toBe('var(--varia-sash-hoverBorder)')
   })
+  it('draws secondary verbs borderless, as Calm Pro does, with the neutral border for outline and danger verbs', () => {
+    const ghost = computed(['button', '.document-verb', ':not(.primary)', ':not(:disabled)'])
+    expect([ghost.get('border-color'), ghost.get('color')]).toEqual(['1px solid transparent', 'var(--varia-button-secondaryForeground)'])
+    for (const emphasis of ['.outline', '.danger']) expect(computed(['button', '.document-verb', emphasis, ':not(.primary)', ':not(:disabled)']).get('border-color'), emphasis).toBe('var(--varia-button-border)')
+    // The title in the strong text of the focused tab; fact values in plain text beside their muted labels.
+    expect(computed(['h1', '.document-title']).get('color')).toBe('var(--varia-tab-activeForeground)')
+    expect([valueOf('.document-facts dd', 'color'), valueOf('.document-facts dt', 'color')]).toEqual(['var(--varia-foreground)', 'var(--varia-descriptionForeground)'])
+    expect(valueOf('.document-facts dd', 'font-weight')).toBeUndefined()
+  })
+  it('lets the splitter take a touch drag, and shows focus on the section column', () => {
+    // Without it a touch or pen drag starts a pan, which cancels the pointer after its first move.
+    expect(valueOf('.document-script-splitter', 'touch-action')).toBe('none')
+    expect(valueOf('.document-sections:focus-visible', 'outline')).toBe('1px solid var(--varia-focusBorder)')
+    // The column is each section's offsetParent, so scrolling it to a section's offsetTop brings that heading to its top.
+    expect(valueOf('.document-sections', 'position')).toBe('relative')
+  })
   it('keeps a danger verb in the error colour when hovered, and a pressed verb in the selection colours', () => {
     const danger = ['button', '.document-verb', '.danger', ':not(.primary)', ':not(:disabled)']
     for (const state of [[], [':hover']]) {
       const style = computed([...danger, ...state]), name = state.join('') || 'rest'
       // button:hover:not(:disabled) outranks a lone .danger rule: the words would turn neutral just as the pointer reaches Stop.
-      expect([style.get('color'), style.get('border-color')], name).toEqual(['var(--varia-errorForeground)', 'var(--varia-errorForeground)'])
+      expect([style.get('color'), style.get('border-color')], name).toEqual(['var(--varia-errorForeground)', 'var(--varia-button-border)'])
     }
     expect(computed([...danger, ':hover']).get('background-color')).toBe('var(--varia-button-secondaryHoverBackground)')
     const pressed = ['button', '.document-verb', '[aria-pressed="true"]', ':not(.primary)', ':not(:disabled)']
@@ -272,7 +353,7 @@ describe('document frame styles and colors', () => {
       expect([strong.get('forced-color-adjust'), strong.get('background-color'), strong.get('color'), strong.get('border-color')], name).toEqual(['none', 'Highlight', 'HighlightText', 'Highlight'])
     }
     // Off, a toggle verb is an ordinary one.
-    expect(computed(['button', '.document-verb', '[aria-pressed="false"]', ':not(.primary)', ':not(:disabled)']).get('border-color')).toBe('var(--varia-button-border)')
+    expect(computed(['button', '.document-verb', '[aria-pressed="false"]', ':not(.primary)', ':not(:disabled)']).get('border-color')).toBe('1px solid transparent')
   })
   it('sizes its bars, buttons and rows from the density tokens', () => {
     expect(densityUse.bar).toContain('.document-script-head')
@@ -288,6 +369,8 @@ describe('document frame styles and colors', () => {
     expect(has('errorForeground', ['editor.background', 'button.secondaryHoverBackground'], 4.5)).toBe(true)
     expect(has('focusBorder', ['editor.background', 'list.inactiveSelectionBackground'], 3)).toBe(true)
     expect(has('sash.hoverBorder', ['panel.background'], 3)).toBe(true)
+    expect(colorRegistry['tab.activeForeground'].description).toContain('the title in the header of a document')
+    expect(has('tab.activeForeground', ['editor.background'], 4.5)).toBe(true)
     expect(has('breadcrumb.separatorForeground', ['editor.background'], 4.5)).toBe(true)
   })
 })

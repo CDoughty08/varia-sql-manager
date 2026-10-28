@@ -86,19 +86,19 @@ describe('states kit components', () => {
   it('draw one empty state with at most one filled action', () => {
     const markup = html(createElement(EmptyState, { className: 'workspace-empty', icon: 'file-code', title: 'No open queries', detail: 'Open or create a query.',
       actions: [{ label: 'New query', run: () => {}, primary: true }, { label: 'Open SQL file', run: () => {}, primary: true }] }))
-    expect(markup).toBe('<div class="empty-state workspace-empty"><span class="empty-state-icon codicon codicon-file-code" aria-hidden="true"></span><p class="empty-state-title">No open queries</p>'
+    expect(markup).toBe('<div class="empty-state workspace-empty"><span class="codicon codicon-file-code empty-state-icon" data-icon="file-code" aria-hidden="true"></span><p class="empty-state-title">No open queries</p>'
       + '<p class="empty-state-detail">Open or create a query.</p><div class="empty-state-actions"><button type="button" class="primary">New query</button><button type="button">Open SQL file</button></div></div>')
     expect(html(createElement(EmptyState, { detail: 'Results were closed.' }))).toBe('<div class="empty-state"><p class="empty-state-detail">Results were closed.</p></div>')
   })
   it('show an inline error as a live sentence with its actions and Copy details', () => {
     const markup = html(createElement(InlineError, { message: 'Could not load Tables.', code: 'TIMEOUT', actions: [{ label: 'Retry', run: () => {} }] }))
-    expect(markup).toContain('<span class="codicon codicon-error" aria-hidden="true"></span>')
+    expect(markup).toContain('<span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span>')
     expect(markup).toContain('<p class="inline-error-message" role="alert">Could not load Tables.</p>')
     expect(markup).toContain('<button type="button">Retry</button><button type="button">Copy details</button><span class="inline-error-status" role="status"></span>')
     // The outer box is not a live region, so the copy outcome is announced once, by its own status.
     expect(markup.startsWith('<div class="inline-error">')).toBe(true)
     const quiet = html(createElement(InlineError, { message: 'Shown again.', role: 'status', copy: false }))
-    expect(quiet).toBe('<div class="inline-error"><span class="codicon codicon-error" aria-hidden="true"></span><div class="inline-error-body"><p class="inline-error-message" role="status">Shown again.</p></div></div>')
+    expect(quiet).toBe('<div class="inline-error"><span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span><div class="inline-error-body"><p class="inline-error-message" role="status">Shown again.</p></div></div>')
   })
   it('draw bounded placeholder rows that say what is loading', () => {
     expect(html(createElement(Skeleton, { label: 'Loading databases' }))).toBe('<div class="skeleton" role="status"><span class="visually-hidden">Loading databases…</span>'
@@ -108,7 +108,7 @@ describe('states kit components', () => {
   })
   it('draw status pills and tags with a word, a tone and the tone\'s glyph', () => {
     expect(html(createElement(StatusPill, { tone: 'running', label: 'RESTORING 42 %' })))
-      .toBe('<span class="status-pill" data-tone="running"><span class="codicon codicon-loading" aria-hidden="true"></span><span class="status-pill-label">RESTORING 42 %</span></span>')
+      .toBe('<span class="status-pill" data-tone="running"><span class="codicon codicon-loading" data-icon="loading" aria-hidden="true"></span><span class="status-pill-label">RESTORING 42 %</span></span>')
     // An environment tag has no glyph by default, and the small size fits tree rows and the status bar.
     expect(html(createElement(StatusPill, { tone: 'critical', label: 'PROD', variant: 'tag', size: 'small', title: 'Production environment' })))
       .toBe('<span class="status-pill tag small" data-tone="critical" title="Production environment"><span class="status-pill-label">PROD</span></span>')
@@ -120,19 +120,19 @@ describe('states kit components', () => {
   })
   it('draw filter chips as toggle buttons whose on state is more than color', () => {
     const off = html(createElement(Chip, { label: 'Blocked', count: 1234, icon: 'lock', pressed: false, onToggle: () => {} }))
-    expect(off).toBe('<button type="button" class="chip" aria-pressed="false"><span class="codicon codicon-lock" aria-hidden="true"></span><span>Blocked</span><span class="chip-count">1,234</span></button>')
+    expect(off).toBe('<button type="button" class="chip" aria-pressed="false"><span class="codicon codicon-lock" data-icon="lock" aria-hidden="true"></span><span>Blocked</span><span class="chip-count">1,234</span></button>')
     const on = html(createElement(Chip, { label: 'All', pressed: true, onToggle: () => {} }))
-    expect(on).toBe('<button type="button" class="chip" aria-pressed="true"><span class="codicon codicon-check" aria-hidden="true"></span><span>All</span></button>')
+    expect(on).toBe('<button type="button" class="chip" aria-pressed="true"><span class="codicon codicon-check" data-icon="check" aria-hidden="true"></span><span>All</span></button>')
     expect(html(createElement(ChipGroup, { label: 'Filter sessions', children: 'x' }))).toBe('<div class="chip-group" role="group" aria-label="Filter sessions">x</div>')
   })
   it('draw the live state and the data\'s age', () => {
     expect(html(createElement(LivePill, { state: 'live', intervalMs: 2000 }))).toBe('<span class="live-pill" data-state="live"><span class="live-dot" aria-hidden="true"></span><span>Live · every 2 s</span></span>')
-    expect(html(createElement(LivePill, { state: 'paused', intervalMs: 2000 }))).toBe('<span class="live-pill" data-state="paused"><span class="codicon codicon-debug-pause" aria-hidden="true"></span><span>Paused</span></span>')
-    expect(html(createElement(LivePill, { state: 'connecting', intervalMs: 2000 }))).toBe('<span class="live-pill" data-state="connecting"><span class="codicon codicon-circle-outline" aria-hidden="true"></span><span>Starting…</span></span>')
-    expect(html(createElement(LivePill, { state: 'ended', intervalMs: 2000, ended: 'disconnected' }))).toBe('<span class="live-pill" data-state="ended"><span class="codicon codicon-debug-disconnect" aria-hidden="true"></span><span>Disconnected</span></span>')
+    expect(html(createElement(LivePill, { state: 'paused', intervalMs: 2000 }))).toBe('<span class="live-pill" data-state="paused"><span class="codicon codicon-debug-pause" data-icon="debug-pause" aria-hidden="true"></span><span>Paused</span></span>')
+    expect(html(createElement(LivePill, { state: 'connecting', intervalMs: 2000 }))).toBe('<span class="live-pill" data-state="connecting"><span class="codicon codicon-circle-outline" data-icon="circle-outline" aria-hidden="true"></span><span>Starting…</span></span>')
+    expect(html(createElement(LivePill, { state: 'ended', intervalMs: 2000, ended: 'disconnected' }))).toBe('<span class="live-pill" data-state="ended"><span class="codicon codicon-debug-disconnect" data-icon="debug-disconnect" aria-hidden="true"></span><span>Disconnected</span></span>')
     expect(html(createElement(StaleBadge, { updatedAt: at(22, 44, 0), now: at(22, 44, 12) }))).toBe('<span class="stale-badge">Updated 12 s ago</span>')
     expect(html(createElement(StaleBadge, { updatedAt: at(22, 44, 0), stale: { since: at(22, 44, 3), retryAt: at(22, 44, 14) }, now: at(22, 44, 10) })))
-      .toBe('<span class="stale-badge" data-stale=""><span class="codicon codicon-warning" aria-hidden="true"></span><span>Stale since 22:44:03 · retrying in 4 s</span></span>')
+      .toBe('<span class="stale-badge" data-stale=""><span class="codicon codicon-warning" data-icon="warning" aria-hidden="true"></span><span>Stale since 22:44:03 · retrying in 4 s</span></span>')
   })
   it('draw a metric tile named for what it says, with its threshold as a glyph and words', () => {
     expect(tileName({ caption: 'Waiting Tasks', value: '12', context: 'avg 4', tone: 'warning' })).toBe('Waiting Tasks: 12, avg 4, above its warning threshold')
@@ -140,7 +140,7 @@ describe('states kit components', () => {
     expect(tileName({ caption: 'Batch Requests/sec', unit: '/s' })).toBe('Batch Requests/sec: no data yet')
     const markup = html(createElement(Tile, { caption: 'Database I/O', value: '3.2', unit: 'MB/s', tone: 'critical', children: createElement('canvas') }))
     expect(markup).toBe('<div class="tile" role="group" aria-label="Database I/O: 3.2 MB/s, above its critical threshold" data-tone="critical"><div class="tile-caption" aria-hidden="true">'
-      + '<span class="codicon codicon-error"></span><span class="tile-caption-text">Database I/O</span></div><p class="tile-value" aria-hidden="true">3.2<span class="tile-unit">MB/s</span></p>'
+      + '<span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span><span class="tile-caption-text">Database I/O</span></div><p class="tile-value" aria-hidden="true">3.2<span class="tile-unit">MB/s</span></p>'
       + '<div class="tile-chart"><canvas></canvas></div></div>')
     expect(html(createElement(Tile, { caption: 'CPU', unit: '%' }))).toContain('<p class="tile-value" aria-hidden="true">—</p>')
   })
