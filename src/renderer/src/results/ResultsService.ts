@@ -104,7 +104,7 @@ const valueKinds: Readonly<Record<string, { kind: TextDocument['kind']; base?: s
  */
 function valueBase(column: ResultColumn, kind: TextDocument['kind']): string {
   const name = column.name.replace(/[\\/:*?"<>|\x00-\x1f\x7f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/g, '_').trim().slice(0, 100)
-  return name || kindInfo[kind].badge
+  return name || kindInfo[kind].blankName
 }
 /** Save Results As's suggested name, '{tab}-Result{n}', cut to the length main accepts (never inside a surrogate pair). */
 export function suggestedName(baseName: string, index: number): string {

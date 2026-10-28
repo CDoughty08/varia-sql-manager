@@ -8,6 +8,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { gridPart, gridTones, liveGrid, liveGridFrame, liveGridNewRows, liveGridOverlay, liveGridSelector, liveGridStrip, statusBar } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-grid-profile-'))
@@ -23,22 +24,28 @@ page.on('pageerror', error => failures.push(error.message))
 
 const live = (method, ...args) => page.evaluate(([name, values]) => window.__variaLive[name](...values), [method, args])
 const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText())
-const grid = page.locator('.live-grid-test [role="grid"]')
+const gridName = 'Live grid'
+const grid = liveGrid(page, gridName)
+const frame = liveGridFrame(page, gridName)
+const parts = { grid: liveGridSelector(gridName), row: gridPart.row, cell: gridPart.cell, tones: gridTones }
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
-/** The rows shown, top to bottom: their row number, class, and cell texts. */
-const rows = () => page.evaluate(() => [...document.querySelectorAll('.live-grid-test .rg-row')].filter(row => row.style.display !== 'none' && row.hasAttribute('aria-rowindex'))
-  .map(row => ({ index: Number(row.getAttribute('aria-rowindex')) - 2, cls: row.className, top: parseFloat(row.style.top), cells: [...row.querySelectorAll('.rg-c')].filter(cell => cell.style.display !== 'none').sort((a, b) => parseFloat(a.style.left) - parseFloat(b.style.left)).map(cell => cell.textContent) }))
-  .sort((a, b) => a.index - b.index))
-/** The active cell: its row's index and item id (the first column), and what a screen reader hears. */
-const active = () => page.evaluate(() => {
-  const root = document.querySelector('.live-grid-test [role="grid"]'), cell = root && document.getElementById(root.getAttribute('aria-activedescendant') ?? '')
-  const row = cell?.closest('.rg-row')
-  const first = row && [...row.querySelectorAll('.rg-c')].find(item => item.getAttribute('aria-colindex') === '2')
-  return cell ? { index: Number(row.getAttribute('aria-rowindex')) - 2, id: first?.textContent ?? null, label: cell.getAttribute('aria-label'), cls: row.className } : undefined
-})
+/** The rows shown, top to bottom: their row number, tone (or 'none'), and cell texts. */
+const rows = () => page.evaluate(({ grid, row, cell, tones }) => {
+  const toneOf = element => Object.keys(tones).find(tone => element.matches(tones[tone])) ?? 'none'
+  return [...document.querySelectorAll(`${grid} ${row}`)].filter(element => element.style.display !== 'none' && element.hasAttribute('aria-rowindex'))
+    .map(element => ({ index: Number(element.getAttribute('aria-rowindex')) - 2, tone: toneOf(element), top: parseFloat(element.style.top), cells: [...element.querySelectorAll(cell)].filter(item => item.style.display !== 'none').sort((a, b) => parseFloat(a.style.left) - parseFloat(b.style.left)).map(item => item.textContent) }))
+    .sort((a, b) => a.index - b.index)
+}, parts)
+/** The active cell: its row's index, tone and item id (the first column), and what a screen reader hears. */
+const active = () => page.evaluate(({ grid, cell: cellPart, tones }) => {
+  const root = document.querySelector(grid), cell = root && document.getElementById(root.getAttribute('aria-activedescendant') ?? '')
+  const row = cell?.closest('[role="row"]')
+  const first = row && [...row.querySelectorAll(cellPart)].find(item => item.getAttribute('aria-colindex') === '2')
+  return cell ? { index: Number(row.getAttribute('aria-rowindex')) - 2, id: first?.textContent ?? null, label: cell.getAttribute('aria-label'), tone: Object.keys(tones).find(tone => row.matches(tones[tone])) ?? 'none' } : undefined
+}, parts)
 
 try {
-  await expect(page.locator('.status-bar')).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
+  await expect(statusBar(page)).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 
   step = 'tones'
@@ -47,12 +54,11 @@ try {
   expect(await live('mountGrid', items, 'debug.synthetic.grid', 0)).toBe(true)
   // Twelve rows of four read cells: the tone column is hidden.
   await expect.poll(async () => { const shown = await rows(); return shown.length === 12 && shown.every(row => row.cells.length === 4 && /^G\d$/.test(row.cells[1])) }).toBe(true)
-  await expect(page.locator('.live-grid-test .rg-ch').filter({ visible: true })).toHaveText(['itemId', 'group', 'name', 'amount'])
+  await expect(grid.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['itemId', 'group', 'name', 'amount'])
   // G0 rows are toned error, G1 warning, G2 running, the others not at all (every group is among twelve items).
-  const tones = { G0: 'tone-error', G1: 'tone-warning', G2: 'tone-running' }
-  const toneOf = row => row.cls.match(/tone-\w+/)?.[0] ?? 'none'
-  await expect.poll(async () => (await rows()).map(row => `${row.cells[1]}:${toneOf(row) === (tones[row.cells[1]] ?? 'none') ? 'ok' : toneOf(row)}`).filter(text => !text.endsWith(':ok'))).toEqual([])
-  expect(new Set((await rows()).map(toneOf))).toEqual(new Set(['tone-error', 'tone-warning', 'tone-running', 'none']))
+  const tones = { G0: 'error', G1: 'warning', G2: 'running' }
+  await expect.poll(async () => (await rows()).map(row => `${row.cells[1]}:${row.tone === (tones[row.cells[1]] ?? 'none') ? 'ok' : row.tone}`).filter(text => !text.endsWith(':ok'))).toEqual([])
+  expect(new Set((await rows()).map(row => row.tone))).toEqual(new Set(['error', 'warning', 'running', 'none']))
   await page.screenshot({ path: 'artifacts/live-grid-tones.png' })
   console.log('Tones passed: the tone column is hidden and each row has its tone.')
 
@@ -60,15 +66,15 @@ try {
   // Select the seventh row's name; as revisions swap in, the selection stays on the same item while its row moves up.
   const before = await rows()
   const chosen = before[6]
-  await page.locator('.live-grid-test .rg-row', { has: page.locator('.rg-c', { hasText: new RegExp(`^Item ${chosen.cells[0]}$`) }) }).locator('.rg-c').nth(2).click()
+  await grid.locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^Item ${chosen.cells[0]}$`) }) }).locator(gridPart.cell).nth(2).click()
   await expect.poll(async () => (await active())?.id).toBe(chosen.cells[0])
   await expect.poll(async () => (await active())?.index, { timeout: 20000 }).toBeLessThanOrEqual(chosen.index - 2)
   expect((await active()).id).toBe(chosen.cells[0])
   // The row's tone is part of what a screen reader hears.
   const group = chosen.cells[1]
-  if (tones[group]) expect((await active()).label).toContain(tones[group].slice(5))
+  if (tones[group]) expect((await active()).label).toContain(tones[group])
   // At the top it leaves the source: it stays one revision, muted ("ended"), then the selection moves to its neighbour.
-  await expect.poll(async () => { const now = await active(); return now?.id === chosen.cells[0] && /tone-muted/.test(now.cls) }, { timeout: 20000 }).toBe(true)
+  await expect.poll(async () => { const now = await active(); return now?.id === chosen.cells[0] && now.tone === 'muted' }, { timeout: 20000 }).toBe(true)
   expect((await active()).label).toContain('ended')
   await page.screenshot({ path: 'artifacts/live-grid-departed.png' })
   await expect.poll(async () => (await rows()).some(row => row.cells[0] === chosen.cells[0]), { timeout: 10000 }).toBe(false)
@@ -125,13 +131,13 @@ try {
   await expect.poll(async () => (await live('grid'))?.rows ?? 0).toBeGreaterThan(100)
   // At the tail, the last row stays in view as rows arrive.
   await expect.poll(async () => { const state = await live('grid'), shown = await rows(); return state.following && shown.at(-1)?.index === state.rows - 1 }).toBe(true)
-  await expect.poll(async () => (await rows()).some(row => /tone-error/.test(row.cls) && row.cells[1] === '3')).toBe(true)
+  await expect.poll(async () => (await rows()).some(row => row.tone === 'error' && row.cells[1] === '3')).toBe(true)
   // Scrolled up, the view stays and counts what arrives.
   await grid.click({ position: { x: 120, y: 60 } })
   await grid.press(`${mod}+Home`)
   await expect.poll(async () => (await live('grid')).following).toBe(false)
   await expect.poll(async () => (await live('grid')).newRows).toBeGreaterThan(25)
-  const button = page.locator('.live-grid-new-rows')
+  const button = liveGridNewRows(frame)
   await expect(button).toHaveText(/^[\d,]+ new rows · Jump to latest$/)
   expect((await rows())[0].index).toBe(0)
   await page.screenshot({ path: 'artifacts/live-grid-new-rows.png' })
@@ -166,10 +172,10 @@ try {
   expect(await live('mountGrid', stopped, 'debug.synthetic.grid', 0)).toBe(true)
   await expect.poll(async () => (await rows()).length).toBe(12)
   await live('dispose', stopped)
-  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveText('This live view stopped; its rows are no longer available.')
+  await expect(liveGridOverlay(frame)).toHaveText('This live view stopped; its rows are no longer available.')
   expect((await live('grid')).released).toBe('stopped')
   await grid.press(`${mod}+C`)
-  await expect(page.locator('.live-grid-test .rg-strip')).toHaveText('Could not copy the rows: This live view stopped; its rows are no longer available.')
+  await expect(liveGridStrip(frame)).toHaveText('Could not copy the rows: This live view stopped; its rows are no longer available.')
   await page.screenshot({ path: 'artifacts/live-grid-stopped.png' })
   await live('unmountGrid')
   console.log('Stopped passed: a view that ended says its rows are gone, and so does Copy.')
@@ -179,9 +185,9 @@ try {
   const lost = await live('subscribeSynthetic', { probes: ['debug.synthetic.grid'], tickMs: 1200, rows: 12 })
   expect(await live('mountGrid', lost, 'debug.synthetic.grid', 0)).toBe(true)
   await expect.poll(async () => (await rows()).length).toBe(12)
-  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveCount(0)
+  await expect(liveGridOverlay(frame)).toHaveCount(0)
   await app.evaluate(() => globalThis.__variaTest.kill())
-  await expect(page.locator('.live-grid-test .rg-overlay')).toHaveText('This live view lost its rows because the SQL backend restarted.')
+  await expect(liveGridOverlay(frame)).toHaveText('This live view lost its rows because the SQL backend restarted.')
   expect((await live('grid')).lost).toBe(true)
   await page.screenshot({ path: 'artifacts/live-grid-lost.png' })
   await live('unmountGrid')

@@ -1,8 +1,12 @@
+import { typeScale } from '../../../shared/theme/metrics'
+
 // The results grid's sizes and limits. Pixel values are CSS pixels; row math stays O(1) because every row is the same
 // height. A tile (tileRows × tileColumns cells of at most maxCellChars characters) always fits the worker's window
 // limits, so no window is ever cut short by its text budget.
 export const gridLimits = {
   rowHeight: 20, headerHeight: 22, cellPadding: 6,
+  /** The cell and header text size (.rg and .rg-ch use the same step); columns are measured with it. */
+  fontSize: typeScale.sm.size,
   /** Two paddings and the 1 px gridline: what a column needs beyond its text. */
   cellChrome: 13,
   rowHeaderMinWidth: 40, rowHeaderMinRows: 9999,

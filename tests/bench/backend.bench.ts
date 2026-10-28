@@ -134,6 +134,36 @@ it('streams B1 rows (two 4 KB values each) into the results worker', async () =>
   record({ id: 'node.b1.mbPerSecond', value: mbPerSecond(b1.distinctBytes, b1.elapsedMs), unit: 'MB/s', detail: `${(b1.distinctBytes / MiB).toFixed(0)} MiB of pages in ${Math.round(b1.elapsedMs)} ms` })
 })
 
+it('round-trips a live tick: the page\'s acknowledgement → worker → main → backend → the next tick at the page', async () => {
+  let workerPort: MessagePort | undefined
+  host.open({ postMessage: (_channel, _message, transfer) => { workerPort = transfer[0] as unknown as MessagePort } })
+  // A 10 ms source and acknowledgements held 20 ms: each next sample is overdue when its credit arrives, so the time from
+  // the acknowledgement to the next event is the whole loop, not the source's schedule.
+  const params = { subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 10 } }
+  const worker = new Worker(new URL('./live-thread.mjs', import.meta.url), { execArgv: ['--disable-warning=ExperimentalWarning'], transferList: [workerPort!], workerData: { port: workerPort, params } })
+  const samples: number[] = []
+  let ackedAt = 0, events = 0
+  try {
+    await new Promise<void>((done, fail) => {
+      worker.on('error', fail)
+      worker.on('message', (message: { type: string; bytes?: number; message?: string }) => {
+        if (message.type === 'error' || message.type === 'liveEnd') return fail(new Error(`The live stream ended: ${JSON.stringify(message)}`))
+        if (message.type !== 'live') return
+        // The first events (opened, the baseline) warm the path up.
+        if (++events > 5 && ackedAt > 0) samples.push(performance.now() - ackedAt)
+        if (samples.length >= 300) return done()
+        setTimeout(() => { ackedAt = performance.now(); worker.postMessage({ type: 'ack', bytes: message.bytes }) }, 20)
+      })
+    })
+  } finally {
+    worker.postMessage({ type: 'cancel' })
+    await new Promise(done => setTimeout(done, 50))
+    await worker.terminate()
+  }
+  expect(host.liveCount).toBe(0)
+  record({ id: 'node.liveData.tickRoundTripP50Ms', value: median(samples), unit: 'ms', detail: `${samples.length} ticks; p99 ${percentile(samples, 99).toFixed(2)} ms` })
+})
+
 it('swaps 5,000-row × 23-column live snapshots through main', async () => {
   // The whole live path on main's side (ResultsPortHost with the test sources, the supervisor, the backend's table writer)
   // with a worker stand-in that acknowledges each frame at once, as the page does once it has applied it: every revision is
@@ -179,32 +209,3 @@ it('swaps 5,000-row × 23-column live snapshots through main', async () => {
     { id: 'node.liveData.snapshotGen2PerMinute', value: collections * 60 / Math.max(1, swaps), unit: 'collections/min', detail: `${collections} gen2 collections in ${swaps} revisions (${Math.round(collections * 60_000 / elapsedMs)} a minute at this rate)` }
   )
 }, 60_000)
-it('round-trips a live tick: the page\'s acknowledgement → worker → main → backend → the next tick at the page', async () => {
-  let workerPort: MessagePort | undefined
-  host.open({ postMessage: (_channel, _message, transfer) => { workerPort = transfer[0] as unknown as MessagePort } })
-  // A 10 ms source and acknowledgements held 20 ms: each next sample is overdue when its credit arrives, so the time from
-  // the acknowledgement to the next event is the whole loop, not the source's schedule.
-  const params = { subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 10 } }
-  const worker = new Worker(new URL('./live-thread.mjs', import.meta.url), { execArgv: ['--disable-warning=ExperimentalWarning'], transferList: [workerPort!], workerData: { port: workerPort, params } })
-  const samples: number[] = []
-  let ackedAt = 0, events = 0
-  try {
-    await new Promise<void>((done, fail) => {
-      worker.on('error', fail)
-      worker.on('message', (message: { type: string; bytes?: number; message?: string }) => {
-        if (message.type === 'error' || message.type === 'liveEnd') return fail(new Error(`The live stream ended: ${JSON.stringify(message)}`))
-        if (message.type !== 'live') return
-        // The first events (opened, the baseline) warm the path up.
-        if (++events > 5 && ackedAt > 0) samples.push(performance.now() - ackedAt)
-        if (samples.length >= 300) return done()
-        setTimeout(() => { ackedAt = performance.now(); worker.postMessage({ type: 'ack', bytes: message.bytes }) }, 20)
-      })
-    })
-  } finally {
-    worker.postMessage({ type: 'cancel' })
-    await new Promise(done => setTimeout(done, 50))
-    await worker.terminate()
-  }
-  expect(host.liveCount).toBe(0)
-  record({ id: 'node.liveData.tickRoundTripP50Ms', value: median(samples), unit: 'ms', detail: `${samples.length} ticks; p99 ${percentile(samples, 99).toFixed(2)} ms` })
-})

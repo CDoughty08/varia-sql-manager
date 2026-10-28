@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -45,9 +46,9 @@ const random = (seed => () => {
 })(20261010)
 
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
-const status = () => page.locator('.output-status')
+const status = () => outputStatus(page)
 const grid = (index = 0) => page.locator(`[data-result-grid][data-result-index="${index}"]`)
-const cell = (row, column) => grid().locator(`.rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`)
+const cell = (row, column) => gridCell(grid(), row, column)
 const stats = () => page.evaluate(() => window.__variaGrid.stats())
 const resetStats = () => page.evaluate(() => window.__variaGrid.reset())
 /** Starts a named segment: the watchdog names it, and long tasks are counted against it. */
@@ -78,29 +79,29 @@ async function launch(env) {
   })
   // Closing a typed query asks first; answer Don't Save.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await page.locator('.status-bar').getByText(/· Ready/).waitFor({ timeout: 60000 })
-  await page.evaluate(() => {
+  await statusBar(page).getByText(/· Ready/).waitFor({ timeout: 60000 })
+  await page.evaluate(gridPart => {
     /** What grid 0 shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {
       const root = document.querySelector('[data-result-grid][data-result-index="0"]')
       if (!root) return { signature: '', loading: 0, rows: 0 }
-      const body = root.querySelector('.rg-scroll').getBoundingClientRect(), head = root.querySelector('.rg-head').getBoundingClientRect()
-      const corner = root.querySelector('.rg-corner').getBoundingClientRect()
+      const body = root.querySelector(gridPart.scroller).getBoundingClientRect(), head = root.querySelector(gridPart.head).getBoundingClientRect()
+      const corner = root.querySelector(gridPart.corner).getBoundingClientRect()
       const inside = box => box.width > 0 && box.right > corner.right + 1 && box.left < body.right - 1 && box.bottom > head.bottom + 1 && box.top < body.bottom - 1
       let firstRow = Infinity, rows = 0, loading = 0, firstColumn = '', left = Infinity
-      for (const row of root.querySelectorAll('.rg-row')) {
+      for (const row of root.querySelectorAll(gridPart.row)) {
         if (row.style.display === 'none' || !inside(row.getBoundingClientRect())) continue
         rows++
-        firstRow = Math.min(firstRow, Number(row.querySelector('.rg-rh').textContent))
-        for (const item of row.querySelectorAll('.rg-c.is-load')) if (item.style.display !== 'none' && inside(item.getBoundingClientRect())) loading++
+        firstRow = Math.min(firstRow, Number(row.querySelector(gridPart.rowHeader).textContent))
+        for (const item of row.querySelectorAll(gridPart.loadingCell)) if (item.style.display !== 'none' && inside(item.getBoundingClientRect())) loading++
       }
-      for (const header of root.querySelectorAll('.rg-ch')) {
+      for (const header of root.querySelectorAll(gridPart.columnHeader)) {
         const box = header.getBoundingClientRect()
         if (header.style.display !== 'none' && box.width > 0 && box.right > corner.right + 1 && box.left < left) { left = box.left; firstColumn = header.textContent }
       }
       return { signature: `${firstRow}:${firstColumn}`, loading, rows }
     }
-  })
+  }, gridPart)
 }
 
 async function close() {
@@ -111,8 +112,8 @@ async function close() {
 }
 
 /** Moves grid 0's scroll bars to fractions of their range and resolves, in ms, once the rows there are painted. */
-const jump = (top, left) => page.evaluate(async ({ top, left }) => {
-  const scroller = document.querySelector('[data-result-grid][data-result-index="0"] .rg-scroll')
+const jump = (top, left) => page.evaluate(async ({ top, left, part }) => {
+  const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + part)
   const before = window.__benchView().signature, started = performance.now()
   scroller.scrollTop = top * (scroller.scrollHeight - scroller.clientHeight)
   if (left !== null) scroller.scrollLeft = left * (scroller.scrollWidth - scroller.clientWidth)
@@ -122,7 +123,7 @@ const jump = (top, left) => page.evaluate(async ({ top, left }) => {
     if (now.signature !== before && now.rows > 0 && now.loading === 0) return performance.now() - started
     if (performance.now() - started > 15000) throw new Error(`Grid 0 did not paint after a jump to ${top}, ${left}: ${JSON.stringify(now)}.`)
   }
-}, { top, left: left ?? null })
+}, { top, left: left ?? null, part: gridPart.scroller })
 /** Fractions at least `gap` from the previous one, so every jump moves the rows in view. */
 function fractions(count, gap) {
   const list = []
@@ -139,7 +140,7 @@ try {
   await cdp.send('Performance.enable')
   const taskSeconds = async () => (await cdp.send('Performance.getMetrics')).metrics.find(metric => metric.name === 'TaskDuration').value
   const heapBytes = async () => { await cdp.send('HeapProfiler.collectGarbage'); return (await cdp.send('Runtime.getHeapUsage')).usedSize }
-  await page.getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
   await page.getByRole('dialog').getByRole('button', { name: 'Connect', exact: true }).click()
@@ -162,18 +163,18 @@ try {
   await segment('first paint')
   const paints = []
   for (let attempt = 0; attempt < 5; attempt++) {
-    await page.evaluate(() => {
+    await page.evaluate(({ cell, loading }) => {
       window.__benchOpened.length = 0
       for (const element of document.querySelectorAll('[data-result-grid]')) element.dataset.stale = ''
       window.__benchPainted = new Promise(done => {
         const check = () => {
-          const first = document.querySelector('[data-result-grid]:not([data-stale]) .rg-row[aria-rowindex="2"] .rg-c[aria-colindex="2"]')
-          if (window.__benchOpened.length && first && !first.classList.contains('is-load') && first.textContent === '0') done(performance.now() - window.__benchOpened[0])
+          const first = document.querySelector('[data-result-grid]:not([data-stale]) ' + cell)
+          if (window.__benchOpened.length && first && !first.matches(loading) && first.textContent === '0') done(performance.now() - window.__benchOpened[0])
           else requestAnimationFrame(check)
         }
         requestAnimationFrame(check)
       })
-    })
+    }, { cell: gridCellSelector(0, 0), loading: gridPart.loadingCell })
     await run('-- varia-fake: sets=W1*100000')
     paints.push(await page.evaluate(() => window.__benchPainted))
   }
@@ -203,7 +204,7 @@ try {
   record('grid.heapGrowthMb', (heapAfter - heapBefore) / 1e6, 'MB', `JS heap after a collection: ${(heapBefore / 1e6).toFixed(1)} MB before, ${(heapAfter / 1e6).toFixed(1)} MB after`)
 
   await segment('wheel')
-  const box = await grid().locator('.rg-scroll').boundingBox()
+  const box = await grid().locator(gridPart.scroller).boundingBox()
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
   await resetStats()
   await page.evaluate(() => {
@@ -271,9 +272,9 @@ try {
   async function wheelSegment(name, cap) {
     await segment(name)
     await page.evaluate(value => window.__variaGrid.setScrollCap(value), cap)
-    const result = await page.evaluate(async label => {
+    const result = await page.evaluate(async ({ label, scrollerPart }) => {
       const frame = () => new Promise(done => requestAnimationFrame(done))
-      const scroller = document.querySelector('[data-result-grid][data-result-index="0"] .rg-scroll')
+      const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + scrollerPart)
       scroller.scrollTop = 0
       scroller.scrollLeft = 0
       for (let index = 0; index < 5; index++) await frame()
@@ -291,7 +292,7 @@ try {
       }
       const start = window.__benchSegments.findLast(item => item.name === label).at
       return { intervals, rows: Number(window.__benchView().signature.split(':')[0]), long: window.__benchLongTasks.filter(task => task.at >= start && task.ms > 50).map(task => task.ms) }
-    }, name)
+    }, { label: name, scrollerPart: gridPart.scroller })
     await page.evaluate(() => window.__variaGrid.setScrollCap())
     if (!(result.rows > 1000)) throw new Error(`${name}: the grid scrolled to row ${result.rows} only.`)
     wheelLongTasks.push(...result.long)
@@ -310,8 +311,8 @@ try {
   await jump(0, 0)
   await segment('300 columns: across')
   await resetStats()
-  const steps = await page.evaluate(async () => {
-    const scroller = document.querySelector('[data-result-grid][data-result-index="0"] .rg-scroll')
+  const steps = await page.evaluate(async scrollerPart => {
+    const scroller = document.querySelector('[data-result-grid][data-result-index="0"] ' + scrollerPart)
     let count = 0
     while (scroller.scrollLeft < scroller.scrollWidth - scroller.clientWidth - 1) {
       scroller.scrollLeft += 120
@@ -320,7 +321,7 @@ try {
     }
     await new Promise(done => requestAnimationFrame(done))
     return count
-  })
+  }, gridPart.scroller)
   const across = await stats()
   record('grid.x1.horizontalFrameP95Ms', percentile(across.frames, 95), 'ms', `${across.frames.length} frames over ${steps} steps of 120 px, max ${Math.max(...across.frames).toFixed(1)} ms`)
   record('grid.x1.wheelIntervalP95Ms', ...await wheelSegment('300 columns: wheel', undefined))
@@ -344,7 +345,7 @@ try {
   await run('-- varia-fake: sets=M1*1000')
   const lastGrid = page.getByRole('grid', { name: 'Result 1000 of 1000, 1 row, 1 column', exact: true })
   for (let index = 0; index < 400 && !(await lastGrid.count()); index++) {
-    await page.locator('.rs-stack').evaluate(stack => { stack.scrollTop += stack.clientHeight * 4 })
+    await page.locator(part.resultStack).evaluate(stack => { stack.scrollTop += stack.clientHeight * 4 })
     await page.waitForTimeout(25)
   }
   await expect(lastGrid).toBeVisible()
@@ -352,13 +353,13 @@ try {
   await segment('a 2 MB value')
   await run('-- varia-fake: sets=L1*3')
   await cell(2, 1).click()
-  await expect(page.locator('.query-tabs').getByRole('tab').filter({ hasText: 'doc1.xml' })).toHaveAttribute('aria-selected', 'true', { timeout: 30000 })
+  await expect(documentTabs(page).getByRole('tab').filter({ hasText: 'doc1.xml' })).toHaveAttribute('aria-selected', 'true', { timeout: 30000 })
   // The value fills in a chunk a frame, formatted as one line per item plus its root's two (as results-smoke checks).
   const items = shapes.L1.row(2)[1].split('<item ').length - 1
   const lastLine = async () => Math.max(...(await page.locator('.margin-view-overlays .line-numbers').allTextContents()).map(Number))
   await expect.poll(async () => { await textbox().focus(); await page.keyboard.press('Control+End'); return lastLine() }, { timeout: 30000 }).toBe(2 + 4 * items)
   await page.keyboard.press('Control+W')
-  await expect(page.locator('.query-tabs').getByRole('tab')).toHaveCount(1)
+  await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
 
   // Each long task, by the segment it started in. results-smoke holds every segment to 50 ms (with one retry); here the
   // count is reported and only the longest has a floor, which a freeze would break.
@@ -396,7 +397,7 @@ try {
     await cell(0, 0).click()
     const saveStarted = performance.now()
     await page.keyboard.press('Control+S')
-    await expect(page.locator('.job-notice')).toHaveText('Saved 1,000,000 rows to grid-bench.csv.', { timeout: 120000 })
+    await expect(jobNotice(page)).toHaveText('Saved 1,000,000 rows to grid-bench.csv.', { timeout: 120000 })
     const saveMs = performance.now() - saveStarted
     const saved = await readFile(file)
     let lineCount = 0

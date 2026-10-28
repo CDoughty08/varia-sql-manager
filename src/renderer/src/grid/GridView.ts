@@ -1171,7 +1171,7 @@ let measuredCharWidth: number | undefined
 function fontMeasure(fresh = false): { charWidth: number; header: (text: string) => number } {
   const context = measureContext === undefined ? measureContext = document.createElement('canvas').getContext('2d') : measureContext
   if (!context) return { charWidth: 7.2, header: text => text.length * 7 }
-  if (fresh || measuredCharWidth === undefined) measuredCharWidth = measureCharWidth(text => { context.font = `12px ${monoFontFamily}`; return context.measureText(text).width })
-  const header = (text: string) => { context.font = `12px ${uiFontFamily}`; return context.measureText(text).width }
+  if (fresh || measuredCharWidth === undefined) measuredCharWidth = measureCharWidth(text => { context.font = `${g.fontSize}px ${monoFontFamily}`; return context.measureText(text).width })
+  const header = (text: string) => { context.font = `${g.fontSize}px ${uiFontFamily}`; return context.measureText(text).width }
   return { charWidth: measuredCharWidth, header }
 }

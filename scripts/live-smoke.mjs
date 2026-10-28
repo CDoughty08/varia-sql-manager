@@ -7,6 +7,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { activeDocumentName, backendBanner, documentTab, documentTabs, queryStatus, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-profile-'))
@@ -28,7 +29,7 @@ const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').
 const liveCalls = async method => (await calls()).filter(call => call.method === method)
 const backendState = () => app.evaluate(() => globalThis.__variaTest.state())
 const sleep = ms => new Promise(done => setTimeout(done, ms))
-const queryTabs = () => page.locator('.query-tabs').getByRole('tab')
+const queryTabs = () => documentTabs(page).getByRole('tab')
 const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
 /** The view's ticks stay where they are for `ms`: nothing is sampled. */
 async function stays(id, ms = 600) {
@@ -38,7 +39,7 @@ async function stays(id, ms = 600) {
 }
 async function connect(password = 'live-smoke-password') {
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
-  if (!await dialog.isVisible()) await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill('live-server')
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -50,9 +51,9 @@ async function connect(password = 'live-smoke-password') {
 }
 
 try {
-  await expect(page.locator('.status-bar')).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
   await connect()
-  await expect(page.locator('.query-context')).toContainText('live-server')
+  await expect(queryStatus(page)).toContainText('live-server')
   // Background throttling is off in smoke runs, so the hidden window counts as visible: only the hook can hide it.
   expect(await page.evaluate(() => document.visibilityState)).toBe('visible')
 
@@ -94,12 +95,12 @@ try {
   console.log('Hidden window passed: paused within 3 s, no frames while hidden, resumed with a gap when shown.')
 
   step = 'tab switch'
-  const owner = await page.evaluate(() => document.querySelector('.query-tabs [role="tab"][aria-selected="true"]')?.textContent)
+  const owner = await activeDocumentName(page)
   await page.keyboard.press(mod + '+N')
   await expect(queryTabs()).toHaveCount(2)
   await expect.poll(async () => (await snapshot(id)).status, { timeout: 5000 }).toBe('paused')
   await stays(id)
-  await queryTabs().filter({ hasText: owner }).click()
+  await documentTab(page, owner).click()
   await expect.poll(async () => (await snapshot(id)).status).toBe('live')
   console.log('Tab switch passed: the view paused while its tab was not showing and resumed when it was.')
 
@@ -126,7 +127,7 @@ try {
   await sleep(500)
   expect((await snapshot(id)).status).toBe('lost')
   const history = (await live('ring', id, 'debug.synthetic.metrics')).length
-  await page.locator('.backend-banner').getByRole('button', { name: 'Reconnect…', exact: true }).click()
+  await backendBanner(page).getByRole('button', { name: 'Reconnect…', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue('live-server')
   await dialog.getByLabel('Password', { exact: true }).fill('live-smoke-password')

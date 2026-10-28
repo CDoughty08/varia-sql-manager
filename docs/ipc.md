@@ -1013,8 +1013,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
   is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
   continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
-  `hidden: 'statusOnly'` (none does yet; the backend only carries the field in its JSON):
-  a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
+  `hidden: 'statusOnly'` (none does yet; the backend's JSON carries the field, but only the renderer acts on it):
+  a view that asks for it with `whileHidden` keeps its probes without tables at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never
   goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause. A view that ends, is lost,
   closes or shows gives its slot to the oldest hidden view that paused only because none was free.
 - **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
@@ -1036,7 +1036,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
   server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
   view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
-  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  readable until the view closes, which releases every result it kept (an append table's older segments too, which the
+  view does not show yet); if the source finished while the view's cancel was on its way,
   `ResultClient` closes what it kept at once.
 - **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
@@ -1105,6 +1106,7 @@ follow tail.
   or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
   Save's command and the context menu are the owning view's (later PRs).
 
+Later: `ChartView` (L4) and `LiveGrid` (L5) on these views.
 
 ## Results port and results worker
 
@@ -1307,6 +1309,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
+| Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |

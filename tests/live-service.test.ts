@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiResult, ResultDescriptor } from '../src/shared/contracts'
+import { limits } from '../src/shared/ipc/wire/protocol'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceSpec } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
@@ -788,6 +789,28 @@ describe('LiveService', () => {
     await settle()
     handle.dispose()
     expect(client.released).toEqual([[{ generation: 1, resultId: right.resultId }]])
+  })
+
+  it('samples a status-only view no more often than the catalogue hidden interval', () => {
+    expect(liveServiceLimits.statusOnlyIntervalMs).toBe(limits.live.hiddenIntervalMs)
+  })
+
+  it('releases the older append segments a finished source kept, not only the newest, and nothing retired', async () => {
+    makeService()
+    const handle = service.open(spec(['debug.synthetic.table']), owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    // Three segments: the second rolls from the first, and the third retires the first (the table keeps two segments' worth).
+    const first = descriptor(), second = descriptor(), third = descriptor()
+    const append = (entry: object, seq: number) => deliver(fake, { type: 'live.tick', seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.table', costMs: 1, effectiveIntervalMs: 1000, append: [entry] }] } as LiveTick)
+    append({ table: 0, descriptor: first, segment: 1 }, 1)
+    append({ table: 0, descriptor: second, segment: 2, rolledFrom: 1 }, 2)
+    append({ table: 0, descriptor: third, segment: 3, rolledFrom: 2, retired: [first.resultId] }, 3)
+    expect(handle.table('debug.synthetic.table', 0)?.descriptor).toEqual(third)
+    fake.end({ ok: true, value: { ended: 'sourceEnded', kept: [third.resultId, second.resultId, first.resultId], ticks: 3, elapsedMs: 3000 } })
+    await settle()
+    handle.dispose()
+    expect(client.released).toEqual([[{ generation: 1, resultId: third.resultId }, { generation: 1, resultId: second.resultId }]])
   })
 
   it('frees a status-only slot when its view ends, is lost or closes, and hands it to a hidden view waiting for one', async () => {
