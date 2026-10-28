@@ -2,9 +2,9 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
-import { activeServerRows, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount, messages, outputView, part, quickInput, serverRows, primaryAction, staleBadge, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
+import { activeServerRows, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount, messages, outputView, part, quickInput, serverRows, primaryAction, staleBadge, statusChips, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -948,7 +948,18 @@ try {
       await press('F5')
       await expect(await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Note', wait)).toHaveAttribute('aria-label', 'Note (nvarchar(20), null)')
       expect(await (await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Id', wait)).getAttribute('id')).toBe(idRowId)
-      console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, and F5 on the server shows a column added by a query below what stays expanded.')
+      // Live status: a state another session sets shows as a chip on the database's row within a few samples, and goes
+      // when it is undone, with no refresh (the row keeps its id).
+      const databaseRow = await revealExplorerRow(page, server, 'Databases', name)
+      const databaseRowId = await databaseRow.getAttribute('id')
+      await run(`ALTER DATABASE [${name}] SET READ_ONLY WITH ROLLBACK IMMEDIATE;`, 'read-only')
+      await expect(statusChips(databaseRow)).toHaveText(['READ-ONLY'], wait)
+      await expect(databaseRow).toHaveAttribute('aria-label', `${name} (Read-only)`)
+      await run(`ALTER DATABASE [${name}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;`, 'read-write')
+      await expect(statusChips(databaseRow)).toHaveCount(0, wait)
+      await expect(databaseRow).toHaveAttribute('aria-label', name)
+      expect(await (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id')).toBe(databaseRowId)
+      console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, F5 on the server shows a column added by a query below what stays expanded, and a database a query sets read-only shows its live chip, without a refresh, until it is set back.')
     } finally {
       // Object Explorer's pool holds no database open, so nothing it did blocks the drop.
       if (created) await run(`USE master;\nIF DB_ID(N'${name}') IS NOT NULL\nBEGIN\n  ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n  DROP DATABASE [${name}];\nEND`, 'dropped')

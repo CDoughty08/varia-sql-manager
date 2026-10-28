@@ -89,6 +89,7 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `liveData.pauseWhenHidden` | Pause live views that are hidden | Boolean | True |  | All | At once | Stops a live view's queries on the server while its tab is not the one showing, or the window is minimized or hidden, and starts them again as soon as it shows. Charts show the gap. While it is False, hidden views keep querying at their usual intervals. Not in SSMS. |
 | `liveData.pauseAfterSeconds` | Pause after hidden for | Integer 1–60 seconds | 2 seconds |  | All | At once | How long a live view stays hidden before its queries stop, so switching tabs for a moment loses no samples. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
 | `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
 | `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
 
 ### Text Editor › General
@@ -228,4 +229,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (70 today).

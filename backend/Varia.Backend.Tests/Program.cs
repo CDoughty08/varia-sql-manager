@@ -22,12 +22,12 @@ void Check(bool condition, string name)
     if (!condition) throw new Exception("FAIL: " + name);
     passed++;
 }
-// A focused SQL Server lane: its permission checks are required, never an offline-only or skipped success.
-if (args is ["--activity-actions-live"])
+// Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
-    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SERVER.");
-    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SCRATCH=1.");
+    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
+    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception(lane + " requires VARIA_TEST_SQL_SCRATCH=1.");
     var focusedUser = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_USER");
     var focusedPassword = string.IsNullOrWhiteSpace(focusedUser) ? null
         : Environment.GetEnvironmentVariable("VARIA_TEST_SQL_PASSWORD") ?? throw new Exception("VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.");
@@ -38,8 +38,16 @@ if (args is ["--activity-actions-live"])
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
-        Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+        if (lane == "--explorer-status-live")
+        {
+            await ExplorerStatusLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused Object Explorer status checks.");
+        }
+        else
+        {
+            await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
+            Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+        }
     }
     finally { await focusedService.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(focusedInfo.Id), json), json); }
     return;
@@ -414,6 +422,7 @@ try
     await LiveChecks.LiveAsync(Check, service, info, Live("tempdb"), json);
     await LiveDataChecks.RunAsync(Check, service, info, Live, json);
     await LiveTableDataChecks.RunAsync(Check, service, Live, json);
+    await ExplorerStatusLiveChecks.RunAsync(Check, service, info, Live, json);
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
     await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);

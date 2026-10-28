@@ -211,6 +211,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The active query's server: a small accent glyph, on every row state (the dot says the connection, the weight a server). */
 .oe-active { flex: none; display: grid; place-items: center; color: var(--varia-objectExplorer-activeConnectionForeground); }
 .oe-active > .codicon { font-size: var(--varia-glyph-sm); }
+/* Live status chips (ExplorerStatusService), before the environment tag: they give way first, each chip ending in an
+   ellipsis, within 40% of the row (cqw, as for the tag) and 20em; the row's accessible name and tooltip say them all. */
+.oe-chips { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: min(40cqw, 20em); overflow: hidden; }
+.oe-chips > .status-pill { flex: 0 1 auto; min-width: 0; }
+/* In a narrow pane each chip would shrink to a letter or two: only the first (a database's state, a server's running
+   jobs) shows; the row's name and tooltip still say them all. */
+@container (max-width: 30em) { .oe-chips > .status-pill:not(:first-child) { display: none; } }
 .oe-actions { display: flex; gap: 2px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */

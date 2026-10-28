@@ -794,7 +794,8 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now) and Object Explorer's `explorer` (the
+status chips: database states, restore progress, running Agent jobs, availability group health). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -1056,10 +1057,16 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 - **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
-  connection, and closes with the tab. At most 16 views are open in a window, first come, whoever owns them; another, or
-  one naming probes its source does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or
-  `INVALID_PARAMS` as a value, never an exception, and runs nothing. An owner of many background views (a status chip per
-  connected server) should share handles rather than take one each, or the documents a user opens find none left.
+  connection, and closes with the tab. At most 16 views hold a slot in a window (main's 16 streams on the port). A
+  `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server, owned by the pane, which
+  `ExplorerStatusService` opens and disposes once it ends) takes only a slot no other view wants, at most 8 of them: one
+  opened without a free slot waits (`status: 'dormant'`, `waiting: true`, running nothing), and a view that opens when all
+  16 are taken takes the newest running background view's slot, which stops and waits again; the new view subscribes once
+  that stream's end has arrived, as after a Reconnect, so main never sees a 17th. A view that closes hands its slot to the
+  oldest waiting background view, which subscribes after the closed view's stream has ended (or, hidden, stays dormant
+  until it shows). With every slot held by other views, another view, or one naming probes its source does not have, is a
+  handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an exception, and runs
+  nothing. The backend's 8 per server and 32 per backend count background views too.
 - **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
   tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
   then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.

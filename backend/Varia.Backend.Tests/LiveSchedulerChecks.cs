@@ -46,15 +46,29 @@ internal static class LiveSchedulerChecks
         var queries = LiveSql.All(catalog).ToList();
         var problems = queries.SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue)).Select(problem => query.Probe + " band " + query.Band + ": " + problem))
             .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem)).ToList();
-        check(queries.Count == LiveSql.MaxBand - LiveSql.MinBand + 1 && problems.Count == 0,
+        var sqlProbes = catalog.Probes.Values.Count(probe => catalog.Sources[probe.Source].Scope != "none");
+        check(sqlProbes == 5 && queries.Count == sqlProbes * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // Every series of a SQL probe comes from a column its query returns, and the clock columns are among them.
         var unmapped = queries.SelectMany(query => catalog.Probes[query.Probe].Series.Where(series => query.Series.FirstOrDefault(entry => entry.Series == series.Id) is not { } mapping
             || !query.Columns.Contains(mapping.Column) || mapping.Base is { } baseColumn && !query.Columns.Contains(baseColumn)
             || series.Counter is "ratio" or "cpuPercent" && mapping.Base is null).Select(series => query.Probe + "." + series.Id)).ToList();
-        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks))
-            && LiveSql.For(LiveSql.OverviewProbe, 12) is null && LiveSql.For("debug.synthetic.metrics", 17) is null,
-            "every series maps to a column of its probe's one row (ratios and CPU with a base), the clock columns are there, and no query exists below 2016: " + string.Join(", ", unmapped));
+        // A rate needs the server's clock; a probe of gauges alone (Object Explorer's Agent count) reads none.
+        static bool Clocked(LiveQuery query, LiveProbeJson spec) => query.MsTicks is null && query.StartTicks is null
+            ? spec.Series.All(series => series.Counter == "gauge")
+            : query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks);
+        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && Clocked(query, catalog.Probes[query.Probe]))
+            && !Clocked(LiveSql.For(LiveSql.OverviewProbe, LiveSql.MaxBand)! with { MsTicks = null, StartTicks = null }, catalog.Probes[LiveSql.OverviewProbe])
+            && LiveSql.For(LiveSql.OverviewProbe, 12) is null && LiveSql.For(LiveSql.DatabasesProbe, 12) is null && LiveSql.For("debug.synthetic.metrics", 17) is null,
+            "every series maps to a column of its probe's one row (ratios and CPU with a base), a probe with rates has the clock columns, and no query exists below 2016: " + string.Join(", ", unmapped));
+        // Object Explorer's status probes read one table each (the Agent count a metrics row), fit their catalogue entries,
+        // and look up a restore's database lock only for RESTORE requests.
+        var statusProblems = new[] { LiveSql.DatabasesProbe, LiveSql.ProgressProbe, LiveSql.AgentProbe, LiveSql.AvailabilityProbe }
+            .SelectMany(probe => LiveSql.For(probe, LiveSql.MaxBand) is { } query ? query.Problems(catalog.Probes[probe]).Select(problem => probe + ": " + problem) : [probe + ": no query"]).ToList();
+        var progress = LiveSql.For(LiveSql.ProgressProbe, LiveSql.MaxBand)!.Body;
+        check(statusProblems.Count == 0 && LiveSql.For(LiveSql.AgentProbe, LiveSql.MaxBand) is { Columns: ["running_jobs"], Tables.Length: 0 }
+            && progress.Contains("OUTER APPLY (SELECT TOP (1) l.resource_database_id FROM sys.dm_tran_locks AS l\n    WHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG') AND l.request_session_id = r.session_id", StringComparison.Ordinal),
+            "Object Explorer's status probes fit their catalogue entries, and the restore progress reads the lock DMV only per RESTORE request: " + string.Join("; ", statusProblems));
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {

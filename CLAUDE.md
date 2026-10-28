@@ -98,7 +98,7 @@ pages, limits, error codes, display formats, benchmarks).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
-- Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
+- Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
   EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
   worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
@@ -111,7 +111,9 @@ pages, limits, error codes, display formats, benchmarks).
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
   the live gates and a per-statement budget, and its failures are values that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Object
+  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server, owned by the pane):
+  at most 8 a window, in slots no other view wants, given up to views the user opens; they never reload the tree.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -139,7 +141,7 @@ pages, limits, error codes, display formats, benchmarks).
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
-  gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
+  gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint

@@ -19,6 +19,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private readonly Func<string, string, Task<SqlRun>> run;
     private readonly List<string> created = [];
     private bool loginCreated;
+    private bool restoringCreated;
 
     private ScratchDatabase(Func<string, string, Task<SqlRun>> run, string suffix)
     {
@@ -31,6 +32,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ReadOnly => Name + "_ro";
     public string Offline => Name + "_off";
     public string SingleUser => Name + "_su";
+    /// <summary>A database left RESTORING by a tail-log backup WITH NORECOVERY (created on demand, by CreateStatesAsync).</summary>
+    public string Restoring => Name + "_rs";
     public string Snapshot => Name + "_snap";
     /// <summary>Where the Script As round trip runs scripts (created on demand).</summary>
     public string RoundTrip => Name + "_rt";
@@ -64,8 +67,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
-    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
+    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup; _rs is left restoring.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -187,6 +190,21 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         else Console.WriteLine("Database snapshot checks skipped: this server could not create a snapshot.");
     }
 
+    /// <summary>For a bare scratch name, Object Explorer's live status checks: the database itself (online and open), and
+    /// read-only, offline, single-user and restoring ones, each marked before its state is set. RESTORING comes from a full
+    /// and a tail-log backup WITH NORECOVERY, both to the null device, so no backup file is written.</summary>
+    public async Task CreateStatesAsync()
+    {
+        foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser, Restoring }) await CreateMarkedAsync(name);
+        await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
+            + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
+        restoringCreated = true;
+        await Exec("DECLARE @device nvarchar(20) = CASE WHEN EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info') "
+            + "AND (SELECT host_platform FROM sys.dm_os_host_info) = N'Linux' THEN N'/dev/null' ELSE N'NUL' END;\n"
+            + "ALTER DATABASE " + Bracket(Restoring) + " SET RECOVERY FULL;\nBACKUP DATABASE " + Bracket(Restoring) + " TO DISK = @device;\n"
+            + "BACKUP LOG " + Bracket(Restoring) + " TO DISK = @device WITH NORECOVERY;");
+    }
+
     /// <summary>Creates the empty, marked round-trip database with the scratch database's collation.</summary>
     public Task<string> CreateRoundTripAsync() => CreateMarkedAsync(RoundTrip);
 
@@ -263,6 +281,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var name in created) await Drop(run, name, name != Offline);
+        // The restoring database's two backups went to the null device; their history goes with it.
+        if (restoringCreated) await run("EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Quote(Restoring) + ";", "msdb");
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");
     }
 }

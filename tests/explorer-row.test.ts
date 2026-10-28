@@ -2,7 +2,9 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
-import ExplorerRow, { connectionState, itemCount, Label, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
+import ExplorerRow, { changedSentence, connectionState, itemCount, Label, liveDatabase, RowEnd, rowDescription, rowName, rowTooltip, shownSublabel, type RowActions, type RowProps } from '../src/renderer/src/explorer/ExplorerRow'
+import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
+import { databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
 
@@ -129,6 +131,45 @@ describe('Object Explorer row visuals', () => {
       .toBe('<span class="oe-end"><i>PROD</i><span class="oe-count" aria-hidden="true">3</span><span class="oe-dot" data-state="lost" title="Connection lost" aria-hidden="true"></span><b>Reconnect</b></span>')
     // The active query's server is marked by a glyph before its dot, not by a fill that would pass for a selection.
     expect(end({ connection: 'online', active: true })).toBe('<span class="oe-end"><span class="oe-active" title="Server of the active query" aria-hidden="true"><span class="codicon codicon-file-code" data-icon="file-code" aria-hidden="true"></span></span><span class="oe-dot" data-state="online" title="Connected" aria-hidden="true"></span></span>')
+  })
+  it('show a database\'s live state as chips in place of its listed sublabel, and say when it differs from the list', () => {
+    const database = (fields: Partial<TreeNode> = {}) => node({ kind: 'database', label: 'Sales', lower: 'sales', ref: { type: 'object', object: { kind: 'database', name: 'Sales' } }, icon: 'database', level: 3, ...fields })
+    const restoring: RowStatus = { chips: databaseChips({ name: 'Sales', state: 1, userAccess: 1, readOnly: false, standby: false }, { name: 'Sales', command: 'RESTORE DATABASE', percent: 42 }), live: true, words: 'Restoring 42 %, Single user', state: 'unavailable' }
+    // Listed online, now restoring: chips at the row's end, no sublabel, dimmed with the unavailable badge, and a note.
+    const markup = render(database(), { status: restoring })
+    expect(markup).toContain('<span class="oe-end"><span class="oe-chips" aria-hidden="true"><span class="status-pill small" data-tone="running" title="The database is being restored, or waits for more backups to restore (WITH NORECOVERY). RESTORE DATABASE: 42 % done.">')
+    expect(markup).toContain('<span class="status-pill-label">RESTORING 42 %</span>')
+    expect(markup).toContain('<span class="status-pill-label">SINGLE USER</span>')
+    expect(markup).not.toContain('oe-sublabel')
+    expect(markup).toContain('class="explorer-row dimmed"')
+    expect(markup).toContain('aria-label="Sales (Restoring 42 %, Single user), unavailable"')
+    expect(markup).toContain(`aria-description="Database\nThe database is not available. Bring it online, then refresh Databases.\n${changedSentence}"`)
+    // Listed offline, now online: no chips, no sublabel, not dimmed, and the note says to refresh.
+    const online = render(database({ sublabel: '(Offline)', status: 'unavailable', hasChildren: false }), { status: onlineStatus })
+    expect(online).toContain('<span class="oe-end"></span>')
+    expect(online).not.toContain('Offline')
+    expect(online).not.toContain('dimmed')
+    expect(online).toContain(`title="Sales\nDatabase\n${changedSentence}"`)
+    // Listed as it is: no note. A login without access keeps noAccess while the database is usable.
+    expect(render(database({ sublabel: '(Read-Only)', status: 'readOnly' }), { status: { chips: databaseChips({ name: 'Sales', state: 0, userAccess: 0, readOnly: true, standby: false }), live: true, words: 'Read-only', state: 'readOnly' } }))
+      .toContain('title="Sales (Read-only)\nDatabase"')
+    expect(liveDatabase(database({ status: 'noAccess' }), onlineStatus)).toMatchObject({ node: { status: 'noAccess' }, changed: false })
+    expect(liveDatabase(database({ status: 'noAccess' }), restoring)).toMatchObject({ node: { status: 'unavailable' }, changed: true })
+    // Without live status (no sample yet, the probe failing, or the setting off) the row is as listed.
+    expect(render(database({ sublabel: '(Offline)', status: 'unavailable' }))).toContain('<span class="oe-sublabel">(Offline)</span>')
+    // Other rows take no database state from a status.
+    expect(render(node(), { status: restoring })).not.toMatch(/Restoring|RESTORING|oe-chips/)
+  })
+  it('end a server row with its live chips before its environment tag, and say them after its name', () => {
+    const chips = serverChips(2, [{ name: 'AG‮1', health: 1, role: 1 }])
+    const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }
+    const markup = render(server(), { status })
+    expect(markup).toContain('<span class="status-pill-label">2 jobs running</span>')
+    // Group names are the server's text: markers for hidden characters, in the chip and its tooltip.
+    expect(markup).toContain('<span class="status-pill-label">AG⟨U+202E⟩1 partially healthy</span>')
+    expect(markup).toContain('title="Availability groups\nAG⟨U+202E⟩1: partially healthy, primary"')
+    expect(markup).toContain('aria-label="localhost (SQL Server 17.0.1000.7 - sa), SQL Server Agent: 2 jobs running, Availability groups: AG⟨U+202E⟩1 partially healthy"')
+    expect(markup).toContain('<span class="oe-sublabel">17.0 · sa</span>')
   })
   it('mark the part of the label that matches the filter, keeping the label\'s text whole', () => {
     expect(render(node(), { match: 'ord' })).toContain('<bdi class="oe-label">dbo.<span class="oe-match">Ord</span>ers</bdi>')

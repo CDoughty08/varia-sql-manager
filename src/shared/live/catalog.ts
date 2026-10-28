@@ -98,6 +98,8 @@ const column = (id: string, dataType: string): LiveColumnSpec => ({ id, name: id
 /** The types debug.synthetic.wide's columns cycle through. */
 const wideTypes = ['nvarchar', 'bigint', 'datetime2', 'float', 'bit', 'int']
 const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
+/** SQL Server on a box (Personal, Standard, Enterprise, Express) and Managed Instance. */
+const boxAndManaged = [1, 2, 3, 4, 8]
 /** A probe's statement budget and load guard when its entry names none. */
 export const defaultBudgetMs = { min: limits.live.budgetMs.min, max: 5000 } as const
 export const defaultDutyCycle = 0.25
@@ -106,10 +108,11 @@ export const defaultSnapshotRows = 5000
 export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
 
-export const liveSourceIds = ['debug.synthetic', 'activity'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
-  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview'
+  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview',
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -121,6 +124,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   activity: {
     id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
     description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
+  },
+  explorer: {
+    id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'],
+    description: 'The states Object Explorer shows as chips on its nodes (docs/object-explorer.md, Live status): one view per connected server while Object Explorer shows, on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). It never reloads the tree.'
   }
 }
 
@@ -173,6 +180,29 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
       { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
       { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
     ]
+  },
+  'explorer.databases': {
+    id: 'explorer.databases', source: 'explorer', label: 'Database states', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: boxAndManaged },
+    description: 'The databases that are not plainly online and open to everyone, from sys.databases: their state (sys.databases.state), user access (0 multi, 1 single, 2 restricted), read-only and standby flags. Needs no server permission; a login sees the databases sys.databases shows it.',
+    tables: [{
+      id: 'databases', mode: 'snapshot', key: ['name'], rowCap: 1000,
+      columns: [column('name', 'sysname'), column('state', 'tinyint'), column('userAccess', 'tinyint'), column('readOnly', 'bit'), column('standby', 'bit')]
+    }]
+  },
+  'explorer.progress': {
+    id: 'explorer.progress', source: 'explorer', label: 'Restore and recovery progress', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: boxAndManaged }, permission: 'serverState',
+    description: 'How far each running RESTORE DATABASE or RESTORE LOG, and each database recovery (DB STARTUP), has come (sys.dm_exec_requests.percent_complete, whole percent). A restore runs in its session\'s database, so the database it restores is the one its request holds an exclusive database lock on (sys.dm_tran_locks, read only for those requests).',
+    tables: [{ id: 'progress', mode: 'snapshot', key: ['name'], rowCap: 1000, columns: [column('name', 'sysname'), column('command', 'nvarchar'), column('percent', 'int')] }]
+  },
+  'explorer.agent': {
+    id: 'explorer.agent', source: 'explorer', label: 'Running Agent jobs', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
+    description: 'How many SQL Server Agent jobs are running: msdb.dbo.sysjobactivity rows of the Agent\'s current session (the newest in msdb.dbo.syssessions) that started and have not stopped, as Job Activity Monitor counts them. A login msdb refuses gets PERMISSION_DENIED as a value.',
+    series: [{ id: 'runningJobs', unit: 'count', label: 'Running jobs', counter: 'gauge' }]
+  },
+  'explorer.availability': {
+    id: 'explorer.availability', source: 'explorer', label: 'Availability group health', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [2, 3] }, permission: 'serverState',
+    description: 'Each availability group\'s synchronization health (0 not healthy, 1 partially healthy, 2 healthy) and this replica\'s role (0 resolving, 1 primary, 2 secondary), from sys.dm_hadr_availability_group_states and sys.dm_hadr_availability_replica_states. A server without Always On has no rows.',
+    tables: [{ id: 'groups', mode: 'snapshot', key: ['name'], rowCap: 100, columns: [column('name', 'sysname'), column('health', 'tinyint'), column('role', 'tinyint')] }]
   }
 }
 
