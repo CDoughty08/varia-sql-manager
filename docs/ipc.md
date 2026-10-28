@@ -1058,15 +1058,20 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
   connection, and closes with the tab. At most 16 views hold a slot in a window (main's 16 streams on the port). A
-  `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server, owned by the pane, which
-  `ExplorerStatusService` opens and disposes once it ends) takes only a slot no other view wants, at most 8 of them: one
+  `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server and login, owned by the
+  pane, which `ExplorerStatusService` opens, moves to the next connection of the same server and login when its own goes,
+  and disposes once it ends, opening it again on Refresh) takes only a slot no other view wants, at most 8 of them: one
   opened without a free slot waits (`status: 'dormant'`, `waiting: true`, running nothing), and a view that opens when all
   16 are taken takes the newest running background view's slot, which stops and waits again; the new view subscribes once
   that stream's end has arrived, as after a Reconnect, so main never sees a 17th. A view that closes hands its slot to the
   oldest waiting background view, which subscribes after the closed view's stream has ended (or, hidden, stays dormant
   until it shows). With every slot held by other views, another view, or one naming probes its source does not have, is a
   handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an exception, and runs
-  nothing. The backend's 8 per server and 32 per backend count background views too.
+  nothing. The backend's 8 per server and 32 per backend count background views too, so they give way there as well: a
+  view the backend refuses with `BUSY` before it opens takes the newest running background view's slot on the same server
+  (`serverOf`: the server the connection names, as typed; without it, the same connection) and subscribes again once that
+  stream has ended, once (a second refusal ends it with `BUSY`; with no such background view it ends at once). A
+  background view the backend refuses waits instead of ending, and tries again when a view of the window closes.
 - **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
   tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
   then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.

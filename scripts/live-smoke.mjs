@@ -10,7 +10,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendBanner, documentTab, documentTabs, explorerLabel, explorerSublabel, explorerTree, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendBanner, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-profile-'))
@@ -42,7 +42,7 @@ async function stays(id, ms = 600) {
   await sleep(ms)
   expect((await frames(id)).ticks).toBe(before)
 }
-async function connect(password = 'live-smoke-password', server = 'live-server') {
+async function connect(password = 'live-smoke-password', server = 'live-server', environment = undefined) {
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
@@ -51,6 +51,7 @@ async function connect(password = 'live-smoke-password', server = 'live-server')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  if (environment) await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
 }
@@ -154,10 +155,11 @@ try {
   // A database restoring with a single user, two Agent jobs and a healthy group, as the fake backend's explorer source reads them.
   const cue = join(control, 'explorer-status.json')
   await writeFile(cue, JSON.stringify({ databases: [['AppData', 1, 1, 0, 0]], progress: [['AppData', 'RESTORE DATABASE', 42]], jobs: 2, groups: [['AG1', 2, 1]] }))
-  await connect('live-smoke-password', 'status-server')
+  // A Production connection, so its PROD tag shares the server row with the chips.
+  await connect('live-smoke-password', 'status-server', 'Production')
   const statusServer = await explorerRow(page, 'status-server')
   await expect(statusChips(statusServer)).toHaveText(['2 jobs running', 'AG1 healthy'])
-  await expect(statusServer).toHaveAttribute('aria-label', /, SQL Server Agent: 2 jobs running, Availability groups: AG1 healthy$/)
+  await expect(statusServer).toHaveAttribute('aria-label', /, SQL Server Agent: 2 jobs running, Availability groups: AG1 healthy, Production environment$/)
   const explorerSubscribe = (await liveCalls('live.subscribe')).filter(call => call.params.source === 'explorer').at(-1)
   expect(explorerSubscribe.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'])
   await expandExplorerPath(page, 'status-server', 'Databases')
@@ -167,12 +169,30 @@ try {
   await expect(appData).toHaveAttribute('aria-label', 'AppData (Restoring 42 %, Single user), unavailable')
   await expect(explorerSublabel(appData)).toHaveCount(0)
   await expect(appData).toHaveAttribute('title', /Its state changed since Databases loaded\. Refresh Databases to update it\./)
-  // A pane narrower than 30em shows only each row's first chip, rather than every chip cut to a letter or two.
+  // A pane narrower than 30em shows only each row's first chip, rather than every chip cut to a letter or two. At the
+  // default pane width the chip that shows is whole (RESTORING 42 % keeps its percentage), and the server's PROD tag keeps
+  // its word whole beside the chips: the label gives up the row's empty space first, and the chips give way, not the tag.
   const narrow = await statusServer.evaluate(row => row.getBoundingClientRect().width < 30 * parseFloat(getComputedStyle(row).fontSize))
   await expect(statusChips(statusServer).first()).toBeVisible()
   await expect(statusChips(statusServer).nth(1)).toBeVisible({ visible: !narrow })
   await expect(statusChips(appData).nth(1)).toBeVisible({ visible: !narrow })
   await explorerTree(page).screenshot({ path: resolve('artifacts', 'explorer-status.png') })
+  // Each part of the server row, for a failure's message: its width, and whether its text is cut.
+  const parts = [part.explorerLabel, part.explorerSublabel, part.explorerEnd, part.explorerChips, part.statusPillValue, part.statusPillLabel, part.explorerDot].join(', ')
+  const layout = await statusServer.evaluate((row, parts) => [...row.querySelectorAll(parts)].map(element => `${element.className} ${Math.round(element.getBoundingClientRect().width)}${element.scrollWidth > element.clientWidth ? ' cut' : ''}`).join(', ')
+    + ` (row ${Math.round(row.getBoundingClientRect().width)} px)`, parts)
+  // Whether an element's text is whole and it ends inside the box that clips it.
+  const shown = (locator, clip) => locator.evaluate((element, clip) => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= element.closest(clip).getBoundingClientRect().right + 0.5, clip)
+  // The database row has room: RESTORING 42 % is whole. The server row is short of it (its name, the chips, PROD, the
+  // active query's glyph and the dot): the jobs chip's word gives way, its count does not, and PROD stays whole.
+  await expect(statusChips(appData).first()).toHaveText('RESTORING 42 %')
+  expect([await shown(statusChips(appData).first().locator(part.statusPillLabel), part.explorerChips), await shown(statusChips(appData).first().locator(part.statusPillValue), part.explorerChips)], layout).toEqual([true, true])
+  await expect(statusChips(statusServer).first().locator(part.statusPillValue)).toHaveText('2')
+  expect(await shown(statusChips(statusServer).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
+  const prod = environmentPill(statusServer, 'explorer')
+  await expect(prod).toHaveText('PROD')
+  expect([await shown(prod.locator(part.statusPillLabel), part.explorerRow), await shown(statusServer.locator(part.explorerDot), part.explorerRow), await shown(explorerLabel(statusServer), part.explorerRow)], layout).toEqual([true, true, true])
+  console.log('Object Explorer status chips at the default pane width: ' + layout)
   // The server changes: the next samples move the chips, and the tree is not listed again.
   const listings = (await calls()).filter(call => call.method === 'explorer.children').length
   await writeFile(cue, JSON.stringify({ databases: [['AppData', 0, 0, 1, 0]], jobs: 0, groups: [['AG1', 1, 2]] }))

@@ -252,13 +252,18 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 ## Live status
 
 While Object Explorer shows (and Environment › Live Data › Show live status in Object Explorer is on), each connected
-server has one background live view of the `explorer` source ([docs/live.md](live.md)) on one session of its own, paused
-while the pane or the window is hidden. Its samples become chips at the end of the rows below; they never reload the
-tree. While chips show, a database row's state comes from them rather than its sublabel (the state when the list
-loaded), and its tooltip says when the two differ. A probe that fails, is unavailable (no permission, or an edition
-without the feature) or has no sample yet shows nothing, and the row shows its sublabel again. A window runs at most 8
-such views and gives their slots to views the user opens ([docs/ipc.md](ipc.md#live-subscriptions)), so a server can be
-without chips until a slot frees.
+server has one background live view of the `explorer` source ([docs/live.md](live.md)) per login, shared by every
+connection to that server with that login, on one session of its own in master (so it never holds the database a
+connection opened in), paused while the pane or the window is hidden. Its samples become chips at the end of the rows
+below; they never reload the tree. While chips show, a database row's state comes from them rather than its sublabel
+(the state when the list loaded), and its tooltip says when the two differ. A probe that fails, is unavailable (no
+permission, or an edition without the feature) or has no sample yet shows nothing, and the row shows its sublabel again;
+so does a database past the 1,000 the probe lists, by name. A running-tone chip turns its glyph only while a restore or
+recovery reports progress. Refresh (F5) samples the view at once and opens again one that ended (a sign-in that
+failed). A window runs at most 8 such views and gives their slots to views the user opens, when the window's 16 are
+taken or the backend refuses one at its 8 a server ([docs/ipc.md](ipc.md#live-subscriptions)), so a server can be
+without chips until a slot frees. The chips are the only part of a row's end that gives way: the environment tag, item
+count and connection dot keep their size, and the label gives up the row's empty space first.
 
 | Kind | Probes |
 | --- | --- |

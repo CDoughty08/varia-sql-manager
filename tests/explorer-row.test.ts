@@ -138,7 +138,8 @@ describe('Object Explorer row visuals', () => {
     // Listed online, now restoring: chips at the row's end, no sublabel, dimmed with the unavailable badge, and a note.
     const markup = render(database(), { status: restoring })
     expect(markup).toContain('<span class="oe-end"><span class="oe-chips" aria-hidden="true"><span class="status-pill small" data-tone="running" title="The database is being restored, or waits for more backups to restore (WITH NORECOVERY). RESTORE DATABASE: 42 % done.">')
-    expect(markup).toContain('<span class="status-pill-label">RESTORING 42 %</span>')
+    // The percentage never gives way: the word beside it ends in an ellipsis first, and the pill still reads the whole label.
+    expect(markup).toContain('<span class="status-pill-label">RESTORING </span><span class="status-pill-value">42 %</span>')
     expect(markup).toContain('<span class="status-pill-label">SINGLE USER</span>')
     expect(markup).not.toContain('oe-sublabel')
     expect(markup).toContain('class="explorer-row dimmed"')
@@ -164,7 +165,7 @@ describe('Object Explorer row visuals', () => {
     const chips = serverChips(2, [{ name: 'AG‮1', health: 1, role: 1 }])
     const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }
     const markup = render(server(), { status })
-    expect(markup).toContain('<span class="status-pill-label">2 jobs running</span>')
+    expect(markup).toContain('<span class="status-pill-value">2</span><span class="status-pill-label"> jobs running</span>')
     // Group names are the server's text: markers for hidden characters, in the chip and its tooltip.
     expect(markup).toContain('<span class="status-pill-label">AG⟨U+202E⟩1 partially healthy</span>')
     expect(markup).toContain('title="Availability groups\nAG⟨U+202E⟩1: partially healthy, primary"')

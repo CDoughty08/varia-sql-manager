@@ -184,7 +184,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @keyframes oe-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .oe-badge[data-badge="loading"] { animation: none; } }
-.oe-label { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+/*
+ * The label grows from nothing to its text (basis 0, max-width max-content), ahead of the sublabel (its grow factor), and
+ * the row's end takes the rest; when the row is short of room the label keeps the smaller of its text and its width, min(35
+ * cqw, 10em): the automatic minimum of a flex item that clips rather than scrolls (overflow: clip) is the smaller of its
+ * min-content and its specified width. So the end's chips show whole beside a short name, and a long name keeps a share.
+ */
+.oe-label { flex: 1000 1 0; width: min(35cqw, 10em); max-width: max-content; overflow: clip; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
@@ -197,12 +203,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
 /*
- * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes at
- * most 60% of the row and never shrinks for the label, so the count and dot always show; a chip or tag in it gives way
- * instead (flex: 0 1 auto; min-width: 0) under a cap such as 12em, or a share of the row in cqw (each row is an inline-size
- * container). A percentage cap would resolve against this content-sized box and clamp the tag to a share of its own width.
+ * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes all
+ * the row the label leaves (see .oe-label). The chips in it give way first (their shrink factor dwarfs the tag's), then the
+ * tag, so the count and dot stay; an item's cap is an em size or a share of the row in cqw (each row is an inline-size
+ * container), since a percentage would resolve against this content-sized box and clamp an item to a share of its width.
  */
-.oe-end { display: flex; flex: none; min-width: 0; max-width: 60%; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
+.oe-end { display: flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
 .oe-end:empty { display: none; }
 .oe-count { flex: none; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
 .oe-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 var(--varia-space-1); border: 2px solid var(--varia-objectExplorer-connectedIndicator); border-radius: 50%; background: var(--varia-objectExplorer-connectedIndicator); }
@@ -211,9 +217,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The active query's server: a small accent glyph, on every row state (the dot says the connection, the weight a server). */
 .oe-active { flex: none; display: grid; place-items: center; color: var(--varia-objectExplorer-activeConnectionForeground); }
 .oe-active > .codicon { font-size: var(--varia-glyph-sm); }
-/* Live status chips (ExplorerStatusService), before the environment tag: they give way first, each chip ending in an
-   ellipsis, within 40% of the row (cqw, as for the tag) and 20em; the row's accessible name and tooltip say them all. */
-.oe-chips { display: flex; flex: 0 1 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: min(40cqw, 20em); overflow: hidden; }
+/* Live status chips (ExplorerStatusService), before the environment tag: the first part of the row's end to give way, each
+   chip's word ending in an ellipsis before its number; the row's accessible name and tooltip say them all. */
+.oe-chips { display: flex; flex: 0 1000 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
 .oe-chips > .status-pill { flex: 0 1 auto; min-width: 0; }
 /* In a narrow pane each chip would shrink to a letter or two: only the first (a database's state, a server's running
    jobs) shows; the row's name and tooltip still say them all. */
@@ -759,6 +765,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
 .tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
 .status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A pill's number (StatusPill `value`): its label gives way, never it. */
+.status-pill-value { flex: none; }
 .status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
 .status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
 .status-pill[data-tone="warning"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
@@ -770,8 +778,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-/* In a server row's end (.oe-end), which is sized from its content: the tag gives way to the count and dot, at most 40% of
-   the row (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
+/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to keep
+   the count and dot in a narrow row; a custom label stops at 40% of the row (cqw: the row is the container; a percentage
+   would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }

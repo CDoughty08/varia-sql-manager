@@ -12,8 +12,9 @@ export interface ProgressRow { readonly name: string; readonly command: string; 
 export interface GroupRow { readonly name: string; readonly health: number; readonly role: number }
 
 /** One chip: its word on the node (`label`), the same for a screen reader (`words`, in the row's accessible name), and a
- *  sentence for its tooltip. `icon` undefined takes the tone's glyph. */
-export interface StatusChip { readonly id: string; readonly tone: StatusTone; readonly label: string; readonly words: string; readonly title: string; readonly icon?: IconId | null }
+ *  sentence for its tooltip. `value`, the end or start of the label that a narrow row never cuts (a percentage, a count).
+ *  `icon` undefined takes the tone's glyph. */
+export interface StatusChip { readonly id: string; readonly tone: StatusTone; readonly label: string; readonly value?: string; readonly words: string; readonly title: string; readonly icon?: IconId | null }
 
 /** sys.databases.state values that have a chip of their own; ONLINE (0) has none. Unknown future values say their number. */
 const states: Readonly<Record<number, { label: string; words: string; tone: StatusTone; title: string }>> = {
@@ -42,9 +43,11 @@ export function databaseChips(row: DatabaseStatusRow | undefined, progress?: Pro
     // A restore of a database another session holds RESTORING shows its progress; so does a recovery at startup.
     const base = known ?? (state === 0 ? (progress && /^RESTORE/.test(progress.command) ? states[1] : states[2]) : { label: `STATE ${state}`, words: `State ${state}`, tone: 'neutral' as const, title: `The database's state is ${state}.` })
     const running = progress ? percentText(progress.percent) : undefined
+    // The running glyph turns only while a request makes progress: a database left RESTORING WITH NORECOVERY (a log-shipping
+    // or mirroring secondary) can wait for months, and nothing is running then.
     chips.push({
       id: 'state', tone: base.tone, label: running ? `${base.label} ${running}` : base.label, words: running ? `${base.words} ${running}` : base.words,
-      title: running ? `${base.title} ${progress!.command}: ${running} done.` : base.title
+      title: running ? `${base.title} ${progress!.command}: ${running} done.` : base.title, ...running ? { value: running } : base.tone === 'running' ? { icon: 'history' as const } : {}
     })
   }
   if (row?.standby) chips.push({ id: 'readOnly', tone: 'warning', label: 'STANDBY', words: 'Standby, read-only', title: 'The database is a log-shipping standby: read-only between log restores.', icon: 'lock' })
@@ -66,8 +69,9 @@ const healthTones: readonly StatusTone[] = ['critical', 'warning', 'success']
 export function serverChips(runningJobs: number | null | undefined, groups: readonly GroupRow[] | undefined): StatusChip[] {
   const chips: StatusChip[] = []
   if (runningJobs !== null && runningJobs !== undefined && runningJobs > 0) {
-    const count = Math.trunc(runningJobs), text = `${count.toLocaleString('en-US')} ${count === 1 ? 'job' : 'jobs'} running`
-    chips.push({ id: 'jobs', tone: 'running', label: text, words: `SQL Server Agent: ${text}`, title: `SQL Server Agent: ${text}.` })
+    const count = Math.trunc(runningJobs), number = count.toLocaleString('en-US'), text = `${number} ${count === 1 ? 'job' : 'jobs'} running`
+    // A still glyph: replication and change data capture agents run as jobs that never end, and a spinner would never stop.
+    chips.push({ id: 'jobs', tone: 'running', label: text, value: number, words: `SQL Server Agent: ${text}`, title: `SQL Server Agent: ${text}.`, icon: 'agent-job' })
   }
   if (groups && groups.length > 0) {
     const worst = Math.max(0, Math.min(2, Math.min(...groups.map(group => group.health))))

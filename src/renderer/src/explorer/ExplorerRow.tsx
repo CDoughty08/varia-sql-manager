@@ -124,7 +124,7 @@ export function liveDatabase(node: TreeNode, status: RowStatus): { node: TreeNod
 /** A row's live chips. Their words are in the row's accessible name, so the chips are hidden from screen readers. */
 function StatusChips({ chips }: { chips: readonly StatusChip[] }) {
   return <span className="oe-chips" aria-hidden="true">
-    {chips.map(chip => <StatusPill key={chip.id} tone={chip.tone} label={displayText(chip.label)} size="small" title={chip.title.split('\n').map(displayText).join('\n')} {...chip.icon !== undefined ? { icon: chip.icon } : {}} />)}
+    {chips.map(chip => <StatusPill key={chip.id} tone={chip.tone} label={displayText(chip.label)} {...chip.value !== undefined ? { value: displayText(chip.value) } : {}} size="small" title={chip.title.split('\n').map(displayText).join('\n')} {...chip.icon !== undefined ? { icon: chip.icon } : {}} />)}
   </span>
 }
 /** The row's accessible name: the label and sublabel as shown, then its state. */

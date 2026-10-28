@@ -112,8 +112,9 @@ pages, limits, error codes, display formats, benchmarks).
   the live gates and a per-statement budget, and its failures are values that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Object
-  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server, owned by the pane):
-  at most 8 a window, in slots no other view wants, given up to views the user opens; they never reload the tree.
+  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
+  the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB

@@ -5,6 +5,7 @@ import { databaseChips, serverChips, statusChipDocs } from '../src/shared/explor
 import { liveProbes, liveSources } from '../src/shared/live/catalog'
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
+import { explorerContribution } from '../src/renderer/src/contributions/explorer'
 import { ExplorerStatusService, onlineStatus, rowStatus } from '../src/renderer/src/explorer/ExplorerStatusService'
 import { LiveService, liveServiceLimits, type PageVisibility } from '../src/renderer/src/live/LiveService'
 import type { LivePatch, LiveStream, ResultHandle, RowWindow } from '../src/renderer/src/results/ResultClient'
@@ -32,6 +33,23 @@ describe('Object Explorer status chips', () => {
     expect(databaseChips(row({ readOnly: true, standby: true, userAccess: 2, state: 1 })).map(chip => chip.label)).toEqual(['RESTORING', 'STANDBY', 'RESTRICTED USER'])
     // Percentages stay within 0 to 100 and whole.
     expect(databaseChips(row({ state: 1 }), { name: 'Sales', command: 'RESTORE LOG', percent: 140 })[0].label).toBe('RESTORING 100 %')
+    // A request's progress on a database the list still has online (state 0) says what the request does.
+    expect(databaseChips(row(), { name: 'Sales', command: 'DB STARTUP', percent: 7 })[0]).toMatchObject({ label: 'RECOVERING 7 %', tone: 'running' })
+    expect(databaseChips(row(), { name: 'Sales', command: 'RESTORE DATABASE', percent: 7 })[0]).toMatchObject({ label: 'RESTORING 7 %', tone: 'running' })
+  })
+  it('turns its glyph only while a restore or recovery makes progress', () => {
+    // A database left RESTORING WITH NORECOVERY can wait for months: its chip keeps the running tone with a still glyph.
+    for (const state of [1, 2]) {
+      expect(databaseChips(row({ state }))[0]).toMatchObject({ tone: 'running', icon: 'history' })
+      expect(databaseChips(row({ state }), { name: 'Sales', command: 'RESTORE DATABASE', percent: 3 })[0].icon).toBeUndefined()
+    }
+    expect(databaseChips(row({ state: 6 }))[0].icon).toBeUndefined()
+    // Replication and change data capture agents are jobs that never end, so the jobs chip never spins either.
+    expect(serverChips(2, undefined)[0]).toMatchObject({ tone: 'running', icon: 'agent-job' })
+    // The number a narrow row must never cut: a progress's percentage, the running jobs' count.
+    expect(databaseChips(row({ state: 1 }), { name: 'Sales', command: 'RESTORE DATABASE', percent: 42 })[0].value).toBe('42 %')
+    expect(databaseChips(row({ state: 1 }))[0].value).toBeUndefined()
+    expect(serverChips(1200, [{ name: 'AG1', health: 2, role: 1 }]).map(chip => chip.value)).toEqual(['1,200', undefined])
   })
   it('gives the server a running-jobs chip and its availability groups\' health, the least healthy first', () => {
     expect(serverChips(undefined, undefined)).toEqual([])
@@ -64,6 +82,10 @@ class FakeClient {
   readonly streams: FakeStream[] = []
   readonly rows = new Map<number, (string | null)[][]>()
   reads = 0
+  /** Reads of these results wait until the test releases them (holds), or fail as a released result's would (failing). */
+  readonly hold = new Set<number>()
+  readonly holds = new Map<number, () => void>()
+  readonly failing = new Set<number>()
   live(params: LiveSubscribeParams, onEvent: (event: LiveEvent, bytes: number) => void): LiveStream {
     let settle!: (result: ApiResult<LiveEnd>) => void
     const done = new Promise<ApiResult<LiveEnd>>(resolve => { settle = resolve })
@@ -85,6 +107,8 @@ class FakeClient {
       key: { generation: descriptor.generation, resultId: descriptor.resultId }, columns: descriptor.columns, getSnapshot: () => ({ state: 'complete' }),
       getWindow: async (first: number, count: number): Promise<RowWindow> => {
         this.reads++
+        if (this.hold.has(descriptor.resultId)) await new Promise<void>(resolve => this.holds.set(descriptor.resultId, resolve))
+        if (this.failing.has(descriptor.resultId)) throw new Error('This result was released.')
         const shown = rows.slice(first, first + count), columns = descriptor.columns.length
         return { first, count: shown.length, colStart: 0, colEnd: columns, text: shown.flatMap(cells => cells.map(cell => cell ?? '')), flags: Uint8Array.from(shown.flatMap(cells => cells.map(cell => cell === null ? 1 : 0))) }
       }
@@ -103,16 +127,17 @@ let resultId = 1
 let seq = 0
 const first = '6f1e3a52-8a8b-4d63-9a43-2c1e1e0d7c11', second = '0b6f2f8e-0b0e-4f6a-9d61-6d8c2b7f1e22'
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
-const info = (id: string): ConnectionInfo => ({ id, server: 'srv-' + id.slice(0, 4), generation: 1 } as unknown as ConnectionInfo)
+const info = (id: string, o: { server?: string; login?: string } = {}): ConnectionInfo => ({ id, server: o.server ?? 'srv-' + id.slice(0, 4), generation: 1, ...o.login ? { login: o.login } : {} } as unknown as ConnectionInfo)
+const database = (name: string) => ({ parent: 3, kind: 'database' as const, ref: { type: 'object' as const, object: { kind: 'database' as const, name } } })
 
 function columns(probe: 'explorer.databases' | 'explorer.progress' | 'explorer.availability') {
   return liveProbes[probe].tables![0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
 }
 /** A stored table revision holding `rows`. */
-function table(probe: 'explorer.databases' | 'explorer.progress' | 'explorer.availability', rows: (string | null)[][], diff?: { added: number; removed: number; changed: number }) {
+function table(probe: 'explorer.databases' | 'explorer.progress' | 'explorer.availability', rows: (string | null)[][], diff?: { added: number; removed: number; changed: number }, cut?: { rowsRead: number }) {
   const id = resultId++
   client.rows.set(id, rows)
-  const descriptor = { generation: 1, resultId: id, columns: columns(probe), rowsStored: rows.length, rowsAvailable: rows.length, bytesStored: 1, truncatedCells: 0, state: 'complete', statement: 0 } as unknown as ResultDescriptor
+  const descriptor = { generation: 1, resultId: id, columns: columns(probe), rowsRead: cut?.rowsRead ?? rows.length, rowsStored: rows.length, rowsAvailable: rows.length, bytesStored: 1, truncatedCells: 0, state: 'complete', statement: 0, ...cut ? { truncated: 'rowLimit' } : {} } as unknown as ResultDescriptor
   return { probe, costMs: 1, effectiveIntervalMs: 5000, tables: [{ table: 0, descriptor, revision: id, ...diff ? { diff } : {} }] }
 }
 const tick = (samples: unknown[], errors?: LiveTick['errors']): LiveTick => ({ type: 'live.tick', seq: ++seq, sampledAt: Date.now(), samples, ...errors ? { errors } : {} } as LiveTick)
@@ -175,7 +200,6 @@ describe('ExplorerStatusService', () => {
     expect(server.databases?.get('Restored')).toMatchObject({ live: true, words: 'Restoring 42 %', state: 'unavailable' })
     expect(server.databases?.get('Archive')).toMatchObject({ words: 'Read-only', state: 'readOnly' })
     expect(server.databases?.get('Solo')?.state).toBeUndefined()
-    const database = (name: string) => ({ parent: 3, kind: 'database' as const, ref: { type: 'object' as const, object: { kind: 'database' as const, name } } })
     expect(rowStatus(server, database('Sales'))).toBe(onlineStatus)
     expect(rowStatus(server, { parent: 0, kind: 'server', ref: { type: 'object', object: { kind: 'server' } } } as never)).toBe(server.server)
     expect(rowStatus(server, { parent: 9, kind: 'table', ref: { type: 'object', object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'T' } } } as never)).toBeUndefined()
@@ -264,5 +288,177 @@ describe('ExplorerStatusService', () => {
     for (let at = 0; at < 10; at++) connections.add(info(`00000000-0000-4000-8000-00000000000${at.toString(16)}`), { server: 's' + at } as never)
     expect(client.streams).toHaveLength(liveServiceLimits.background)
     expect(live.getSnapshot().handles).toHaveLength(10)
+  })
+
+  it('shares one view between connections to the same server and login, and moves it when the first goes', async () => {
+    connections.add(info(first, { server: 'SQL01 ', login: 'CORP\\ana' }), { server: 'SQL01' } as never)
+    connections.add(info(second, { server: 'sql01', login: 'corp\\ANA' }), { server: 'sql01' } as never)
+    const other = '00000000-0000-4000-8000-000000000003'
+    connections.add(info(other, { server: 'sql01', login: 'sa' }), { server: 'sql01' } as never)
+    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first, other])
+    const fake = streamOf(first)
+    open(fake)
+    fake.onEvent(tick([table('explorer.databases', [['Sales', '6', '0', '0', '0']])]), 10)
+    await settle()
+    expect(status.server(second)).toBe(status.server(first))
+    expect(status.server(second)?.databases?.get('Sales')?.words).toBe('Offline')
+    expect(status.server(other)?.databases).toBeUndefined()
+    // The view reads through the oldest connection; when it goes, the next one takes over.
+    connections.remove(first)
+    await settle()
+    expect(fake.cancelled).toBe(true)
+    expect(client.streams.at(-1)!.params.connectionId).toBe(second)
+    expect(status.server(first)).toBeUndefined()
+    expect(live.getSnapshot().handles).toHaveLength(2)
+  })
+
+  it('says nothing of a database past a list cut at its row cap, rather than call it online', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    const rows = Array.from({ length: 1000 }, (_, at) => ['db' + String(at).padStart(5, '0'), '6', '0', '0', '0'])
+    fake.onEvent(tick([table('explorer.databases', rows, undefined, { rowsRead: 1300 })]), 10)
+    await settle()
+    let server = status.server(first)!
+    expect(server.complete).toBe(false)
+    expect(rowStatus(server, database('db00999'))?.words).toBe('Offline')
+    expect(rowStatus(server, database('db01200'))).toBeUndefined()
+    // A whole list again: a database it does not name is online.
+    fake.onEvent(tick([table('explorer.databases', [['db00001', '6', '0', '0', '0']])]), 10)
+    await settle()
+    server = status.server(first)!
+    expect(server.complete).toBe(true)
+    expect(rowStatus(server, database('db01200'))).toBe(onlineStatus)
+  })
+
+  it('drops rows it could not bring up to date, and reads the next revision whatever its diff', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    fake.onEvent(tick([table('explorer.databases', [['Sales', '0', '0', '1', '0']])]), 10)
+    await settle()
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Read-only')
+    // The changed revision was released before it was read (two quick samples): Read-only is no longer known to be true.
+    const changed = table('explorer.databases', [['Sales', '6', '0', '0', '0']], { added: 0, removed: 0, changed: 1 })
+    client.failing.add(changed.tables[0].descriptor.resultId)
+    fake.onEvent(tick([changed]), 10)
+    await settle()
+    expect(status.server(first)!.databases).toBeUndefined()
+    const reads = client.reads
+    fake.onEvent(tick([table('explorer.databases', [['Sales', '6', '0', '0', '0']], { added: 0, removed: 0, changed: 0 })]), 10)
+    await settle()
+    expect(client.reads).toBe(reads + 1)
+    expect(status.server(first)!.databases?.get('Sales')).toMatchObject({ words: 'Offline', state: 'unavailable' })
+  })
+
+  it('keeps the newer rows when an older read finishes last', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    const older = table('explorer.databases', [['Sales', '0', '0', '1', '0']])
+    client.hold.add(older.tables[0].descriptor.resultId)
+    fake.onEvent(tick([older]), 10)
+    fake.onEvent(tick([table('explorer.databases', [['Sales', '6', '0', '0', '0']], { added: 0, removed: 0, changed: 1 })]), 10)
+    await settle()
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Offline')
+    client.holds.get(older.tables[0].descriptor.resultId)!()
+    await settle()
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Offline')
+    // An unchanged revision after it is not read again, and keeps what the newer read said.
+    fake.onEvent(tick([table('explorer.databases', [], { added: 0, removed: 0, changed: 0 })]), 10)
+    await settle()
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Offline')
+  })
+
+  it('shows nothing of an earlier subscription once the view subscribes again', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    fake.onEvent(tick([table('explorer.databases', [['Sales', '0', '0', '1', '0']]), table('explorer.progress', [['Sales', 'RESTORE LOG', '5']])]), 10)
+    await settle()
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Restoring 5 %, Read-only')
+    // Hidden long enough to go dormant, then shown: a new subscription, whose first sample brings no table yet.
+    panes.set({ explorer: false, editor: true, output: false })
+    vi.advanceTimersByTime(defaultSettings['liveData.stopAfterHiddenMinutes'] * 60_000 + 1000)
+    await settle()
+    expect(fake.cancelled).toBe(true)
+    panes.set({ explorer: true, editor: true, output: false })
+    await settle()
+    const next = client.streams.at(-1)!
+    expect(next).not.toBe(fake)
+    open(next)
+    next.onEvent(tick([{ probe: 'explorer.agent', costMs: 1, effectiveIntervalMs: 10_000, metrics: [0] }]), 10)
+    await settle()
+    expect(status.server(first)!.databases).toBeUndefined()
+    // Its first table is read even though it reports no change: the rows before it belong to the old subscription.
+    const reads = client.reads
+    next.onEvent(tick([table('explorer.databases', [['Sales', '0', '0', '1', '0']], { added: 0, removed: 0, changed: 0 })]), 10)
+    await settle()
+    expect(client.reads).toBe(reads + 1)
+    expect(status.server(first)!.databases?.get('Sales')?.words).toBe('Read-only')
+  })
+
+  it('takes a database\'s usability from its state: emergency mode is usable, a standby read-only', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    const fake = streamOf(first)
+    open(fake)
+    fake.onEvent(tick([table('explorer.databases', [['Em', '5', '0', '0', '0'], ['Standby', '0', '0', '0', '1'], ['Pending', '3', '0', '0', '0']])]), 10)
+    await settle()
+    const databases = status.server(first)!.databases!
+    expect(databases.get('Em')).toMatchObject({ words: 'Emergency' })
+    expect(databases.get('Em')!.state).toBeUndefined()
+    expect(databases.get('Standby')).toMatchObject({ words: 'Standby, read-only', state: 'readOnly' })
+    expect(databases.get('Pending')).toMatchObject({ words: 'Recovery pending', state: 'unavailable' })
+  })
+
+  it('refreshes only the view of the connection Refresh names, and opens again one that ended', async () => {
+    connections.add(info(first), { server: 'a' } as never)
+    connections.add(info(second), { server: 'b' } as never)
+    const a = streamOf(first), b = streamOf(second)
+    open(a)
+    open(b)
+    await settle()
+    status.refresh(first)
+    await settle()
+    expect(a.updates).toEqual([{ refresh: true }])
+    expect(b.updates).toEqual([])
+    // Every probe stopped for good (the login's password was reset): the view ends, and F5 opens it again, once.
+    a.end({ ok: true, value: { ended: 'failed', code: 'LOGIN_FAILED', message: 'Login failed. Refresh or reconnect to sign in again.', ticks: 1, elapsedMs: 10 } })
+    await settle()
+    expect(live.getSnapshot().handles.map(handle => handle.connectionId)).toEqual([second])
+    status.refresh(first)
+    await settle()
+    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first, second, first])
+    expect(b.updates).toEqual([])
+    status.refresh('00000000-0000-4000-8000-0000000000ff')
+    expect(client.streams).toHaveLength(3)
+  })
+
+  it('follows the visibility it is given, such as the Object Explorer container\'s', () => {
+    status.dispose()
+    let shown = false
+    const listeners = new Set<() => void>()
+    const visibility = { get: () => shown, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+    status = new ExplorerStatusService({ live, connections, panes, settings, visibility, schedule: callback => callback() })
+    connections.add(info(first), { server: 'a' } as never)
+    expect(client.streams).toHaveLength(0)
+    shown = true
+    for (const listener of [...listeners]) listener()
+    expect(client.streams.map(stream => stream.params.connectionId)).toEqual([first])
+  })
+})
+
+describe('Object Explorer\'s Refresh', () => {
+  it('samples the refreshed node\'s server at once', () => {
+    const handlers = new Map<string, (args?: unknown) => unknown>()
+    const commands = { register: (id: string, handler: { run: (args?: unknown) => unknown }) => { handlers.set(id, handler.run); return { dispose: () => {} } } }
+    const refreshed: (number | undefined)[] = [], sampled: (string | undefined)[] = []
+    const node = { id: 7, connectionId: first, kind: 'database', lost: false, ref: { type: 'object', object: { kind: 'database', name: 'Sales' } } }
+    const explorer = { menuNode: () => node, getSnapshot: () => ({ selected: 7 }), refresh: (id?: number) => { refreshed.push(id) } }
+    const disposable = explorerContribution({ commands, documents: {}, connections: { isLive: () => true, get: () => undefined }, explorer, explorerStatus: { refresh: (id?: string) => { sampled.push(id) } } } as never, { writeClipboardText: async () => ({ ok: true, value: undefined }) } as never)
+    handlers.get('explorer.refresh')!()
+    expect(refreshed).toEqual([7])
+    expect(sampled).toEqual([first])
+    disposable.dispose()
   })
 })

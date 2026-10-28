@@ -116,18 +116,25 @@ internal static partial class LiveSql
         + "WHERE d.state <> 0 OR d.user_access <> 0 OR d.is_read_only = 1 OR d.is_in_standby = 1\n"
         + "ORDER BY d.name;";
 
-    // A RESTORE runs in its session's own database (master, usually) until its last phase, so the database it restores is
-    // the one its request holds an exclusive database lock on. The lock DMV is read only for such requests (the APPLY runs
-    // per request row), never scanned for the whole server; a database recovering at startup (DB STARTUP) is the request's own.
+    // A database recovering at startup (DB STARTUP) is its request's own database. A RESTORE runs in its session's database
+    // (master, usually) until its last phase, so the database it restores is the one its request holds an exclusive database
+    // lock on. The lock DMV costs a scan of the lock manager each time it is read (tens of milliseconds on an idle server), so
+    // only the RESTORE branch reads it, once per RESTORE request (the APPLY's outer rows are those requests alone): a server
+    // with nothing restoring never scans it, however many databases recover.
     private const string Progress =
         "SELECT d.name, r.command, CONVERT(int, r.percent_complete) AS [percent]\n"
         + "FROM sys.dm_exec_requests AS r\n"
-        + "OUTER APPLY (SELECT TOP (1) l.resource_database_id FROM sys.dm_tran_locks AS l\n"
-        + "    WHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG') AND l.request_session_id = r.session_id AND l.resource_type = N'DATABASE' AND l.request_mode = N'X'\n"
+        + "JOIN sys.databases AS d ON d.database_id = r.database_id\n"
+        + "WHERE r.command = N'DB STARTUP'\n"
+        + "UNION ALL\n"
+        + "SELECT d.name, r.command, CONVERT(int, r.percent_complete)\n"
+        + "FROM sys.dm_exec_requests AS r\n"
+        + "CROSS APPLY (SELECT TOP (1) l.resource_database_id FROM sys.dm_tran_locks AS l\n"
+        + "    WHERE l.request_session_id = r.session_id AND l.resource_type = N'DATABASE' AND l.request_mode = N'X'\n"
         + "    ORDER BY l.resource_database_id) AS t\n"
-        + "JOIN sys.databases AS d ON d.database_id = CASE WHEN r.command = N'DB STARTUP' THEN r.database_id ELSE t.resource_database_id END\n"
-        + "WHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG', N'DB STARTUP')\n"
-        + "ORDER BY d.name;";
+        + "JOIN sys.databases AS d ON d.database_id = t.resource_database_id\n"
+        + "WHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG')\n"
+        + "ORDER BY name;";
 
     // Job Activity Monitor's count: the Agent's current session (a new one starts with every Agent start), so rows a crashed
     // Agent left without a stop date in an older session are not counted.

@@ -23,7 +23,7 @@ export const svgIcons = {
   role: { path: 'M8 5.5a2 2 0 1 1-4 0 2 2 0 0 1 4 0ZM2.5 13.5v-1a3.5 3.5 0 0 1 7 0v1M10 3.5a2 2 0 0 1 0 4M11 9.2a3.5 3.5 0 0 1 2.5 3.3v1', use: 'Server, database and application roles.' },
   shield: { path: 'M8 1.5l5.5 2v4c0 3.25-2.25 5.5-5.5 7-3.25-1.5-5.5-3.75-5.5-7v-4ZM5.5 8l2 2 3-3.5', use: 'Audits, audit specifications, security policies.' },
   'execution-plan': { path: 'M2.5 2.5h4v4h-4ZM9.5 2.5h4v4h-4ZM9.5 9.5h4v4h-4ZM6.5 4.5h3M7.5 4.5v7h2', use: 'Execution plan documents.' },
-  'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent jobs (planned).' },
+  'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent: Object Explorer\'s running-jobs chip, and jobs (planned).' },
   'ssis-package': { path: 'M1.5 3.5h13v2h-13ZM2.5 5.5h11v8h-11ZM5.5 9.5h4.5M8.5 8l1.5 1.5-1.5 1.5', use: 'Integration Services packages (planned).' },
   'ssis-environment': { path: 'M2.5 3.5h11M2.5 7.5h11M2.5 11.5h7M13.5 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z', use: 'Integration Services environments (planned).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>

@@ -22,8 +22,9 @@ const MiB = 1024 * 1024
 export const liveServiceLimits = {
   /** Open handles in a window: main runs at most this many live streams on the results port. */
   handles: limits.live.portStreams,
-  /** Background views (Object Explorer's status chips, one per server) holding a slot at once. They take only slots no
-   *  other view wants, and give theirs up to a view that opens when every slot is taken. */
+  /** Background views (Object Explorer's status chips, one per server and login) holding a slot at once. They take only
+   *  slots no other view wants: they give theirs up to a view that opens when every slot of the window is taken, or that
+   *  the backend refuses (BUSY) at its caps of 8 a server and 32 a backend, and wait when the backend refuses them. */
   background: 8,
   /** Hidden views that keep their status probes running (a source's `hidden: 'statusOnly'`). */
   statusOnly: 4,
@@ -66,7 +67,8 @@ export interface LiveSpec {
    *  (an SSIS execution this window started, so its end is still seen). At most 4 such views a window; others pause. */
   whileHidden?: 'statusOnly'
   /** A background view: it runs only in a slot nobody else wants (at most liveServiceLimits.background of them), waits
-   *  for one when none is free, and gives its slot up, newest first, to a view that opens when every slot is taken. */
+   *  for one when none is free or the backend refuses it (BUSY), and gives its slot up, newest first, to a view that opens
+   *  when every slot is taken, or that the backend refuses on the same server. */
   background?: true
 }
 
@@ -237,6 +239,9 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     /** Coalesces snapshot notifications: an animation frame in the app. */
     schedule?: (callback: () => void) => void
     catalog?: LiveCatalog
+    /** The server a connection reaches, as the user typed it: a view the backend refuses at its per-server cap takes a
+     *  background view's slot on that server. Without it, only one on the same connection. */
+    serverOf?: (connectionId: string) => string | undefined
   }) {
     super({ handles: [] })
     this.timers = o.timers ?? browserTimers
@@ -314,6 +319,17 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
       if (!handle.background || handle.holdsSlot()) continue
       if (handle.claimSlot(after)) after = undefined
     }
+  }
+
+  /** The backend refused `requester` (BUSY) at its caps: the newest running background view on the same server gives its
+   *  slot up. Returns the stream whose end the requester waits for (undefined when it has ended), or false when no
+   *  background view runs there, since one on another server would free nothing the server's cap counts. */
+  yieldOnServer(requester: Handle): StreamRecord | undefined | false {
+    const serverOf = this.o.serverOf, server = serverOf?.(requester.connectionId)
+    const same = (handle: Handle) => server !== undefined ? serverOf?.(handle.connectionId) === server : handle.connectionId === requester.connectionId
+    // A dormant view holds no subscription the backend counts.
+    const victim = [...this.handles.values()].reverse().find(handle => handle !== requester && handle.background && handle.holdsSlot() && (handle.status === 'connecting' || handle.status === 'live' || handle.status === 'paused') && same(handle))
+    return victim ? victim.yieldSlot() : false
   }
 
   /** Open views of a source, as they are: it never subscribes, so a badge or summary that reads it starts no sampling of
@@ -405,6 +421,8 @@ class Handle implements LiveHandle {
   readonly background: boolean
   /** A background view without a slot: dormant until LiveService gives it one. */
   private waiting = false
+  /** This view, refused BUSY, already took a background view's slot: a second refusal ends it. Cleared once it opens. */
+  private busyRetried = false
   private snapshot: LiveSnapshot
   private stream: StreamRecord | undefined
   /** The last subscription this view stopped: the next one waits for its end (see restart). */
@@ -548,6 +566,15 @@ class Handle implements LiveHandle {
     this.changed()
   }
 
+  /** The backend refused this background view (BUSY at its caps): it waits, running nothing, until a view closes. */
+  private waitForSlot(): void {
+    this.waiting = true
+    this.status = 'dormant'
+    this.clearTimer('staleTimer')
+    this.leaveStatusOnly()
+    this.changed()
+  }
+
   /** Another view needs this background view's slot: it stops (its history stays) and waits for one. Returns the stream
    *  whose end the other view waits for. */
   yieldSlot(): StreamRecord | undefined {
@@ -596,6 +623,7 @@ class Handle implements LiveHandle {
 
   private applyOpened(record: StreamRecord, event: LiveOpenedEvent): void {
     record.opened = true
+    this.busyRetried = false
     this.spid = event.spid
     const now = this.service.now()
     let rings = false
@@ -656,6 +684,18 @@ class Handle implements LiveHandle {
     this.stream = undefined
     this.clearTimer('retryTimer')
     this.updateError = false
+    // The backend refused the subscription at its caps (8 a server, 32 a backend). A background view waits for a slot
+    // rather than end; another view takes a background view's slot on the same server, once.
+    if (!result.ok && result.code === 'BUSY' && !record.opened) {
+      if (this.background) { this.waitForSlot(); return }
+      const after = this.busyRetried ? false : this.service.yieldOnServer(this)
+      if (after !== false) {
+        this.busyRetried = true
+        this.previous = after
+        this.restart()
+        return
+      }
+    }
     if (result.ok) {
       const end = result.value
       if (end.resume !== undefined) this.resume = end.resume

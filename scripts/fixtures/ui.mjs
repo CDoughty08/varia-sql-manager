@@ -121,6 +121,8 @@ export const part = {
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
   statusPillLabel: '.status-pill-label',
+  /** A pill's number (StatusPill `value`: a percentage, a count), which never gives way to the label beside it. */
+  statusPillValue: '.status-pill-value',
   /** The status bars' spans that hold the tag with its visually hidden prefix. */
   queryEnvironment: '.query-status-environment',
   statusEnvironment: '.status-environment',
@@ -307,8 +309,8 @@ export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)
 export const connectionDot = row => row.locator(part.explorerDot)
-/** The labels of a row's live status chips, in order ("RESTORING 42 %", "2 jobs running"). */
-export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPillLabel}`)
+/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 jobs running"). */
+export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPill}`)
 /** The server rows marked as the active query's server (at most one). */
 export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
 export const explorerMatches = page => explorerTree(page).locator(part.explorerMatch)

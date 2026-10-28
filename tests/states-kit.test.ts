@@ -158,6 +158,13 @@ describe('states kit components', () => {
     // An environment tag has no glyph by default, and the small size fits tree rows and the status bar.
     expect(html(createElement(StatusPill, { tone: 'critical', label: 'PROD', variant: 'tag', size: 'small', title: 'Production environment' })))
       .toBe('<span class="status-pill tag small" data-tone="critical" title="Production environment"><span class="status-pill-label">PROD</span></span>')
+    // A value at the label's end or start is set apart, so a narrow pill cuts the word beside it and never the number.
+    expect(html(createElement(StatusPill, { tone: 'running', label: 'RESTORING 42 %', value: '42 %', icon: null })))
+      .toBe('<span class="status-pill" data-tone="running"><span class="status-pill-label">RESTORING </span><span class="status-pill-value">42 %</span></span>')
+    expect(html(createElement(StatusPill, { tone: 'running', label: '12 jobs running', value: '12', icon: null })))
+      .toBe('<span class="status-pill" data-tone="running"><span class="status-pill-value">12</span><span class="status-pill-label"> jobs running</span></span>')
+    // A value the label does not start or end with, or the whole label, changes nothing.
+    for (const [label, value] of [['RESTORING 42 %', '7'], ['42 %', '42 %']]) expect(html(createElement(StatusPill, { tone: 'running', label, value, icon: null }))).not.toContain('status-pill-value')
     expect(html(createElement(StatusPill, { tone: 'success', label: 'Succeeded', icon: null }))).not.toContain('codicon')
     expect(html(createElement(StatusPill, { tone: 'neutral', label: 'Canceled', icon: 'circle-slash' }))).toContain('codicon-circle-slash')
     for (const tone of statusTones) expect(html(createElement(StatusPill, { tone, label: tone })), tone).toContain(`data-tone="${tone}"`)
