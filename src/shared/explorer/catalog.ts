@@ -3,6 +3,7 @@
 // explorerCatalogJson() as Explorer/explorer-catalog.json (a vitest file snapshot keeps that copy in sync).
 // Erasable TypeScript (no enums), so Node's type stripping can load it as well.
 import type { CodiconId, IconId } from '../icons.ts'
+import { maxIdentifierLength } from '../sql/identifiers.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -13,23 +14,33 @@ export const nodeKinds = [
   'databaseAuditSpecification', 'databaseTrigger', 'externalDataSource', 'externalFileFormat', 'fullTextCatalog', 'fullTextStoplist', 'partitionScheme',
   'partitionFunction', 'searchPropertyList', 'planGuide',
   'table', 'view', 'synonym', 'procedure', 'function', 'sequence', 'type', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy',
-  'column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter', 'returnValue'
+  'column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter', 'returnValue',
+  'ssisCatalog', 'ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment'
 ] as const
 export type NodeKind = typeof nodeKinds[number]
 
-/** Which identity fields a kind's refs carry (`scopeFields`). */
-export const kindScopes = ['server', 'serverObject', 'database', 'databaseObject', 'schemaObject', 'child', 'childUnnamed'] as const
+/**
+ * Which identity fields a kind's refs carry (`scopeFields`). The `ssis*` scopes name SSIS Catalog objects by folder and
+ * project (SSISDB names, not database objects): the catalog itself, a folder, a folder's project or environment, and a
+ * project's package.
+ */
+export const kindScopes = ['server', 'serverObject', 'database', 'databaseObject', 'schemaObject', 'child', 'childUnnamed', 'ssisCatalog', 'ssisFolder', 'ssisFolderObject', 'ssisProjectObject'] as const
 export type KindScope = typeof kindScopes[number]
-export const refFields = ['database', 'schema', 'name', 'parent'] as const
+export const refFields = ['database', 'schema', 'name', 'parent', 'ssisFolder', 'ssisProject'] as const
 export type RefField = typeof refFields[number]
+const ssisFields = ['ssisFolder', 'ssisProject'] as const
 export const scopeFields: { readonly [S in KindScope]: { readonly required: readonly RefField[]; readonly forbidden: readonly RefField[] } } = {
-  server: { required: [], forbidden: ['database', 'schema', 'name', 'parent'] },
-  serverObject: { required: ['name'], forbidden: ['database', 'schema', 'parent'] },
-  database: { required: ['name'], forbidden: ['database', 'schema', 'parent'] },
-  databaseObject: { required: ['database', 'name'], forbidden: ['schema', 'parent'] },
-  schemaObject: { required: ['database', 'schema', 'name'], forbidden: ['parent'] },
-  child: { required: ['database', 'parent', 'name'], forbidden: ['schema'] },
-  childUnnamed: { required: ['database', 'parent'], forbidden: ['schema', 'name'] }
+  server: { required: [], forbidden: ['database', 'schema', 'name', 'parent', ...ssisFields] },
+  serverObject: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
+  database: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
+  databaseObject: { required: ['database', 'name'], forbidden: ['schema', 'parent', ...ssisFields] },
+  schemaObject: { required: ['database', 'schema', 'name'], forbidden: ['parent', ...ssisFields] },
+  child: { required: ['database', 'parent', 'name'], forbidden: ['schema', ...ssisFields] },
+  childUnnamed: { required: ['database', 'parent'], forbidden: ['schema', 'name', ...ssisFields] },
+  ssisCatalog: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
+  ssisFolder: { required: ['name'], forbidden: ['database', 'schema', 'parent', ...ssisFields] },
+  ssisFolderObject: { required: ['ssisFolder', 'name'], forbidden: ['database', 'schema', 'parent', 'ssisProject'] },
+  ssisProjectObject: { required: ['ssisFolder', 'ssisProject', 'name'], forbidden: ['database', 'schema', 'parent'] }
 }
 /** The kinds that own child folders, and so can be a child ref's `parent`. */
 export const parentKinds = ['table', 'view', 'tableType', 'procedure', 'function'] as const
@@ -50,7 +61,8 @@ export const folderIds = [
   'storage', 'fullTextCatalogs', 'partitionSchemes', 'partitionFunctions', 'fullTextStoplists', 'searchPropertyLists',
   'databaseSecurity', 'users', 'roles', 'databaseRoles', 'applicationRoles', 'schemas', 'asymmetricKeys', 'certificates', 'symmetricKeys',
   'alwaysEncryptedKeys', 'columnMasterKeys', 'columnEncryptionKeys', 'databaseAuditSpecifications', 'securityPolicies',
-  'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters'
+  'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
+  'integrationServicesCatalogs', 'ssisProjects', 'ssisEnvironments', 'ssisPackages'
 ] as const
 export type FolderId = typeof folderIds[number]
 
@@ -64,7 +76,8 @@ export const nodeSubtypes = [
   'check', 'default', 'edge',
   'clustered', 'nonclustered', 'clusteredColumnstore', 'nonclusteredColumnstore', 'xml', 'spatial', 'hash', 'other',
   'alias',
-  'input', 'output'
+  'input', 'output',
+  'entryPoint', 'child'
 ] as const
 export type NodeSubtype = typeof nodeSubtypes[number]
 
@@ -79,7 +92,8 @@ export const queryIds = [
   'fullTextCatalogs', 'partitionSchemes', 'partitionFunctions', 'fullTextStoplists', 'searchPropertyLists',
   'users', 'databaseRoles', 'applicationRoles', 'schemas', 'asymmetricKeys', 'certificates', 'symmetricKeys', 'columnMasterKeys', 'columnEncryptionKeys',
   'databaseAuditSpecifications', 'securityPolicies',
-  'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters'
+  'columns', 'keys', 'constraints', 'tableTriggers', 'indexes', 'statistics', 'parameters',
+  'ssisCatalogs', 'ssisFolders', 'ssisProjects', 'ssisPackages', 'ssisEnvironments'
 ] as const
 export type QueryId = typeof queryIds[number]
 
@@ -90,7 +104,7 @@ export const explorerIcons = [
   'symbol-field', 'references', 'symbol-operator', 'symbol-key', 'pass', 'symbol-constant', 'link', 'zap', 'list-ordered', 'layers', 'graph',
   'symbol-function', 'symbol-parameter', 'arrow-left', 'package', 'symbol-structure', 'code', 'law', 'symbol-numeric', 'milestone',
   'person', 'symbol-namespace', 'workspace-trusted', 'circuit-board', 'file-code', 'book', 'circle-slash', 'list-flat', 'split-horizontal',
-  'symbol-ruler', 'archive', 'remote'
+  'symbol-ruler', 'archive', 'remote', 'folder-library', 'project', 'symbol-variable', 'symbol-file'
 ] as const satisfies readonly IconId[]
 export type ExplorerIcon = typeof explorerIcons[number]
 /** Folders show `folder`, or `folder-opened` while expanded. */
@@ -163,6 +177,12 @@ export interface KindSpec {
   readonly variantIcons?: Readonly<Record<string, ExplorerIcon>>
   /** Static child folders, in SSMS order. */
   readonly folders: readonly FolderId[]
+  /** Dynamic rows listed directly below the node, after its static folders (SSMS lists an SSIS catalog's folders so). */
+  readonly list?: QueryId
+  /** The kinds of the listed rows. */
+  readonly rows?: readonly NodeKind[]
+  /** The longest name a ref of this kind may carry, in UTF-16 code units, when it is longer than sysname's 128. */
+  readonly maxName?: number
   readonly subtypeFolders?: Partial<Record<NodeSubtype, readonly FolderId[]>>
   /** Table subtypes whose first page starts with the history table's row (query `historyTable`). */
   readonly historyLookup?: readonly NodeSubtype[]
@@ -252,7 +272,13 @@ const folderData: { readonly [F in FolderId]: Omit<FolderSpec, 'id'> } = {
   tableTriggers: { label: 'Triggers', owner: 'object', order: 4, list: 'tableTriggers', rows: ['trigger'] },
   indexes: { label: 'Indexes', owner: 'object', order: 5, list: 'indexes', rows: ['index'] },
   statistics: { label: 'Statistics', owner: 'object', order: 6, list: 'statistics', rows: ['statistic'] },
-  parameters: { label: 'Parameters', owner: 'object', order: 7, list: 'parameters', rows: ['parameter', 'returnValue'] }
+  parameters: { label: 'Parameters', owner: 'object', order: 7, list: 'parameters', rows: ['parameter', 'returnValue'] },
+
+  // The SSIS Catalog (D-ssis 3.2): SSISDB lists its folders directly below itself (KindSpec.list), as SSMS shows them.
+  integrationServicesCatalogs: { label: 'Integration Services Catalogs', owner: 'server', order: 8, since: 13, list: 'ssisCatalogs', rows: ['ssisCatalog'] },
+  ssisProjects: { label: 'Projects', owner: 'object', order: 1, list: 'ssisProjects', rows: ['ssisProject'], filter: named },
+  ssisEnvironments: { label: 'Environments', owner: 'object', order: 2, list: 'ssisEnvironments', rows: ['ssisEnvironment'], filter: named },
+  ssisPackages: { label: 'Packages', owner: 'object', order: 1, list: 'ssisPackages', rows: ['ssisPackage'], filter: named }
 }
 export const folderSpecs = Object.fromEntries(folderIds.map(id => [id, { id, ...folderData[id] }])) as { readonly [F in FolderId]: FolderSpec }
 
@@ -265,7 +291,6 @@ export const laterFolders: readonly LaterFolder[] = [
     contents: ['Policy Management', 'Data Collection', 'Resource Governor', 'Extended Events', 'Maintenance Plans', 'SQL Server Logs', 'Database Mail',
       'Distributed Transaction Coordinator', 'Legacy']
   },
-  { label: 'Integration Services Catalogs', owner: 'server', order: 8 },
   { label: 'SQL Server Agent', owner: 'server', order: 9 },
   { label: 'XEvent Profiler', owner: 'server', order: 10 },
   { label: 'Endpoints', owner: 'server', parent: 'serverObjects', order: 2, contents: ['System Endpoints', 'Database Mirroring', 'Service Broker', 'TSQL'] },
@@ -288,7 +313,7 @@ type KindData = Omit<KindSpec, 'kind' | 'folders' | 'scriptable'> & { readonly f
 // Most kinds are scriptable leaves; the data names only the exceptions.
 const kindData: { readonly [K in NodeKind]: KindData } = {
   server: {
-    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects'], smo: 'Server', scriptable: false, insert: 'none'
+    title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none'
   },
   login: { title: 'Login', scope: 'serverObject', icon: 'login', smo: 'Login', insert: 'onePart' },
   serverRole: { title: 'Server Role', scope: 'serverObject', icon: 'role', smo: 'ServerRole', insert: 'onePart' },
@@ -377,7 +402,17 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
   },
   statistic: { title: 'Statistic', scope: 'child', icon: 'graph', smo: 'Statistic', insert: 'onePart' },
   parameter: { title: 'Parameter', scope: 'child', icon: 'symbol-parameter', subtypes: ['input', 'output'], smo: 'Parameter', scriptable: false, insert: 'raw' },
-  returnValue: { title: 'Return value', scope: 'childUnnamed', icon: 'arrow-left', scriptable: false, insert: 'none' }
+  returnValue: { title: 'Return value', scope: 'childUnnamed', icon: 'arrow-left', scriptable: false, insert: 'none' },
+  // SSIS Catalog objects are named by folder and project, not by database and schema, and are not SQL objects: nothing
+  // scripts or inserts them. A package that is not an entry point is the subtype `child`.
+  ssisCatalog: { title: 'Integration Services Catalog', scope: 'ssisCatalog', icon: 'database', list: 'ssisFolders', rows: ['ssisFolder'], scriptable: false, insert: 'none' },
+  ssisFolder: { title: 'Folder', scope: 'ssisFolder', icon: 'folder-library', folders: ['ssisProjects', 'ssisEnvironments'], scriptable: false, insert: 'none' },
+  ssisProject: { title: 'Project', scope: 'ssisFolderObject', icon: 'project', folders: ['ssisPackages'], scriptable: false, insert: 'none' },
+  ssisPackage: {
+    title: 'Package', scope: 'ssisProjectObject', icon: 'package', subtypes: ['entryPoint', 'child'], subtypeIcons: { child: 'symbol-file' }, maxName: 260,
+    scriptable: false, insert: 'none'
+  },
+  ssisEnvironment: { title: 'Environment', scope: 'ssisFolderObject', icon: 'symbol-variable', scriptable: false, insert: 'none' }
 }
 export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
   const { folders = [], scriptable = true, ...rest } = kindData[kind]
@@ -388,8 +423,10 @@ export const explorerLimits = {
   pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
   cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
   typeAheadMax: 64, rowHeight: 22, indent: 16, overscan: 10, deleteSlice: 10_000,
-  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512
+  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260
 } as const
+/** The name bound of a kind's refs: sysname's 128 UTF-16 code units unless the kind declares a longer one. */
+export const maxNameOf = (spec: Pick<KindSpec, 'maxName'>): number => spec.maxName ?? maxIdentifierLength
 
 const byOrder = (a: { readonly order: number }, b: { readonly order: number }) => a.order - b.order
 const subfolderMap = new Map<FolderId, readonly FolderId[]>(folderIds.map(id => [id, folderIds.filter(child => folderSpecs[child].parent === id).map(child => folderSpecs[child]).sort(byOrder).map(spec => spec.id)]))
@@ -453,7 +490,7 @@ export function explorerCatalogJson(): string {
     const spec = kindSpecs[kind]
     return {
       ...spec, subtypes: spec.subtypes ?? [], subtypeIcons: spec.subtypeIcons ?? {}, variantIcons: spec.variantIcons ?? {}, subtypeFolders: spec.subtypeFolders ?? {},
-      historyLookup: spec.historyLookup ?? [], subtypeSmo: spec.subtypeSmo ?? {}, parents: childParentKinds(kind)
+      historyLookup: spec.historyLookup ?? [], subtypeSmo: spec.subtypeSmo ?? {}, parents: childParentKinds(kind), rows: spec.rows ?? [], maxName: maxNameOf(spec)
     }
   })
   return [

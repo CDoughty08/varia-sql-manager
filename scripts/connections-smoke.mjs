@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { activeDocument, connectErrorDetails, connectFailure, connectOutcome, copyOutcome, databaseErrorDetails, errorNote, errorSentence, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocument, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -283,7 +283,7 @@ try {
     const [number, severity, , answered] = await connectErrorDetails(dialog).locator('dd').allTextContents()
     expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
     expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
-    expect([...await dialog.getByRole('alert').allTextContents(), ...await connectErrorDetails(dialog).allTextContents()].join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
+    expect((await connectFailure(dialog).allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
     // Load databases with the same login fails the same way, and shows the same details under its note.
     const liveDatabaseDetails = databaseErrorDetails(dialog)
     await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
@@ -529,7 +529,7 @@ try {
   // The explanation is part of the alert, so it is read with the error, and it lines up with the error's sentence.
   const explained = async (text) => {
     await expect(dialog.getByRole('alert')).toContainText(text)
-    const [note, sentence] = await Promise.all([errorNote(connectFailure(dialog)).boundingBox(), errorSentence(connectFailure(dialog)).boundingBox()])
+    const [note, sentence] = await Promise.all([connectFailureNote(dialog).boundingBox(), connectFailureSentence(dialog).boundingBox()])
     expect(Math.abs(note.x - sentence.x)).toBeLessThan(1)
   }
   await explained(/Strict encryption always validates/)
@@ -550,7 +550,7 @@ try {
   await expect(dialog.getByRole('alert')).toContainText('The backend operation failed.')
   await expect(details).toHaveCount(0)
   await connectFailure(dialog).getByRole('button', { name: 'Copy details', exact: true }).click()
-  await expect(copyOutcome(connectFailure(dialog))).toHaveText('Details copied.')
+  await expect(connectFailureCopyStatus(dialog)).toHaveText('Details copied.')
   expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Connecting to backend-error\nCode: BACKEND_ERROR\nMessage: The backend operation failed. Verify the connection and object permissions.\nException: System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)')
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
   expect(history.value.library.profiles.some(item => item.options.server === 'server-down')).toBe(false)

@@ -10,10 +10,13 @@ import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
+import type { SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
+import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
+import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -218,7 +221,8 @@ export interface ExplorerNode {
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA'] as const
+// NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'NOT_SUPPORTED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -262,12 +266,25 @@ export interface RpcMethods {
   'actions.script': { params: ActionRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
   'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
+  'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
+  /** Changes the SSIS Catalog (Stop Operation) on its own unpooled connection after a preflight; never re-sent, and only Stop
+   *  (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
+  'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
+  /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
+  'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
+  /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
+  'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
 export interface PortMethods {
   'results.read': { params: ResultsReadParams; result: ResultsReadResult }
   'results.close': { params: { resultIds: number[] }; result: ResultsCloseResult }
+  /** A live subscription (docs/ipc.md): its EVENTs are credited, one unacknowledged at a time, and it ends only by CANCEL,
+   *  a disconnect, a backend shutdown, a failure or its source ending. */
+  'live.subscribe': { params: LiveSubscribeParams; result: LiveEnd }
+  'live.update': { params: LiveUpdateParams; result: LiveUpdateResult }
 }
 /** Methods only main sends (results jobs): no renderer or port schema accepts them. */
 export interface JobMethods {
@@ -392,6 +409,20 @@ export interface VariaApi {
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
+  describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
+  /** Runs an SSIS Catalog action (Stop Operation). Refusals and failures come back as `result.error` with the steps that ran. */
+  executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
+  /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
+   *  answers `CANCELLED`. */
+  cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an Activity Monitor session's details (the flyout). Failures the user can act on come back as `result.error`. */
+  activityDetails(params: ActivityDetailsRequest): Promise<ApiResult<ActivityDetailsResult>>
+  /** Kills sessions (1–64) after checking each one's identity; every session gets an outcome or is reported untried. */
+  activityKill(params: ActivityKillRequest): Promise<ApiResult<ActivityKillResult>>
+  /** Cancels Details reads by their `requestId`s (1–16); `cancelled` counts those still running. A read cancelled this
+   *  way answers `CANCELLED`. */
+  cancelActivity(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
   getSettings(): Promise<ApiResult<SettingsLoad>>
   /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */

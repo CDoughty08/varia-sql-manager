@@ -2,6 +2,7 @@
 // (src/shared/ipc/port-messages.ts).
 import type { BackendStatus, QueryEvent, WireKind } from '../../../shared/contracts'
 import type { ErrorCode } from '../../../shared/ipc/wire/protocol'
+import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from '../../../shared/live/schema'
 
 /** A result is named by its backend generation and its id within that generation. */
 export interface ResultKey { readonly generation: number; readonly resultId: number }
@@ -54,6 +55,15 @@ export type WorkerRequest =
   | { readonly type: 'cancel'; readonly id: number }
   | { readonly type: 'close'; readonly id: number; readonly generation: number; readonly resultIds: readonly number[] }
   | { readonly type: 'stats'; readonly id: number }
+  /** A live subscription (docs/ipc.md, Live subscriptions); `cancel` with the same id ends it. */
+  | { readonly type: 'live'; readonly id: number; readonly params: LiveSubscribeParams }
+  /** A change to the running subscription whose request id is `live`. */
+  | { readonly type: 'liveUpdate'; readonly id: number; readonly live: number; readonly params: LiveUpdateParams }
+  /** The page applied a live event of the subscription `id`: the worker grants those bytes back to main. */
+  | { readonly type: 'liveAck'; readonly id: number; readonly bytes: number }
+  /** Results the backend already released (retired by a tick, or ended with their subscription): their pages go, and no
+   *  results.close is sent. */
+  | { readonly type: 'forget'; readonly generation: number; readonly resultIds: readonly number[] }
 
 /** Worker → UI. A window's `flags` buffer and a measure's `widths` buffer are transferred. */
 export type WorkerResponse =
@@ -66,3 +76,7 @@ export type WorkerResponse =
   | { readonly type: 'query'; readonly queryId: string; readonly event: QueryEvent }
   | { readonly type: 'memory'; readonly usedBytes: number; readonly globalBytes: number; readonly generation: number; readonly seq: number }
   | { readonly type: 'backend'; readonly generation: number; readonly status: BackendStatus }
+  /** A live event as main validated it, with its EVENT body's length, which the page acknowledges with `liveAck`. */
+  | { readonly type: 'live'; readonly id: number; readonly bytes: number; readonly event: LiveEvent }
+  | { readonly type: 'liveEnd'; readonly id: number; readonly result: LiveEnd }
+  | { readonly type: 'liveUpdated'; readonly id: number; readonly result: LiveUpdateResult }

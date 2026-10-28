@@ -74,8 +74,8 @@ export interface SendOptions {
   backstopMs?: number
   credit?: number
   stream?: StreamSink
-  /** Each EVENT for this request; returning false rejects it as invalid (a contained violation). */
-  onEvent?: (event: unknown) => boolean | void
+  /** Each EVENT for this request, with its body's length; returning false rejects it as invalid (a contained violation). */
+  onEvent?: (event: unknown, bytes: number) => boolean | void
   sensitive?: boolean
 }
 
@@ -102,7 +102,10 @@ interface Pending {
   readonly resolve: (value: unknown) => void
   readonly reject: (error: BackendError) => void
   readonly stream?: StreamSink
-  readonly onEvent?: (event: unknown) => boolean | void
+  readonly onEvent?: (event: unknown, bytes: number) => boolean | void
+  /** Live subscriptions: EVENTs count against credit, one unacknowledged at a time (`initialCredit` all back). */
+  readonly creditedEvents: boolean
+  readonly initialCredit: number
   timer?: unknown
   granted: number
   received: number
@@ -237,7 +240,8 @@ export class BackendConnection {
       return refuse('BACKEND_LOST', sentences.lost)
     }
     const sensitive = o.sensitive ?? policy.sensitive === true
-    const credit = o.credit === undefined ? undefined : Math.min(wire.credit.max, Math.max(wire.credit.min, Math.floor(o.credit)))
+    const creditedEvents = policy.creditedEvents === true
+    const credit = o.credit === undefined ? (creditedEvents ? wire.live.initialCredit : undefined) : Math.min(wire.credit.max, Math.max(wire.credit.min, Math.floor(o.credit)))
     const envelope = credit === undefined ? { method, params } : { method, params, credit }
     let body: Uint8Array
     try { body = sensitive ? encodeSensitiveControl(envelope) : encodeControl(envelope) }
@@ -258,7 +262,7 @@ export class BackendConnection {
     let resolve!: (value: unknown) => void
     let reject!: (error: BackendError) => void
     const done = new Promise<unknown>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
-    const pending: Pending = { id, method, resolve, reject, stream: o.stream, onEvent: o.onEvent, granted: credit ?? 0, received: 0, seq: 0 }
+    const pending: Pending = { id, method, resolve, reject, stream: creditedEvents ? undefined : o.stream, onEvent: o.onEvent, creditedEvents, initialCredit: credit ?? 0, granted: credit ?? 0, received: 0, seq: 0 }
     this.pending.set(id, pending)
     const backstopMs = o.backstopMs ?? 0
     if (backstopMs > 0) pending.timer = this.clock.setTimeout(() => this.backstop(pending, backstopMs), backstopMs)
@@ -271,11 +275,13 @@ export class BackendConnection {
     if (this.pending.has(id)) this.write(encodeFrame(FrameKind.CANCEL, id, reason), false)
   }
 
-  /** More credit for a stream, clamped to 16 MiB outstanding. */
+  /** More credit for a stream, clamped to 16 MiB outstanding. A live subscription's credit acknowledges its EVENTs: it
+   *  is clamped to what they took, so an over-eager acknowledgement can never let two frames be in flight. */
   credit(id: number, bytes: number): void {
     const pending = this.pending.get(id)
-    if (!pending?.stream) return
-    const grant = Math.min(Math.floor(bytes), wire.credit.max, wire.credit.perStream - (pending.granted - pending.received))
+    if (!pending || (!pending.stream && !pending.creditedEvents)) return
+    const room = pending.creditedEvents ? pending.initialCredit - (pending.granted - pending.received) : wire.credit.perStream - (pending.granted - pending.received)
+    const grant = Math.min(Math.floor(bytes), wire.credit.max, room)
     if (!(grant >= 1)) return
     pending.granted += grant
     this.write(encodeFrame(FrameKind.CREDIT, id, grant), false)
@@ -336,10 +342,16 @@ export class BackendConnection {
       pending.stream.data(frame.arg, frame.body.buffer as ArrayBuffer)
       return
     }
+    // A live EVENT is accepted only while nothing is unacknowledged, and only up to the event limit; it then takes its
+    // length from the credit until the renderer has applied it.
+    if (frame.kind === FrameKind.EVENT && pending.creditedEvents) {
+      if (frame.body.length > wire.eventBody || pending.granted - pending.received < pending.initialCredit) return this.contained(pending)
+      pending.received += frame.body.length
+    }
     const body = decoded(frame.body)
     if (!body) return this.contained(pending)
     if (frame.kind === FrameKind.EVENT) {
-      if (pending.onEvent?.(body.value) === false) this.contained(pending)
+      if (pending.onEvent?.(body.value, frame.body.length) === false) this.contained(pending)
       return
     }
     const value = body.value
