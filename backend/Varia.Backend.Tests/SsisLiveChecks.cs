@@ -19,7 +19,7 @@ internal static class SsisLiveChecks
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
     private static long Long(string? text) => long.Parse(text!, CultureInfo.InvariantCulture);
 
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, ConnectOptions> live, JsonSerializerOptions json)
     {
         async Task<SqlRun> Sql(string text, string database = "master", string? session = null)
         {
@@ -92,7 +92,10 @@ internal static class SsisLiveChecks
             return;
         }
         if (manifest is null) throw new InvalidOperationException(path + " is missing.");
-        await FakeAsync(check, Sql, id => service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(id), json), json), scratch, manifest.Catalogs[^1]);
+        Task<object> Close(string id) => service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(id), json), json);
+        await FakeAsync(check, Sql, Close, scratch, manifest.Catalogs[^1]);
+        // S1b: the SSIS tree and ssis.describe, against the same fake catalog.
+        await SsisCatalogLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
     }
 
     private static void Write(ManifestFile? manifest, CatalogShape? shape, string path)

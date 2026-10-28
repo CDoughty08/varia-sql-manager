@@ -141,6 +141,7 @@ await ScriptingChecks.RunAsync(Check);
 await ActionChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
+await SsisChecks.RunAsync(Check);
 ActivityChecks.Run(Check);
 await ActivityActionChecks.RunAsync(Check, json);
 using (var offline = new SqlService())
@@ -427,7 +428,7 @@ try
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
-    await SsisLiveChecks.RunAsync(Check, service, info, json);
+    await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityLiveChecks.RunAsync(Check, service, info);
     await ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);

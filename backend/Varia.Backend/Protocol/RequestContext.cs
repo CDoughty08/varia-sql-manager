@@ -2,11 +2,12 @@ namespace Varia.Backend.Protocol;
 
 /// <summary>What a method waits for before it runs (the lanes of src/shared/ipc/methods.ts): control runs at once,
 /// metadata takes one of 8 slots, query uses the session path, results one of 16 read slots, explorer runs at once
-/// under Object Explorer's own gates (static folders need no slot at all), and actions runs DDL at once under the action
+/// under Object Explorer's own gates (static folders need no slot at all), actions runs DDL at once under the action
 /// service's own gates, so a DROP waiting on a lock never holds a metadata slot (Kill Process runs there under gates of its
-/// own). A live subscription takes no slot: it samples on its own task, one tick at a time, and answers only when it ends;
-/// its statements, and a unary live method's (activity.details, through LiveService.RunGatedAsync), run under the live gates.</summary>
-internal enum RequestLane { Control, Metadata, Query, Results, Explorer, Actions, Live }
+/// own), and ssis runs SSIS Catalog reads at once under the SSIS service's own gates. A live subscription takes no slot: it
+/// samples on its own task, one tick at a time, and answers only when it ends; its statements, and a unary live method's
+/// (activity.details, through LiveService.RunGatedAsync), run under the live gates.</summary>
+internal enum RequestLane { Control, Metadata, Query, Results, Explorer, Actions, Live, Ssis }
 
 /// <summary>Why a request's token was cancelled: CANCEL frame reasons 1–4, or its own header deadline.</summary>
 internal enum CancelReason { None = 0, User = 1, Deadline = 2, ConsumerGone = 3, Shutdown = 4, Expired = 5 }

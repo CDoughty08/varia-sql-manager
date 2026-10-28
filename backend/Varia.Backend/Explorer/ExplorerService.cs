@@ -15,6 +15,11 @@ internal interface IExplorerHost
     /// <summary>An unopened connection from the connection's Object Explorer pool; with a database, a pool in that database
     /// (cloud editions, which cannot EXEC across databases).</summary>
     SqlConnection Connection(string connectionId, string? database);
+    /// <summary>An unopened connection from the connection's SSIS read pool (" - Integration Services"), in the SSIS Catalog's
+    /// database, for QueryScope.Ssis listings.</summary>
+    SqlConnection SsisConnection(string connectionId);
+    /// <summary>The SSIS Catalog's database: SSISDB, or the checks' fake catalog.</summary>
+    string SsisCatalog { get; }
     /// <summary>Opens one of those connections; a Kerberos token failure throws AUTH_KERBEROS (or AUTH_UNSUPPORTED), and a
     /// Microsoft Entra token failure AUTH_ENTRA, which the node shows.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
@@ -75,6 +80,9 @@ internal sealed class ExplorerService : IDisposable
         var real = server.Explorer(catalog);
         var profile = Options.ForceBand is { } band ? real with { Band = band } : real;
         ExplorerRefs.CheckServed(request, catalog, profile);
+        // The catalog node is the catalog's database; any other name is a stale or forged ref.
+        if (request.Object.Kind == "ssisCatalog" && !string.Equals(request.Object.Name, host.SsisCatalog, StringComparison.OrdinalIgnoreCase))
+            throw new RequestException("INVALID_PARAMS", "Invalid Object Explorer request: the SSIS Catalog is " + host.SsisCatalog + ".");
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(request.RequestId, request.ConnectionId, source);
         try
@@ -133,9 +141,9 @@ internal sealed class ExplorerService : IDisposable
         var render = new SqlRender(profile.Band, vector, FilterShape.From(request.Filter), query.ChildFolder ? target.Kind : null);
         var first = key is null;
         var statics = nodes.Count;
-        return await RunAsync(request, profile, query.Scope, query.Render(render), Parameters(request, key, first), async (command, reader) =>
+        return await RunAsync(request, profile, query.Scope, query.Render(render), Parameters(request, key, first) with { SsisCatalog = host.SsisCatalog }, async (command, reader) =>
         {
-            if (query.ChildFolder && !await ParentExistsAsync(reader, token)) return new(nodes, 0, Error: NotFound(target));
+            if ((query.ChildFolder || query.OwnerLookup is not null) && !await ParentExistsAsync(reader, token)) return new(nodes, 0, Error: NotFound(target));
             var context = new RowContext(catalog, profile, request.Database, target);
             if (query.ReadPrelude is not null) context = context with { Prelude = await query.ReadPrelude(reader, token) };
             int? total = null;
@@ -162,6 +170,7 @@ internal sealed class ExplorerService : IDisposable
             }
             // Rows past the page are not drained: attention stops the statement.
             if (more) TryCancel(command);
+            else if (first && count == 0 && query.WhenEmpty?.Invoke(context) is { } empty) return new(nodes, 0, Error: empty);
             else if (query.Tail?.Invoke(context) is { } tail) nodes.Add(tail);
             return new(nodes, 0, more ? ExplorerCursor.Encode(query.Id, last) : null, total);
         }, token, nodes);
@@ -230,7 +239,7 @@ internal sealed class ExplorerService : IDisposable
     }
 
     internal sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
-        string? SsisFolder, string? SsisProject);
+        string? SsisFolder, string? SsisProject, string? SsisCatalog = null);
 
     internal static Values Parameters(ExplorerRequest request, CursorKey? key, bool first, string? objectName = null, string? objectSchema = null)
     {
@@ -248,6 +257,7 @@ internal sealed class ExplorerService : IDisposable
         Func<SqlCommand, SqlDataReader, Task<ExplorerChildrenResult>> read, CancellationToken token, List<ExplorerNode> partial)
     {
         var perDatabase = scope == QueryScope.Database && (profile.Cloud || Options.ForcePerDatabaseScope);
+        var database = scope == QueryScope.Ssis ? host.SsisCatalog : request.Database;
         // Inside EXEC [db].sys.sp_executesql, a missing procedure can only be the wrapper's: the database is gone.
         var phase = scope == QueryScope.Database && !perDatabase ? ErrorPhase.Scope : ErrorPhase.Statement;
         var gate = gates.GetOrAdd(request.ConnectionId, _ => new SemaphoreSlim(Options.PerConnection));
@@ -257,8 +267,15 @@ internal sealed class ExplorerService : IDisposable
             await total.WaitAsync(token);
             try
             {
-                await using var connection = host.Connection(request.ConnectionId, perDatabase ? request.Database : null);
-                await host.OpenAsync(connection, token);
+                await using var connection = scope == QueryScope.Ssis ? host.SsisConnection(request.ConnectionId) : host.Connection(request.ConnectionId, perDatabase ? request.Database : null);
+                try { await host.OpenAsync(connection, token); }
+                // 4060 says the login cannot open the catalog's database, whether it is gone, offline, restoring or closed to the
+                // login: the Explorer pool tells which.
+                catch (SqlException error) when (scope == QueryScope.Ssis && ExplorerErrors.Classify(error.Number, error.Class, ErrorPhase.Statement) is "NO_DB_ACCESS" or "DATABASE_UNAVAILABLE"
+                    && !token.IsCancellationRequested)
+                {
+                    return new(partial, 0, Error: await SsisOpenFailureAsync(request, database!, token));
+                }
                 await using var command = connection.CreateCommand();
                 command.CommandTimeout = 30;
                 var prologue = CatalogSql.Prologue + (Options.TestDelay is { } delay ? "WAITFOR DELAY '" + delay.ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture) + "';\n" : "");
@@ -278,13 +295,34 @@ internal sealed class ExplorerService : IDisposable
         }
         catch (SqlException error) when (!token.IsCancellationRequested)
         {
-            return new(partial, 0, Error: ExplorerErrors.From(error, phase, Subject(request), request.Database));
+            return new(partial, 0, Error: ExplorerErrors.From(error, phase, Subject(request), database));
         }
         catch (RequestException error) when (error.Code is "AUTH_KERBEROS" or "AUTH_UNSUPPORTED" or "AUTH_ENTRA")
         {
             return new(partial, 0, Error: ExplorerErrors.SignIn(error));
         }
         finally { gate.Release(); }
+    }
+
+    /// <summary>The SSIS Catalog's database state, read on the Explorer pool after its own failed to open: it was dropped (the
+    /// node is gone), it is unavailable to everyone (offline, restoring, single-user in use), or the login may not open it.</summary>
+    private async Task<ExplorerError> SsisOpenFailureAsync(ExplorerRequest request, string name, CancellationToken token)
+    {
+        try
+        {
+            await using var connection = host.Connection(request.ConnectionId, null);
+            await host.OpenAsync(connection, token);
+            await using var command = connection.CreateCommand();
+            command.CommandTimeout = 30;
+            command.CommandText = CatalogSql.Prologue + ExplorerQueries.SsisCatalogState;
+            command.Parameters.Add(Parameter("@ssis_catalog", SqlDbType.NVarChar, 128, name));
+            await using var reader = await command.ExecuteReaderAsync(token);
+            if (!await reader.ReadAsync(token)) return ExplorerErrors.Create("NOT_FOUND", "The SSIS Catalog " + name, null);
+            return ExplorerLabels.Unavailable(Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture)) is { } reason
+                ? ExplorerErrors.Create("DATABASE_UNAVAILABLE", name, name, 0, reason)
+                : ExplorerErrors.Create("NO_DB_ACCESS", name, name);
+        }
+        catch (SqlException error) when (!token.IsCancellationRequested) { return ExplorerErrors.From(error, ErrorPhase.Statement, Subject(request), name); }
     }
 
     /// <summary>The parameters <see cref="CatalogSql.Declarations"/> declares, in its order.</summary>
@@ -304,7 +342,8 @@ internal sealed class ExplorerService : IDisposable
         Parameter("@d2", SqlDbType.Date, 0, values.D2),
         Parameter("@ssis_folder", SqlDbType.NVarChar, 128, values.SsisFolder),
         Parameter("@ssis_project", SqlDbType.NVarChar, 128, values.SsisProject),
-        Parameter("@kb", SqlDbType.BigInt, 0, values.Key?.Kb)
+        Parameter("@kb", SqlDbType.BigInt, 0, values.Key?.Kb),
+        Parameter("@ssis_catalog", SqlDbType.NVarChar, 128, values.SsisCatalog)
     ];
 
     private static void Add(SqlCommand command, string name, SqlDbType type, int size, object? value) => command.Parameters.Add(Parameter(name, type, size, value));

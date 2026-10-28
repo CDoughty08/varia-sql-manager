@@ -12,8 +12,8 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
-/// band of the catalog columns it has when that is higher) and whether it is a cloud edition.</summary>
-internal readonly record struct ExplorerProfile(int Band, bool Cloud)
+/// band of the catalog columns it has when that is higher), whether it is a cloud edition, and whether it runs on Linux.</summary>
+internal readonly record struct ExplorerProfile(int Band, bool Cloud, bool Linux = false)
 {
     public string Engine => Cloud ? "cloud" : "box";
 }
