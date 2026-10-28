@@ -191,7 +191,17 @@ export const contrastPairs: readonly ContrastPair[] = [
   // The stale badge also goes in the status bar (every state) and on Object Explorer rows.
   ...text(['live.staleForeground'], ...kitSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
   // A tile's threshold outline and glyph.
-  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile)
+  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile),
+
+  // The document frame (src/renderer/src/kit): the current section in its list, its accent edge (beside it, or under it
+  // in a narrow document), a section's problem glyph and the focus ring on it; the Script drawer's splitter, hovered or focused.
+  // A pressed header verb takes the current section's colours; a danger verb keeps its words in the error colour when hovered.
+  // The document's title is in the strong text of the focused tab, as Calm Pro draws it.
+  ...text(['tab.activeForeground'], editor),
+  ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
+  ...text(['errorForeground'], hovered(...editor)),
+  ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
+  ...graphic(['sash.hoverBorder'], panel)
 ]
 
 /**
