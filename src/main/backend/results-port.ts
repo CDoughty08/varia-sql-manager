@@ -92,6 +92,8 @@ export class ResultsPortHost {
   get isOpen(): boolean { return !!this.port }
   get ownedCount(): number { return this.owned.size }
   get liveCount(): number { return this.lives.size }
+  /** The snapshot revisions the live streams name and have not retired (each stream's `snapshots`), for tests of its bound. */
+  get liveSnapshotCount(): number { let count = 0; for (const stream of this.lives.values()) count += stream.snapshots.size; return count }
 
   /** A new port for the frame (after trusted()); the previous one closes and its streams are cancelled. */
   open(frame: FrameLike): void {
@@ -161,8 +163,9 @@ export class ResultsPortHost {
 
   /**
    * For a live snapshot table's revision this renderer owns: a function that names the table's newest revision it owns
-   * when called (undefined once the stream ended). Save Results As asks before its dialog, which may stay open for many
-   * samples while each revision is retired two samples on, and saves the revision the table has once the file is chosen.
+   * when called (undefined once it no longer owns one: the stream ended without keeping it). Save Results As asks before
+   * its dialog, which may stay open for many samples while each revision is retired two samples on, and saves the revision
+   * the table has once the file is chosen; a source that ended meanwhile keeps its newest revision, which is saved.
    * Undefined for any other result.
    */
   liveNewest(generation: number, resultId: number): (() => number | undefined) | undefined {
@@ -172,7 +175,9 @@ export class ResultsPortHost {
       if (table === undefined) continue
       return () => {
         const newest = stream.newest.get(table)
-        return newest !== undefined && this.lives.get(stream.rid) === stream && this.owns(generation, newest) ? newest : undefined
+        // Ownership alone decides: a stream's end disowns its results except those its source kept (still shown, saved until
+        // results.close), and a port's close or a new generation disowns them all.
+        return newest !== undefined && this.owns(generation, newest) ? newest : undefined
       }
     }
     return undefined

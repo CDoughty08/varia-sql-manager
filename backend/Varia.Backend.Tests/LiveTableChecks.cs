@@ -604,6 +604,19 @@ internal static class LiveTableChecks
             && itemRows.Count == 5 && itemRows.All(row => row[4] == Expected(long.Parse(row[0]!, CultureInfo.InvariantCulture)))
             && logRows.Count > 0 && logRows.All(row => row[3] == (row[1] switch { "3" => "error", "2" => "warning", _ => null })),
             "the synthetic grid and log store a last tone column with its role, toned by group and by level");
+        // The tone is never data: no sort or filter may name it (a filter's text never matching it is checked below).
+        var naming = new List<string>();
+        foreach (var patch in new[] { new LiveProbeArgs(SyntheticSampler.GridProbe, Filter: new LiveFilterArgs("warn", ["tone"])), new LiveProbeArgs(SyntheticSampler.GridProbe, Sort: [new LiveSortArgs("tone", false)]),
+            new LiveProbeArgs(SyntheticSampler.GridProbe, Sort: [new LiveSortArgs("tone", true, 0)]) })
+        {
+            try
+            {
+                service.Live.Update(new LiveUpdateArgs(view.Id, SyntheticSampler.Source, Probes: [patch]), Json);
+                naming.Add("accepted " + JsonSerializer.Serialize(patch));
+            }
+            catch (RequestException error) when (error.Code == "INVALID_PARAMS") { }
+        }
+        check(naming.Count == 0, "live.update refuses a filter or a sort that names a table's tone column: " + string.Join(", ", naming));
         await Stop(view);
 
         var store = Store();
@@ -612,6 +625,11 @@ internal static class LiveTableChecks
         var spec = Probe(new LiveTableJson("toned", "snapshot", [Column("id"), Column("name", "nvarchar"), new LiveColumnJson("tone", "tone", "nvarchar", "tone")], ["id"]));
         var table = tableSet.Snapshot(spec, 0);
         List<LiveRow> Toned(long first) => [.. Enumerable.Range(0, 3).Select(offset => new LiveRow([LiveCell.Of(first + offset), LiveCell.Of("n" + (first + offset)), offset == 0 ? LiveCell.Of("error") : LiveCell.Null]))];
+        // A filter's text matches only what the user can see: the tone text ("error") matches nothing.
+        var byTone = table.Write(Toned(40), new(Filter: new LiveFilterArgs("ERROR"))).Sample!.Descriptor;
+        var byName = table.Write(Toned(50), new(Filter: new LiveFilterArgs("n5"))).Sample!.Descriptor;
+        check(byTone.RowsAvailable == 0 && byName.RowsAvailable == 3,
+            "a snapshot filter over every column leaves the hidden tone column out: " + byTone.RowsAvailable + " rows by tone text, " + byName.RowsAvailable + " by name");
         var shown = table.Write(Toned(1), new()).Sample!.Descriptor;
         // Every column, whole rows (the grid's Select All), with headers; then the tone column alone.
         var copy = await TextChecks.Copy(jobs, new ResultsCopyArgs(shown.ResultId, [new CopyPartArgs([[0, ResultJobs.MaxSafeInteger]], [[0, 2]])], true, "lf", ResultJobs.MaxCopyBytes));

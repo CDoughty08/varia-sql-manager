@@ -350,6 +350,30 @@ describe('ResultsPortHost live subscriptions', () => {
     expect(newest()).toBeUndefined()
   })
 
+  it('still names the newest revision of a source that ended and kept its tables while the dialog was open', async () => {
+    const { host, live, lives } = fixture()
+    live(1)
+    lives[0].onLive(tick(1, table(10, 1)), 400)
+    const newest = host.liveNewest(1, 10)!
+    lives[0].onLive(tick(2, table(11, 2)), 400)
+    lives[0].onLive(tick(3, table(12, 3, [10])), 400)
+    // The source finished (an SSIS execution) and kept what it shows: 12 is still the table's, owned, and the one saved.
+    lives[0].resolve(ended({ ended: 'sourceEnded', kept: [11, 12], ticks: 3 }))
+    await settle()
+    expect(host.liveCount).toBe(0)
+    expect([host.owns(1, 10), host.owns(1, 12)]).toEqual([false, true])
+    expect(newest()).toBe(12)
+  })
+
+  it('forgets each snapshot revision a tick retires, so a long subscription names only the ones not yet retired', () => {
+    const { host, live, lives } = fixture()
+    live(1)
+    // An hour of 2 s samples of one table: each revision is retired two samples on.
+    for (let seq = 1; seq <= 1800; seq++) lives[0].onLive(tick(seq, table(100 + seq, seq, seq > 2 ? [100 + seq - 2] : undefined)), 400)
+    expect(host.liveSnapshotCount).toBe(2)
+    expect(host.liveNewest(1, 1900)!()).toBe(1900)
+  })
+
   it('takes back every result of a stream that fails, and none of a later generation\'s', async () => {
     const { host, live, lives, port } = fixture()
     live(1)

@@ -12,7 +12,7 @@ export interface LiveGridPaneProps {
   readonly probe: LiveProbeId
   /** The table's index in the probe's catalogue entry. */
   readonly table?: number
-  /** The grid's accessible name ("Processes"). */
+  /** The grid's accessible name ("Processes"), which its label starts with ("Processes, 12 rows, 9 columns"); read when the grid is built. */
   readonly label: string
   /** What a screen reader hears for a toned row ("blocked"). */
   readonly toneLabel?: (tone: LiveTone) => string | undefined
@@ -49,7 +49,7 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
       createView: (first, hooks) => {
         const view = new GridView({
           root: rootRef.current!, scroller: scrollRef.current!, handle: first.handle, client: resultClient, descriptor: first.descriptor, state: own,
-          resultIndex: 0, resultCount: 1, platform, followTail: first.mode === 'append',
+          resultIndex: 0, resultCount: 1, label, platform, followTail: first.mode === 'append',
           onSelection: hooks.onSelection, onViewport: hooks.onViewport,
           onCopy: () => { void created.copy(false).then(result => setNotice(result && !result.ok && result.code !== 'CANCELLED' ? 'Could not copy the rows: ' + result.error : undefined), onUnexpectedError) },
           onEscape: () => false,

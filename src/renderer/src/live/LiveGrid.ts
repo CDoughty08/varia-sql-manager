@@ -7,7 +7,7 @@
 // Save writes the table's newest revision once the file is chosen, since the samples retire the one shown while the
 // dialog is open.
 import type { ApiResult, ResultsFormat, ResultsJobResult, SavedResults, VariaApi } from '../../../shared/contracts'
-import { limits } from '../../../shared/ipc/wire/protocol'
+import { limits, type ErrorCode } from '../../../shared/ipc/wire/protocol'
 import { liveProbes, type LiveProbeId, type LiveTableSpec } from '../../../shared/live/catalog'
 import type { LiveSort } from '../../../shared/live/schema'
 import { onUnexpectedError } from '../core/errors'
@@ -91,6 +91,8 @@ export const liveGridText = {
   dormant: 'Paused while hidden; the rows come back when the view is shown.'
 } as const
 
+/** The failures that mean a job's result was gone (released, lost or never there), rather than that the job failed. */
+const goneCodes: ReadonlySet<ErrorCode> = new Set(['RESULT_UNAVAILABLE', 'RESULT_RELEASED', 'RESULT_NOT_FOUND', 'NOT_FOUND', 'BACKEND_LOST', 'BACKEND_UNAVAILABLE'])
 const unitSeparator = '\u001f'
 const resultKey = (table: LiveTable) => `${table.descriptor.generation}:${table.descriptor.resultId}`
 
@@ -231,12 +233,13 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
   /**
    * Sorts this grid's snapshot table by a shown column (its index) or a catalogue column id; `undefined` goes back to the
    * source's order. The backend sorts, and its next revision arrives sorted: the probe's sort setting holds a key for
-   * this table (`table`), so the probe's other tables keep theirs. A probe-wide key (no table) gives way to it.
+   * this table (`table`), so the probe's other tables keep theirs. A probe-wide key (no table) gives way to it here, and
+   * stays on the other tables as their own keys.
    */
   sortBy(column: number | string | undefined, descending = false): void {
     if (this.spec.mode !== 'snapshot') return
-    const others = (this.o.live.probeOptions(this.o.probe)?.sort ?? []).filter(key => key.table !== undefined && key.table !== this.index)
-    if (column === undefined) this.o.live.setProbe(this.o.probe, { sort: others.length > 0 ? others : undefined })
+    const others = this.siblingKeys()
+    if (column === undefined) this.o.live.setProbe(this.o.probe, { sort: others.length > 0 ? others.slice(0, limits.live.sortColumns) : undefined })
     else {
       const id = typeof column === 'number' ? this.spec.columns[column]?.id : this.spec.columns.find(item => item.id === column)?.id
       if (!id || this.spec.columns.find(item => item.id === id)?.role === 'tone') return
@@ -260,13 +263,23 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     if (!table || !this.o.api) return undefined
     return this.gone(table, () => this.o.api!.saveResults({ jobId: this.newId(), generation: table.descriptor.generation, resultId: table.descriptor.resultId, suggestedName, ...format ? { format } : {} }))
   }
-  /** Runs a job on the shown result, and says in a live view's words when the result is gone (before or during it). */
+  /**
+   * Runs a job on the shown result, and says in a live view's words when the view's rows are gone (before or during it).
+   * Only the view's loss counts: the samples retire the revision a job started on as a matter of course, and a job that
+   * failed for its own reason (a file in use) keeps its own words.
+   */
   private async gone<T>(table: LiveTable, job: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
-    const before = this.goneText(table)
+    const before = this.goneText(table) && this.viewGone()
     if (before) return { ok: false, error: before, code: 'RESULT_UNAVAILABLE' }
     const result = await job()
-    const after = !result.ok && result.code !== 'CANCELLED' ? this.goneText(table) : undefined
-    return after && !result.ok ? { ...result, error: after } : result
+    if (result.ok || !result.code || !goneCodes.has(result.code)) return result
+    const after = this.viewGone()
+    return after ? { ...result, error: after } : result
+  }
+  /** Why the view no longer has rows: the table it holds now (the newest revision, or the one shown) is lost or released. */
+  private viewGone(): string | undefined {
+    const current = this.o.live.table(this.o.probe, this.index) ?? this.table
+    return current && this.goneText(current)
   }
   private goneText(table: LiveTable): string | undefined {
     const state = table.handle.getSnapshot().state
@@ -277,6 +290,11 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
 
   dispose(): void {
     if (this.disposed) return
+    // The table's track list is this grid's: left behind, the backend would go on following (and keeping) its rows for a
+    // grid that no longer selects them, and a new grid's first list, if empty, would never replace it.
+    if (this.sent.keys.length > 0 || this.sent.linger > 0) {
+      try { this.o.live.track(this.o.probe, [], this.index, 0) } catch (error) { onUnexpectedError(error) }
+    }
     this.disposed = true
     this.stopTick.dispose()
     this.stopLive()
@@ -375,6 +393,8 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
       this.revision++
       this.swapping = true
       try { view.swap(next.handle, next.descriptor, map, next.departed ? { muted: next.departed } : {}) } finally { this.swapping = false }
+      // A swap to a revision with no rows drops the selection without a word: the snapshot must not go on naming it.
+      this.selection = view.currentSelection()
       this.updateTracking()
     } else {
       // A new segment holds other rows: nothing maps. A roll keeps following the tail; a restart keeps the view's intent,
@@ -384,6 +404,7 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
       this.known = new Map()
       this.pinned = new Map()
       view.swap(next.handle, next.descriptor, () => -1, follow ? {} : { top: 0 })
+      this.selection = view.currentSelection()
       // Scrolled up, only rows that arrive after the restart are new.
       this.viewRows = this.seenRows = follow ? 0 : next.handle.getSnapshot().rowsAvailable
       if (follow) view.revealEnd()
@@ -393,6 +414,9 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
 
   private viewportChanged(viewport: GridViewport): void {
     this.viewRows = viewport.rows
+    // A frame that finds rows and no selection selects the first cell without reporting it (GridView's current cell);
+    // the snapshot names what the grid shows.
+    if (this.view) this.selection = this.view.currentSelection()
     if (viewport.atEnd) { this.following = true; this.seenRows = viewport.rows }
     else if (this.following) { this.following = false; this.seenRows = Math.min(this.seenRows || viewport.rows, viewport.rows) }
     this.changed()
@@ -465,6 +489,21 @@ export class LiveGrid extends SnapshotStore<LiveGridSnapshot> implements Disposa
     return columns.length - (columns.at(-1)?.role === 'tone' ? 1 : 0)
   }
   private newId(): string { return this.o.newId?.() ?? crypto.randomUUID() }
+  /** The probe's sort keys for its other tables, in order: theirs, and each probe-wide key as a key of every other snapshot
+   *  table with that column (which it sorted), so that sorting this grid leaves its siblings' order as it was. */
+  private siblingKeys(): LiveSort[] {
+    const keys = this.o.live.probeOptions(this.o.probe)?.sort ?? [], tables = liveProbes[this.o.probe]?.tables ?? [], out: LiveSort[] = []
+    const has = (table: number, column: string) => [...keys, ...out].some(key => key.table === table && key.column === column)
+    for (const key of keys) {
+      if (key.table !== undefined) { if (key.table !== this.index) out.push(key); continue }
+      tables.forEach((table, at) => {
+        if (at !== this.index && table.mode === 'snapshot' && table.columns.some(column => column.id === key.column && column.role !== 'tone') && !has(at, key.column)) {
+          out.push({ column: key.column, descending: key.descending, table: at })
+        }
+      })
+    }
+    return out
+  }
   /** This table's sort keys in the probe's sort setting: those for it, and probe-wide ones on a column it has. */
   private sortOf(): LiveSort[] | undefined {
     if (this.spec.mode !== 'snapshot') return undefined

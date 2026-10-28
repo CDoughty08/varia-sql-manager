@@ -55,6 +55,8 @@ try {
   // Twelve rows of four read cells: the tone column is hidden.
   await expect.poll(async () => { const shown = await rows(); return shown.length === 12 && shown.every(row => row.cells.length === 4 && /^G\d$/.test(row.cells[1])) }).toBe(true)
   await expect(grid.locator(gridPart.columnHeader).filter({ visible: true })).toHaveText(['itemId', 'group', 'name', 'amount'])
+  // Screen readers hear the owner's name for the grid, with its rows and shown columns.
+  await expect(grid).toHaveAttribute('aria-label', 'Live grid, 12 rows, 4 columns')
   // G0 rows are toned error, G1 warning, G2 running, the others not at all (every group is among twelve items).
   const tones = { G0: 'error', G1: 'warning', G2: 'running' }
   await expect.poll(async () => (await rows()).map(row => `${row.cells[1]}:${row.tone === (tones[row.cells[1]] ?? 'none') ? 'ok' : row.tone}`).filter(text => !text.endsWith(':ok'))).toEqual([])

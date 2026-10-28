@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
-import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveSourceSpec } from './catalog'
+import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
 
@@ -173,7 +173,9 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
   const allSources = Object.keys(catalog.sources)
   const requestSource = idEnum(allSources.filter(id => o.test || !catalog.sources[id].testOnly))
   const probeId = idEnum(Object.keys(catalog.probes))
-  const columnsOf = (spec: LiveProbeSpec, mode?: 'snapshot' | 'append') => new Set((spec.tables ?? []).filter(table => mode === undefined || table.mode === mode).flatMap(table => table.columns.map(column => column.id)))
+  // A row's tone column is never data: no sort or filter names it, and a filter's text never matches it.
+  const dataColumns = (columns: LiveTableSpec['columns']) => columns.filter(column => column.role !== 'tone')
+  const columnsOf = (spec: LiveProbeSpec, mode?: 'snapshot' | 'append') => new Set((spec.tables ?? []).filter(table => mode === undefined || table.mode === mode).flatMap(table => dataColumns(table.columns).map(column => column.id)))
 
   const sortSchema = z.array(z.object({ column: catalogId, descending: z.boolean(), table: tableIndex.optional() }).strict()).min(1).max(L.sortColumns)
   const filterSchema = z.object({ text: z.string().min(1).max(L.filterCharacters), columns: z.array(catalogId).min(1).max(L.filterColumns).optional() }).strict()
@@ -194,7 +196,7 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     if (spec.source !== source) ctx.addIssue({ code: 'custom', message: 'The probe belongs to another source.', path: [...path, 'probe'] })
     const sortable = columnsOf(spec, 'snapshot')
     const sorted = settings.sort ?? [], table = (index: number) => spec.tables?.[index]
-    const unsortable = (key: LiveSort) => key.table === undefined ? !sortable.has(key.column) : table(key.table)?.mode !== 'snapshot' || !table(key.table)!.columns.some(column => column.id === key.column)
+    const unsortable = (key: LiveSort) => key.table === undefined ? !sortable.has(key.column) : table(key.table)?.mode !== 'snapshot' || !dataColumns(table(key.table)!.columns).some(column => column.id === key.column)
     if (sorted.some(unsortable) || new Set(sorted.map(key => (key.table ?? '') + '/' + key.column)).size !== sorted.length) ctx.addIssue({ code: 'custom', message: 'Sort names a column the probe does not sort by.', path: [...path, 'sort'] })
     if (settings.view !== undefined && !(spec.views ?? []).includes(settings.view)) ctx.addIssue({ code: 'custom', message: 'Unknown view.', path: [...path, 'view'] })
     if (settings.filter !== undefined) {

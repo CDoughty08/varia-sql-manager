@@ -63,6 +63,8 @@ export interface GridViewOptions {
   readonly state: GridViewState
   readonly resultIndex: number
   readonly resultCount: number
+  /** The grid's name, which its accessible label starts with (a live grid's "Processes"); "Result i of n" otherwise. */
+  readonly label?: string
   readonly platform: Platform
   readonly stats?: GridStats
   onSelection(selection: GridSelection): void
@@ -1136,7 +1138,7 @@ export class GridView {
   /** The grid's own ARIA: counts change at most once a second while rows stream in. */
   private aria(state: string, rows: number): void {
     const open = state === 'open'
-    const label = `Result ${this.o.resultIndex + 1} of ${this.resultCount}, ${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(this.columns)} ${plural(this.columns, 'column')}${open ? ', still loading' : ''}`
+    const label = gridLabel(this.o.label ?? `Result ${this.o.resultIndex + 1} of ${this.resultCount}`, rows, this.columns, open)
     if (label === this.ariaLabel) return
     const now = performance.now()
     if (open && rows !== this.ariaRows && now - this.ariaAt < g.ariaRowCountMs) {
@@ -1153,6 +1155,10 @@ export class GridView {
 }
 
 /** A live table's hidden tone column: its last column, when that column's role is tone; else -1. */
+/** A grid's accessible label: its name, then how many rows and shown columns it has, and whether more rows are coming. */
+export function gridLabel(name: string, rows: number, columns: number, open: boolean): string {
+  return `${name}, ${formatCount(rows)} ${plural(rows, 'row')}, ${formatCount(columns)} ${plural(columns, 'column')}${open ? ', still loading' : ''}`
+}
 export function toneColumnOf(descriptor: Pick<ResultDescriptor, 'columns'>): number {
   const last = descriptor.columns.length - 1
   return last >= 1 && descriptor.columns[last].role === 'tone' ? last : -1

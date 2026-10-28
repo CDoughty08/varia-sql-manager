@@ -716,9 +716,10 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     {
         if (settings.Sort is { } sort)
         {
-            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            // A row's tone column is never data: no sort or filter names it.
+            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
             bool Sorts(LiveSortArgs key) => key.Table is not { } table ? sortable.Contains(key.Column)
-                : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column);
+                : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column && LiveColumnJson.IsData(column));
             if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !Sorts(key))
                 || sort.Select(key => key.Table + "/" + key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
                 throw Invalid("Sort names a column the probe does not sort by.");
@@ -726,7 +727,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
         if (settings.View is { } view && !spec.Views.Contains(view, StringComparer.Ordinal)) throw Invalid("Unknown view.");
         if (settings.Filter is { } filter)
         {
-            var columns = spec.Tables.SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            var columns = spec.Tables.SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
             if (spec.FilterMode == "none" || filter.Text is not { Length: >= 1 } text || text.Length > Limits.FilterCharacters
                 || filter.Columns is { } named && (named.Length is 0 || named.Length > Limits.FilterColumns || named.Any(column => column is null || !columns.Contains(column))))
                 throw Invalid("The probe does not take this filter.");

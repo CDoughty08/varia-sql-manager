@@ -314,6 +314,16 @@ describe('live table samples', () => {
     expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 1, keys: ['1'] }, { probe: 'debug.synthetic.grid', table: 1, seq: 1, keys: ['G1'] }] })).toBe(true)
     expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.log', table: 0, seq: 1, keys: ['1'] }] })).toBe(false)
   })
+  it('never lets a sort or filter name a table\'s hidden tone column', () => {
+    const grid = (settings: Record<string, unknown>) => subscribe({ probes: [{ probe: 'debug.synthetic.grid', intervalMs: 1000, ...settings }] })
+    expect(ok(testLiveSubscribeParamsSchema, grid({ filter: { text: 'warn', columns: ['name'] }, sort: [{ column: 'amount', descending: true, table: 0 }] }))).toBe(true)
+    for (const [name, settings] of Object.entries({
+      filter: { filter: { text: 'warn', columns: ['tone'] } },
+      sort: { sort: [{ column: 'tone', descending: true }] },
+      tableSort: { sort: [{ column: 'tone', descending: false, table: 0 }] }
+    })) expect(ok(testLiveSubscribeParamsSchema, grid(settings)), name).toBe(false)
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000, filter: { text: 'x', columns: ['tone'] } }] }))).toBe(false)
+  })
 })
 
 describe('live frame budget', () => {

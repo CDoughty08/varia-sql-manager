@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ResultDescriptor } from '../src/shared/contracts'
 import type { LiveTableSpec } from '../src/shared/live/catalog'
 import { GridData } from '../src/renderer/src/grid/data'
-import { toneColumnOf, type GridViewport } from '../src/renderer/src/grid/GridView'
+import { gridLabel, toneColumnOf, type GridViewport } from '../src/renderer/src/grid/GridView'
 import type { GridSelection } from '../src/renderer/src/grid/selection'
 import { remapSelection, remapTop, sameSelection, survivingRow, type RowMap } from '../src/renderer/src/grid/swap'
 import { tileColumnOf, tileRowOf } from '../src/renderer/src/grid/tiles'
@@ -71,6 +71,14 @@ describe('grid swap', () => {
     expect(sameSelection(before, { ...before, blocks: [...before.blocks, before.blocks[0]] })).toBe(false)
     expect(sameSelection(undefined, undefined)).toBe(true)
     expect(sameSelection(before, undefined)).toBe(false)
+  })
+})
+
+describe('grid label', () => {
+  it('starts with the owner\'s name for a live grid, and names a query\'s result by its place otherwise', () => {
+    expect(gridLabel('Processes', 12, 9, false)).toBe('Processes, 12 rows, 9 columns')
+    expect(gridLabel('Result 2 of 3', 1, 1, true)).toBe('Result 2 of 3, 1 row, 1 column, still loading')
+    expect(gridLabel('Messages', 12_345, 4, false)).toBe('Messages, 12,345 rows, 4 columns')
   })
 })
 
@@ -481,6 +489,17 @@ describe('LiveGrid', () => {
     const remounted = harness(keySpec, { options: { sort: [{ column: 'id', descending: true, table: 0 }, { column: 'name', descending: false, table: 1 }] } })
     expect(remounted.grid.getSnapshot().sort).toEqual([{ column: 'id', descending: true }])
     expect(harness(keySpec, { index: 1, options: { sort: [{ column: 'name', descending: false }] } }).grid.getSnapshot().sort).toEqual([{ column: 'name', descending: false }])
+    // A probe-wide key sorts every table with its column: sorting table 0 keeps it on the groups table (table 1, which has
+    // items), and clearing table 0's sort keeps it there too.
+    const wide = harness(keySpec, { options: { sort: [{ column: 'items', descending: true }, { column: 'name', descending: false }] } })
+    wide.grid.sortBy('id')
+    expect(wide.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'id', descending: false, table: 0 }, { column: 'items', descending: true, table: 1 }] })
+    wide.grid.sortBy(undefined)
+    expect(wide.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'items', descending: true, table: 1 }] })
+    // A table with its own key for the column keeps only that one.
+    const both = harness(keySpec, { options: { sort: [{ column: 'items', descending: false, table: 1 }, { column: 'items', descending: true }] } })
+    both.grid.sortBy(undefined)
+    expect(both.live.setProbe).toHaveBeenLastCalledWith('debug.synthetic.grid', { sort: [{ column: 'items', descending: false, table: 1 }] })
   })
 
   it('keeps following the selected row\'s key while the next revision has not answered it, and moves there once one does', async () => {
@@ -584,5 +603,75 @@ describe('LiveGrid', () => {
     expect(view.disposed).toBe(true)
     expect(ticks.size).toBe(0)
     expect(statusListeners.size).toBe(0)
+  })
+
+  it('clears its table\'s track list when disposed, so the backend stops following the rows it selected', async () => {
+    const { grid, live, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12'] }))
+    frame({ selection: selection({ active: cell(1) }), viewport: { firstRow: 0, lastRow: 2, rows: 3, atEnd: true } })
+    await settle()
+    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', ['11', '12', '10'], 0, 1)
+    grid.dispose()
+    expect(live.track).toHaveBeenLastCalledWith('debug.synthetic.grid', [], 0, 0)
+    grid.dispose()
+    expect(live.track).toHaveBeenCalledTimes(2)
+    // A grid that never sent a list leaves the table's alone.
+    const quiet = harness()
+    quiet.emit(table({ ids: ['1'] }))
+    quiet.grid.dispose()
+    expect(quiet.live.track).not.toHaveBeenCalled()
+  })
+
+  it('names the selection the grid shows through a revision with no rows and back, where the grid selects the first cell', async () => {
+    const { grid, live, view, emit, frame } = harness()
+    emit(table({ ids: ['10', '11', '12', '13'] }))
+    frame({ selection: selection({ active: cell(1, 1) }), viewport: { firstRow: 0, lastRow: 3, rows: 4, atEnd: true } })
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(1, 1) }, activeKey: '11' })
+    // A filter that matches nothing: the swap drops the selection without reporting it, as GridView does.
+    emit(table({ ids: [], tracked: { seq: 1, rows: [-1, -1, -1], keys: ['11', '12', '10'] } }))
+    await settle()
+    expect(view.selection).toBeUndefined()
+    expect(grid.getSnapshot().selection).toBeUndefined()
+    expect(grid.getSnapshot().activeKey).toBeUndefined()
+    // The filter is cleared: GridView's first frame over the rows selects the first cell without reporting it.
+    emit(table({ ids: ['20', '21', '22'] }))
+    await settle()
+    view.selection = selection({ active: cell(0, 0) })
+    frame({ viewport: { firstRow: 0, lastRow: 2, rows: 3, atEnd: true } })
+    await settle()
+    expect(grid.getSnapshot()).toMatchObject({ selection: { active: cell(0, 0) }, activeKey: '20' })
+    expect(live.track.mock.lastCall![1][0]).toBe('20')
+  })
+
+  it('keeps a job\'s own failure while the view goes on, though the samples retired the revision it started on', async () => {
+    const { grid, view, emit, api } = harness()
+    const shown = table({ ids: ['1', '2'] })
+    emit(shown)
+    view.selection = selection({ active: cell(0) })
+    // Save Results As stays open for two samples, which retire the revision shown; the file was in use.
+    const inUse = { ok: false as const, error: 'Could not save Processes.csv: the file is in use by another program.', code: 'EXPORT_FAILED' as const }
+    const later = [table({ ids: ['1', '2'] }), table({ ids: ['2', '3'] })]
+    api.saveResults.mockImplementationOnce((async () => { for (const next of later) emit(next); shown.release(); return inUse }) as never)
+    await expect(grid.save('Processes.csv')).resolves.toEqual(inUse)
+    await settle()
+    expect(grid.getSnapshot().released).toBeUndefined()
+    // A job whose own result was gone while the view still has its rows keeps the backend's words too: the view did not stop.
+    const closed = { ok: false as const, error: 'These results were closed before they could be saved.', code: 'RESULT_UNAVAILABLE' as const }
+    const newer = table({ ids: ['3'] })
+    api.saveResults.mockImplementationOnce((async () => { emit(newer); later[1].release(); return closed }) as never)
+    await expect(grid.save('Processes.csv')).resolves.toEqual(closed)
+    await settle()
+    const copyFailed = { ok: false as const, error: 'The selection is too large to copy.', code: 'TOO_LARGE' as const }
+    api.copyResults.mockImplementationOnce((async () => { emit(table({ ids: ['4'] })); newer.release(); return copyFailed }) as never)
+    await expect(grid.copy(false)).resolves.toEqual(copyFailed)
+    await settle()
+    // The view stops while a save runs: its result is gone, and it says so in the live view's words, as it does to a save
+    // asked for once it stopped.
+    const current = grid.shown as ReturnType<typeof table>
+    api.saveResults.mockImplementationOnce((async () => { current.release(); return closed }) as never)
+    await expect(grid.save('Processes.csv')).resolves.toEqual({ ...closed, error: liveGridText.stopped })
+    await expect(grid.save('Processes.csv')).resolves.toEqual({ ok: false, error: liveGridText.stopped, code: 'RESULT_UNAVAILABLE' })
+    expect(api.saveResults).toHaveBeenCalledTimes(3)
   })
 })

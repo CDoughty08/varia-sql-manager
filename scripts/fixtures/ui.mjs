@@ -286,9 +286,11 @@ export const resultSplitters = page => page.getByRole('separator', { name: /^Res
 
 // Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
 
-/** A live grid's own grid by its accessible name, for page code. */
-export const liveGridSelector = name => `[role="grid"][aria-label="${name}"]`
-export const liveGrid = (page, name) => page.getByRole('grid', named(name))
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+ *  for page code. */
+export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const liveGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
 export const liveGridFrame = (page, name) => page.locator(part.liveGrid).filter({ has: liveGrid(page, name) })
 /** What the frame says over the rows once they are gone (stopped, lost). */
 export const liveGridOverlay = frame => frame.locator(gridPart.overlay)

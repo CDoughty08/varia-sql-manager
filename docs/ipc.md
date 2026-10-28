@@ -807,7 +807,7 @@ from its own state; the writers do the rest.
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
   not fit is left out (`more`) for a later tick to send.
-- **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet):
+- **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet, and that no sort or filter names; a filter over every column leaves it out, so its text never matches):
   each cell is `error`, `warning`, `running`, `muted` or NULL. The stored result's column keeps the role
   (`ResultColumn.role` `tone`), so the grid hides it and colours the row instead (LiveGrid, below), and Copy and Save
   Results As leave it out of every part, header and JSON object whatever columns a request names (`ResultJobs` through
@@ -1073,7 +1073,8 @@ follow tail.
   pinned keys, since the user chose by what they see. A block whose row is gone collapses to the active cell; an active row that is gone moves to
   where the nearest surviving row went (below, then above, within 64 rows), passing over rows whose place the grid does
   not know, and else stays at its index. A view scrolled to the very top stays at the top,
-  so rows that sort first are seen. Departed rows are muted for their one revision, whatever their tone.
+  so rows that sort first are seen. Departed rows are muted for their one revision, whatever their tone. A grid that is disposed
+  (its pane unmounts) sends an empty list for its table, so the backend stops following, and keeping, the rows it selected.
 - **Tones.** The tone column (the result's last, role `tone`) is not shown: each row tile the grid reads also reads the tile
   column that holds it, and each pooled row takes one class, `tone-error`, `tone-warning`, `tone-running` or
   `tone-muted` (theme keys `resultsGrid.row{Error,Warning,Running,Muted}{Background,Foreground}`; a NULL in a toned row drops
@@ -1088,8 +1089,8 @@ follow tail.
   rows the segment had when the view left its tail, and the selected rows' keys (known in the same result, pinned in a newer
   one). The grid reports the selection it restores as its snapshot's `selection` and `activeKey`.
 - **Sort, Copy, Save.** `sortBy(column, descending)` sets the probe's sort key for this grid's table (`table`, by catalogue
-  column id; never the tone; append tables are in id order), keeping the keys of the probe's other tables and replacing
-  probe-wide ones, and the next revision arrives sorted; the snapshot's `sort` is this table's keys in the probe's settings.
+  column id; never the tone; append tables are in id order), keeping the keys of the probe's other tables (a probe-wide key gives way on this table and becomes a key of each other
+  snapshot table with that column), and the next revision arrives sorted; the snapshot's `sort` is this table's keys in the probe's settings.
   GridView has no header sort yet: header presses select columns, and a header-click sort with its indicator and
   `aria-sort` is Activity Monitor's (AM2b) change to GridView. Copy acts on the revision the grid shows, through
   `results.copy`, which leases it: the samples after it may retire it mid-copy and the copy still completes. Save names
@@ -1097,12 +1098,15 @@ follow tail.
   lease starts only with the export: so for a live snapshot table main saves the table's newest revision the renderer owns
   once the file is chosen (`ResultsPortHost.liveNewest`, from the ticks it relays), the one the grid shows by then (which
   may hold a departed row that stays its one revision); it fails `RESULT_UNAVAILABLE` only if the subscription ended
-  meanwhile. Copy and Save of a result that is gone answer in the live view's words, not a query's. An append segment saves once it is complete (a roll
+  meanwhile without keeping the table (a source that ends keeps its newest revision, which is saved). When the view's rows are
+  gone (the table it holds now is lost or released) and a job failed because its result was, Copy and Save answer in the live
+  view's words, not a query's; a retired revision is not a stop, and any other failure (a file in use) keeps its own words. An append segment saves once it is complete (a roll
   or the source's end).
 - **What the owner sees.** The grid's snapshot carries the table shown, the new-rows count, the sort, `lost` (the shown
   result was lost with the backend), `released` (the view's subscription ended and released it: `dormant` while hidden
-  long enough to stop, which resumes when shown, else `stopped`; the pane shows an overlay for both and for `lost`), the selection as the grid last reported it (a swap
-  that moves it reports it, as a click does) and the active row's key once known (`activeKey`), for a details pane, Kill
+  long enough to stop, which resumes when shown, else `stopped`; the pane shows an overlay for both and for `lost`), the selection the grid shows (a swap
+  that moves it reports it, as a click does; one to a revision with no rows clears it, and the first cell a frame selects
+  once rows come back is read from the grid) and the active row's key once known (`activeKey`), for a details pane, Kill
   or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
   Save's command and the context menu are the owning view's (later PRs).
 
