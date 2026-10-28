@@ -307,8 +307,8 @@ export const currentSectionItem = frame => sectionList(frame).locator('[aria-cur
 export const sectionTabStop = frame => sectionList(frame).locator('[tabindex="0"]')
 /** The scrolling column of sections, a tab stop named after the document. */
 export const sectionColumn = (frame, title) => frame.getByRole('region', named(title + ' sections'))
-/** A section in the column, a region named by its heading. */
-export const frameSection = (frame, title) => frame.getByRole('region', named(title))
+/** A section in the column, a group named by its heading (not a landmark). */
+export const frameSection = (frame, title) => frame.getByRole('group', named(title))
 /** A collapsible section's heading button. */
 export const sectionToggle = section => section.getByRole('heading', { level: 2 }).getByRole('button')
 export const scriptDrawer = frame => frame.getByRole('region', { name: 'Script', exact: true })

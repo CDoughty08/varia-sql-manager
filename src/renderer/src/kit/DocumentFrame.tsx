@@ -135,11 +135,15 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
 
 const sectionDomId = (id: string, section: string) => `${id}-section-${section}`
 
-/** A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. */
+/**
+ * A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. A
+ * named group, not a region: a document of ten pages would otherwise add ten landmarks, where its headings and the list
+ * already lead to each one.
+ */
 export function FrameSectionView({ id, section, collapsed, onToggle }: { readonly id: string; readonly section: FrameSection; readonly collapsed: boolean; readonly onToggle: () => void }) {
   const domId = sectionDomId(id, section.id), headingId = `${domId}-heading`, bodyId = `${domId}-body`
   const open = !section.collapsible || !collapsed
-  return <section className="document-section" id={domId} aria-labelledby={headingId} data-section={section.id}>
+  return <section className="document-section" id={domId} role="group" aria-labelledby={headingId} data-section={section.id}>
     <div className="document-section-head">
       <h2 className="document-section-title" id={headingId}>
         {section.collapsible

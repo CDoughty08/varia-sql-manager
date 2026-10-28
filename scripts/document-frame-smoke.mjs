@@ -1,7 +1,7 @@
 // The document frame (src/renderer/src/kit/DocumentFrame.tsx) in real Chromium, before any document uses it: the section
 // list's keys, tab stop, tooltips and scroll, the scroll spy, a collapsed section chosen from the list, the section toggle,
 // paging the column by keyboard, the Script drawer's splitter (keys, mouse, touch, a cancelled drag), toggle and ways out,
-// the header's verbs, and the narrow layout. The fixture page (tests/fixtures/document-frame) is built here with Vite and
+// the header's verbs, its one row whatever its words, its icons and chevrons, and the narrow layout. The fixture page (tests/fixtures/document-frame) is built here with Vite and
 // runs in a hidden, sandboxed window of its own.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { currentSectionItem, documentCrumbs, documentFrame, documentHeader, frameSection, scriptActions, scriptDrawer, scriptNotice, scriptSplitter, scriptText, scriptToggle, sectionColumn, sectionItem, sectionList, sectionTabStop, sectionToggle } from './fixtures/ui.mjs'
@@ -51,8 +51,28 @@ const scrollColumn = async target => {
   const top = target === 'start' ? 0 : target === 'end' ? Number.MAX_SAFE_INTEGER : await sectionTop(target)
   await column().evaluate((element, value) => { element.scrollTop = value }, top)
 }
-const headingAtTop = name => expect.poll(async () => Math.abs(await scrollTop() - await sectionTop(name))).toBeLessThanOrEqual(1)
+/** How far the section's box sits below the top of the column's visible box, on screen (not the offsets the frame scrolls by). */
+const headingOffset = async name => {
+  const box = await frameSection(frame, name).boundingBox()
+  return box.y - await column().evaluate(element => element.getBoundingClientRect().top + element.clientTop)
+}
+const headingAtTop = name => expect.poll(async () => Math.abs(await headingOffset(name))).toBeLessThanOrEqual(1)
 const fixtureState = () => page.evaluate(() => window.__frameFixture)
+/** Past the scroll spy's next check (a frame, or 50 ms in a hidden window), so what it decides has rendered. */
+const settle = () => page.waitForTimeout(300)
+/** What a codicon draws: its glyph rule's content, `none` without Monaco's rules. */
+const glyph = locator => locator.evaluate(element => getComputedStyle(element, '::before').content)
+const drawn = async (locator, name) => expect(await glyph(locator), `${name} draws its glyph`).toMatch(/^"[^"]+"$/)
+/** The space before and after each crumb's chevron: after it comes the next crumb, or the title. */
+const chevronSpacing = async () => {
+  const titleLeft = (await frame.getByRole('heading', { level: 1 }).boundingBox()).x
+  const crumbs = await documentCrumbs(frame).evaluateAll(items => items.map(item => {
+    const [text, chevron] = [...item.children].map(child => child.getBoundingClientRect())
+    return { textRight: text.right, left: chevron.left, right: chevron.right, nextLeft: item.nextElementSibling?.firstElementChild?.getBoundingClientRect().left }
+  }))
+  return crumbs.map(crumb => [crumb.left - crumb.textRight, (crumb.nextLeft ?? titleLeft) - crumb.right])
+}
+const headerHeight = async () => (await documentHeader(frame).boundingBox()).height
 const splitterValue = async () => Number(await scriptSplitter(frame).getAttribute('aria-valuenow'))
 const frameHeight = async () => (await frame.boundingBox()).height
 /** Whether the item's box lies inside the section list's visible box. */
@@ -108,6 +128,12 @@ try {
   await expect(current()).toHaveAttribute('data-section', 'general')
   expect(await focused()).toBe('general')
   await headingAtTop('General')
+  // Keys with a modifier are not the list's: they go on to the workbench (Shift+Down, Ctrl+End) and leave the section.
+  for (const key of ['Shift+ArrowDown', 'Control+End', 'Alt+ArrowDown', 'Shift+End']) await page.keyboard.press(key)
+  await settle()
+  expect((await fixtureState()).frame.section, 'a modified key does not move the list').toBe('general')
+  expect(await focused()).toBe('general')
+  await headingAtTop('General')
 
   // Choosing a collapsed section opens it and scrolls its heading to the top once it has rendered.
   await expect(options().getByRole('table')).toHaveCount(0)
@@ -116,13 +142,19 @@ try {
   await expect(sectionToggle(options())).toHaveAttribute('aria-expanded', 'true')
   await headingAtTop('Options')
   await expect(current()).toHaveAttribute('data-section', 'options')
+  // It stays open once the scroll spy has seen the scroll: the spy works from the latest state, not the first render's.
+  await settle()
+  await expect(options().getByRole('table')).toHaveCount(1)
+  expect((await fixtureState()).frame.collapsed, 'the scroll spy keeps a section the list opened').toEqual(['permissions'])
 
   // Near the end, where Permissions cannot reach the top, the section chosen stays marked; away from the end the scroll
   // decides again, so coming back to the end marks the last section.
   await item('permissions').click()
   await expect(frameSection(frame, 'Permissions').getByRole('table')).toHaveCount(1)
-  await page.waitForTimeout(300)
+  await settle()
   await expect(current()).toHaveAttribute('data-section', 'permissions')
+  await expect(frameSection(frame, 'Permissions').getByRole('table')).toHaveCount(1)
+  expect((await fixtureState()).frame.collapsed).toEqual([])
   await scrollColumn('start')
   await expect(current()).toHaveAttribute('data-section', 'general')
   await scrollColumn('end')
@@ -132,6 +164,11 @@ try {
   await sectionToggle(options()).click()
   await expect(options().getByRole('table')).toHaveCount(0)
   await expect(sectionToggle(options())).toHaveAttribute('aria-expanded', 'false')
+  // A scroll after the toggle keeps it: the spy changes only the current section.
+  await scrollColumn('start')
+  await settle()
+  await expect(options().getByRole('table')).toHaveCount(0)
+  expect((await fixtureState()).frame.collapsed, 'a scroll after a toggle keeps the sections as they were left').toEqual(['options'])
   await sectionToggle(options()).click()
   await expect(options().getByRole('table')).toHaveCount(1)
 
@@ -197,12 +234,21 @@ try {
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false })
   await cdp.detach()
   await expect.poll(splitterValue, 'a touch drag moves the splitter as far as the finger').toBeGreaterThanOrEqual(held + 100 / height * 100 - 3)
+  // A scroll after a resize keeps the drawer's size.
+  const resized = await splitterValue()
+  await scrollColumn('Filegroups')
+  await settle()
+  expect(await splitterValue(), 'a scroll after a resize keeps the drawer as tall').toBe(resized)
+  expect(Math.round((await fixtureState()).frame.scriptSize * 100)).toBe(resized)
 
-  // Closing the drawer leaves its bar; opening it shows the script again.
+  // Closing the drawer leaves its bar, and a scroll leaves it closed; opening it shows the script again.
   await scriptToggle(frame).click()
   await expect(scriptToggle(frame)).toHaveAttribute('aria-expanded', 'false')
   await expect(scriptText(frame)).toHaveCount(0)
   await expect(scriptActions(frame)).toHaveCount(3)
+  await scrollColumn('start')
+  await settle()
+  await expect(scriptToggle(frame)).toHaveAttribute('aria-expanded', 'false')
   await scriptToggle(frame).click()
   await expect(scriptText(frame)).toBeVisible()
 
@@ -227,7 +273,41 @@ try {
   expect((await colors(split))[1], 'a secondary verb is borderless').toBe('rgba(0, 0, 0, 0)')
   expect((await fixtureState()).ran).toEqual(['Stop', 'Split View'])
   await expect(documentCrumbs(frame).first()).toHaveAttribute('title', 'sqlprod-cluster-node-01.corp.example.com\\INSTANCE2025')
-  expect((await documentHeader(frame).boundingBox()).height, 'the header is one row at 1280 px').toBeLessThan(60)
+  const oneRow = await headerHeight()
+  expect(oneRow, 'the header is one row at 1280 px').toBeLessThan(60)
+
+  // Every icon draws its glyph (the codicon font and Monaco's glyph rules, as the app loads them).
+  await expect.poll(() => page.evaluate(() => [...document.fonts].some(font => font.family.replace(/"/g, '') === 'codicon' && font.status === 'loaded')), 'the codicon font loads').toBe(true)
+  await drawn(documentCrumbs(frame).first().locator('[data-icon]'), 'a crumb chevron')
+  await drawn(item('files').locator('[data-icon="error"]'), 'the problem glyph')
+  for (const name of ['Stop', 'Refresh']) await drawn(page.getByRole('button', { name, exact: true }).locator('[data-icon]'), name)
+  for (const name of ['Open in Query Window', 'Save Script As…', 'Copy']) await drawn(scriptActions(frame, name).locator('[data-icon]'), name)
+  await drawn(sectionToggle(options()).locator('[data-icon]'), 'a section toggle')
+  // Each chevron sits as far from the crumb before it as from what follows, the title included.
+  for (const [before, after] of await chevronSpacing()) {
+    expect(before, 'a chevron is apart from its crumb').toBeGreaterThan(0)
+    expect(Math.abs(before - after), `a chevron is spaced evenly (${before} and ${after} px)`).toBeLessThanOrEqual(0.5)
+  }
+
+  // Sections are groups, not landmarks: the frame's regions are its column and its Script drawer.
+  await expect(frame.getByRole('region')).toHaveCount(2)
+
+  // The header stays one row whatever its words: a long subtitle is cut rather than pushing the verbs under the title,
+  // and a live document's pill changing its words does not move the content under the header.
+  const longSubtitle = 'Database Properties of a database with a long name on a server far away from here at the end of the hall'
+  await page.evaluate(subtitle => window.__frameFixture.setSubtitle(subtitle), longSubtitle)
+  await expect(frame.getByText(longSubtitle)).toBeVisible()
+  expect(await headerHeight(), 'a long subtitle keeps the header on one row').toBe(oneRow)
+  expect(await frame.getByText(longSubtitle).evaluate(element => element.scrollWidth > element.clientWidth), 'the subtitle is cut').toBe(true)
+  const verbRow = async () => { const verb = await page.getByRole('button', { name: 'Save', exact: true }).boundingBox(), heading = await frame.getByRole('heading', { level: 1 }).boundingBox(); return Math.abs((verb.y + verb.height / 2) - (heading.y + heading.height / 2)) }
+  expect(await verbRow(), 'the verbs stay on the title\'s row').toBeLessThanOrEqual(4)
+  for (const label of ['Stopped · backend unavailable', 'Live · every 2 s', 'Paused · resumes when shown again in this window']) {
+    await page.evaluate(text => window.__frameFixture.setState(text), label)
+    await expect(frame.getByText(label)).toBeVisible()
+    expect(await headerHeight(), `the header keeps its height with "${label}"`).toBe(oneRow)
+  }
+  await page.evaluate(() => { window.__frameFixture.setSubtitle('Database Properties'); window.__frameFixture.setState('Unsaved changes') })
+  await expect(frame.getByText('Unsaved changes')).toBeVisible()
   await page.screenshot({ path: join('artifacts', 'document-frame-dark.png') })
 
   // Where the list is narrow (a 700 px window), a long title is cut; its tooltip carries it whole.
@@ -253,12 +333,30 @@ try {
   await expect(current()).toHaveAttribute('data-section', 'extended')
   await page.keyboard.press('Home')
   await expect.poll(() => insideList('general')).toBe(true)
+  // The strip's scrollbar is thin, as the query tab strip's: a classic one would crowd the current item's underline.
+  const strip = await sectionList(frame).evaluate(element => { const style = getComputedStyle(element); return { overflows: element.scrollWidth > element.clientWidth, bar: element.offsetHeight - element.clientHeight - parseFloat(style.borderTopWidth) - parseFloat(style.borderBottomWidth) } })
+  const classicBar = await page.evaluate(() => { const probe = document.createElement('div'); probe.style.cssText = 'position: absolute; width: 100px; height: 50px; overflow-x: scroll'; document.body.append(probe); const size = probe.offsetHeight - probe.clientHeight; probe.remove(); return size })
+  expect(strip.overflows, 'the strip scrolls at 560 px').toBe(true)
+  if (classicBar > 0) expect(strip.bar, `the strip's scrollbar is thinner than a classic one (${classicBar} px)`).toBeLessThan(classicBar)
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'no horizontal page scroll when narrow').toBe(true)
   await page.screenshot({ path: join('artifacts', 'document-frame-narrow.png') })
   await close()
 
-  // A list longer than its box follows the scroll: the section the content shows stays in view in the list.
-  await launch('theme=light&sections=many')
+  // A list longer than its box follows the scroll: the section the content shows stays in view in the list. The frame
+  // runs past the bottom of an overflow: hidden box here, as it can in a dock panel.
+  await launch('theme=light&sections=many&wrap=clipped')
+  const clipTop = () => page.evaluate(() => document.getElementById('clip').scrollTop)
+  // The list's keys show the item inside the list only: focus alone would scroll the clipping box to show it.
+  await item('s1').evaluate(element => element.focus({ preventScroll: true }))
+  expect(await clipTop()).toBe(0)
+  await page.keyboard.press('End')
+  await expect(current()).toHaveAttribute('data-section', 's40')
+  expect(await focused()).toBe('s40')
+  await expect.poll(() => insideList('s40')).toBe(true)
+  expect(await clipTop(), 'a key in the list scrolls nothing outside the frame').toBe(0)
+  await page.keyboard.press('Home')
+  await expect(current()).toHaveAttribute('data-section', 's1')
+  expect(await clipTop()).toBe(0)
   await scrollColumn('Section 31')
   await expect(current()).toHaveAttribute('data-section', 's31')
   await expect.poll(() => insideList('s31'), 'the current section is visible in the list').toBe(true)

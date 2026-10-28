@@ -192,7 +192,8 @@ describe('document frame markup', () => {
     expect(lost.match(/data-section="\w+" tabindex="0"/g)).toEqual(['data-section="general" tabindex="0"'])
     // The column is a tab stop of its own, so the page keys scroll a section taller than the view.
     expect(markup).toContain('<div class="document-content document-sections" role="region" aria-label="AdventureWorks sections" tabindex="0">')
-    expect(markup).toContain('<section class="document-section" id="doc-2-section-general" aria-labelledby="doc-2-section-general-heading" data-section="general"><div class="document-section-head">'
+    // A section is a named group, not a landmark: ten pages would add ten regions to the landmark list.
+    expect(markup).toContain('<section class="document-section" id="doc-2-section-general" role="group" aria-labelledby="doc-2-section-general-heading" data-section="general"><div class="document-section-head">'
       + '<h2 class="document-section-title" id="doc-2-section-general-heading">General</h2></div><div class="document-section-body" id="doc-2-section-general-body"><p>facts</p></div></section>')
     expect(markup).toContain('<h2 class="document-section-title" id="doc-2-section-files-heading">Files</h2><span class="aside">2 files</span>')
     // A collapsible section's heading is a disclosure button; a collapsed one renders no body (a live one stops drawing).
@@ -332,6 +333,8 @@ describe('document frame styles and colors', () => {
     // Without it a touch or pen drag starts a pan, which cancels the pointer after its first move.
     expect(valueOf('.document-script-splitter', 'touch-action')).toBe('none')
     expect(valueOf('.document-sections:focus-visible', 'outline')).toBe('1px solid var(--varia-focusBorder)')
+    // The column is each section's offsetParent, so scrolling it to a section's offsetTop brings that heading to its top.
+    expect(valueOf('.document-sections', 'position')).toBe('relative')
   })
   it('keeps a danger verb in the error colour when hovered, and a pressed verb in the selection colours', () => {
     const danger = ['button', '.document-verb', '.danger', ':not(.primary)', ':not(:disabled)']
