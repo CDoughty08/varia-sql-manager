@@ -17,7 +17,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | New Query | `file.new` | Ctrl+N | Ctrl+N | ⌘N | `!documentBusy` | File › New Query |
 | Open File… | `file.open` | Ctrl+O | Ctrl+O | ⌘O | `!documentBusy` | File › Open… |
-| Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !activeDocumentIsActivityMonitor && !documentBusy` | File › Save; Query tab context menu › Save |
+| Save | `file.save` | Ctrl+S (`!outputGridFocus`) | Ctrl+S (`!outputGridFocus`) | ⌘S (`!outputGridFocus`) | `hasActiveDocument && !documentBusy` | File › Save; Query tab context menu › Save |
 | Save As… | `file.saveAs` | — | — | ⇧⌘S | `activeDocumentIsText && !documentBusy` | File › Save As…; Query tab context menu › Save As… |
 | Save All | `file.saveAll` | Ctrl+Shift+S | Ctrl+Shift+S | ⌥⌘S | `anyDocumentDirty && !documentBusy` | File › Save All |
 | Open Recent File… | `file.openRecent` | — | — | — | `hasRecentFiles && !documentBusy` | File › Recent Files › each recent file |

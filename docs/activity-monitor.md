@@ -25,7 +25,9 @@ only what the connection reported, nothing a probe has not produced.
 The header says what the monitor is doing ("Live · every 2 s", "Live · slowed to 4 s", "Paused", "Paused while hidden",
 "Stopped · backend unavailable") and how old the data is, then the refresh interval, the chart window (1, 5, 15 or 60
 minutes, 15 by default; charts reach back as far as Environment › Live Data keeps history), what a sample costs on the server (the sum
-of the running probes' last statement times, each listed in its tooltip), and **Pause**, **Refresh Now** and **Split View**.
+of the running probes' last statement times, each listed in its tooltip), and **Pause**, **Refresh Now** and **Split View**,
+which show only their icons (named in their tooltips) in a document narrower than 1,040 px, so the title and its state
+keep their room in the one header row.
 Pause stops collecting, as SSMS's does: no SQL runs, the charts keep their history and show a gap, and Resume starts a
 new baseline. A monitor whose tab is not showing pauses by itself after the Live Data delay. A monitor keeps its
 interval, window, panes and charts while other tabs show; Tools › Options › Activity Monitor sets what a new one starts
@@ -41,10 +43,14 @@ permission the document still opens: it says which permission it needs (VIEW SER
 (quoted as one name, never run by Varia) and **Retry**, and the tiles say "No permission"; the same holds when the
 permission goes while the monitor runs (the overview then stops for good). A sample that fails for another reason
 (blocked, timed out) keeps the tiles' last values, and a note above them gives the reason until a sample succeeds; the
-probe retries by itself.
+probe retries by itself. A monitor that stops because none of its probes can run on the server (NOT_SUPPORTED) says the
+server is not covered and offers no Retry; one that stops for the permission shows the permission message, whose Retry
+helps once the GRANT has run.
 
 The panes sit in one slot, or two with Split View: side by side when the document is at least 1,400 px wide, stacked
-below that, with a splitter (arrow keys, Home and End). Each slot has a tab per pane; choosing in one slot the pane the
+below that, each then at least 200 px tall, with a splitter (arrow keys, Home and End). The tiles keep their height and
+the expanded charts give way down to a floor, so the panes keep theirs; only a document too short for all of them
+scrolls. Each slot has a tab per pane; choosing in one slot the pane the
 other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its
 probe stays paused: no SQL runs for a pane nobody can read.
 
@@ -575,7 +581,9 @@ Its SQL is written for SQL Server 2016 (band 13) to SQL Server 2025 (band 17); M
 catalog it has, not the version it reports. Any other server opens the document with "Activity Monitor isn't available for this kind of server."
 
 Showing other sessions and server activity needs VIEW SERVER STATE (SQL Server 2019 and earlier, Managed Instance) or
-VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later). Without it the monitor still opens, shows the login's own
+VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later), named by the version the server reports, as the capability
+probe checks it; a Managed Instance is asked for VIEW SERVER STATE even where it has the newer permission. Without it
+the monitor still opens, shows the login's own
 session, and offers the GRANT statement to copy (never runs it). File names need VIEW ANY DEFINITION; without it Data
 File I/O shows ids. Kill Process needs ALTER ANY CONNECTION (sysadmin or processadmin).
 

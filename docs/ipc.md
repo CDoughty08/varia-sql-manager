@@ -1051,7 +1051,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   Paused), with the reason in `error` and on the indicator; `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT` and
   `BACKEND_UNAVAILABLE` refusals go again after 1 s, doubling to 30 s, any other with the view's next change, and the next
   accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe` (there is no
-  subscription-wide pause there) and unpauses them when it resumes. `setArgs` changes the source's `args` in place (the
+  subscription-wide pause there) and unpauses them when it resumes; a view opened with `paused: true` (a paused Activity
+  Monitor's Retry) is paused by the user from the start, so nothing samples before its pause could reach the backend. `setArgs` changes the source's `args` in place (the
   history and state carry on, and later subscriptions use them). Refresh sends `refresh: true` (a dormant view subscribes
   again); `track` sends a keyed table's tracked keys with a new `seq` each time, and a new subscription sends them again
   with new ones.

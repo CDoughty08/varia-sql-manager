@@ -207,7 +207,16 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
   ...text(['errorForeground'], hovered(...editor)),
   ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
-  ...graphic(['sash.hoverBorder'], panel)
+  ...graphic(['sash.hoverBorder'], panel),
+
+  // The Activity Monitor (src/renderer/src/activity): a count on a pane's tab strip (Blocking's blocked sessions), a tile's
+  // pressed chart button, the focus rings on tiles' buttons and pane tabs, and the panes' splitter, which shows its focus
+  // only by this fill, in the document.
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], [...panelTitle, toneKeys(tone).background])),
+  ...text(['list.inactiveSelectionForeground'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['panelTitle.activeBorder', 'focusBorder'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['focusBorder'], tile, panelTitle),
+  ...graphic(['sash.hoverBorder'], editor)
 ]
 
 /**

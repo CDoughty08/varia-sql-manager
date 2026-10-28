@@ -32,7 +32,8 @@
 // The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
 // a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
 // BLOCKED, as a probe that waited out its lock timeout does), the resources probe opens unavailable as the
-// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED).
+// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
+// a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -673,7 +674,8 @@ async function workbench(id, method, params, credit) {
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {},
+        ...params.server === 'no-permission' && params.username ? { login: params.username } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }

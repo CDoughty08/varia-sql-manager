@@ -9,11 +9,9 @@ import {
 } from '../../../shared/activity/catalog'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import { chartSeriesColors } from '../../../shared/theme/charts'
-import type { TileTone } from '../../../shared/theme/tones'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import { useTicker } from '../core/useTicker'
-import { Chip, ChipGroup } from '../kit/Chip'
 import DocumentFrame from '../kit/DocumentFrame'
 import EmptyState from '../kit/EmptyState'
 import { formatInterval } from '../kit/format'
@@ -27,11 +25,16 @@ import type { LiveHandle, LiveSnapshot } from '../live/LiveService'
 import { scaledRing, type RingReader } from '../live/ring'
 import { freshness, pillStatus } from '../live/status'
 import { splitLimits, type MonitorState, type PaneSlot } from './ActivityMonitorService'
-import { chartScaleOf, latestValue, monitorFacts, overviewNotice, overviewProbe, seriesIndex, tileReadings, toneAnnouncement, type TileReading } from './tiles'
+import { tileName } from '../kit/Tile'
+import { chartScaleOf, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewProbe, seriesIndex, tileReadings, type Announcement, type TileReading } from './tiles'
 
 const noHandle = { subscribe: () => () => {}, getSnapshot: () => undefined }
 /** Where the panes sit side by side: below it they stack (D-am §3.2). */
 export const sideBySideWidth = 1400
+/** Each stacked pane's least height in split view, so the split never squeezes both panes into one pane's room. */
+export const paneFloor = 200
+/** The splitter's thickness (styles.css .activity-splitter). */
+const splitterSize = 6
 
 export default function ActivityMonitor({ documentId }: { readonly documentId: string }) {
   const workbench = useWorkbench()
@@ -77,16 +80,17 @@ function HeaderTools({ state, snapshot }: { readonly state: MonitorState; readon
   const costs = running.filter(([, probe]) => probe.costMs !== undefined)
   const cost = costs.reduce((sum, [, probe]) => sum + probe.costMs!, 0)
   const detail = running.map(([id, probe]) => `${probeSpecs[id as keyof typeof probeSpecs]?.title ?? id}: every ${formatInterval(probe.effectiveIntervalMs)}${probe.costMs === undefined ? '' : `, last ${Math.round(probe.costMs)} ms`}`).join('\n')
+  // Two compact pickers (Calm Pro's "Last 15 min"), so the title and its state keep their room in the one header row.
   return <>
-    <span className="activity-interval">
-      <select aria-label="Refresh interval" value={String(state.intervalSeconds)} onChange={event => activity.setInterval(state.id, Number(event.target.value))}>
-        {activityIntervalsSeconds.map(seconds => <option key={seconds} value={String(seconds)}>Every {seconds} s</option>)}
-      </select>
-    </span>
-    <ChipGroup label="Chart window">
-      {chartWindowsMinutes.map(minutes => <Chip key={minutes} label={`${minutes} min`} pressed={state.windowMinutes === minutes} title={`Charts show the last ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`} onToggle={() => activity.setWindow(state.id, minutes)} />)}
-    </ChipGroup>
-    {costs.length > 0 && <span className="activity-cost" title={detail}>Cost {Math.round(cost)} ms a sample</span>}
+    <select className="activity-select" aria-label="Refresh interval" value={String(state.intervalSeconds)} onChange={event => activity.setInterval(state.id, Number(event.target.value))}>
+      {activityIntervalsSeconds.map(seconds => <option key={seconds} value={String(seconds)}>Every {seconds} s</option>)}
+    </select>
+    <select className="activity-select" aria-label="Chart window" value={String(state.windowMinutes)} onChange={event => activity.setWindow(state.id, Number(event.target.value))}>
+      {chartWindowsMinutes.map(minutes => <option key={minutes} value={String(minutes)}>Last {formatInterval(minutes * 60_000)}</option>)}
+    </select>
+    {costs.length > 0 && <span className="activity-cost" title={`What a sample costs on the server\n${detail}`}>
+      <Icon name="watch" /><span className="visually-hidden">Sample cost </span>{Math.round(cost)} ms
+    </span>}
   </>
 }
 
@@ -95,48 +99,46 @@ function Banner({ snapshot, documentId, login, version, edition }: { readonly sn
   const { activity, commands } = useWorkbench()
   const [copied, setCopied] = useState<boolean>()
   const retry: ErrorAction = { label: 'Retry', run: () => activity.retry(documentId) }
-  if (snapshot.status === 'lost') {
-    return <InlineError className="activity-banner" message={snapshot.error?.message ?? 'The SQL backend stopped, so the monitor stopped with it.'} code={snapshot.error?.code}
+  const notice = monitorNotice(snapshot)
+  // Every banner is the kit's InlineError with the same class, so all of them have the same inset in the same box.
+  switch (notice?.kind) {
+    case undefined: return null
+    case 'lost': return <InlineError className="activity-banner" message={notice.message ?? 'The SQL backend stopped, so the monitor stopped with it.'} code={notice.code}
       actions={[{ label: 'Reconnect…', run: () => void commands.execute('connection.reconnect', undefined, 'toolbar') }]} />
+    case 'disconnected': return <InlineError className="activity-banner" role="status" copy={false} message="The server was disconnected. Open the Activity Monitor again after connecting." />
+    case 'ended': return <InlineError className="activity-banner" message={notice.message} code={notice.code} actions={[retry]} />
+    case 'permission': {
+      const major = version ? Number.parseInt(version, 10) : undefined, permission = serverStatePermission(Number.isFinite(major) ? major : undefined, edition)
+      const copy: ErrorAction[] = login ? [{ label: 'Copy GRANT statement', run: () => { void window.varia.writeClipboardText(grantStatement(login, major, edition)).then(result => setCopied(result.ok), () => setCopied(false)) } }] : []
+      return <InlineError className="activity-banner" role="status" code="PERMISSION_DENIED" message={`Activity Monitor needs ${permission} to show server activity and other sessions.`} actions={[...copy, retry]}>
+        {copied !== undefined && <p className="activity-note" role="status">{copied ? 'GRANT statement copied. Varia never runs it.' : 'The statement could not be copied.'}</p>}
+      </InlineError>
+    }
+    // A failed sample: the tiles keep their last values and the probe retries by itself, so this only says why.
+    case 'failing': return <InlineError className="activity-banner" role="status" code={notice.code} message={notice.message} />
+    // A server the monitor does not cover: nothing a Retry could change.
+    case 'unavailable': return <InlineError className="activity-banner" role="status" copy={false} message={notice.message} />
   }
-  if (snapshot.status === 'ended') {
-    if (snapshot.ended?.ended === 'disconnected') return <InlineError className="activity-banner" role="status" copy={false} message="The server was disconnected. Open the Activity Monitor again after connecting." />
-    if (snapshot.error) return <InlineError className="activity-banner" message={snapshot.error.message} code={snapshot.error.code} actions={[retry]} />
-    return null
-  }
-  const notice = snapshot.status === 'live' || snapshot.status === 'connecting' ? overviewNotice(snapshot) : undefined
-  if (!notice) return null
-  if (notice.kind === 'permission') {
-    const major = version ? Number.parseInt(version, 10) : undefined, permission = serverStatePermission(Number.isFinite(major) ? major : undefined, edition)
-    const copy: ErrorAction[] = login ? [{ label: 'Copy GRANT statement', run: () => { void window.varia.writeClipboardText(grantStatement(login, major, edition)).then(result => setCopied(result.ok), () => setCopied(false)) } }] : []
-    return <div className="activity-banner">
-      <InlineError role="status" code="PERMISSION_DENIED" message={`Activity Monitor needs ${permission} to show server activity and other sessions.`} actions={[...copy, retry]} />
-      {copied !== undefined && <p className="activity-note" role="status">{copied ? 'GRANT statement copied. Varia never runs it.' : 'The statement could not be copied.'}</p>}
-    </div>
-  }
-  // A failed sample: the tiles keep their last values and the probe retries by itself, so this only says why.
-  if (notice.kind === 'failing') return <InlineError className="activity-banner" role="status" code={notice.code} message={notice.message} />
-  return <InlineError className="activity-banner" role="status" copy={false} message={notice.message} />
 }
 
 /** The eight tiles: SSMS's four charts first. Activating one expands its chart below. */
 function Tiles({ documentId, state, handle, readings, snapshot }: { readonly documentId: string; readonly state: MonitorState; readonly handle: LiveHandle; readonly readings: readonly TileReading[]; readonly snapshot: LiveSnapshot }) {
   const { activity } = useWorkbench()
-  const tones = useRef<(TileTone | undefined)[]>([])
-  const [announcement, setAnnouncement] = useState('')
-  // A crossing is said once, when it happens; a tile that calms down or stays says nothing.
+  const [announcement, setAnnouncement] = useState<Announcement>()
+  // A crossing is said once, when it happens; a tile that calms down or stays says nothing. The service keeps the tones
+  // last shown, so a tab switch, which remounts this view, says nothing again.
   useEffect(() => {
-    const said = readings.flatMap((reading, index) => toneAnnouncement(reading.caption, tones.current[index], reading.tone) ?? [])
-    tones.current = readings.map(reading => reading.tone)
-    if (said.length) setAnnouncement(said.join(' '))
+    const said = activity.noteTones(documentId, readings)
+    if (said) setAnnouncement(previous => nextAnnouncement(previous, said))
   })
-  const notice = overviewNotice(snapshot)
+  const notice = monitorNotice(snapshot)
   const missing = notice?.kind === 'permission' ? 'No permission' : notice?.kind === 'unavailable' ? 'Not available' : undefined
   return <section className="activity-tiles" aria-label="Server overview" data-activity-region="tiles">
     {tileSpecs.map((tile, index) => {
-      const reading = readings[index], expanded = state.expanded.includes(index)
-      return <div key={tile.caption} className="activity-tile" data-expanded={expanded ? '' : undefined} onClick={event => { if (!(event.target as Element).closest('button')) activity.toggleTile(documentId, index) }}>
-        <Tile caption={reading.caption} value={reading.value} unit={reading.unit} context={missing ?? reading.context} tone={reading.tone}>
+      const reading = readings[index], expanded = state.expanded.includes(index), context = missing ?? reading.context
+      // The caption and figures may be cut in a narrow tile, so the tooltip says the whole tile, as its name does.
+      return <div key={tile.caption} className="activity-tile" title={tileName({ ...reading, context })} data-expanded={expanded ? '' : undefined} onClick={event => { if (!(event.target as Element).closest('button')) activity.toggleTile(documentId, index) }}>
+        <Tile caption={reading.caption} value={reading.value} unit={reading.unit} context={context} tone={reading.tone}>
           <Sparkline handle={handle} series={tile.series} title={tile.caption} windowMinutes={state.windowMinutes} />
         </Tile>
         <button type="button" className="activity-tile-toggle" aria-pressed={expanded} aria-label={`${tile.caption} chart`} title={expanded ? 'Hide the chart' : 'Show the chart'}
@@ -145,7 +147,8 @@ function Tiles({ documentId, state, handle, readings, snapshot }: { readonly doc
         </button>
       </div>
     })}
-    <p className="visually-hidden" role="status" aria-live="polite">{announcement}</p>
+    {/* Keyed by the announcement, so the same sentence again is a new node, which screen readers speak again. */}
+    <p className="visually-hidden" role="status" aria-live="polite">{announcement && <span key={announcement.id}>{announcement.text}</span>}</p>
   </section>
 }
 
@@ -223,8 +226,10 @@ function Panes({ state, ring }: { readonly state: MonitorState; readonly ring: R
     activity.setSplitRatio(state.id, jump ?? state.splitRatio + step!)
   }
   const first = Math.round(state.splitRatio * 1000) / 10
-  return <div ref={box} className="activity-panes" data-orientation={orientation} data-split={state.split ? '' : undefined}
-    style={state.split ? { [wide ? 'gridTemplateColumns' : 'gridTemplateRows']: `minmax(0, ${first}fr) auto minmax(0, ${100 - first}fr)` } : undefined}>
+  // Stacked, each pane keeps its own floor (the panes then need room for two); side by side they share the height.
+  const style = !state.split ? undefined : wide ? { gridTemplateColumns: `minmax(0, ${first}fr) auto minmax(0, ${100 - first}fr)` }
+    : { gridTemplateRows: `minmax(${paneFloor}px, ${first}fr) auto minmax(${paneFloor}px, ${100 - first}fr)`, minHeight: 2 * paneFloor + splitterSize }
+  return <div ref={box} className="activity-panes" data-orientation={orientation} data-split={state.split ? '' : undefined} style={style}>
     <Pane state={state} slot="primary" blocked={blocked} />
     {state.split && <>
       <div className="activity-splitter" role="separator" tabIndex={0} aria-orientation={wide ? 'vertical' : 'horizontal'} aria-label="Resize the panes"

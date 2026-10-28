@@ -13,6 +13,7 @@ import { FakeCanvas, FakeChartEnvironment, fakeOwner } from './fixtures/fake-can
 import { liveIndicator } from '../src/renderer/src/live/status'
 import type { LivePatch, LiveStream, ResultHandle } from '../src/renderer/src/results/ResultClient'
 import type { ResultKey } from '../src/renderer/src/results/worker-protocol'
+import { ActivityMonitorService, type ActivityMonitorServiceOptions } from '../src/renderer/src/activity/ActivityMonitorService'
 
 // LiveService against a fake ResultClient: each stream records what the service sent, and the test plays the backend's
 // side (events, update answers, the end). As the real ones do, the backend refuses an update NOT_FOUND until it has
@@ -1061,6 +1062,52 @@ describe('LiveService', () => {
     const late = service.open(spec(['debug.synthetic.status']), owner().value)
     expect(late.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'PORT_CLOSED' } })
     expect(client.streams).toHaveLength(2)
+  })
+
+  it('opens a view the user paused with every probe paused, so nothing samples until Resume', async () => {
+    makeService()
+    const view = owner({ connectionId })
+    const handle = service.open(spec(['debug.synthetic.status', 'debug.synthetic.table'], { probes: [{ probe: 'debug.synthetic.status' }, { probe: 'debug.synthetic.table', paused: true }], paused: true }), view.value)
+    const fake = client.last
+    expect(fake.params.probes).toEqual([{ probe: 'debug.synthetic.status', intervalMs: 1000, paused: true }, { probe: 'debug.synthetic.table', intervalMs: 1000, paused: true }])
+    deliver(fake, opened(fake))
+    await settle()
+    expect(fake.updates).toEqual([])
+    expect(handle.getSnapshot()).toMatchObject({ status: 'paused', pausedBy: 'user' })
+    // Resume runs what the view runs; the probe it paused itself stays paused.
+    handle.setUserPaused(false)
+    await settle()
+    expect(fake.updates).toEqual([{ probes: [{ probe: 'debug.synthetic.status', paused: false }] }])
+    expect(handle.getSnapshot().status).toBe('live')
+  })
+
+  it('subscribes an Activity Monitor paused when Retry restarts a paused monitor', async () => {
+    makeService()
+    const monitorId = 'monitor-1', view = owner({ connectionId })
+    const documents = {
+      registerProvider: () => ({ dispose: () => {} }), activate: () => {}, getSnapshot: () => ({ documents: [] }),
+      openCustom: () => ({ id: monitorId }), get: (id: string) => id === monitorId ? { id, connectionId, kind: 'activityMonitor' } : undefined
+    } as unknown as ActivityMonitorServiceOptions['documents']
+    const connections = { get: () => ({ id: connectionId, server: 'sql01', lost: false }) } as unknown as ActivityMonitorServiceOptions['connections']
+    const activity = new ActivityMonitorService({ documents, connections, live: service, owner: () => view.value, settings: () => defaultSettings })
+    const running = (fake: FakeStream) => fake.params.probes.filter(probe => !probe.paused).map(probe => probe.probe)
+    activity.open(connectionId)
+    expect(running(client.last)).toEqual(['activity.overview'])
+    deliver(client.last, opened(client.last))
+    activity.setPaused(monitorId, true)
+    await settle()
+    client.last.end({ ok: true, value: { ended: 'failed', code: 'BACKEND_ERROR', message: 'The live view failed.', ticks: 0, elapsedMs: 1 } })
+    await settle()
+    // Retry while paused: no probe runs, not even before the pause could reach the backend.
+    activity.retry(monitorId)
+    expect(client.streams).toHaveLength(2)
+    expect(running(client.last)).toEqual([])
+    expect(activity.handle(monitorId)?.getSnapshot()).toMatchObject({ pausedBy: 'user' })
+    activity.setPaused(monitorId, false)
+    deliver(client.last, opened(client.last))
+    await settle()
+    expect(client.last.updates).toEqual([{ probes: [{ probe: 'activity.overview', paused: false }] }])
+    activity.dispose()
   })
 })
 

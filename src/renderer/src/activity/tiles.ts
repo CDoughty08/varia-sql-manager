@@ -82,6 +82,11 @@ export function toneAnnouncement(caption: string, before: TileTone | undefined, 
   const rank = (tone: TileTone | undefined) => tone === 'critical' ? 2 : tone === 'warning' ? 1 : 0
   return after && rank(after) > rank(before) ? `${caption} is ${toneWords[after]}.` : undefined
 }
+/** What the tiles say when their tones move from `before` to `readings`: each upward crossing, in tile order. */
+export function crossings(before: readonly (TileTone | undefined)[], readings: readonly Pick<TileReading, 'caption' | 'tone'>[]): string | undefined {
+  const said = readings.flatMap((reading, index) => toneAnnouncement(reading.caption, before[index], reading.tone) ?? [])
+  return said.length ? said.join(' ') : undefined
+}
 
 /**
  * How a tile's series is charted: the live unit it is sent in, except where the tile shows another unit the chart's labels
@@ -113,6 +118,34 @@ export function overviewNotice(snapshot: LiveSnapshot): OverviewNotice | undefin
   if (probe.state === 'failing' && probe.error) return { kind: 'failing', code: probe.error.code, message: probe.error.message }
   return undefined
 }
+
+/**
+ * The one message the document shows above the tiles: the backend went away, the server disconnected, the view ended with
+ * an error, or the overview's notice while the view runs. An end whose cause outlasts a Retry reads as the running view
+ * would: a server none of whose probes can run (AM1 ends it NOT_SUPPORTED) is not offered a Retry that can never succeed,
+ * and a login without the permission gets the permission message, whose Retry helps once the GRANT has been run.
+ */
+export type MonitorNotice =
+  | OverviewNotice
+  | { readonly kind: 'lost'; readonly code?: string; readonly message?: string }
+  | { readonly kind: 'disconnected' }
+  | { readonly kind: 'ended'; readonly code: string; readonly message: string }
+export function monitorNotice(snapshot: LiveSnapshot): MonitorNotice | undefined {
+  if (snapshot.status === 'lost') return { kind: 'lost', ...snapshot.error ? { code: snapshot.error.code, message: snapshot.error.message } : {} }
+  if (snapshot.status === 'ended') {
+    if (snapshot.ended?.ended === 'disconnected') return { kind: 'disconnected' }
+    const error = snapshot.error
+    if (!error) return undefined
+    if (error.code === 'NOT_SUPPORTED') return { kind: 'unavailable', message: unavailableMessage }
+    if (error.code === 'PERMISSION_DENIED') return { kind: 'permission' }
+    return { kind: 'ended', code: error.code, message: error.message }
+  }
+  return snapshot.status === 'live' || snapshot.status === 'connecting' ? overviewNotice(snapshot) : undefined
+}
+
+/** A live region's sentence with its own id: the same sentence again is a new node, which screen readers speak again. */
+export interface Announcement { readonly id: number; readonly text: string }
+export const nextAnnouncement = (previous: Announcement | undefined, text: string): Announcement => ({ id: (previous?.id ?? 0) + 1, text })
 
 /** The header's fact line: what the connection says about the server, and nothing a probe has not produced. */
 export function monitorFacts(connection: { readonly server: string; readonly productVersion?: string; readonly serverVersion?: string; readonly engineEdition?: number; readonly login?: string } | undefined): { label: string; value: string }[] {

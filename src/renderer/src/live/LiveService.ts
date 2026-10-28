@@ -62,6 +62,9 @@ export interface LiveSpec {
   /** Hidden, keep the probes without tables running at 30 s or slower instead of pausing, where the source allows it
    *  (an SSIS execution this window started, so its end is still seen). At most 4 such views a window; others pause. */
   whileHidden?: 'statusOnly'
+  /** Opens paused by the user, as setUserPaused(true) would, but before it subscribes: every probe goes paused, so no
+   *  sample runs until setUserPaused(false). A view that pauses after open could sample first. */
+  paused?: boolean
 }
 
 export type LiveStatus = 'connecting' | 'live' | 'paused' | 'dormant' | 'lost' | 'ended'
@@ -429,6 +432,7 @@ class Handle implements LiveHandle {
     this.connectionId = spec.connectionId
     this.args = spec.args
     this.whileHidden = spec.whileHidden
+    this.userPaused = !!spec.paused
     for (const probe of spec.probes) {
       const catalogue = service.catalog.probes[probe.probe]
       const interval = catalogue?.intervalMs ?? { default: limits.live.intervalMs.min, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }

@@ -1,11 +1,16 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { activityIntervalsSeconds, grantStatement, serverStatePermission, tileSpecs, unavailableMessage } from '../src/shared/activity/catalog'
 import { liveProbes } from '../src/shared/live/catalog'
 import { defaultSettings, settingDef, settingDefs } from '../src/shared/settings/catalog'
-import { chartScaleOf, latestValue, monitorFacts, overviewNotice, seriesIndex, tileReading, tileReadings, tileTone, toneAnnouncement } from '../src/renderer/src/activity/tiles'
+import { chartScaleOf, crossings, latestValue, monitorFacts, monitorNotice, nextAnnouncement, overviewNotice, seriesIndex, tileReading, tileReadings, tileTone, toneAnnouncement } from '../src/renderer/src/activity/tiles'
 import type { LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import { MetricRing, scaledRing } from '../src/renderer/src/live/ring'
 import { freshness, pillStatus } from '../src/renderer/src/live/status'
+import InlineError from '../src/renderer/src/kit/InlineError'
+import { computed } from './fixtures/css-cascade'
+import { stylesheetRules } from './fixtures/css-rules'
 
 const overviewSeries = liveProbes['activity.overview'].series!.length
 /** An overview ring with one sample: the named series set, the rest missing. */
@@ -108,6 +113,29 @@ describe('Activity Monitor header state', () => {
     expect(overviewNotice(overview({ error: error('BLOCKED', false) }, 'fresh'))).toBeUndefined()
     expect(overviewNotice(snapshot('live', {}))).toBeUndefined()
   })
+  it('says why a view that ended shows nothing, offering Retry only where it can help', () => {
+    const ended = (code: string, message = 'Failed.') => snapshot('ended', {}, { ended: { ended: 'failed', ticks: 0, elapsedMs: 1 }, error: { code, message } } as Partial<LiveSnapshot>)
+    // A server none of whose probes can run (Azure SQL Database, before SQL Server 2016) ends NOT_SUPPORTED: the running
+    // view's words, and no Retry.
+    expect(monitorNotice(ended('NOT_SUPPORTED', 'This server does not support this view.'))).toEqual({ kind: 'unavailable', message: unavailableMessage })
+    // Without the permission it ends as the running view says it: Retry helps once the GRANT has run.
+    expect(monitorNotice(ended('PERMISSION_DENIED'))).toEqual({ kind: 'permission' })
+    expect(monitorNotice(ended('BACKEND_ERROR', 'The live view failed.'))).toEqual({ kind: 'ended', code: 'BACKEND_ERROR', message: 'The live view failed.' })
+    expect(monitorNotice(snapshot('ended', {}, { ended: { ended: 'disconnected', ticks: 0, elapsedMs: 1 } }))).toEqual({ kind: 'disconnected' })
+    expect(monitorNotice(snapshot('ended', {}, { ended: { ended: 'cancelled', ticks: 0, elapsedMs: 1 } }))).toBeUndefined()
+    expect(monitorNotice(snapshot('lost', {}, { error: { code: 'BACKEND_LOST', message: 'The SQL backend restarted.' } } as Partial<LiveSnapshot>))).toEqual({ kind: 'lost', code: 'BACKEND_LOST', message: 'The SQL backend restarted.' })
+    // Running, the overview's notice; paused, none.
+    expect(monitorNotice(snapshot('live', { 'activity.overview': probe('unavailable', 2_000, { reason: 'NOT_SUPPORTED' }) }))).toEqual({ kind: 'unavailable', message: unavailableMessage })
+    expect(monitorNotice(snapshot('paused', { 'activity.overview': probe('unavailable', 2_000, { reason: 'NOT_SUPPORTED' }) }))).toBeUndefined()
+  })
+  it('announces crossings as new sentences, the same words again included', () => {
+    expect(crossings([], [{ caption: 'Blocked Sessions', tone: 'critical' }, { caption: 'Waiting Tasks', tone: 'warning' }])).toBe('Blocked Sessions is above its critical threshold. Waiting Tasks is above its warning threshold.')
+    expect(crossings(['critical', 'warning'], [{ caption: 'Blocked Sessions', tone: 'critical' }, { caption: 'Waiting Tasks' }])).toBeUndefined()
+    // A live region whose text does not change says nothing, so the same sentence twice is two announcements with their own ids.
+    const first = nextAnnouncement(undefined, 'Blocked Sessions is above its critical threshold.'), again = nextAnnouncement(first, first.text)
+    expect(again.text).toBe(first.text)
+    expect(again.id).not.toBe(first.id)
+  })
   it('lists only the facts the connection has in the header', () => {
     expect(monitorFacts(undefined)).toEqual([])
     expect(monitorFacts({ server: 'sql01', productVersion: '17.0.1000.7', serverVersion: '17.00.1000', engineEdition: 3, login: 'CONTOSO\\dba' }))
@@ -137,5 +165,19 @@ describe('Activity Monitor settings and permissions', () => {
       .toEqual(['VIEW SERVER PERFORMANCE STATE', 'VIEW SERVER PERFORMANCE STATE', 'VIEW SERVER STATE', 'VIEW SERVER STATE', 'VIEW SERVER STATE'])
     expect(grantStatement('CONTOSO\\dba', 17)).toBe('GRANT VIEW SERVER PERFORMANCE STATE TO [CONTOSO\\dba];')
     expect(grantStatement('x]; DROP LOGIN sa; --', 15)).toBe('GRANT VIEW SERVER STATE TO [x]]; DROP LOGIN sa; --];')
+  })
+})
+
+describe('Activity Monitor layout rules', () => {
+  const rules = stylesheetRules()
+  it('draws every banner as the kit draws an inline error, in the same box with the same inset', () => {
+    // A rule for an inline error inside a banner would give banners built around one another inset than those that are one.
+    expect(rules.filter(rule => /\.activity-banner\s+\S/.test(rule.selector)).map(rule => rule.selector)).toEqual([])
+    const banner = computed(['div', '.inline-error', '.activity-banner']), kit = computed(['div', '.inline-error'])
+    expect(banner.get('padding')).toBe(kit.get('padding'))
+    expect(banner.get('border-color')).toBe('1px solid var(--varia-panel-border)')
+    // Copy GRANT statement's outcome goes inside the error, in line with its sentence.
+    const markup = renderToStaticMarkup(createElement(InlineError, { className: 'activity-banner', message: 'Needs a permission.', copy: false, children: createElement('p', { className: 'activity-note' }, 'Copied.') }))
+    expect(markup).toMatch(/^<div class="inline-error activity-banner">.*<div class="inline-error-body"><p class="inline-error-message" role="alert">Needs a permission.<\/p><p class="activity-note">Copied.<\/p><\/div><\/div>$/)
   })
 })

@@ -87,6 +87,6 @@ Compact is the default and the only density `:root` sets; Comfortable is planned
 | --- | --- | --- | --- | --- |
 | `--varia-header` | 40 | 44 | The title bar. | Not yet |
 | `--varia-bar` | 36 | 40 | Tab strips, the query bar, side-bar headers. | `.query-tabs`, `.document-script-head`, `.activity-pane-tabs [role="tab"]` |
-| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.document-verb`, `.activity-interval select`, `.activity-tile-toggle` |
+| `--varia-control` | 26 | 28 | Buttons, inputs, selects. | `.icon-button`, `.document-verb`, `.activity-select`, `.activity-tile-toggle` |
 | `--varia-row` | 22 | 26 | Tree, grid and list rows. | `.explorer-row`, `.skeleton-row`, `.document-nav-item` |
 | `--varia-status` | 24 | 26 | The status bars. | `.status-bar`, `.query-status-bar` |

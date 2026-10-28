@@ -16,6 +16,8 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { LiveHandle, LiveOwner, LiveSpec } from '../live/LiveService'
 import type { ConnectionService } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
+import type { TileTone } from '../../../shared/theme/tones'
+import { crossings, type TileReading } from './tiles'
 
 /** A monitor's two pane slots: the first, and the one split view adds. */
 export type PaneSlot = 'primary' | 'secondary'
@@ -80,7 +82,10 @@ export function probeSettings(state: MonitorState): { probe: LiveProbeId; interv
 
 export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapshot> implements CustomDocumentProvider, Disposable {
   readonly kind = 'activityMonitor' as const
+  readonly saves = false
   private readonly handles = new Map<string, LiveHandle>()
+  /** Each monitor's tile tones as last shown, so a view remounted by a tab switch never repeats a crossing already said. */
+  private readonly tones = new Map<string, readonly (TileTone | undefined)[]>()
   private readonly registration: Disposable
   private readonly contextStore = new (class extends SnapshotStore<ActivityContextState> { set(value: ActivityContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private disposed = false
@@ -122,8 +127,8 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   private startView(id: string): void {
     const state = this.get(id), connectionId = this.options.documents.get(id)?.connectionId
     if (!state || !connectionId) return
-    const handle = this.options.live.open({ connectionId, source: 'activity', probes: probeSettings(state) }, this.options.owner(id))
-    if (state.paused) handle.setUserPaused(true)
+    // A paused monitor subscribes paused (Retry while paused): pausing after it opened would let a sample run first.
+    const handle = this.options.live.open({ connectionId, source: 'activity', probes: probeSettings(state), ...state.paused ? { paused: true } : {} }, this.options.owner(id))
     this.handles.set(id, handle)
   }
 
@@ -176,6 +181,14 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
     this.put({ ...state, expanded })
   }
 
+  /** What the tiles' live region says for these readings: each threshold crossed upward since the monitor's last ones. */
+  noteTones(id: string, readings: readonly Pick<TileReading, 'caption' | 'tone'>[]): string | undefined {
+    if (!this.get(id)) return undefined
+    const said = crossings(this.tones.get(id) ?? [], readings)
+    this.tones.set(id, readings.map(reading => reading.tone))
+    return said
+  }
+
   /** A change of panes or interval: the probes whose settings moved are told, in one debounced live update. */
   private update(before: MonitorState, after: MonitorState): void {
     this.put(after)
@@ -199,7 +212,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
 
   // --- CustomDocumentProvider ------------------------------------------------------------------------------------------
 
-  /** Nothing to save: File › Save is disabled on a monitor, and a Save that reaches it saves nothing. */
+  /** Nothing to save (`saves`): File › Save is disabled on a monitor, and a Save that reaches it saves nothing. */
   save(): Promise<boolean> { return Promise.resolve(false) }
   canClose(): string | undefined { return undefined }
   revision(): number { return 0 }
@@ -208,6 +221,7 @@ export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapsho
   closed(id: string): void {
     const handle = this.handles.get(id)
     this.handles.delete(id)
+    this.tones.delete(id)
     try { handle?.dispose() } catch (error) { onUnexpectedError(error) }
     if (!this.get(id)) return
     const monitors = { ...this.getSnapshot().monitors }

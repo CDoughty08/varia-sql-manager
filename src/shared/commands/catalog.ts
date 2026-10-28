@@ -101,7 +101,7 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+o' }], menus: [{ menu: 'file', group: '1_file', order: 2, title: 'Open…', mnemonic: 'o' }]
   },
   'file.save': {
-    title: 'Save', category: 'File', icon: 'save', precondition: 'hasActiveDocument && !activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openFirst,
+    title: 'Save', category: 'File', icon: 'save', precondition: 'hasActiveDocument && !documentBusy', unavailableHint: openFirst,
     // In a results grid, Ctrl+S saves its results (SSMS).
     keybindings: [{ key: 'mod+s', when: '!outputGridFocus' }], menus: [{ menu: 'file', group: '1_file', order: 3, mnemonic: 's' }, { menu: 'documentTab.context', group: '1_save', order: 1, mnemonic: 's' }]
   },
@@ -306,6 +306,8 @@ export const commandCatalog = {
   },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',
+    // 'l', not 'v': the menu's mnemonics are checked across every placement at once, and Activity Monitor's 't' leaves
+    // Environment… only its 'v' (tests/command-catalog.test.ts).
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'l', when: 'explorerFolderFiltered' }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },

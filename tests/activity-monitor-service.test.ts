@@ -44,7 +44,30 @@ describe('Activity Monitor document', () => {
     expect(liveViews.views.map(view => view.spec.connectionId)).toEqual(['c1', 'c2'])
     // A monitor has nothing to save, so Save is not offered on it.
     expect(commands.isEnabled('file.save')).toBe(false)
+    expect(commands.isEnabled('file.save', { tabId: id })).toBe(false)
     await settled()
+  })
+  it('leaves Save on every other tab while a monitor is active, as a tab menu offers it', () => {
+    const { activity, documents, connect, commands } = monitorFixture()
+    connect(connectionInfo('c1'))
+    const query = documents.create('q.sql', '', 'master', 'c1').id
+    expect(commands.isEnabled('file.save', { tabId: query })).toBe(true)
+    activity.open('c1')
+    expect(documents.active?.kind).toBe('activityMonitor')
+    expect(commands.isEnabled('file.save', { tabId: query })).toBe(true)
+  })
+  it('says each threshold crossing once per monitor, even when its view is drawn again after a tab switch', () => {
+    const { activity, connect } = monitorFixture()
+    connect(connectionInfo('c1'))
+    const id = activity.open('c1')
+    const calm = [{ caption: 'Blocked Sessions' }, { caption: 'Waiting Tasks' }], blocked = [{ caption: 'Blocked Sessions', tone: 'critical' as const }, { caption: 'Waiting Tasks' }]
+    expect(activity.noteTones(id, calm)).toBeUndefined()
+    expect(activity.noteTones(id, blocked)).toBe('Blocked Sessions is above its critical threshold.')
+    // The same readings again (another render, or the view mounted again on a tab switch) say nothing.
+    expect(activity.noteTones(id, blocked)).toBeUndefined()
+    expect(activity.noteTones(id, calm)).toBeUndefined()
+    expect(activity.noteTones(id, blocked)).toBe('Blocked Sessions is above its critical threshold.')
+    expect(activity.noteTones('nope', blocked)).toBeUndefined()
   })
   it('refuses a lost connection, and a server that is not connected', () => {
     const { activity, connect, connections, liveViews } = monitorFixture()
@@ -181,8 +204,9 @@ describe('Activity Monitor document', () => {
     activity.setPaused(id, true)
     activity.retry(id)
     expect(liveViews.views.map(view => view.disposed)).toEqual([true, false])
-    // The new view starts paused, as the monitor is.
-    expect(liveViews.last.calls).toEqual([{ method: 'setUserPaused', paused: true }])
+    // The new view subscribes paused, as the monitor is, rather than pausing once it has opened.
+    expect(liveViews.last.spec.paused).toBe(true)
+    expect(liveViews.last.calls).toEqual([])
     expect(activity.get(id)?.generation).toBe(1)
     activity.dispose()
     expect(liveViews.last.disposed).toBe(true)

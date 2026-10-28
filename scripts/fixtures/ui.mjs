@@ -101,6 +101,8 @@ export const part = {
   statusPill: '.status-pill',
   /** The states kit's live label (kit/LivePill.tsx): "Live · every 2 s", "Paused", "Stopped · backend unavailable". */
   livePill: '.live-pill',
+  /** The states kit's age of a live view's data ("Updated 2 s ago", "Stale since …"). */
+  staleBadge: '.stale-badge',
   statusPillLabel: '.status-pill-label',
   /** The status bars' spans that hold the tag with its visually hidden prefix. */
   queryEnvironment: '.query-status-environment',
@@ -121,6 +123,12 @@ export const part = {
   tableDesigner: '.table-designer',
   // The document frame
   documentHeader: '.document-header',
+  /** The frame's scrolling content under the header and fact line. */
+  documentContent: '.document-content',
+  // The Activity Monitor (src/renderer/src/activity): a banner (the kit's InlineError in a box), and a tile's caption, which
+  // assistive technology hears in the tile's name instead.
+  activityBanner: '.activity-banner',
+  tileCaption: '.tile-caption-text',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -342,6 +350,16 @@ export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
 export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
 /** A live document's label of what its view is doing, in its header (kit/LivePill.tsx). */
 export const livePill = scope => scope.locator(part.livePill)
+export const staleBadge = scope => scope.locator(part.staleBadge)
+/** A document's title, its one level 1 heading. */
+export const documentTitle = frame => frame.getByRole('heading', { level: 1 })
+/** The header's controls and verbs, a group named after the document's title. */
+export const documentActions = (frame, title) => frame.getByRole('group', named(title + ' actions'))
+export const documentContent = frame => frame.locator(part.documentContent)
+/** An Activity Monitor's banner, and its error glyph. */
+export const activityBanner = frame => frame.locator(part.activityBanner)
+export const bannerGlyph = banner => banner.locator(':scope > .codicon')
+export const tileCaptions = frame => frame.locator(part.tileCaption)
 
 // Menus and the quick input
 
