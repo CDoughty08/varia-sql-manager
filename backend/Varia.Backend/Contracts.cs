@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace Varia.Backend;
 
 /// <summary>Environment is the profile's label (Production, Staging, a custom one of at most 32 characters); the backend only
@@ -81,6 +83,24 @@ internal sealed record ResultsExportArgs(uint ResultId, string Path, string Form
 internal sealed record ResultsJobResult(long Rows, long Bytes, long TruncatedCells, bool Partial);
 /// <summary>debug.results.synthesize (VARIA_BACKEND_TEST_HOOKS=1 only).</summary>
 internal sealed record SynthesizeArgs(string Shape, int Rows);
+
+/// <summary>live.subscribe (results port only; docs/ipc.md, Live subscriptions). Args are read per source
+/// (Live/LiveService.cs), so each source's members are checked and unknown ones refused.</summary>
+internal sealed record LiveSubscribeArgs(string SubscriptionId, string ConnectionId, string Source, LiveProbeArgs[] Probes, JsonElement? Args = null, string? Resume = null);
+/// <summary>One probe's settings: IntervalMs is required on subscribe and optional in an update. Clear (updates only) names
+/// settings to drop (sort, view, filter): an absent member keeps its setting, so null cannot mean "none".</summary>
+internal sealed record LiveProbeArgs(string Probe, int? IntervalMs = null, bool? Paused = null, LiveSortArgs[]? Sort = null, string? View = null, LiveFilterArgs? Filter = null,
+    string[]? Clear = null);
+internal sealed record LiveSortArgs(string Column, bool Descending);
+internal sealed record LiveFilterArgs(string Text, string[]? Columns = null);
+/// <summary>live.update: Source repeats the subscription's.</summary>
+internal sealed record LiveUpdateArgs(string SubscriptionId, string Source, bool? Paused = null, LiveProbeArgs[]? Probes = null, bool? Refresh = null, LiveTrackArgs[]? Track = null,
+    JsonElement? Args = null);
+/// <summary>The rows to follow across revisions of one keyed snapshot table: key texts joined with U+001F.</summary>
+internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] Keys);
+/// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
+internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
+    int? LateEvery = null, JsonElement? Start = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,

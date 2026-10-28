@@ -23,6 +23,15 @@
 //   cancels.jsonl       one { method } line per entra-wait request a CANCEL frame ended
 // Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
 // CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
+// live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
+// stop-and-wait credit: live.opened, then a live.tick per wake only once the previous one is acknowledged, a snapshot
+// table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
+// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
+// the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
+// count as protocol violations.
+// Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
+// modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
+// live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
 // A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, and notes SET NOEXEC, PARSEONLY, FMTONLY and
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
@@ -44,6 +53,8 @@ const cancels = []
 const streams = new Map()
 // Requests a CANCEL frame named (an export stops at its next page), and directive scripts query.cancel stopped.
 const cancelled = new Set()
+// Live subscriptions by request id.
+const lives = new Map()
 const runningDirectives = new Set()
 const cancelledQueries = new Set()
 const controlDirectory = process.env.VARIA_TEST_BACKEND_DIR
@@ -75,10 +86,11 @@ function handle(frame) {
   if (frame.kind === FrameKind.CANCEL) {
     cancels.push({ id: frame.id, reason: frame.arg })
     cancelled.add(frame.id)
+    if (lives.has(frame.id)) { endLive(lives.get(frame.id), frame.arg === 4 ? 'shutdown' : 'cancelled'); return }
     if ((mode === 'echo' || mode === 'workbench') && streams.has(frame.id)) { streams.delete(frame.id); fail(frame.id, 'CANCELLED', 'The operation was cancelled.') }
     return
   }
-  if (frame.kind === FrameKind.CREDIT) { streams.get(frame.id)?.grant(frame.arg); return }
+  if (frame.kind === FrameKind.CREDIT) { (lives.get(frame.id) ?? streams.get(frame.id))?.grant(frame.arg); return }
   if (frame.kind === FrameKind.REQUEST && !frame.oversize) request(frame.id, frame.arg, decodeControl(frame.body))
 }
 
@@ -129,6 +141,7 @@ function request(id, deadline, { method, params, credit }) {
       process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, Uint8Array.of(0xc1)))
       return
   }
+  if (method === 'live.subscribe') return liveEcho(id, credit, params)
   if (credit !== undefined) return stream(id, credit, params)
   if (method === 'system.health') return respond(id, { protocolVersion: 2, pid: process.pid, cancels, deadline })
   if (method === 'query.cancel') return respond(id, { cancelled: false })
@@ -158,6 +171,38 @@ function stream(id, credit, { pages = 4, bytes = 40 * 1024 } = {}) {
   }
   streams.set(id, { grant: more => { available += more; pump() } })
   pump()
+}
+
+const syntheticProbes = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
+const opened = probes => ({ type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
+const statusTick = (seq, sample = seq) => ({ type: 'live.tick', seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 0, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: sample }] }] })
+/** Echo-mode live.subscribe: protocol tests of main's credited-EVENT rule. */
+function liveEcho(id, credit = 65_536, params = {}) {
+  const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
+  // The opened frame reports the probes asked for (main refuses any other set); ticks sample the status probe.
+  const probes = Array.isArray(params.probes) ? params.probes.map(probe => probe.probe) : syntheticProbes
+  switch (mode) {
+    case 'live-overrun': event(opened(probes)); event(statusTick(1)); return
+    case 'live-data': event(opened(probes)); process.stdout.write(encodeFrame(FrameKind.DATA, id, 1, new Uint8Array(16))); return
+    case 'live-big': event({ ...opened(probes), padding: 'x'.repeat(300 * 1024) }); return
+  }
+  const ticks = params.ticks ?? 3
+  const live = { id, initial: credit, available: credit, seq: 0 }
+  const send = value => { const body = encodeControl(value); live.available -= body.length; process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, body)) }
+  live.grant = more => {
+    live.available += more
+    if (live.available < live.initial || !lives.has(id)) return
+    if (live.seq < ticks) return send(statusTick(++live.seq + (mode === 'live-seq-gap' ? 1 : 0)))
+    lives.delete(id)
+    respond(id, { ended: 'sourceEnded', kept: [], ticks, elapsedMs: 1 })
+  }
+  live.end = ended => respond(id, { ended, ticks: live.seq, elapsedMs: 1 })
+  lives.set(id, live)
+  send(opened(probes))
+}
+function endLive(live, ended) {
+  lives.delete(live.id)
+  if (live.end) return live.end(ended)
 }
 
 /** Whether a control file exists; `consume` also removes it. Only for startup and exit: see `controlled`. */
@@ -479,6 +524,103 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
+/** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
+function liveSubscribe(id, credit, params) {
+  if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
+  if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
+  const now = Date.now()
+  const live = {
+    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
+    probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0
+  }
+  live.grant = more => { live.available += more; wakeLive(live) }
+  live.end = ended => {
+    clearTimeout(live.timer)
+    const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
+    for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
+    respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
+  }
+  lives.set(id, live)
+  sendLive(live, opened([...live.probes.keys()]))
+  wakeLive(live)
+}
+function sendLive(live, value) {
+  const body = encodeControl(value)
+  live.available -= body.length
+  process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
+}
+const periodOf = (live, probe) => live.args.tickMs ?? probe.intervalMs
+function wakeLive(live) {
+  clearTimeout(live.timer)
+  if (!lives.has(live.id)) return
+  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused)
+  if (active.length === 0) return
+  const now = Date.now(), next = Math.min(...active.map(probe => probe.dueAt))
+  if (next > now) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
+  // Stop-and-wait: nothing is sampled while the previous frame is unacknowledged; its CREDIT wakes the source again.
+  if (live.available < live.initial) return
+  const samples = [], errors = []
+  for (const probe of active.filter(item => item.dueAt <= now)) {
+    const period = periodOf(live, probe), missed = Math.floor((now - probe.dueAt) / period)
+    const sample = {
+      probe: probe.probe, costMs: 0, effectiveIntervalMs: probe.intervalMs, ...(probe.last >= 0 ? { elapsedMs: now - probe.last } : {}),
+      ...(probe.last < 0 ? { gap: 'baseline' } : probe.resumed ? { gap: 'resumed' } : missed > 0 ? { gap: 'late' } : {}), ...(missed > 0 ? { skipped: missed } : {})
+    }
+    probe.dueAt += (missed + 1) * period
+    probe.last = now
+    probe.resumed = false
+    const n = ++probe.samples
+    if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
+    else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
+    else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
+  }
+  live.sampledAt = Math.max(live.sampledAt + 1, Date.now())
+  sendLive(live, { type: 'live.tick', seq: ++live.seq, sampledAt: live.sampledAt, samples, ...(errors.length ? { errors } : {}) })
+  live.ticks++
+  if (live.args.endAfterTicks && live.ticks >= live.args.endAfterTicks) { lives.delete(live.id); return live.end('sourceEnded') }
+  wakeLive(live)
+}
+/** One snapshot revision: ids n … n + rows − 1, sorted as asked (the id breaks ties), stored as a result. */
+function liveTable(live, probe, n) {
+  let rows = Array.from({ length: live.args.rows ?? 3 }, (_, offset) => ({ id: n + offset, label: 'Row ' + (n + offset), value: (n + offset) * 37 % 100 + n % 7 }))
+  if (probe.sort) rows = rows.sort((a, b) => { for (const key of probe.sort) { const left = a[key.column], right = b[key.column]; if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.id - b.id })
+  const columns = [['id', 'int'], ['label', 'nvarchar'], ['value', 'int']].map(([name, dataType]) => ({ name, dataType, wire: 'text', nullable: false }))
+  const result = storeResult({ columns, rows: rows.map(row => [String(row.id), row.label, String(row.value)]) }, 0)
+  live.revisions.push(result.resultId)
+  const retired = live.revisions.length > 2 ? [live.revisions.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  const current = new Map(rows.map(row => [row.id, row.value]))
+  const diff = { added: [...current.keys()].filter(key => !live.previous.has(key)).length, removed: [...live.previous.keys()].filter(key => !current.has(key)).length, changed: [...current].filter(([key, value]) => live.previous.has(key) && live.previous.get(key) !== value).length }
+  live.previous = current
+  const track = probe.tracks.get(0)
+  const tracked = track && { seq: track.seq, rows: track.keys.map(key => rows.findIndex(row => String(row.id) === key)) }
+  return { table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
+}
+function liveUpdate(id, params) {
+  const live = [...lives.values()].find(item => item.subscriptionId === params.subscriptionId && item.grant && item.probes)
+  if (!live) return fail(id, 'NOT_FOUND', 'This live view has ended.')
+  const now = Date.now()
+  const resume = probe => { probe.dueAt = now; probe.resumed = probe.last >= 0 }
+  for (const patch of params.probes ?? []) {
+    const probe = live.probes.get(patch.probe)
+    if (!probe) return fail(id, 'INVALID_PARAMS', 'The probe is not part of this subscription.')
+    if (patch.intervalMs !== undefined) probe.intervalMs = patch.intervalMs
+    if (patch.paused !== undefined) { if (probe.paused && !patch.paused) resume(probe); probe.paused = patch.paused }
+    if (patch.sort !== undefined) probe.sort = patch.sort
+    if (patch.clear?.includes('sort')) probe.sort = undefined
+  }
+  for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
+  if (params.args) live.args = { ...live.args, ...params.args }
+  if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
+  if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
+  respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
+  wakeLive(live)
+}
+
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
 async function entraWait(id, method) {
   while (!cancelled.has(id)) await sleep(25)
@@ -514,9 +656,12 @@ async function workbench(id, method, params, credit) {
       return respond(id, workbenchDatabases)
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'live.subscribe': return liveSubscribe(id, credit, params)
+    case 'live.update': return liveUpdate(id, params)
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
     case 'connections.disconnect':
       for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)
+      for (const live of [...lives.values()]) if (live.connectionId === params.connectionId) endLive(live, 'disconnected')
       return respond(id, { disconnected: workbenchConnections.delete(params.connectionId) })
     case 'query.session.close': {
       if (params.transaction === 'commit' && sessions.get(params.sessionId)?.transactions && await controlled('fail-commit')) {
