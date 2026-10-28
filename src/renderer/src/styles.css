@@ -782,3 +782,86 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   /* On a selected row a pill follows the row's text. */
   [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
 }
+/* The document frame (src/renderer/src/kit/DocumentFrame.tsx): every non-query document's header row (where the object
+   is, its name and state, its controls and verbs), a fact line, sections with their list, and the Script drawer. */
+.document-frame { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; container-type: inline-size; background: var(--varia-editor-background); color: var(--varia-foreground); }
+/* One row wherever the document is wider than the narrow layout: a live document's pill changes its words while people
+   read, so the header's height must not follow them. The crumbs give way first, then the subtitle, then the title. */
+.document-header { display: flex; flex-wrap: nowrap; align-items: center; gap: var(--varia-space-2) var(--varia-space-3); flex: none; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-2); }
+.document-heading { display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--varia-space-0) var(--varia-space-2); flex: 1 1 0; min-width: 0; }
+.document-crumbs { flex: 0 100 auto; min-width: 0; margin-inline-end: calc(var(--varia-space-0) - var(--varia-space-2)); }
+/* Each chevron sits as far from the crumb before it as from what follows it, the title included. */
+.document-crumbs ol { display: flex; flex-wrap: nowrap; align-items: baseline; column-gap: var(--varia-space-0); margin: 0; padding: 0; list-style: none; }
+.document-crumbs li { display: inline-flex; align-items: center; gap: var(--varia-space-0); min-width: 0; max-width: 32ch; color: var(--varia-breadcrumb-foreground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.document-crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.document-crumbs .codicon { flex: none; color: var(--varia-breadcrumb-separatorForeground); font-size: var(--varia-size-sm); }
+.document-title { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-lg); line-height: var(--varia-line-lg); font-weight: 600; color: var(--varia-tab-activeForeground); unicode-bidi: isolate; }
+.document-subtitle { flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-variant-numeric: tabular-nums; }
+.document-heading > .status-pill, .document-heading > .live-pill { flex: none; align-self: center; }
+.document-actions { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); margin-left: auto; }
+.document-verb { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; }
+/* Secondary verbs are borderless, as Calm Pro's are; an outline verb (and a danger one) has the neutral button border. */
+.document-verb.outline, .document-verb.danger { border-color: var(--varia-button-border); }
+/* Stop execution, Kill session…: words in the error colour, hovered or not, so a verb that ends something never looks like the primary one. */
+.document-verb.danger, .document-verb.danger:hover:not(:disabled) { color: var(--varia-errorForeground); }
+/* A toggle verb (Split View) that is on: the current section's colours and an accent edge, hovered or not. */
+.document-verb[aria-pressed="true"], .document-verb[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
+.document-facts { display: flex; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-4); flex: none; margin: 0; padding: 0 var(--varia-space-4) var(--varia-space-2); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.document-facts > div { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
+.document-facts dt { flex: none; color: var(--varia-descriptionForeground); }
+.document-facts dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-foreground); font-variant-numeric: tabular-nums; unicode-bidi: isolate; }
+.document-frame > .document-body, .document-frame > .document-content { border-top: 1px solid var(--varia-panel-border); }
+.document-body { flex: 1; min-height: 0; display: flex; }
+.document-content { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+/* Positioned, so each section's offsetTop is its distance from the column's top (the scroll spy reads it). */
+.document-sections { position: relative; padding: 0 var(--varia-space-4) var(--varia-space-4); }
+.document-sections:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.document-nav { flex: 0 0 clamp(150px, 22%, 220px); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: var(--varia-space-2) 0; border-right: 1px solid var(--varia-panel-border); }
+.document-nav-item { display: flex; align-items: center; gap: 6px; flex: none; height: var(--varia-row); padding: 0 var(--varia-space-3); border-radius: 0; text-align: left; }
+/* The current section keeps its fill under the pointer (button:hover would outrank a lone state rule). */
+.document-nav-item[aria-current="location"], .document-nav-item[aria-current="location"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); box-shadow: inset 2px 0 0 var(--varia-panelTitle-activeBorder); transition: none; }
+.document-nav-item:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.document-nav-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.document-nav-item > .codicon-error { color: var(--varia-errorForeground); }
+.document-section { padding-top: var(--varia-space-3); }
+.document-section + .document-section { margin-top: var(--varia-space-3); border-top: 1px solid var(--varia-panel-border); }
+.document-section-head { display: flex; align-items: center; gap: var(--varia-space-2); min-height: var(--varia-control); }
+.document-section-title { flex: 1; min-width: 0; margin: 0; font-size: var(--varia-size-md); line-height: var(--varia-line-md); font-weight: 600; }
+.document-section-title > button { display: inline-flex; align-items: center; gap: var(--varia-space-1); max-width: 100%; padding: 0 var(--varia-space-1) 0 0; color: inherit; font: inherit; }
+.document-section-body { padding-top: var(--varia-space-2); }
+/* The Script drawer: its bar stays when it is closed; open, it takes its share of the height (an inline flex-basis). */
+.document-script { display: flex; flex-direction: column; flex: none; min-height: 0; background: var(--varia-panel-background); border-top: 1px solid var(--varia-panel-border); }
+.document-script-splitter { flex: none; height: 4px; margin-top: -1px; cursor: row-resize; touch-action: none; }
+.document-script-splitter:hover, .document-script-splitter:focus-visible { background: var(--varia-sash-hoverBorder); outline: none; }
+.document-script-head { display: flex; align-items: center; gap: var(--varia-space-2); flex: none; height: var(--varia-bar); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); }
+.document-script-toggle { display: inline-flex; align-items: center; gap: var(--varia-space-1); color: var(--varia-foreground); font-weight: 600; }
+.document-script-lines, .document-script-notice { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.document-script-notice { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.document-script-actions { display: flex; gap: var(--varia-space-0); margin-left: auto; }
+.document-script-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.document-script-text { flex: 1; min-height: 0; width: 100%; margin: 0; padding: var(--varia-space-2) var(--varia-space-3); resize: none; border: 0; border-top: 1px solid var(--varia-panel-border); border-radius: 0; background: var(--varia-panel-background); color: var(--varia-foreground); font: var(--varia-size-sm)/var(--varia-line-sm) var(--varia-font-mono); tab-size: 4; white-space: pre; overflow: auto; }
+.document-script-text:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.document-script-empty, .document-script-note { margin: 0; padding: var(--varia-space-2) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); }
+.document-script-note { flex: none; border-top: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+/* A narrow document puts its section list across the top, and its verbs under the title. */
+@container (max-width: 640px) {
+  .document-header, .document-heading, .document-crumbs ol { flex-wrap: wrap; }
+  .document-heading { flex: 1 1 auto; }
+  .document-body { flex-direction: column; }
+  /* Thin, as the query tab strip's: a classic bar would crowd the current section's underline. */
+  .document-nav { flex: none; flex-direction: row; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; padding: 0 var(--varia-space-2); border-right: 0; border-bottom: 1px solid var(--varia-panel-border); }
+  .document-nav-item[aria-current="location"], .document-nav-item[aria-current="location"]:hover:not(:disabled) { box-shadow: inset 0 -2px 0 var(--varia-panelTitle-activeBorder); }
+  .document-actions { flex: 0 1 auto; margin-left: 0; }
+}
+@media (forced-colors: active) {
+  /* Forced colors would box every item as a button and drop the current one's fill and edge: the list keeps no borders,
+     and the current section takes the selection colors, as a selected tree row does. */
+  .document-nav-item { border-style: none; }
+  .document-nav-item[aria-current="location"], .document-nav-item[aria-current="location"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; }
+  .document-nav-item[aria-current="location"] > .codicon { color: HighlightText; }
+  .document-nav-item[aria-current="location"]:focus-visible { outline: 2px solid HighlightText; outline-offset: -2px; }
+  .document-verb[aria-pressed="true"], .document-verb[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .document-verb[aria-pressed="true"]:focus-visible { outline-color: CanvasText; }
+  .document-script-splitter { background: CanvasText; forced-color-adjust: none; }
+  .document-script-splitter:hover, .document-script-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
+}
