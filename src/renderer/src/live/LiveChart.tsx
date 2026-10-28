@@ -1,7 +1,7 @@
 // The React shell of a live chart: it mounts the canvas, the legend and "View as table", and hands everything else to
 // ChartView, which draws from the probe's ring and redraws on the view's ticks. The table takes the plot's place, at its
 // size, and scrolls there, so neither the card nor the canvas changes size when it shows. Sparklines (a tile's trace) have
-// no legend, labels, crosshair or table; the tile around them says the value.
+// no legend, labels, crosshair or table, and take no focus; the tile around them says the value.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import type { LiveProbeId } from '../../../shared/live/catalog'
 import type { ChartSurface } from '../../../shared/theme/charts'
@@ -109,7 +109,7 @@ export function LiveChart(props: LiveChartProps) {
         </svg>{entry.label}
       </li>)}
     </ul>}
-    <canvas ref={canvasRef} className="live-chart-canvas" tabIndex={chart ? 0 : -1} onKeyDown={chart ? keyDown : undefined} />
+    <canvas ref={canvasRef} className="live-chart-canvas" tabIndex={chart ? 0 : undefined} onKeyDown={chart ? keyDown : undefined} />
     {tableOn && <div className="live-chart-table-wrap" tabIndex={0} role="region" aria-label={`${title} table`}><table className="live-chart-table">
       <caption>{table.total === 0 ? `${title}: no samples yet` : `${title}: ${table.rows.length < table.total ? `${table.rows.length} of ${table.total}` : table.total} samples, newest first`}</caption>
       <thead style={{ background: `var(${cssVariable(surface ?? 'panel.background')})` }}><tr><th scope="col">Time</th>{series.map(entry => <th key={entry.index} scope="col">{entry.label}</th>)}</tr></thead>

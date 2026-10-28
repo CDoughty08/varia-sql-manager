@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { LiveProbeId } from '../src/shared/live/catalog'
 import { chartSeriesColors } from '../src/shared/theme/charts'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpan, niceCeiling } from '../src/renderer/src/live/chart-format'
-import { ChartLink, ChartView, chartColor, chartLimits, forcedColorsDashes, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
-import type { PageVisibility } from '../src/renderer/src/live/LiveService'
+import { ChartLink, ChartView, chartColor, chartLimits, forcedColorsDashes, probeCurrent, type ChartSeries, type ChartViewOptions } from '../src/renderer/src/live/ChartView'
+import type { LiveSnapshot, PageVisibility } from '../src/renderer/src/live/LiveService'
 import { MetricRing, ringGap } from '../src/renderer/src/live/ring'
 import { FakeCanvas, FakeChartEnvironment, fakeOwner, type FakeElement } from './fixtures/fake-canvas'
 
@@ -28,6 +29,8 @@ function chart(o: Partial<ChartViewOptions> & { ringValue?: MetricRing; width?: 
   })
   return { view, canvas, env, root, ring }
 }
+/** What the tooltip shows for a crosshair sentence: each part's spaces do not break, so it wraps only between parts. */
+const tipText = (sentence: string) => sentence.split(' · ').map(part => part.replaceAll(' ', '\u00a0')).join(' · ')
 const seriesStrokes = (canvas: FakeCanvas, color: string) => canvas.context.strokes.filter(stroke => stroke.style === color && stroke.width > 1.5)
 
 describe('chart text', () => {
@@ -208,6 +211,96 @@ describe('ChartView', () => {
     expect(bands.map(band => band.style)).toEqual([dark['charts.blue'], dark['charts.blue'], dark['charts.orange'], dark['charts.orange']])
     expect(canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'])).toHaveLength(4)
   })
+  it('breaks stacked bands at a gap flag though every value is there', () => {
+    const ring = ringOf(30, 2, () => 10, index => index === 15 ? ringGap : 0)
+    const series: ChartSeries[] = [0, 1].map(at => ({ index: at, label: `C${at}`, color: chartColor(at), style: 'stacked' }))
+    const { canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count', max: 40 }, labels: 'none', width: 60 })
+    env.flush()
+    expect(canvas.context.fills.filter(fill => fill.vertices > 0).map(band => band.style)).toEqual([dark['charts.blue'], dark['charts.blue'], dark['charts.orange'], dark['charts.orange']])
+    expect(canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'])).toHaveLength(4)
+  })
+  it('marks a lone stacked sample between two gaps with a one-pixel tick', () => {
+    const ring = ringOf(5, 2, () => 10, index => index === 2 || index === 3 ? ringGap : 0)
+    const series: ChartSeries[] = [0, 1].map(at => ({ index: at, label: `C${at}`, color: chartColor(at), style: 'stacked' }))
+    const { canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count', max: 40 }, labels: 'none' })
+    env.flush()
+    const parts = canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'])
+    expect(parts).toHaveLength(6)
+    const ticks = parts.filter(part => part.vertices === 2 && part.points[1][0] - part.points[0][0] === 1)
+    expect(ticks).toHaveLength(2)
+    expect(ticks.every(tick => tick.points[0][1] === tick.points[1][1])).toBe(true)
+  })
+  it('counts a stacked series missing from some of a column\'s samples as 0 in them', () => {
+    // 40 samples over a 20-pixel plot, two a column: A is always 10, B only in every second sample, so B's band adds 5.
+    const ring = ringOf(40, 2, (index, series) => series === 0 ? 10 : index % 2 === 0 ? 10 : null)
+    const series: ChartSeries[] = [0, 1].map(at => ({ index: at, label: `C${at}`, color: chartColor(at), style: 'stacked' }))
+    const { canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count', max: 40 }, labels: 'none', width: 26, window: { spanMs: 40_000, end: 'live' } })
+    env.flush()
+    const y = (value: number) => 98 - value / 40 * 94
+    const parts = canvas.context.strokes.filter(stroke => stroke.style === dark['panel.background'])
+    expect(parts).toHaveLength(2)
+    expect(parts[0].points[5][1]).toBeCloseTo(y(10), 6)
+    expect(parts[1].points[5][1]).toBeCloseTo(y(15), 6)
+  })
+  it('gives a series whose index the ring does not have no value, never another series\' values', () => {
+    // The ring keeps values sample-major, so index 2 of a two-series ring would read the next sample's first value.
+    const ring = ringOf(5, 2, (index, series) => (series + 1) * 100 + index)
+    const series: ChartSeries[] = [{ index: 2, label: 'Past', color: 'charts.blue' }, { index: -1, label: 'Before', color: 'charts.orange' }, { index: 0.5, label: 'Half', color: 'charts.green' }, { index: 1, label: 'B', color: 'charts.yellow' }]
+    const { view, canvas, env, root } = chart({ ringValue: ring, series, scale: { unit: 'count' }, labels: 'axes' })
+    env.flush()
+    expect(view.latest()).toEqual([Number.NaN, Number.NaN, Number.NaN, 204])
+    expect(view.table().rows[1].values).toEqual(['no value', 'no value', 'no value', '203'])
+    for (const color of ['charts.blue', 'charts.orange', 'charts.green'] as const) expect(seriesStrokes(canvas, dark[color]).filter(stroke => stroke.vertices > 0)).toEqual([])
+    expect(seriesStrokes(canvas, dark['charts.yellow'])).toHaveLength(1)
+    // The scale follows only the series the ring has.
+    expect(canvas.context.texts[0].text).toBe('250')
+    view.key({ key: 'ArrowLeft', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
+    env.flush()
+    expect((root.children.find(child => (child as FakeElement).attributes?.get('role') === 'status') as FakeElement).text).toBe('now · Past no value · Before no value · Half no value · B 204')
+  })
+  it('redraws a crosshair\'s move without reading the window\'s samples again', () => {
+    const ring = ringOf(3600, 2, (index, series) => series === 0 ? index % 100 : 5)
+    const series: ChartSeries[] = [{ index: 0, label: 'A', color: 'charts.blue', style: 'area' }, { index: 1, label: 'B', color: 'charts.orange', style: 'stacked' }]
+    const link = new ChartLink()
+    const one = chart({ ringValue: ring, series, link, labels: 'axes', scale: { unit: 'count' }, width: 600, window: { spanMs: 3_600_000, end: 'live' } })
+    const two = chart({ ringValue: ring, series, link, labels: 'axes', scale: { unit: 'count' }, width: 600, window: { spanMs: 3_600_000, end: 'live' } })
+    one.env.flush(); two.env.flush()
+    const reads = vi.spyOn(ring, 'value')
+    for (const clientX of [100, 220, 340]) {
+      reads.mockClear()
+      one.canvas.listeners.get('pointermove')!({ clientX })
+      one.env.flush(); two.env.flush()
+      // The crosshair's own sample, a few reads a series, not the 7,200 a draw of the window takes.
+      expect(reads.mock.calls.length, `at ${clientX}`).toBeLessThan(20)
+    }
+    expect([one.view.stats.draws, two.view.stats.draws]).toEqual([4, 4])
+    expect(one.canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')).toHaveLength(3)
+    // A tick still reads them all.
+    reads.mockClear()
+    ring.push(start + 1000, [1, 5])
+    one.view.invalidate(); one.env.flush()
+    expect(reads.mock.calls.length).toBeGreaterThan(3600)
+    reads.mockRestore()
+  })
+  it('draws at most 12 series, however many it is given', () => {
+    const ring = ringOf(30, 13, (index, series) => index + series)
+    const series = Array.from({ length: 13 }, (_, at): ChartSeries => ({ index: at, label: `S${at}`, color: chartColor(at) }))
+    const { view, canvas, env } = chart({ ringValue: ring, series, scale: { unit: 'count' } })
+    env.flush()
+    expect(canvas.context.strokes.filter(stroke => stroke.width === 1.75)).toHaveLength(chartLimits.series)
+    expect(view.latest()).toHaveLength(12)
+    expect(view.table().rows[0].values).toHaveLength(12)
+  })
+  it('calls a probe\'s newest sample current only within twice its effective interval', () => {
+    const probe = 'debug.synthetic.metrics' as LiveProbeId
+    const snapshot = (state: string, age: number | undefined): LiveSnapshot => ({ status: 'live', connectionId: 'c', probes: { [probe]: { state, effectiveIntervalMs: 1000, lastSampleAt: age === undefined ? undefined : start - age } } } as unknown as LiveSnapshot)
+    expect(probeCurrent(snapshot('fresh', 1900), probe, start)).toBe(true)
+    expect(probeCurrent(snapshot('fresh', 2000), probe, start)).toBe(true)
+    expect(probeCurrent(snapshot('fresh', 2500), probe, start)).toBe(false)
+    expect(probeCurrent(snapshot('limited', 500), probe, start)).toBe(true)
+    expect(probeCurrent(snapshot('stale', 500), probe, start)).toBe(false)
+    expect(probeCurrent(snapshot('fresh', undefined), probe, start)).toBe(false)
+  })
   it('puts a stacked crosshair\'s dots on the bands drawn in its column', () => {
     // 3,600 samples over a 100 px plot: 38 a column. A alternates 0 and 100, so its band sits at the column's mean, far
     // from either sample's own value.
@@ -305,7 +398,7 @@ describe('ChartView', () => {
     expect(press('End')).toBe(true)
     one.env.flush(); two.env.flush()
     expect(tip.hidden).toBe(false)
-    expect(tip.text).toBe('now · 90 %')
+    expect(tip.text).toBe(tipText('now · 90 %'))
     // The other chart shows the same moment as a line, without a tooltip of its own.
     const crosshair = (fixture: Fixture) => fixture.canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')
     expect(crosshair(two)).toHaveLength(1)
@@ -325,7 +418,7 @@ describe('ChartView', () => {
     canvas.listeners.get('pointermove')!({ clientX: 198 })
     env.flush()
     const tip = root.children[0] as FakeElement
-    expect(tip.text).toBe('0:30 ago · 30 %')
+    expect(tip.text).toBe(tipText('0:30 ago · 30 %'))
     expect(tip.hidden).toBe(false)
     canvas.listeners.get('pointerleave')!({})
     env.flush()
@@ -339,6 +432,12 @@ describe('ChartView', () => {
     expect(rows).toHaveLength(chartLimits.tableRows)
     expect(rows[0]).toEqual({ time: 'now', values: ['299 %'], gapBefore: true })
     expect(rows.at(-1)).toEqual({ time: '4:59 ago', values: ['0 %'], gapBefore: false })
+    // The ring's first sample is flagged (a view's baseline), but no gap lies between rows the table lists.
+    const fresh = chart({ ringValue: ringOf(5, 1, index => index, index => index === 0 ? ringGap : 0) })
+    expect(fresh.view.table(5).rows.map(row => row.gapBefore)).toEqual([false, false, false, false, false])
+    // Nor before the oldest row of a window that starts after the ring's first sample.
+    const later = chart({ ringValue: ringOf(10, 1, index => index, index => index === 5 ? ringGap : 0), window: { spanMs: 4000, end: 'live' } })
+    expect(later.view.table().rows.map(row => [row.values[0], row.gapBefore])).toEqual([['9 %', false], ['8 %', false], ['7 %', false], ['6 %', false], ['5 %', false]])
     expect(view.table(60).rows).toHaveLength(60)
     expect(view.table(1000).rows).toHaveLength(120)
     // A fixed window names samples by the clock; both of its ends are in it.
@@ -471,18 +570,42 @@ describe('ChartView', () => {
     canvas.context.reset()
     view.invalidate(); env.flush()
     expect(tip.hidden).toBe(false)
-    expect(tip.text).toBe('1:00 ago · 1 %')
+    expect(tip.text).toBe(tipText('1:00 ago · 1 %'))
     expect(canvas.context.strokes.filter(stroke => stroke.dash.join() === '2,2')).toHaveLength(1)
     press('ArrowRight')
     expect(status()).toBe('0:59 ago · 2 %')
-    // A pointer's crosshair is where the pointer was: once its sample leaves the window, it goes.
+    // A pointer's crosshair stays under the pointer: as the window moves, it shows the sample now at that place.
     canvas.listeners.get('pointermove')!({ clientX: 1 })
     env.flush()
-    expect(tip.text).toBe('1:00 ago · 1 %')
+    expect(tip.text).toBe(tipText('1:00 ago · 1 %'))
     env.time = start + 2000
     ring.push(start + 2000, [62])
     view.invalidate(); env.flush()
-    expect(tip.hidden).toBe(true)
+    expect(tip.hidden).toBe(false)
+    expect(tip.text).toBe(tipText('1:00 ago · 2 %'))
+  })
+  it('keeps a pointer\'s crosshair under the pointer while ticks move the window, here and on linked charts', () => {
+    const ring = ringOf(61, 1, index => index)
+    const link = new ChartLink()
+    const one = chart({ ringValue: ring, width: 400, link }), two = chart({ ringValue: ring, width: 400, link })
+    one.env.flush(); two.env.flush()
+    const tip = one.root.children[0] as FakeElement
+    const line = (fixture: Fixture) => fixture.canvas.context.strokes.find(stroke => stroke.dash.join() === '2,2')?.points[0][0]
+    // Near the plot's right edge (1 px to 395 px): 5 s ago.
+    one.canvas.listeners.get('pointermove')!({ clientX: 362 })
+    one.env.flush(); two.env.flush()
+    expect(tip.text).toBe(tipText('0:05 ago · 55 %'))
+    const x = line(one)!
+    for (let at = 1; at <= 8; at++) {
+      one.env.time = two.env.time = start + at * 1000
+      ring.push(start + at * 1000, [60 + at])
+      one.canvas.context.reset(); two.canvas.context.reset()
+      one.view.invalidate(); two.view.invalidate(); one.env.flush(); two.env.flush()
+      expect(tip.hidden).toBe(false)
+      expect(tip.text).toBe(tipText(`0:05 ago · ${55 + at} %`))
+      expect(line(one)).toBeCloseTo(x, 6)
+      expect(line(two)).toBeCloseTo(x, 6)
+    }
   })
   it('maps the pointer to the plot inside the value axis\'s labels', () => {
     const ring = ringOf(61, 1, index => index)
@@ -491,7 +614,7 @@ describe('ChartView', () => {
     // "100 %" is the widest label: 30 px in the fake context, so the plot runs from 36 px to 395 px.
     canvas.listeners.get('pointermove')!({ clientX: 36 + (395 - 36) / 2 })
     env.flush()
-    expect((root.children[0] as FakeElement).text).toBe('0:30 ago · 30 %')
+    expect((root.children[0] as FakeElement).text).toBe(tipText('0:30 ago · 30 %'))
   })
   it('places the tooltip inside the plot, beside the crosshair on the side with room', () => {
     const ring = ringOf(61, 1, index => index)
@@ -509,6 +632,22 @@ describe('ChartView', () => {
     env.flush()
     expect(Number.parseFloat(tip.style.left) + tip.offsetWidth).toBeLessThan(crosshairX())
     expect(Number.parseFloat(tip.style.left)).toBeGreaterThanOrEqual(1)
+  })
+  it('keeps a tooltip wider than a narrow plot inside the plot, on both sides', () => {
+    // The fake tooltip is 80 px wide; this plot runs from 1 px to 55 px.
+    const ring = ringOf(61, 1, index => index)
+    const { canvas, env, root } = chart({ ringValue: ring, width: 60 })
+    env.flush()
+    const tip = root.children[0] as FakeElement
+    for (const clientX of [2, 28, 54]) {
+      canvas.listeners.get('pointermove')!({ clientX })
+      env.flush()
+      expect(tip.hidden).toBe(false)
+      expect(tip.style.maxWidth).toBe('54px')
+      const left = Number.parseFloat(tip.style.left)
+      expect(left, `at ${clientX}`).toBeGreaterThanOrEqual(1)
+      expect(left + Math.min(tip.offsetWidth, Number.parseFloat(tip.style.maxWidth)), `at ${clientX}`).toBeLessThanOrEqual(55)
+    }
   })
   it('reads clock times instead of "now" while its probe is not current, as its view says', () => {
     const ring = ringOf(30, 1, index => index)

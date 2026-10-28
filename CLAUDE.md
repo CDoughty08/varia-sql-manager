@@ -108,7 +108,8 @@ pages, limits, error codes, display formats, benchmarks).
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
-  while off screen or hidden, at most two vertices a pixel column, colors only from the theme's `charts.*` keys.
+  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
+  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB

@@ -677,7 +677,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .live-chart-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0 0 4px; padding: 0; list-style: none; }
 .live-chart-legend li { display: flex; align-items: center; gap: 4px; }
 .live-chart-swatch { flex: none; width: 16px; height: 8px; }
-.live-chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 3px 7px; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.live-chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 3px 7px; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
 .live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
 .live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
 .live-chart[data-table] .live-chart-canvas { display: none; }

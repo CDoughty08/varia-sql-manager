@@ -1,11 +1,12 @@
 // Live charts in the real app (src/renderer/src/live/ChartView.ts) on the fake backend's debug.synthetic source, mounted
 // over the workbench through window.__variaLive: the canvas draws the series in the theme's chart colors and redraws as
 // ticks arrive, stops drawing while the window is hidden, names itself for screen readers, follows the keyboard and the
-// pointer with a crosshair (gone when focus leaves, kept on the oldest sample as the window moves), keeps its name still
-// while focused, lists its samples as a table in the plot's place (one-line caption, a header that stays, a themed focus
-// ring, a row cap), follows its props, shows a legend only for several series, stops calling a paused sample "now", draws
-// a sparkline in a metric tile, follows a theme switch, and draws in the system colors the DOM resolves under forced
-// colors, through a change of contrast theme, legend included.
+// pointer with a crosshair (gone when focus leaves, kept on the oldest sample as the window moves, kept under a pointer
+// held still, its tooltip inside a narrow plot), keeps its name still while focused, lists its samples as a table in the
+// plot's place (one-line caption, a header that stays, a themed focus ring, a row cap), follows its props, shows a legend
+// only for several series, stops calling a paused sample "now", draws a sparkline in a metric tile (which takes no
+// focus), follows a theme switch, and draws in the system colors the DOM resolves under forced colors, through a change
+// of contrast theme, legend included.
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -103,7 +104,9 @@ try {
   // Ticks move the window past that sample: the crosshair stays on the window's oldest sample, shown, not gone.
   await sleep(400)
   await expect(tip).toBeVisible()
-  await expect(tip).toHaveText(/^0:(0\d|10) ago · \d+(\.\d+)? %$/)
+  // The tooltip's parts keep their own spaces from breaking (no-break spaces, which \s matches), so it wraps only between
+  // parts.
+  await expect(tip).toHaveText(/^0:(0\d|10)\sago · \d+(\.\d+)?\s%$/)
   await page.keyboard.press('ArrowRight')
   await expect(status).not.toHaveText(oldest)
   await page.keyboard.press('Escape')
@@ -126,16 +129,46 @@ try {
   const bounds = await canvas.boundingBox()
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
   await expect(tip).toBeVisible()
-  await expect(tip).toHaveText(/^0:0\d ago · \d+(\.\d+)? %$/)
+  await expect(tip).toHaveText(/^0:0\d\sago · \d+(\.\d+)?\s%$/)
   // The tooltip sits inside the plot, so it covers nothing outside the chart.
   const tipBox = await tip.boundingBox()
   expect(tipBox.y).toBeGreaterThanOrEqual(bounds.y)
   expect(tipBox.y + tipBox.height).toBeLessThanOrEqual(bounds.y + bounds.height)
   expect(tipBox.x).toBeGreaterThanOrEqual(bounds.x)
   expect(tipBox.x + tipBox.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1)
+  // A pointer held still keeps the crosshair under it while ticks move the window: the tooltip names a sample as old as
+  // the place under the pointer, near either edge, and does not go when the sample it showed scrolls out.
+  const ageOf = text => text.startsWith('now') ? 0 : Number.parseInt(/^0:(\d\d)\s+ago/.exec(text)?.[1] ?? 'NaN', 10)
+  for (const [fraction, place] of [[0.85, 'right'], [0.12, 'left']]) {
+    await page.mouse.move(bounds.x + bounds.width * fraction, bounds.y + bounds.height / 2)
+    await expect(tip).toBeVisible()
+    const held = ageOf(await tip.textContent())
+    expect(held, place).not.toBeNaN()
+    for (let sample = 0; sample < 6; sample++) {
+      await sleep(500)
+      await expect(tip, place).toBeVisible()
+      expect(Math.abs(ageOf(await tip.textContent()) - held), `${place}, after ${(sample + 1) * 500} ms`).toBeLessThanOrEqual(1)
+    }
+  }
   await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height + 60)
   await expect(tip).toBeHidden()
-  console.log('Pointer crosshair passed: the tooltip follows the pointer and goes when it leaves.')
+  // A tooltip wider than a narrow card's plot wraps inside it, whichever side of the crosshair has room.
+  const narrow = await live('mountChart', id, { series: [1, 2], unit: 'perSecond', labels: 'axes', spanMs: 10_000, width: 200, height: 110 })
+  const narrowBox = page.locator(`[data-chart-test="${narrow}"]`), narrowCanvas = narrowBox.locator('canvas'), narrowTip = chartTooltip(narrowBox)
+  await expect.poll(async () => (await chart(narrow))?.pixels.colors['charts.orange'] ?? 0).toBeGreaterThan(5)
+  const narrowBounds = await narrowCanvas.boundingBox()
+  for (const fraction of [0.3, 0.5, 0.8, 0.98]) {
+    await page.mouse.move(narrowBounds.x + narrowBounds.width * fraction, narrowBounds.y + narrowBounds.height / 2)
+    await expect(narrowTip).toHaveText(/^(now|\d:\d\d\s+ago) · Wave\s.* · Rate\s.*$/)
+    const narrowTipBox = await narrowTip.boundingBox()
+    expect(narrowTipBox.x, `left at ${fraction}`).toBeGreaterThanOrEqual(narrowBounds.x)
+    expect(narrowTipBox.x + narrowTipBox.width, `right at ${fraction}`).toBeLessThanOrEqual(narrowBounds.x + narrowBounds.width + 1)
+    // Its text wraps inside the box rather than running out of it.
+    expect(await narrowTip.evaluate(element => element.scrollWidth - element.clientWidth), `text at ${fraction}`).toBeLessThanOrEqual(1)
+  }
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height + 60)
+  await live('unmountChart', narrow)
+  console.log('Pointer crosshair passed: the tooltip follows the pointer, stays under a pointer held still as the window moves, stays inside a narrow plot, and goes when the pointer leaves.')
 
   step = 'table'
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
@@ -241,8 +274,20 @@ try {
   await expect(tileBox.getByRole('group', { name: 'Wave: no data yet', exact: true })).toBeVisible()
   await expect.poll(async () => { const pixels = (await chart(tiled)).pixels.colors; return pixels['charts.blue'] > 10 && pixels['tile.background'] > 0 }).toBe(true)
   expect((await tileBox.locator('canvas').boundingBox()).height).toBe(32)
+  // A sparkline has no keys and no focus ring, so it takes no focus: a click on it does what a click on the tile's caption
+  // does, and never leaves the focus on an invisible canvas.
+  const spark = tileBox.locator('canvas')
+  expect(await spark.getAttribute('tabindex')).toBeNull()
+  const focusAfterClick = async target => {
+    await box.getByRole('button', { name: 'View as table', exact: true }).focus()
+    await target.click()
+    return page.evaluate(() => { const at = document.activeElement; return at ? `${at.tagName} ${at.getAttribute('class') ?? ''}` : '' })
+  }
+  const afterSpark = await focusAfterClick(spark)
+  await expect(spark).not.toBeFocused()
+  expect(afterSpark).toBe(await focusAfterClick(tileBox.getByText('Wave', { exact: true })))
   await live('unmountChart', tiled)
-  console.log('Tile passed: a sparkline in the tile\'s chart slot, 32 px tall, on the tile\'s surface.')
+  console.log('Tile passed: a sparkline in the tile\'s chart slot, 32 px tall, on the tile\'s surface, taking no focus.')
 
   step = 'theme'
   const darkBlue = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-charts-blue').trim())

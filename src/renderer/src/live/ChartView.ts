@@ -3,9 +3,9 @@
 // the size, the pixel ratio, the theme or the crosshair changed, and only while the canvas is on screen and the page is
 // visible. Each series is reduced to the smallest and largest value in each device pixel column, so a draw strokes at
 // most two vertices a column whatever the history holds; a gap in the history (a pause, a reset, missed samples) or a
-// missing value breaks the line. Colors come only from the active theme's charts.* keys, or the system colors under
-// forced colors, as the DOM resolves them. Text on the canvas is drawn with fillText; the tooltip and the crosshair's
-// announcement are Text nodes.
+// missing value breaks the line. Colors come only from the active theme's charts.* keys and the surface the chart sits
+// on, or the system colors under forced colors, as the DOM resolves them. Text on the canvas is drawn with fillText; the
+// tooltip and the crosshair's announcement are Text nodes.
 import type { LiveProbeId, LiveUnit } from '../../../shared/live/catalog'
 import { chartCategorical, type ChartSeriesColor, type ChartSurface } from '../../../shared/theme/charts'
 import { typeScale } from '../../../shared/theme/metrics'
@@ -147,6 +147,8 @@ export function browserChartEnvironment(): ChartEnvironment {
   }
 }
 
+const inRing = (ring: MetricRing, series: ChartSeries) => Number.isInteger(series.index) && series.index >= 0 && series.index < ring.series
+
 /** The categorical color of the n-th series: blue, orange, green, yellow, purple, then round again. */
 export const chartColor = (index: number): ChartSeriesColor => chartCategorical[((index % chartCategorical.length) + chartCategorical.length) % chartCategorical.length]
 
@@ -209,12 +211,16 @@ export class ChartView implements Disposable {
   private configRevision = 0
   private colorsRevision = 0
   private crosshair?: Crosshair
+  /** Where the pointer is over the canvas (CSS px from its left), while it is. */
+  private pointerX?: number
   private layout?: Layout
   /** What the last draw drew; a frame with the same key draws nothing. */
   private drawn = ''
+  /** What the layout, buckets and stack were last reduced from. */
+  private reduced = ''
   private lastRing?: MetricRing
   private readonly buckets = new Buckets()
-  private stack = { sums: new Float64Array(0), counts: new Float64Array(0), has: new Uint8Array(0), breaks: new Uint8Array(0), tops: new Float64Array(0) }
+  private stack = { sums: new Float64Array(0), samples: new Float64Array(0), has: new Uint8Array(0), breaks: new Uint8Array(0), tops: new Float64Array(0) }
   private label = ''
   private labelAt = Number.NEGATIVE_INFINITY
   private pendingLabel?: string
@@ -266,7 +272,7 @@ export class ChartView implements Disposable {
     this.stops.push(this.env.observeDevicePixelRatio(() => this.invalidate()))
     if (o.page) this.stops.push(o.page.subscribe(() => this.invalidate()))
     if (this.variant === 'chart') {
-      const move = (event: PointerEvent) => this.pointerMoved(event), leave = () => this.moveCrosshair(undefined)
+      const move = (event: PointerEvent) => this.pointerMoved(event), leave = () => { this.pointerX = undefined; this.moveCrosshair(undefined) }
       // A screen reader speaks the focused element's name whenever it changes, so the name holds still while the chart has
       // focus (the status region announces the steps) and catches up when focus leaves.
       const focus = () => { this.focused = true }
@@ -380,7 +386,7 @@ export class ChartView implements Disposable {
     return this.series.map(series => {
       if (!ring) return Number.NaN
       for (let index = layout.first + layout.count - 1; index >= layout.first; index--) {
-        const value = ring.value(index, series.index)
+        const value = this.read(ring, index, series)
         if (Number.isFinite(value)) return value
       }
       return Number.NaN
@@ -396,10 +402,12 @@ export class ChartView implements Disposable {
     const rows: ChartTableRow[] = []
     for (let k = 0; k < take; k++) {
       // A row follows a gap if any sample since the previous (older) row's does, listed or not, as the line breaks there.
-      const index = at(k), older = k + 1 < take ? at(k + 1) : index - 1
+      // The oldest row has no listed row before it: a flag on the window's first sample (the ring's first is a view's
+      // baseline) parts it from nothing the chart shows.
+      const index = at(k), older = k + 1 < take ? at(k + 1) : layout.first
       let gapBefore = false
       for (let from = index; from > older && !gapBefore; from--) gapBefore = (ring.flags(from) & ringGap) !== 0
-      rows.push({ time: this.when(ring, layout, index), values: this.series.map(series => formatChartValue(ring.value(index, series.index), this.scale.unit)), gapBefore })
+      rows.push({ time: this.when(ring, layout, index), values: this.series.map(series => formatChartValue(this.read(ring, index, series), this.scale.unit)), gapBefore })
     }
     return { rows, total: layout.count }
   }
@@ -434,12 +442,17 @@ export class ChartView implements Disposable {
     // Read at every draw: no event says that the forced palette changed while forced colors stayed on.
     this.palette = forced ? this.env.systemColors(this.system) : undefined
     const palette = this.palette ? [this.palette.text, this.palette.canvas, this.palette.gray].join('/') : ''
-    const key = [ring ? ring.revision : -1, ring ? ring.capacity : 0, width, height, ratio, palette, this.colorsRevision, this.configRevision, this.crosshair?.time ?? '', this.crosshair?.from ?? '', this.current ? 1 : 0].join(' ')
+    // What the window's samples reduce to (the layout, the columns, the bands) depends on this much; a crosshair or a
+    // color alone repaints from what the last reduction kept, without reading the window again.
+    const data = [ring ? ring.revision : -1, ring ? ring.capacity : 0, width, height, ratio, this.configRevision, this.current ? 1 : 0].join(' ')
+    const key = [data, palette, this.colorsRevision, this.crosshair?.time ?? '', this.crosshair?.from ?? ''].join(' ')
     if (key === this.drawn && ring === this.lastRing) return
+    const reduce = data !== this.reduced || ring !== this.lastRing
     this.drawn = key
+    this.reduced = data
     this.lastRing = ring
     this.stats.draws++
-    this.draw(this.context, ring, width, height, ratio, forced)
+    this.draw(this.context, ring, width, height, ratio, forced, reduce)
   }
 
   /** The window over the ring as it is now. A live one ends at the newest sample, so history stays in view when collection
@@ -453,14 +466,22 @@ export class ChartView implements Disposable {
   }
 
   /** A keyboard crosshair whose sample a live window left moves to the window's oldest sample, so Home stays on it and
-   *  the next step starts from what is shown. */
+   *  the next step starts from what is shown. A pointer's stays under the pointer, on the sample now nearest it. */
   private keepCrosshair(ring: MetricRing | undefined): void {
     const crosshair = this.crosshair
-    if (!ring || crosshair?.from !== 'key') return
+    if (!ring || (crosshair?.from !== 'key' && crosshair?.from !== 'pointer')) return
     const window = this.spanOf(ring)
-    if (window.count === 0 || crosshair.time >= ring.time(window.first)) return
-    const time = ring.time(window.first)
-    this.crosshair = { time, from: 'key' }
+    if (window.count === 0) return
+    let time: number
+    if (crosshair.from === 'pointer') {
+      if (!this.layout) return
+      time = ring.time(this.nearest(ring, window, this.pointerTime(window, this.layout)))
+      if (time === crosshair.time) return
+    } else {
+      if (crosshair.time >= ring.time(window.first)) return
+      time = ring.time(window.first)
+    }
+    this.crosshair = { time, from: crosshair.from }
     this.o.link?.moved(this, time)
   }
 
@@ -490,13 +511,13 @@ export class ChartView implements Disposable {
       // A series with no value in the window has no top (NaN), which would poison every Math.max after it.
       for (const series of this.series) {
         if (series.style === 'stacked') continue
-        const high = ring.minMax(series.index, first, count)[1]
+        const high = this.minMax(ring, series, first, count)[1]
         if (Number.isFinite(high)) top = Math.max(top, high)
       }
       if (stacked.length) {
         for (let index = first; index < first + count; index++) {
           let total = 0
-          for (const series of stacked) { const value = ring.value(index, series.index); if (Number.isFinite(value)) total += value }
+          for (const series of stacked) { const value = this.read(ring, index, series); if (Number.isFinite(value)) total += value }
           top = Math.max(top, total)
         }
       }
@@ -508,14 +529,25 @@ export class ChartView implements Disposable {
     return forced && this.palette ? this.palette[system] : this.colors[key]
   }
 
-  private draw(context: CanvasRenderingContext2D, ring: MetricRing | undefined, width: number, height: number, ratio: number, forced: boolean): void {
+  /** A series' value; NaN when the ring has no series of its index, which the ring's sample-major values would otherwise
+   *  answer with another series' value (a consumer that miscounted, or a catalogue that dropped a series). */
+  private read(ring: MetricRing, index: number, series: ChartSeries): number {
+    return inRing(ring, series) ? ring.value(index, series.index) : Number.NaN
+  }
+  private minMax(ring: MetricRing, series: ChartSeries, first: number, count: number): [number, number] {
+    return inRing(ring, series) ? ring.minMax(series.index, first, count) : [Number.NaN, Number.NaN]
+  }
+
+  /** `reduce`: the window's samples changed, or what they are reduced to (the size, the series); otherwise the layout,
+   *  buckets and stack from the last draw still hold, and only the paint (a crosshair, colors) is redone. */
+  private draw(context: CanvasRenderingContext2D, ring: MetricRing | undefined, width: number, height: number, ratio: number, forced: boolean, reduce: boolean): void {
     const pixelWidth = Math.max(1, Math.round(width * ratio)), pixelHeight = Math.max(1, Math.round(height * ratio))
     if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth
     if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight
     context.setTransform(ratio, 0, 0, ratio, 0, 0)
     context.clearRect(0, 0, width, height)
     context.font = `${typeScale.xs.size}px ${uiFontFamily}`
-    const layout = this.measure(ring, width, height, context)
+    const layout = reduce ? this.measure(ring, width, height, context) : this.layout
     this.layout = layout
     // No size (the table took the plot's place, or the card collapsed): nothing to draw, and no tooltip to leave behind.
     if (!layout) { this.hideTip(); return }
@@ -527,15 +559,18 @@ export class ChartView implements Disposable {
     const x = (column: number) => layout.left + (column + 0.5) / ratio
     if (ring && layout.count > 0) {
       const stacked = this.series.filter(series => series.style === 'stacked')
-      if (stacked.length) this.drawStack(context, ring, layout, stacked, columns, x, y, surface, forced)
       const lines = this.series.filter(series => series.style !== 'stacked')
-      this.bucket(ring, layout, lines, columns)
+      if (reduce) {
+        if (stacked.length) this.reduceStack(ring, layout, stacked, columns)
+        this.bucket(ring, layout, lines, columns)
+      }
+      if (stacked.length) this.drawStack(context, layout, stacked, columns, x, y, surface, forced)
       lines.forEach((series, at) => this.drawLine(context, layout, series, at, this.series.indexOf(series), columns, x, y, forced))
       for (const series of lines) this.drawEnd(context, ring, layout, series, x, y, columns, surface, forced)
       this.drawCrosshair(context, ring, layout, x, y, columns, surface, forced)
     } else this.hideTip()
     if (this.variant === 'chart') this.drawLabels(context, layout, y, forced)
-    this.updateLabel(ring, layout)
+    if (reduce) this.updateLabel(ring, layout)
   }
 
   private drawGrid(context: CanvasRenderingContext2D, layout: Layout, y: (value: number) => number, snap: (value: number) => number, forced: boolean): void {
@@ -588,7 +623,7 @@ export class ChartView implements Disposable {
       const gap = (ring.flags(index) & ringGap) !== 0
       for (let at = 0; at < lines.length; at++) {
         if (gap) pending[at] = 1
-        const value = ring.value(index, lines[at].index)
+        const value = this.read(ring, index, lines[at])
         if (!Number.isFinite(value)) { pending[at] = 1; continue }
         const base = (at * columns + column) * 4, buckets = this.buckets.values
         if (Number.isNaN(buckets[base])) {
@@ -651,35 +686,43 @@ export class ChartView implements Disposable {
     context.setLineDash([])
   }
 
-  private drawStack(context: CanvasRenderingContext2D, ring: MetricRing, layout: Layout, stacked: readonly ChartSeries[], columns: number, x: (column: number) => number, y: (value: number) => number, surface: string, forced: boolean): void {
+  /** Fills the stack: per column, each band's top (the means of the column's samples, each on the ones below), whether
+   *  the column has a sample with a stacked value, and whether the bands break before it. */
+  private reduceStack(ring: MetricRing, layout: Layout, stacked: readonly ChartSeries[], columns: number): void {
     const count = stacked.length
     if (this.stack.has.length !== columns || this.stack.tops.length !== columns * count) {
-      this.stack = { sums: new Float64Array(columns * count), counts: new Float64Array(columns * count), has: new Uint8Array(columns), breaks: new Uint8Array(columns), tops: new Float64Array(columns * count) }
+      this.stack = { sums: new Float64Array(columns * count), samples: new Float64Array(columns), has: new Uint8Array(columns), breaks: new Uint8Array(columns), tops: new Float64Array(columns * count) }
     }
-    const { sums, counts, has, breaks, tops } = this.stack
-    sums.fill(0); counts.fill(0); has.fill(0); breaks.fill(0)
+    const { sums, samples, has, breaks, tops } = this.stack
+    sums.fill(0); samples.fill(0); has.fill(0); breaks.fill(0)
     let pending = 0
     for (let index = layout.first; index < layout.first + layout.count; index++) {
       const column = Math.min(columns - 1, Math.max(0, Math.floor((ring.time(index) - layout.start) / layout.span * columns)))
       if (ring.flags(index) & ringGap) pending = 1
       let any = false
       for (let at = 0; at < count; at++) {
-        const value = ring.value(index, stacked[at].index)
-        if (Number.isFinite(value)) { sums[column * count + at] += value; counts[column * count + at]++; any = true }
+        const value = this.read(ring, index, stacked[at])
+        if (Number.isFinite(value)) { sums[column * count + at] += value; any = true }
       }
       if (!any) { pending = 1; continue }
+      // Every sample with a stacked value counts toward each band's mean: a series missing from it adds 0 there.
+      samples[column]++
       if (!has[column]) { has[column] = 1; breaks[column] = pending }
       pending = 0
     }
-    // A column's bands are the means of its samples, each on the ones below; a missing series adds nothing.
     for (let column = 0; column < columns; column++) {
       let total = 0
       for (let at = 0; at < count; at++) {
         const cell = column * count + at
-        total += counts[cell] ? sums[cell] / counts[cell] : 0
+        total += samples[column] ? sums[cell] / samples[column] : 0
         tops[cell] = total
       }
     }
+  }
+
+  private drawStack(context: CanvasRenderingContext2D, layout: Layout, stacked: readonly ChartSeries[], columns: number, x: (column: number) => number, y: (value: number) => number, surface: string, forced: boolean): void {
+    const count = stacked.length
+    const { has, breaks, tops } = this.stack
     const top = (column: number, at: number) => at < 0 ? layout.min : tops[column * count + at]
     for (let at = 0; at < count; at++) {
       const color = this.color(stacked[at].color, 'text', forced)
@@ -719,7 +762,7 @@ export class ChartView implements Disposable {
 
   /** The newest sample's marker, ringed in the surface so it stands off the line. */
   private drawEnd(context: CanvasRenderingContext2D, ring: MetricRing, layout: Layout, series: ChartSeries, x: (column: number) => number, y: (value: number) => number, columns: number, surface: string, forced: boolean): void {
-    const index = layout.first + layout.count - 1, value = ring.value(index, series.index)
+    const index = layout.first + layout.count - 1, value = this.read(ring, index, series)
     if (!Number.isFinite(value)) return
     this.dot(context, x(this.column(ring.time(index), layout, columns)), y(value), this.variant === 'sparkline' ? 2 : 3, this.color(series.color, 'text', forced), surface)
   }
@@ -752,7 +795,7 @@ export class ChartView implements Disposable {
     context.setLineDash([])
     const stacked = this.series.filter(series => series.style === 'stacked')
     for (const series of this.series) {
-      const value = ring.value(index, series.index)
+      const value = this.read(ring, index, series)
       if (!Number.isFinite(value)) continue
       // A band is drawn at its column's mean, so its dot sits on the band's top there, not at this sample's own total.
       const place = stacked.indexOf(series)
@@ -761,11 +804,16 @@ export class ChartView implements Disposable {
     }
     // Every chart of a link shows the line; only the one under the pointer or the keyboard shows its values.
     if (crosshair.from === 'link') { this.hideTip(); return }
-    this.tipText.nodeValue = this.describe(ring, layout, index)
+    // A tooltip wider than the plot wraps between its parts (each part's own spaces do not break), one series a line.
+    this.tipText.nodeValue = this.describe(ring, layout, index).split(' · ').map(part => part.replaceAll(' ', '\u00a0')).join(' · ')
     this.tip.hidden = false
-    // Inside the plot, at its top, beside the crosshair on whichever side has room, so it never leaves the chart's box.
-    const width = this.tip.offsetWidth, gap = 8
-    const beside = left + gap + width <= layout.right ? left + gap : Math.max(layout.left, left - gap - width)
+    // Inside the plot, at its top, beside the crosshair on whichever side has room, else against the plot's right edge, so
+    // it never leaves the chart's box. It is measured at the plot's left, where the whole plot's width is open to it.
+    const plot = layout.right - layout.left, gap = 8
+    this.tip.style.maxWidth = `${plot}px`
+    this.tip.style.left = `${this.canvas.offsetLeft + layout.left}px`
+    const width = Math.min(this.tip.offsetWidth, plot)
+    const beside = left + gap + width <= layout.right ? left + gap : left - gap - width >= layout.left ? left - gap - width : Math.max(layout.left, layout.right - width)
     this.tip.style.left = `${this.canvas.offsetLeft + beside}px`
     this.tip.style.top = `${this.canvas.offsetTop + layout.top + 2}px`
   }
@@ -775,7 +823,7 @@ export class ChartView implements Disposable {
   /** The crosshair's sentence: "4:10 ago · 93 %", or "now · Read 12 MB/s · Write 5 MB/s". */
   private describe(ring: MetricRing, layout: Span, index: number): string {
     const values = this.series.map(series => {
-      const value = formatChartValue(ring.value(index, series.index), this.scale.unit)
+      const value = formatChartValue(this.read(ring, index, series), this.scale.unit)
       return this.series.length > 1 ? `${series.label} ${value}` : value
     })
     return [this.when(ring, layout, index), ...values].join(' · ')
@@ -793,11 +841,15 @@ export class ChartView implements Disposable {
   }
 
   private pointerMoved(event: PointerEvent): void {
+    this.pointerX = event.clientX - this.canvas.getBoundingClientRect().left
     const ring = this.o.ring(), layout = this.layout
     if (!ring || !layout || layout.count === 0) return
-    const offset = event.clientX - this.canvas.getBoundingClientRect().left
-    const time = layout.start + (offset - layout.left) / Math.max(1, layout.right - layout.left) * layout.span
-    this.moveCrosshair(ring.time(this.nearest(ring, layout, time)), 'pointer')
+    this.moveCrosshair(ring.time(this.nearest(ring, layout, this.pointerTime(layout, layout))), 'pointer')
+  }
+
+  /** The time under the pointer in `window`, across the plot of `plot`. */
+  private pointerTime(window: Span, plot: Layout): number {
+    return window.start + ((this.pointerX ?? plot.left) - plot.left) / Math.max(1, plot.right - plot.left) * window.span
   }
 
   private moveCrosshair(time: number | undefined, from: 'pointer' | 'key' = 'pointer'): void {
@@ -811,10 +863,10 @@ export class ChartView implements Disposable {
   private updateLabel(ring: MetricRing | undefined, layout: Layout): void {
     const summaries: SeriesSummary[] = this.series.map(series => {
       if (!ring || layout.count === 0) return { label: series.label, latest: Number.NaN, min: Number.NaN, max: Number.NaN }
-      const [min, max] = ring.minMax(series.index, layout.first, layout.count)
+      const [min, max] = this.minMax(ring, series, layout.first, layout.count)
       let latest = Number.NaN
       for (let index = layout.first + layout.count - 1; index >= layout.first && Number.isNaN(latest); index--) {
-        const value = ring.value(index, series.index)
+        const value = this.read(ring, index, series)
         if (Number.isFinite(value)) latest = value
       }
       return { label: series.label, latest, min, max }
