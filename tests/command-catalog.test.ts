@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { codicons, commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
+import { commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
 import { findConflicts, focusSamples } from '../src/shared/commands/conflicts'
 import { contextKeyNames, contextKeys, contextRecord, isContextKey, keysOfScope, targetKeyMenu, whenProblems } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
@@ -7,6 +7,7 @@ import { assignMnemonics, buildMenuModel, contextMenuIds, maxSubmenuDepth, menub
 import { parseWhen, referencedKeys } from '../src/shared/commands/when'
 import { themeMenuModel } from '../src/shared/theme/menu'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
+import { isIconId } from '../src/shared/icons'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
 import { workbenchFixture } from './fixtures/workbench'
 import { folderIds, nodeKinds } from '../src/shared/explorer/catalog'
@@ -19,8 +20,8 @@ const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConfl
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 98 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, and the two notification commands.
-    expect(commandIds).toHaveLength(145)
+    // 99 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, and the two notification commands.
+    expect(commandIds).toHaveLength(146)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -54,13 +55,9 @@ describe('command catalogue', () => {
     expect(isCommandId('file.new')).toBe(true)
     for (const value of ['__proto__', 'toString', 'constructor', 'file.New', 'theme.mode.dark', '', 1, null, undefined, {}]) expect(isCommandId(value), String(value)).toBe(false)
   })
-  it('uses codicons that exist in the bundled font', async () => {
-    // Untyped Monaco internals: loading the library registers every codicon with codiconsUtil.
-    const library = 'monaco-editor/base/common/codiconsLibrary.js', util = 'monaco-editor/base/common/codiconsUtil.js'
-    await import(library)
-    const { getCodiconFontCharacters } = await import(util) as { getCodiconFontCharacters(): Record<string, number> }
-    const characters = getCodiconFontCharacters()
-    for (const icon of codicons) expect(Object.hasOwn(characters, icon), icon).toBe(true)
+  it('names icons of the registry', () => {
+    // tests/icons.test.ts checks the registry against the bundled codicon font.
+    expect(commandIds.filter(id => commandDescriptor(id).icon !== undefined && !isIconId(commandDescriptor(id).icon))).toEqual([])
   })
   it('lets exactly window close, the text-editing commands, and the context-menu key run behind a modal', () => {
     // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu.

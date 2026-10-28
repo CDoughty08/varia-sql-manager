@@ -163,7 +163,7 @@ internal static class KerberosProbe
     internal const int MaxPrincipalLength = 256;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint AcquireCredential(out uint minor, IntPtr name, uint lifetimeWanted, IntPtr mechanisms, int usage, out IntPtr credential, IntPtr actualMechanisms, out uint lifetime);
+    private delegate uint AcquireCredential(out uint minor, IntPtr name, uint lifetimeWanted, ref GssOidSet mechanisms, int usage, out IntPtr credential, IntPtr actualMechanisms, out uint lifetime);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate uint ReleaseCredential(out uint minor, ref IntPtr credential);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -181,6 +181,13 @@ internal static class KerberosProbe
     {
         public nuint Length;
         public IntPtr Value;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GssOidSet
+    {
+        public nuint Count;
+        public IntPtr Elements;
     }
 
     /// <summary>The library .NET's own GSSAPI shim loads: MIT Kerberos on Linux, the system GSS framework on macOS.</summary>
@@ -202,8 +209,7 @@ internal static class KerberosProbe
         try
         {
             if (!NativeLibrary.TryGetExport(library, "gss_acquire_cred", out var acquire) || !NativeLibrary.TryGetExport(library, "gss_release_cred", out var release)) return new(KerberosState.Unknown, null);
-            // The default initiator credential of the default mechanisms: the ticket SqlClient's Negotiate token would use.
-            var major = Marshal.GetDelegateForFunctionPointer<AcquireCredential>(acquire)(out _, IntPtr.Zero, 0, IntPtr.Zero, Initiate, out var credential, IntPtr.Zero, out var lifetime);
+            var major = AcquireKerberosCredential(acquire, out var credential, out var lifetime);
             try
             {
                 var state = Classify(major, lifetime);
@@ -212,6 +218,28 @@ internal static class KerberosProbe
             finally { if (credential != IntPtr.Zero) Marshal.GetDelegateForFunctionPointer<ReleaseCredential>(release)(out _, ref credential); }
         }
         finally { NativeLibrary.Free(library); }
+    }
+
+    private static uint AcquireKerberosCredential(IntPtr acquire, out IntPtr credential, out uint lifetime)
+    {
+        // RFC 4121's Kerberos mechanism, 1.2.840.113554.1.2.2. Asking for all mechanisms lets macOS succeed with a
+        // non-Kerberos credential even when the Kerberos cache is absent, which cannot establish that a ticket exists.
+        byte[] kerberos = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02];
+        // Apple's x86/x64 GSS ABI packs gss_OID_desc at two-byte alignment; its pointer follows the uint32 length
+        // immediately. MIT and Apple's ARM ABI align that pointer normally (gssapi.h's __APPLE__ pack(push,2)).
+        var pointerOffset = OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture is Architecture.X86 or Architecture.X64 ? sizeof(uint) : IntPtr.Size;
+        var descriptorSize = pointerOffset + IntPtr.Size;
+        var storage = Marshal.AllocHGlobal(descriptorSize + kerberos.Length);
+        try
+        {
+            var elements = IntPtr.Add(storage, descriptorSize);
+            Marshal.Copy(kerberos, 0, elements, kerberos.Length);
+            Marshal.WriteInt32(storage, kerberos.Length);
+            Marshal.WriteIntPtr(storage, pointerOffset, elements);
+            var mechanisms = new GssOidSet { Count = 1, Elements = storage };
+            return Marshal.GetDelegateForFunctionPointer<AcquireCredential>(acquire)(out _, IntPtr.Zero, 0, ref mechanisms, Initiate, out credential, IntPtr.Zero, out lifetime);
+        }
+        finally { Marshal.FreeHGlobal(storage); }
     }
 
     /// <summary>gss_inquire_cred's name of the credential, as gss_display_name writes it (UTF-8), or null.</summary>

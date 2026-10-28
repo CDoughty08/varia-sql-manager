@@ -5,6 +5,7 @@ import {
   computeWindow, flatten, needsQuery, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
+import { meterWork } from './fixtures/work-meter'
 
 /** A node table built by hand: `add` appends a child (or a root), and fields can be set on the result. */
 function table() {
@@ -43,12 +44,6 @@ function sample(count = 3) {
   for (let index = 0; index < count; index++) t.add(tables.id, `dbo.Table${index}`)
   return { ...t, server, databases, system, app, tables }
 }
-function bestOf3(action: () => void): number {
-  let best = Infinity
-  for (let run = 0; run < 3; run++) { const start = performance.now(); action(); best = Math.min(best, performance.now() - start) }
-  return best
-}
-
 describe('row ids', () => {
   it('encode the owner and kind of synthetic rows, and leave node ids alone', () => {
     for (const kind of [RowKind.Loading, RowKind.Error, RowKind.More, RowKind.Stopped, RowKind.Capped, RowKind.Paused, RowKind.MoreError]) {
@@ -111,12 +106,33 @@ describe('flatten', () => {
     expect(rows.nodes.map(node => node?.label)).toEqual(['server-a', 'Databases', 'System Databases', 'AppData', 'Tables', undefined, 'dbo.Table0', 'Security'])
     expect(rows.nodes.every((node, index) => node ? node.id === rows.ids[index] : rows.ids[index] < 0)).toBe(true)
   })
-  it('flattens 250,000 visible rows within the budget', () => {
+  it('flattens 250,000 visible rows with one visit per node, preserving order and identity', () => {
     const t = sample(250_000)
-    let rows = t.rows()
-    const time = bestOf3(() => { rows = t.rows() })
+    const prefix = [t.server, t.databases, t.system, t.app, t.tables].map(node => node.id)
+    const children = t.tables.children!, security = t.server.children!.find(node => node.folder === 'serverSecurity')!
+    const visits = new Uint8Array(t.nodes.size)
+    for (const [id, node] of t.nodes) {
+      Object.defineProperty(node, 'id', { configurable: true, enumerable: true, get: () => {
+        if (++visits[id - 1] > 1) throw new Error('Flatten inspected a node more than once.')
+        return id
+      } })
+    }
+    const { result: rows, work } = meterWork(() => t.rows())
     expect(rows.count).toBe(250_000 + 6)
-    expect(time).toBeLessThan(60)
+    expect(visits.every(count => count === 1)).toBe(true)
+    // Its five row arrays grow by doubling from 256 rows: O(log n) allocations, and allocating and copying O(n) elements in
+    // all. A fixed growth step, a copy per row or a second pass is quadratic or more work, whatever the runner's speed.
+    const arrays = 5, growths = Math.ceil(Math.log2(rows.count / 256))
+    expect(work.allocations, JSON.stringify(work)).toBeLessThanOrEqual(arrays * (growths + 1))
+    expect(work.allocated, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 4 * rows.count)
+    expect(work.elements, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 2 * rows.count)
+    expect([work.characters, work.costly]).toEqual([0, 0])
+    expect(Array.from(rows.ids.subarray(0, prefix.length))).toEqual(prefix)
+    expect(children.every((node, index) => rows.nodes[index + prefix.length] === node)).toBe(true)
+    expect(rows.nodes.at(-1)).toBe(security)
+    expect(rows.nodes.every((node, index) => node === t.nodes.get(rows.ids[index]))).toBe(true)
+    expect([rows.levels[5], rows.posinset[5], rows.setsize[5]]).toEqual([5, 1, 250_000])
+    expect([rows.levels.at(-2), rows.posinset.at(-2), rows.setsize.at(-2)]).toEqual([5, 250_000, 250_000])
   })
 })
 
@@ -267,14 +283,41 @@ describe('type-ahead', () => {
     expect(t.nodes.get(rows.ids[typeAhead(rows, 0, 'e')])!.label).toBe('Error')
     expect(typeAhead(rows, 0, '')).toBe(-1)
   })
-  it('scans 100,000 rows within the budget', () => {
+  it('searches 100,000 rows in one pass and wraps without rescanning', () => {
     const labels = Array.from({ length: 100_000 }, (_, index) => `dbo.table${index}`)
     const { rows, nodes } = folder(labels)
-    let found = -1
-    const time = bestOf3(() => { found = typeAhead(rows, 0, 'zzz') })
-    expect(found).toBe(-1)
-    expect(time).toBeLessThan(20)
-    expect(nodes.get(rows.ids[typeAhead(rows, 0, 'table99999')])!.label).toBe('dbo.table99999')
+    const visited: number[] = []
+    for (const [index, node] of rows.nodes.entries()) {
+      const lower = node!.lower
+      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => {
+        visited.push(index)
+        if (visited.length > rows.count) throw new Error('Type-ahead inspected more than one pass of the visible rows.')
+        return lower
+      } })
+    }
+    // Count actual matching work, independent of shared-runner scheduling or garbage-collection pauses.
+    const missed = meterWork(() => typeAhead(rows, 0, 'zzz'))
+    expect(missed.result).toBe(-1)
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    // Matching a row scans its label at most once plus the prefix twice (at the start and after the schema), with no
+    // locale-aware, Unicode or regular-expression call per row: only the buffer is lowercased, once.
+    const longest = Math.max(...labels.map(label => label.length))
+    expect(missed.work.characters, JSON.stringify(missed.work)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'z'.length) + 'zzz'.length)
+    expect(missed.work.costly, JSON.stringify(missed.work)).toBeLessThanOrEqual(1)
+    // Nor any array work per row (a few dozen elements is the buffer's own handling).
+    expect(missed.work.elements + missed.work.allocated, JSON.stringify(missed.work)).toBeLessThanOrEqual(1000)
+    visited.length = 0
+    const { result: last, work: found } = meterWork(() => typeAhead(rows, 0, 'table99999'))
+    expect(found.characters, JSON.stringify(found)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'table99999'.length) + 'table99999'.length)
+    expect(found.costly).toBeLessThanOrEqual(1)
+    expect(nodes.get(rows.ids[last])!.label).toBe('dbo.table99999')
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    visited.length = 0
+    const wrapped = typeAhead(rows, last, 'table0')
+    expect(nodes.get(rows.ids[wrapped])!.label).toBe('dbo.table0')
+    expect(visited).toEqual([last, 0, wrapped])
   })
   it('collects printable keys until a pause of a second, ignoring IME, modifiers and leading spaces', () => {
     let now = 0

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react'
+import type { IconId } from '../../../shared/icons'
 import type { TileTone } from '../../../shared/theme/tones'
+import Icon from '../Icon'
 
 interface Props {
   /** What the number is, as SSMS names it ("% Processor Time", "Waiting Tasks"). */
@@ -15,7 +17,7 @@ interface Props {
   readonly children?: ReactNode
 }
 
-const toneGlyphs: Readonly<Record<TileTone, string>> = { warning: 'warning', critical: 'error' }
+const toneGlyphs: Readonly<Record<TileTone, IconId>> = { warning: 'warning', critical: 'error' }
 const toneWords: Readonly<Record<TileTone, string>> = { warning: 'above its warning threshold', critical: 'above its critical threshold' }
 
 /** The accessible name: "Waiting Tasks: 12, avg 4, above its warning threshold", or "…: no data yet". */
@@ -29,7 +31,7 @@ export default function Tile(props: Props) {
   const { caption, value, unit, context, tone, children } = props
   return <div className="tile" role="group" aria-label={tileName(props)} data-tone={tone}>
     <div className="tile-caption" aria-hidden="true">
-      {tone && <span className={`codicon codicon-${toneGlyphs[tone]}`} />}
+      {tone && <Icon name={toneGlyphs[tone]} />}
       <span className="tile-caption-text">{caption}</span>
     </div>
     <p className="tile-value" aria-hidden="true">{value ?? '—'}{value !== undefined && unit && <span className="tile-unit">{unit}</span>}</p>

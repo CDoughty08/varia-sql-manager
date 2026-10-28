@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+
 /** The parts of a window's webContents the watchdog reads. */
 export interface WatchedContents {
   isDestroyed(): boolean
@@ -22,7 +24,8 @@ export const rendererWatchdogMs = 1000
  * When that renderer dies, the other process still holds its channel open, so Chromium never sees it go: no
  * render-process-gone, and the window freezes. The watchdog checks the main window's renderer process every
  * `intervalMs` and reports one that has exited while Chromium still says it runs. It waits for a second check in a row
- * first, so Chromium's own report, which follows an exit at once, wins whenever it comes.
+ * first, so Chromium's own report, which follows an exit at once, wins whenever it comes. Linux can likewise leave an
+ * exited renderer unreaped without that event; its zombie PID still exists but no longer runs.
  */
 export class RendererWatchdog {
   private suspect?: number
@@ -49,7 +52,18 @@ export class RendererWatchdog {
   stop(): void { this.timers.clearInterval(this.timer) }
 }
 
-/** Whether a process runs: signal 0 checks without sending anything (on Windows, that the process has not exited). */
+/** Whether a process runs: Linux retains an exited, unreaped process's PID, so signal 0 alone also finds zombies. */
 export function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0) } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+  if (process.platform === 'linux') {
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+      // The comm field is parenthesized and may itself contain spaces, parentheses or newlines. Its final ')' precedes
+      // the state and numeric parent PID. No signal is sent, and a zombie cannot have its PID reused until it is reaped.
+      const state = stat.startsWith(`${pid} (`) ? /^ ([A-Za-z]) \d+(?:\s|$)/.exec(stat.slice(stat.lastIndexOf(')') + 1))?.[1] : undefined
+      if (state === 'Z' || state === 'X' || state === 'x') return false
+    } catch { /* An unavailable/restricted procfs does not prove death; the next signal-0 probe can still see an exit. */ }
+  }
+  return true
 }

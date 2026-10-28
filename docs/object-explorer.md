@@ -35,7 +35,7 @@ The server row expands on connect; its folders stay collapsed.
 | PolyBase | — | 2019 (15) | — | Planned | — |
 | Always On High Availability | — | — | — | Planned | — |
 | Management | — | — | — | Planned: Policy Management, Data Collection, Resource Governor, Extended Events, Maintenance Plans, SQL Server Logs, Database Mail, Distributed Transaction Coordinator, Legacy | — |
-| Integration Services Catalogs | — | — | — | Planned | — |
+| Integration Services Catalogs | `integrationServicesCatalogs` | 2016 (13) | Yes | Integration Services Catalog (`ssisCatalogs`) | — |
 | SQL Server Agent | — | — | — | Planned | — |
 | XEvent Profiler | — | — | — | Planned | — |
 
@@ -108,7 +108,8 @@ A database expands only while it is online (or in emergency mode). Expanding one
 
 ## Object children
 
-Child folders list their rows by name, except Columns and Parameters, which keep the object's order. Every other kind is a leaf.
+Child folders list their rows by name, except Columns and Parameters, which keep the object's order, and an SSIS project's Packages,
+which list in deployment order (`package_id`: a package name can be longer than a sysname cursor key). Every other kind is a leaf.
 
 | Kind | Subtypes | Children |
 | --- | --- | --- |
@@ -121,6 +122,9 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | `function` | none, `scalar`, `clrScalar`, `aggregate` | Parameters |
 | `function` | `inline`, `tableValued`, `clrTableValued` | Columns, Parameters |
 | `tableType` | any | Columns, Keys, Constraints, Indexes |
+| `ssisCatalog` | any | Folder rows (`ssisFolders`) |
+| `ssisFolder` | any | Projects, Environments |
+| `ssisProject` | any | Packages |
 
 | Folder | Id | Below | Lists (query) |
 | --- | --- | --- | --- |
@@ -131,36 +135,39 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | Indexes | `indexes` | `table`, `view`, `tableType` | Index (`indexes`) |
 | Statistics | `statistics` | `table`, `view` | Statistic (`statistics`) |
 | Parameters | `parameters` | `procedure`, `function` | Parameter, Return value (`parameters`) |
+| Projects | `ssisProjects` | `ssisFolder` | Project (`ssisProjects`) |
+| Environments | `ssisEnvironments` | `ssisFolder` | Environment (`ssisEnvironments`) |
+| Packages | `ssisPackages` | `ssisProject` | Package (`ssisPackages`) |
 
-## Node kinds (51)
+## Node kinds (56)
 
-Icons are codicons, or `svg:` stroke icons drawn by `Icon.tsx`. Folders show `folder` (`folder-opened` while expanded).
+Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
 
 | Kind | Title | Scope | Icons | SMO | Scriptable | Inserts |
 | --- | --- | --- | --- | --- | --- | --- |
-| `server` | Server | `server` | `svg:server` | Server | No | — |
-| `login` | Login | `serverObject` | `svg:login` | Login | Yes | `[name]` |
-| `serverRole` | Server Role | `serverObject` | `svg:role` | ServerRole | Yes | `[name]` |
-| `credential` | Credential | `serverObject` | `svg:key` | Credential | Yes | `[name]` |
+| `server` | Server | `server` | `server` | Server | No | — |
+| `login` | Login | `serverObject` | `login` | Login | Yes | `[name]` |
+| `serverRole` | Server Role | `serverObject` | `role` | ServerRole | Yes | `[name]` |
+| `credential` | Credential | `serverObject` | `key` | Credential | Yes | `[name]` |
 | `cryptographicProvider` | Cryptographic Provider | `serverObject` | `circuit-board` | CryptographicProvider | Yes | `[name]` |
-| `audit` | Audit | `serverObject` | `svg:shield` | Audit | Yes | `[name]` |
-| `serverAuditSpecification` | Server Audit Specification | `serverObject` | `svg:shield` | ServerAuditSpecification | Yes | `[name]` |
+| `audit` | Audit | `serverObject` | `shield` | Audit | Yes | `[name]` |
+| `serverAuditSpecification` | Server Audit Specification | `serverObject` | `shield` | ServerAuditSpecification | Yes | `[name]` |
 | `backupDevice` | Backup Device | `serverObject` | `archive` | BackupDevice | Yes | `[name]` |
 | `linkedServer` | Linked Server | `serverObject` | `remote` | LinkedServer | Yes | `[name]` |
 | `serverTrigger` | Trigger | `serverObject` | `zap` | ServerDdlTrigger | Yes | `[name]` |
-| `database` | Database | `database` | `svg:database`; `snapshot` → `device-camera` | Database | Yes | `[name]` |
+| `database` | Database | `database` | `database`; `snapshot` → `device-camera` | Database | Yes | `[name]` |
 | `user` | User | `databaseObject` | `person` | User | Yes | `[name]` |
-| `databaseRole` | Database Role | `databaseObject` | `svg:role` | DatabaseRole | Yes | `[name]` |
-| `applicationRole` | Application Role | `databaseObject` | `svg:role` | ApplicationRole | Yes | `[name]` |
+| `databaseRole` | Database Role | `databaseObject` | `role` | DatabaseRole | Yes | `[name]` |
+| `applicationRole` | Application Role | `databaseObject` | `role` | ApplicationRole | Yes | `[name]` |
 | `schema` | Schema | `databaseObject` | `symbol-namespace` | Schema | Yes | `[name]` |
 | `assembly` | Assembly | `databaseObject` | `package` | SqlAssembly | Yes | `[name]` |
-| `asymmetricKey` | Asymmetric Key | `databaseObject` | `svg:key` | AsymmetricKey | Yes | `[name]` |
+| `asymmetricKey` | Asymmetric Key | `databaseObject` | `key` | AsymmetricKey | Yes | `[name]` |
 | `certificate` | Certificate | `databaseObject` | `workspace-trusted` | Certificate | Yes | `[name]` |
-| `symmetricKey` | Symmetric Key | `databaseObject` | `svg:key` | SymmetricKey | Yes | `[name]` |
-| `columnMasterKey` | Column Master Key | `databaseObject` | `svg:key` | ColumnMasterKey | Yes | `[name]` |
-| `columnEncryptionKey` | Column Encryption Key | `databaseObject` | `svg:key` | ColumnEncryptionKey | Yes | `[name]` |
-| `databaseAuditSpecification` | Database Audit Specification | `databaseObject` | `svg:shield` | DatabaseAuditSpecification | Yes | `[name]` |
+| `symmetricKey` | Symmetric Key | `databaseObject` | `key` | SymmetricKey | Yes | `[name]` |
+| `columnMasterKey` | Column Master Key | `databaseObject` | `key` | ColumnMasterKey | Yes | `[name]` |
+| `columnEncryptionKey` | Column Encryption Key | `databaseObject` | `key` | ColumnEncryptionKey | Yes | `[name]` |
+| `databaseAuditSpecification` | Database Audit Specification | `databaseObject` | `shield` | DatabaseAuditSpecification | Yes | `[name]` |
 | `databaseTrigger` | Trigger | `databaseObject` | `zap` | DatabaseDdlTrigger | Yes | `[name]` |
 | `externalDataSource` | External Data Source | `databaseObject` | `cloud` | ExternalDataSource | Yes | `[name]` |
 | `externalFileFormat` | External File Format | `databaseObject` | `file-code` | ExternalFileFormat | Yes | `[name]` |
@@ -170,42 +177,53 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `partitionFunction` | Partition Function | `databaseObject` | `symbol-ruler` | PartitionFunction | Yes | `[name]` |
 | `searchPropertyList` | Search Property List | `databaseObject` | `list-flat` | SearchPropertyList | Yes | `[name]` |
 | `planGuide` | Plan Guide | `databaseObject` | `milestone` | PlanGuide | Yes | `[name]` |
-| `table` | Table | `schemaObject` | `svg:table`; `history` → `history`; `ledgerHistory` → `history`; `updatableLedger` → `verified`; `appendOnlyLedger` → `verified`; `graphNode` → `type-hierarchy`; `graphEdge` → `git-compare`; `fileTable` → `file`; `external` → `cloud`; `droppedLedger` → `trash` | Table | Yes | `[schema].[name]` |
-| `view` | View | `schemaObject` | `eye`; `ledger` → `verified`; `droppedLedger` → `trash` | View | Yes | `[schema].[name]` |
+| `table` | Table | `schemaObject` | `table`; `history` → `history`; `ledgerHistory` → `history`; `updatableLedger` → `verified`; `appendOnlyLedger` → `verified`; `graphNode` → `type-hierarchy`; `graphEdge` → `git-compare`; `fileTable` → `file`; `external` → `cloud`; `droppedLedger` → `trash` | Table | Yes | `[schema].[name]` |
+| `view` | View | `schemaObject` | `view`; `ledger` → `verified`; `droppedLedger` → `trash` | View | Yes | `[schema].[name]` |
 | `synonym` | Synonym | `schemaObject` | `link` | Synonym | Yes | `[schema].[name]` |
-| `procedure` | Stored Procedure | `schemaObject` | `symbol-method` | StoredProcedure | Yes | `[schema].[name]` |
+| `procedure` | Stored Procedure | `schemaObject` | `procedure` | StoredProcedure | Yes | `[schema].[name]` |
 | `function` | Function | `schemaObject` | `symbol-function` | UserDefinedFunction; `aggregate` → UserDefinedAggregate | Yes | `[schema].[name]` |
 | `sequence` | Sequence | `schemaObject` | `symbol-numeric` | Sequence | Yes | `[schema].[name]` |
 | `type` | Type | `schemaObject` | `symbol-structure` | UserDefinedDataType; `clr` → UserDefinedType | Yes | `[schema].[name]` |
-| `tableType` | Table Type | `schemaObject` | `svg:table` | UserDefinedTableType | Yes | `[schema].[name]` |
+| `tableType` | Table Type | `schemaObject` | `table` | UserDefinedTableType | Yes | `[schema].[name]` |
 | `xmlSchemaCollection` | XML Schema Collection | `schemaObject` | `code` | XmlSchemaCollection | Yes | `[schema].[name]` |
 | `rule` | Rule | `schemaObject` | `law` | Rule | Yes | `[schema].[name]` |
 | `default` | Default | `schemaObject` | `symbol-constant` | Default | Yes | `[schema].[name]` |
-| `securityPolicy` | Security Policy | `schemaObject` | `svg:shield` | SecurityPolicy | Yes | `[schema].[name]` |
-| `column` | Column | `child` | `symbol-field`; `primaryKey` → `svg:key`; `foreignKey` → `references`; `computed` → `symbol-operator` | Column | No | `[name]` |
-| `key` | Key | `child` | `svg:key`; `unique` → `symbol-key`; `foreign` → `references` | Index; `foreign` → ForeignKey | Yes | `[name]` |
+| `securityPolicy` | Security Policy | `schemaObject` | `shield` | SecurityPolicy | Yes | `[schema].[name]` |
+| `column` | Column | `child` | `symbol-field`; `primaryKey` → `key`; `foreignKey` → `references`; `computed` → `symbol-operator` | Column | No | `[name]` |
+| `key` | Key | `child` | `key`; `unique` → `symbol-key`; `foreign` → `references` | Index; `foreign` → ForeignKey | Yes | `[name]` |
 | `constraint` | Constraint | `child` | `pass`; `default` → `symbol-constant`; `edge` → `link` | Check; `default` → DefaultConstraint; `edge` → EdgeConstraint | Yes | `[name]` |
 | `trigger` | Trigger | `child` | `zap` | Trigger | Yes | `[name]` |
 | `index` | Index | `child` | `list-ordered`; `clusteredColumnstore` → `layers`; `nonclusteredColumnstore` → `layers` | Index | Yes | `[name]` |
 | `statistic` | Statistic | `child` | `graph` | Statistic | Yes | `[name]` |
 | `parameter` | Parameter | `child` | `symbol-parameter` | Parameter | No | the name as is (`@name`) |
 | `returnValue` | Return value | `childUnnamed` | `arrow-left` | — | No | — |
+| `ssisCatalog` | Integration Services Catalog | `ssisCatalog` | `database` | — | No | — |
+| `ssisFolder` | Folder | `ssisFolder` | `folder-library` | — | No | — |
+| `ssisProject` | Project | `ssisFolderObject` | `project` | — | No | — |
+| `ssisPackage` | Package | `ssisProjectObject` | `package`; `child` → `symbol-file` | — | No | — |
+| `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
 
 ## Node identity
 
 A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry
 names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,
-used verbatim (never trimmed), without U+0000.
+used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260, if it
+owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).
+SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.
 
 | Scope | Requires | Forbids | Kinds |
 | --- | --- | --- | --- |
-| `server` | — | `database`, `schema`, `name`, `parent` | `server` |
-| `serverObject` | `name` | `database`, `schema`, `parent` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
-| `database` | `name` | `database`, `schema`, `parent` | `database` |
-| `databaseObject` | `database`, `name` | `schema`, `parent` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
-| `schemaObject` | `database`, `schema`, `name` | `parent` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
-| `child` | `database`, `parent`, `name` | `schema` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
-| `childUnnamed` | `database`, `parent` | `schema`, `name` | `returnValue` |
+| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server` |
+| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
+| `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `database` |
+| `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
+| `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
+| `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
+| `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject` | `returnValue` |
+| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisCatalog` |
+| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisFolder` |
+| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | `ssisProject`, `ssisEnvironment` |
+| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | `ssisPackage` |
 
 | Child kind | Parent kinds |
 | --- | --- |
@@ -220,8 +238,8 @@ used verbatim (never trimmed), without U+0000.
 
 ## Status badges
 
-An 8×8 badge at the bottom right of the row icon. Disabled, unavailable and inaccessible nodes are dimmed as well;
-read-only databases are not, because their sublabel says it.
+A 9 px badge (`--varia-glyph-badge`) at the bottom right of the row icon.
+Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.
 
 | Status | Badge |
 | --- | --- |
@@ -257,3 +275,4 @@ read-only databases are not, because their sublabel says it.
 | `sublabel` | 200 | Characters in a sublabel |
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
+| `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |

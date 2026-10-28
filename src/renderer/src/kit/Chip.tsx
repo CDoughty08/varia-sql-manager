@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react'
+import type { IconId } from '../../../shared/icons'
+import Icon from '../Icon'
 import { formatCount } from '../results/status'
 
 interface ChipProps {
@@ -7,8 +9,8 @@ interface ChipProps {
   readonly onToggle: () => void
   /** How many rows the filter matches, drawn after the label and part of its name ("Blocked 3"). */
   readonly count?: number
-  /** A codicon name shown before the label, such as `lock` for Blocked. */
-  readonly icon?: string
+  /** An icon shown before the label, such as `lock` for Blocked. */
+  readonly icon?: IconId
   readonly disabled?: boolean
   readonly title?: string
 }
@@ -16,8 +18,8 @@ interface ChipProps {
 /** A filter toggle (`aria-pressed`): on, it is filled, outlined in the accent and checked, so the state is not color alone. */
 export function Chip({ label, pressed, onToggle, count, icon, disabled, title }: ChipProps) {
   return <button type="button" className="chip" aria-pressed={pressed} disabled={disabled} title={title} onClick={onToggle}>
-    {pressed && <span className="codicon codicon-check" aria-hidden="true" />}
-    {icon && <span className={`codicon codicon-${icon}`} aria-hidden="true" />}
+    {pressed && <Icon name="check" />}
+    {icon && <Icon name={icon} />}
     <span>{label}</span>
     {count !== undefined && <span className="chip-count">{formatCount(count)}</span>}
   </button>

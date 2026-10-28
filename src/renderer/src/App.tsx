@@ -25,6 +25,9 @@ import MemoryIndicator from './results/MemoryIndicator'
 import TitleBar from './TitleBar'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
+import EnvironmentDialog from './EnvironmentDialog'
+import EnvironmentTag from './EnvironmentTag'
+import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
@@ -74,6 +77,8 @@ export default function App() {
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
   // The lost connection that the open Connect dialog replaces.
   const [reconnecting, setReconnecting] = useState<string>()
+  // The connected server whose Environment dialog is open.
+  const [environmentFor, setEnvironmentFor] = useState<string>()
   // The query that Execute opened the Connect dialog for: it runs once connected.
   const [pendingExecute, setPendingExecute] = useState<string>()
   const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
@@ -122,6 +127,7 @@ export default function App() {
       setOptions(lost.options)
       setShowConnect(true)
     },
+    editEnvironment: id => setEnvironmentFor(id),
     closePane: pane => workspaceRef.current?.close(pane),
     paneLocation: pane => workspaceRef.current?.location(pane) ?? 'closed',
     floatPane: pane => workspaceRef.current?.float(pane),
@@ -224,17 +230,17 @@ export default function App() {
 
   return <div className="app">
     <TitleBar title={windowTitle} />
-    <div className="toolbar">
+    <div className="toolbar" role="toolbar" aria-label="Standard">
       <div className="toolbar-actions">
-        <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="plus" />Connect</button>
+        <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
         <span className="toolbar-divider" />
-        <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="plus" />New query</button>
-        <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="open" />Open</button>
+        <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="add" />New query</button>
+        <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="folder-opened" />Open</button>
         <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
         <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
         <span className="toolbar-divider" />
         <button className="execute" disabled={!enabled.execute} title={connection?.lost ? lostHint : undefined} onClick={() => run('query.execute')}><Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
-        <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="stop" />Cancel</button>
+        <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
         <span className="toolbar-divider" />
         <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
       </div>
@@ -252,10 +258,10 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
-        <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(connections.find(value => value.id === tab.connectionId)?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}>{kindInfo[documentKind(tab)].icon ? <span className={`sql-icon codicon codicon-${kindInfo[documentKind(tab)].icon}`} role="img" aria-label={kindInfo[documentKind(tab)].badge} /> : <span className="sql-icon">{kindInfo[documentKind(tab)].badge}</span>}<span className="tab-name">{tab.name}</span>{tab.file?.readOnly && <span className="tab-readonly codicon codicon-lock" aria-label="Read-only" />}{tab.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" />}</button>
+        <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" role="img" aria-label="Executing" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
-        </div>)}</div>
+        </div> })}</div>
         {active.id ? <>
           {statusTop && statusBar}
           {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer shows. */}
@@ -264,7 +270,8 @@ export default function App() {
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
+    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}{environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
+    {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { documentTabs, errorBanner, explorerLabel, menuItemNames, objectDialogConnection, objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, renameBox, statusSegment, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'object-actions-profile-'))
@@ -19,13 +20,13 @@ const watchdog = setTimeout(() => { console.error('Object actions suite exceeded
 const fast = { force: true }
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
-const openMenus = () => page.locator('.menu')
-const labels = () => explorerMenu().locator('.menu-item .menu-label').allTextContents()
-const disabled = () => explorerMenu().locator('.menu-item[aria-disabled="true"] .menu-label').allTextContents()
+const openMenus = () => openMenusOf(page)
+const labels = () => menuItemNames(explorerMenu())
+const disabled = () => menuItemNames(explorerMenu(), { disabled: true })
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
-const commandBanner = () => page.locator('.global-error[role="alert"]')
-const warningBanner = () => page.locator('.global-error.warning[role="status"]')
-const tabs = () => page.locator('.query-tabs').getByRole('tab')
+const commandBanner = () => errorBanner(page)
+const warningBanner = () => warningBannerOf(page)
+const tabs = () => documentTabs(page).getByRole('tab')
 const clipboard = () => application.evaluate(({ clipboard }) => clipboard.readText())
 const stubCalls = method => application.evaluate((_electron, name) => globalThis.variaStub.calls.filter(call => call.method === name).map(call => call.params), method)
 const appData = ['server-a', 'Databases', 'AppData']
@@ -33,7 +34,7 @@ const tablesPath = [...appData, 'Tables']
 const ordersPath = [...tablesPath, 'dbo.Orders']
 
 async function connect(server) {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const connectDialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(connectDialog.getByText('Loading saved connections…')).toHaveCount(0)
   await connectDialog.getByLabel('Server Name', { exact: true }).fill(server)
@@ -53,7 +54,7 @@ async function closeMenu() {
 }
 /** Selects a row with a click on its label, which also focuses the tree. */
 async function select(...path) {
-  await (await revealExplorerRow(page, ...path)).locator('.oe-label').click()
+  await explorerLabel(await revealExplorerRow(page, ...path)).click()
   await expect(explorerTree(page)).toBeFocused()
 }
 
@@ -65,8 +66,23 @@ try {
   await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
   await application.evaluate(installActionsStub, actionsStubData())
   await connect('server-a')
+  // A row moves when a folder above it finishes loading, as Views does when Tables' rows arrive. Here Views' row moves
+  // between the press on its chevron and the release, once, so that click is lost: expanding the path must click again
+  // rather than wait for an expansion that never comes (a Windows run failed so).
+  await page.evaluate(({ twistie, label }) => {
+    const move = event => {
+      const row = event.target.closest?.('[role="treeitem"]')
+      if (!event.target.closest?.(twistie) || row?.querySelector(label)?.textContent !== 'Views') return
+      window.removeEventListener('pointerdown', move, true)
+      row.style.translate = `0 ${row.offsetHeight}px`
+      setTimeout(() => { row.style.translate = '' }, 50)
+      window.__variaMovedPress = true
+    }
+    window.addEventListener('pointerdown', move, true)
+  }, { twistie: part.explorerTwistie, label: part.explorerLabel })
   // Top down, so no row moves once its own folder has loaded: a right-click must land on the row it selects.
   for (const path of [['server-a', 'Databases', 'System Databases'], tablesPath, [...appData, 'Views'], [...appData, 'Programmability', 'Stored Procedures']]) await expandExplorerPath(page, ...path)
+  expect(await page.evaluate(() => window.__variaMovedPress)).toBe(true)
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
 
   // 1. SSMS's order: the query items, Script … as, Copy Name, then Rename and Delete, then Refresh; SQL Server's own
@@ -85,7 +101,7 @@ try {
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
-  await expect(page.locator('.explorer-rename')).toHaveCount(0)
+  await expect(renameBox(page)).toHaveCount(0)
   await page.keyboard.press('Delete')
   await expect(dialog()).toHaveCount(0)
   console.log('Object action checks: table, view, procedure and database menus in SSMS\'s order, Properties last, with master\'s Rename and Delete greyed and its keys inert.')
@@ -131,7 +147,7 @@ try {
   await page.keyboard.press('Enter')
   await expect(commandBanner()).toHaveText('Rename failed for dbo.Orders2: The name Taken is already in use in this schema.')
   await expect(box).toHaveCount(0)
-  await expect(renamed.locator('.oe-label')).toHaveText('dbo.Orders2')
+  await expect(explorerLabel(renamed)).toHaveText('dbo.Orders2')
   await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   console.log('Object action checks: F2 renames inline with the name selected, Escape sends nothing, Enter renames and reselects, and NAME_IN_USE reverts the label.')
 
@@ -141,13 +157,13 @@ try {
   await expect(box).toHaveValue('Orders2')
   await page.keyboard.type('Blocked')
   await page.keyboard.press('Enter')
-  const status = page.locator('.status-bar .status-scripting')
+  const status = statusSegment(page)
   await expect(status).toContainText('Renaming dbo.Orders2 to Blocked…')
   const blockedId = (await stubCalls('actions.execute')).at(-1).requestId
   await status.getByRole('button', { name: 'Stop rename', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(blockedId)
   await expect(status).not.toContainText('Renaming')
-  await expect(renamed.locator('.oe-label')).toHaveText('dbo.Orders2')
+  await expect(explorerLabel(renamed)).toHaveText('dbo.Orders2')
   await expect(commandBanner()).toHaveCount(0)
   console.log('Object action checks: a rename waiting on a lock shows in the status bar, and its Stop cancels it in the backend and keeps the name.')
 
@@ -159,11 +175,11 @@ try {
   await expect(page.getByRole('dialog')).toHaveCount(1)
   if (!mac) expect(await page.evaluate(() => window.variaDeleteKey)).toBe(true)
   await expect(dialog().getByRole('navigation', { name: 'Select a page' }).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
-  await expect(dialog().locator('.object-dialog-box dd')).toHaveText(['server-a', 'sa'])
-  await expect(dialog().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogConnection(dialog()).locator('dd')).toHaveText(['server-a', 'sa'])
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   const compactFrame = await dialog().boundingBox()
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['dbo.Lines', 'Table', 'dbo', '', ''])
-  await expect(dialog().locator('.object-dialog-warnings li')).toHaveText(['Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.'])
+  await expect(objectDialogWarnings(dialog())).toHaveText(['Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.'])
   // Script › Script Action to Clipboard puts the action's script there; the dialog stays open, as in SSMS.
   await dialog().getByRole('button', { name: 'Script options', exact: true }).click()
   await dialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
@@ -174,7 +190,7 @@ try {
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog().getByRole('alert')).toHaveText(dependentsMessage)
   await expect(dialog().getByRole('grid').locator('tbody td').nth(3)).toHaveText('Error')
-  await expect(dialog().locator('.object-dialog-progress')).toHaveText('Error')
+  await expect(objectDialogProgress(dialog())).toHaveText('Error')
   await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-dark.png') })
   await page.keyboard.press('Escape')
   await expect(dialog()).toHaveCount(0)
@@ -182,11 +198,11 @@ try {
   // OK deletes dbo.Orders2: the dialog closes, Tables reloads without it, and the tree has focus.
   await (await explorerRow(page, ...tablesPath, 'dbo.Orders2')).click({ button: 'right', force: true })
   await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
-  await expect(dialog().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
   await expect.poll(async () => (await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { name: 'Orders2' } })
-  await expect(page.locator('.explorer-tree .oe-label', { hasText: 'dbo.Orders2' })).toHaveCount(0)
+  await expect(explorerTree(page).locator(part.explorerLabel, { hasText: 'dbo.Orders2' })).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: Delete opens one Delete Object dialog, Script Action to Clipboard leaves it open, DEPENDENTS keeps it with the error, and OK deletes and reloads Tables.')
 
@@ -204,7 +220,7 @@ try {
   await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   await expect(properties()).toBeVisible()
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogProgress(properties())).toHaveText('Ready')
   // Database Properties uses the large frame, as SSMS's property dialogs are larger than Delete Object.
   const largeFrame = await properties().boundingBox()
   expect(largeFrame.width).toBeGreaterThan(compactFrame.width)
@@ -265,7 +281,7 @@ try {
   await recoveryTime.fill('120')
   await recoveryTime.press('Enter')
   await expect(recoveryTime).toHaveAttribute('data-changed', 'true')
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogProgress(properties())).toHaveText('Ready')
   expect((await stubCalls('actions.execute')).length).toBe(executes)
   await recoveryTime.fill('60')
   await expect(recoveryTime).not.toHaveAttribute('data-changed', 'true')
@@ -273,7 +289,7 @@ try {
   await application.evaluate(() => { globalThis.variaStub.answers.push(1) })
   await properties().getByRole('button', { name: 'OK', exact: true }).click()
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.prompts.length)).toBe(1)
-  await expect(properties().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogProgress(properties())).toHaveText('Ready')
   expect((await stubCalls('actions.execute')).length).toBe(executes)
   expect((await application.evaluate(() => globalThis.variaStub.prompts))[0]).toEqual({ title: 'Open Connections', buttons: ['Yes', 'No'], defaultId: 1, cancelId: 1,
     message: 'To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?' })
@@ -303,7 +319,7 @@ try {
     await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
   }).toPass()
   await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
-  await expect(dialog().locator('.object-dialog-progress')).toHaveText('Ready')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })).toBeChecked()
   await expect(dialog().getByLabel('Close existing connections', { exact: true })).not.toBeChecked()
   await page.screenshot({ path: resolve('artifacts', 'object-actions-database-dark.png') })
