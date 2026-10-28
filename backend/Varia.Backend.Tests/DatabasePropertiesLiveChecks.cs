@@ -90,7 +90,7 @@ internal static class DatabasePropertiesLiveChecks
 
         // SQL Server builds exactly Script's statement for every batch the catalogue can plan, with the database and the
         // login named by every hostile fragment at the sysname limit, and nothing runs.
-        var databases = (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar;
+        var databases = ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql));
         var mismatches = new List<string>();
         var total = 0;
         foreach (var fragment in InjectionMatrix.Fragments.Append("]").Append("'").Append(" ").Append("‮"))
@@ -102,7 +102,7 @@ internal static class DatabasePropertiesLiveChecks
                 if (!selected[index].SequenceEqual([DatabaseAlter.Statement(catalog, corpus[index])])) mismatches.Add(corpus[index].Template + " " + corpus[index].Key + " " + fragment[..1]);
             total += corpus.Count;
         }
-        check(mismatches.Count == 0 && total > 1000 && (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar == databases,
+        check(mismatches.Count == 0 && total > 1000 && ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql)) == databases,
             "SQL Server builds exactly Script's statement for all " + total + " Database Properties batches with hostile database and login names, and the dry run changes nothing: " + string.Join(", ", mismatches.Take(5)));
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")

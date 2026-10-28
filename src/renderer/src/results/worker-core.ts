@@ -1,11 +1,13 @@
 // The results worker's logic, free of `self` so it runs in Node tests (tests/results-worker.test.ts). It reads pages
 // from main through the results port, validates and caches them (decodePage), and answers the UI's windows and cells
-// with display text decoded only for the cells asked for.
-import type { BackendStatus, ResultsCloseResult, ResultsReadResult, WireKind } from '../../../shared/contracts'
-import type { PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
+// with display text decoded only for the cells asked for. It also relays live subscriptions between the page and main
+// without decoding anything, and grants each live event's bytes back only once the page says it applied the event.
+import type { BackendStatus, ResultsCloseResult, WireKind } from '../../../shared/contracts'
+import type { PortEndResult, PortMessage, PortRequest } from '../../../shared/ipc/port-messages'
 import { decodePage, PageFormatError, type PageView } from '../../../shared/ipc/wire/pages'
 import { CELL_ERROR, CELL_NULL, cellFlags, cellSlice, cellText, displayText, runSlice, textRun, type TextRun } from '../../../shared/ipc/wire/cells'
 import { limits as wire, type ErrorCode } from '../../../shared/ipc/wire/protocol'
+import type { LiveEnd, LiveEvent, LiveUpdateResult } from '../../../shared/live/schema'
 import { gridLimits as g } from '../grid/constants'
 import { displayColumns } from '../grid/measure'
 import { formatJson, formatXml } from './doc-format'
@@ -28,6 +30,11 @@ export const workerLimits: WorkerLimits = {
   windowCharacters: wire.worker.windowCharacters, documentCharacters: wire.cell.document, readCredit: wire.credit.workerDefault, readRows: 65_536
 }
 export const resultUnavailable = 'These results are no longer available because the SQL backend restarted.'
+export const liveLost = 'This live view ended because the SQL backend restarted.'
+const liveEnded = 'This live view has ended.'
+const notRunning = 'The SQL backend is not running. Use Restart SQL Backend from the command palette.'
+const portClosed = 'The results connection is not open. Reload the workbench.'
+const released = 'These results were closed. Execute the query again to see them.'
 
 interface CachedPage { readonly id: string; readonly result: string; readonly firstRow: number; readonly rowCount: number; readonly view: PageView; readonly bytes: number }
 interface Read { readonly rid: number; readonly key: ResultKey; readonly result: string; readonly wires: readonly WireKind[]; readonly firstRow: number; readonly end: number; readonly waiters: Set<Waiter>; cancelled: boolean }
@@ -42,6 +49,9 @@ interface Waiter {
   readonly reads: Set<Read>
   readonly settle: () => void
 }
+/** A live subscription main runs for the page: `id` is the page's, `rid` the port's. `unacked` is what main's events
+ *  took that the page has not acknowledged yet; nothing more is ever granted back. */
+interface Live { readonly id: number; readonly rid: number; readonly generation: number; unacked: number; cancelled: boolean }
 
 const resultOf = (key: ResultKey): string => `${key.generation}:${key.resultId}`
 
@@ -85,7 +95,16 @@ export class ResultsWorkerCore {
   private readonly waiters = new Map<number, Waiter>()
   private readonly prefetches = new Set<Waiter>()
   private readonly closes = new Map<number, number>()
+  private readonly lives = new Map<number, Live>()
+  private readonly liveIds = new Map<number, Live>()
+  /** Live updates in flight: the page's id and the generation they were sent to, by rid. */
+  private readonly updates = new Map<number, { readonly id: number; readonly generation: number }>()
+  /** Live requests that came while no generation was ready to take them (before main's first message on a port, or while
+   *  a backend starts or restarts): sent once one is, or failed when none runs. */
+  private deferred: (Extract<WorkerRequest, { type: 'live' | 'liveUpdate' }>)[] = []
   private port: PortLike | undefined
+  /** The backend's status as main last announced it on this port; undefined until its first message. */
+  private status: BackendStatus | undefined
   private generation = 0
   private cacheBytes = 0
   private nextRid = 1
@@ -98,9 +117,17 @@ export class ResultsWorkerCore {
   get cachedPages(): number { return this.cache.size }
   get cachedBytes(): number { return this.cacheBytes }
   get pendingReads(): number { return this.reads.size }
+  get liveStreams(): number { return this.lives.size }
 
-  /** The port main sent; a new one replaces the old (after a worker restart, the page reopens it). */
-  attach(port: PortLike): void { this.port = port }
+  /** The port main sent; a new one replaces the old (after a worker restart, the page reopens it). Main cancelled the old
+   *  port's live streams when it closed it, so they end here. */
+  attach(port: PortLike): void {
+    if (this.port && this.port !== port) {
+      this.endLives(() => true, 'PORT_CLOSED', portClosed)
+      this.status = undefined
+    }
+    this.port = port
+  }
 
   handle(request: WorkerRequest): void {
     switch (request.type) {
@@ -112,6 +139,10 @@ export class ResultsWorkerCore {
       case 'close': return this.close(request.id, request.generation, request.resultIds)
       case 'measure': return this.measure(request)
       case 'stats': this.post({ type: 'stats', id: request.id, bytes: this.cacheBytes, pages: this.cache.size }); return
+      case 'live': return this.live(request)
+      case 'liveUpdate': return this.liveUpdate(request)
+      case 'liveAck': return this.liveAck(request.id, request.bytes)
+      case 'forget': return this.forgetResults(request.generation, request.resultIds)
     }
   }
 
@@ -123,10 +154,19 @@ export class ResultsWorkerCore {
       case 'end': return message.ok ? this.ended(message.rid, message.result) : this.failed(message.rid, message.code, message.message)
       case 'query': this.post({ type: 'query', queryId: message.queryId, event: message.event }); return
       case 'memory': this.post({ type: 'memory', usedBytes: message.usedBytes, globalBytes: message.globalBytes, generation: message.generation, seq: message.seq }); return
+      case 'live': return this.liveEvent(message.rid, message.bytes, message.event)
     }
   }
 
   private send(request: PortRequest): void { this.port?.postMessage(request) }
+
+  /** The next port rid, skipping those still in use (a live stream may outlive 2^31 reads). */
+  private allocate(): number {
+    let rid = this.nextRid
+    while (this.reads.has(rid) || this.closes.has(rid) || this.lives.has(rid) || this.updates.has(rid)) rid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    this.nextRid = rid >= 2 ** 31 - 1 ? 1 : rid + 1
+    return rid
+  }
 
   private error(id: number | undefined, code: ErrorCode, message: string): void {
     if (id !== undefined) this.post({ type: 'error', id, code, message })
@@ -210,7 +250,7 @@ export class ResultsWorkerCore {
     const waiter: Waiter = { id, key, result, wires, first, count, reads: new Set(), settle: () => { this.forget(waiter); answer() } }
     const gaps = this.missing(result, first, first + count)
     if (gaps.length === 0) return waiter.settle()
-    if (!this.port) return this.error(id, 'PORT_CLOSED', 'The results connection is not open. Reload the workbench.')
+    if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
     if (id === undefined) this.prefetches.add(waiter)
     else this.waiters.set(id, waiter)
     // Rows a read in flight covers come with it, so they are not read (and sent through main) a second time.
@@ -243,8 +283,7 @@ export class ResultsWorkerCore {
   }
 
   private read(key: ResultKey, wires: readonly WireKind[], firstRow: number, end: number): Read {
-    const rid = this.nextRid
-    this.nextRid = this.nextRid >= 2 ** 31 - 1 ? 1 : this.nextRid + 1
+    const rid = this.allocate()
     const read: Read = { rid, key, result: resultOf(key), wires, firstRow, end, waiters: new Set(), cancelled: false }
     this.reads.set(rid, read)
     this.send({ t: 'read', rid, generation: key.generation, resultId: key.resultId, firstRow, maxRows: end - firstRow, credit: this.limits.readCredit })
@@ -253,6 +292,20 @@ export class ResultsWorkerCore {
 
   /** The UI no longer needs a request; reads nobody else waits for are cancelled. */
   private cancel(id: number): void {
+    const live = this.liveIds.get(id)
+    if (live) {
+      // The stream ends with main's answer (cancelled), which also says what became of its results.
+      if (!live.cancelled) this.send({ t: 'cancel', rid: live.rid })
+      live.cancelled = true
+      return
+    }
+    const waiting = this.deferred.findIndex(request => request.type === 'live' && request.id === id)
+    if (waiting >= 0) {
+      // Never sent: it ends as cancelled at once, having run nothing.
+      this.deferred.splice(waiting, 1)
+      this.post({ type: 'liveEnd', id, result: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+      return
+    }
     const waiter = this.waiters.get(id)
     if (!waiter) return
     const reads = [...waiter.reads]
@@ -268,9 +321,8 @@ export class ResultsWorkerCore {
 
   private close(id: number, generation: number, resultIds: readonly number[]): void {
     for (const resultId of resultIds) this.drop(resultOf({ generation, resultId }))
-    if (!this.port) return this.error(id, 'PORT_CLOSED', 'The results connection is not open. Reload the workbench.')
-    const rid = this.nextRid
-    this.nextRid = this.nextRid >= 2 ** 31 - 1 ? 1 : this.nextRid + 1
+    if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
+    const rid = this.allocate()
     this.closes.set(rid, id)
     this.send({ t: 'close', rid, generation, resultIds: [...resultIds] })
   }
@@ -287,6 +339,82 @@ export class ResultsWorkerCore {
       for (const result of [...this.indexes.keys()]) if (!result.startsWith(generation + ':')) this.drop(result)
     }
     this.post({ type: 'backend', generation, status })
+    // Main ends these with BACKEND_LOST; this covers an end that never comes (the port's answer raced the loss). The page
+    // hears of the new generation first, so the streams' results are already lost there.
+    this.endLives(live => live.generation !== generation, 'RESULT_UNAVAILABLE', liveLost)
+    this.status = status
+    if (!this.holding() && this.deferred.length > 0) {
+      const deferred = this.deferred
+      this.deferred = []
+      for (const request of deferred) this.handle(request)
+    }
+  }
+
+  /** Main takes a stream only for a generation that is ready (an unresponsive one still is), so until one is, live requests
+   *  wait rather than fail as if a backend had been lost; with none running they fail. */
+  private holding(): boolean { return this.status === undefined || this.status === 'starting' || this.status === 'restarting' }
+
+  private live(request: Extract<WorkerRequest, { type: 'live' }>): void {
+    const { id, params } = request
+    if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
+    if (this.holding()) { this.deferred.push(request); return }
+    if (this.generation === 0) return this.error(id, 'BACKEND_UNAVAILABLE', notRunning)
+    if (this.liveIds.has(id)) return this.error(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
+    const live: Live = { id, rid: this.allocate(), generation: this.generation, unacked: 0, cancelled: false }
+    this.lives.set(live.rid, live)
+    this.liveIds.set(id, live)
+    this.send({ t: 'live', rid: live.rid, generation: live.generation, params })
+  }
+
+  private liveUpdate(request: Extract<WorkerRequest, { type: 'liveUpdate' }>): void {
+    const { id, params } = request
+    if (!this.port) return this.error(id, 'PORT_CLOSED', portClosed)
+    if (this.holding() && this.deferred.some(item => item.type === 'live' && item.id === request.live)) { this.deferred.push(request); return }
+    const live = this.liveIds.get(request.live)
+    if (!live || live.cancelled) return this.error(id, 'NOT_FOUND', liveEnded)
+    const rid = this.allocate()
+    this.updates.set(rid, { id, generation: live.generation })
+    this.send({ t: 'liveUpdate', rid, generation: live.generation, params })
+  }
+
+  /** Main sends nothing more for a subscription until its last event is acknowledged, so only bytes its events took
+   *  are granted back: a page that acknowledges more, twice, or for a stream that ended changes nothing. */
+  private liveAck(id: number, bytes: number): void {
+    const live = this.liveIds.get(id)
+    if (!live || !Number.isInteger(bytes) || bytes < 1 || bytes > live.unacked) return
+    live.unacked -= bytes
+    this.send({ t: 'credit', rid: live.rid, bytes })
+  }
+
+  /** Relayed as main validated it; descriptors and numbers only, so nothing is decoded here. */
+  private liveEvent(rid: number, bytes: number, event: LiveEvent): void {
+    const live = this.lives.get(rid)
+    if (!live) return
+    live.unacked += bytes
+    this.post({ type: 'live', id: live.id, bytes, event })
+  }
+
+  /** Ends the live streams and updates `which` selects with an error; their late answers from main are then dropped. */
+  private endLives(which: (live: { generation: number }) => boolean, code: ErrorCode, message: string): void {
+    for (const live of [...this.lives.values()]) {
+      if (!which(live)) continue
+      this.lives.delete(live.rid)
+      this.liveIds.delete(live.id)
+      this.error(live.id, code, message)
+    }
+    for (const [rid, update] of [...this.updates]) {
+      if (!which(update)) continue
+      this.updates.delete(rid)
+      this.error(update.id, code, message)
+    }
+  }
+
+  /** Results the backend already released: their pages go, and reads still bringing rows of them end, since main would
+   *  refuse to read them again. No results.close is sent. */
+  private forgetResults(generation: number, resultIds: readonly number[]): void {
+    const results = new Set(resultIds.map(resultId => resultOf({ generation, resultId })))
+    for (const read of [...this.reads.values()]) if (!read.cancelled && results.has(read.result)) this.abandonRead(read, 'RESULT_RELEASED', released)
+    for (const result of results) this.drop(result)
   }
 
   private page(rid: number, body: ArrayBuffer): void {
@@ -338,7 +466,20 @@ export class ResultsWorkerCore {
     }
   }
 
-  private ended(rid: number, result: ResultsReadResult | ResultsCloseResult): void {
+  private ended(rid: number, result: PortEndResult): void {
+    const live = this.lives.get(rid)
+    if (live) {
+      this.lives.delete(rid)
+      this.liveIds.delete(live.id)
+      this.post({ type: 'liveEnd', id: live.id, result: result as LiveEnd })
+      return
+    }
+    const update = this.updates.get(rid)
+    if (update) {
+      this.updates.delete(rid)
+      this.post({ type: 'liveUpdated', id: update.id, result: result as LiveUpdateResult })
+      return
+    }
     const close = this.closes.get(rid)
     if (close !== undefined) {
       this.closes.delete(rid)
@@ -356,6 +497,17 @@ export class ResultsWorkerCore {
   }
 
   private failed(rid: number, code: ErrorCode, message: string): void {
+    const live = this.lives.get(rid)
+    if (live) {
+      this.lives.delete(rid)
+      this.liveIds.delete(live.id)
+      return this.error(live.id, code, message)
+    }
+    const update = this.updates.get(rid)
+    if (update) {
+      this.updates.delete(rid)
+      return this.error(update.id, code, message)
+    }
     const close = this.closes.get(rid)
     if (close !== undefined) {
       this.closes.delete(rid)

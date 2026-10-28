@@ -6,7 +6,8 @@ import { anyResultGrid, backendBanner, errorMessages, explorerLabel, gridCell as
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
-// and reconnected; and the UI's responsiveness while a million stored rows are read through the results worker.
+// and reconnected; the UI's responsiveness while a million stored rows are read through the results worker; and a live
+// subscription relayed through that worker, acknowledged by the page.
 // Main honours VARIA_TEST_BACKEND, VARIA_BACKEND_LIVENESS_MS, __variaTest, and test mode only in smoke runs.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -155,6 +156,42 @@ try {
   expect(responsiveness.frames >= responsiveness.elapsed / 100 ? responsiveness.frameGap : responsiveness.timerGap).toBeLessThanOrEqual(linux ? 300 : 500)
   console.log('Responsiveness passed: a million synthetic rows read through the results worker without blocking the UI.')
 
+  // 7b. A live subscription through the real results worker and port to the backend's debug.synthetic source: each tick's
+  // table opens as a handle, a tick the page does not acknowledge holds the source, retired revisions are released, and
+  // cancelling releases the rest.
+  step = 'live relay'
+  const relayed = await page.evaluate(async () => {
+    const client = window.__variaResults, ticks = [], handles = []
+    let held
+    const params = {
+      subscriptionId: '3f0e8c52-6a1d-4c8e-9b7a-2d5f6e7a8b9c', connectionId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', source: 'debug.synthetic',
+      probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }, { probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 50, rows: 5 }
+    }
+    const stream = client.live(params, (event, bytes) => {
+      if (event.type === 'live.tick') {
+        ticks.push(event)
+        for (const sample of event.samples) for (const table of sample.tables ?? []) handles.push(client.open(table.descriptor))
+      }
+      // The fourth tick is held: the source must sample nothing until it is acknowledged.
+      if (ticks.length === 4 && held === undefined) { held = bytes; return }
+      stream.ack(bytes)
+    })
+    const until = async test => { const end = performance.now() + 15000; while (!test()) { if (performance.now() > end) throw new Error(`Live relay timed out after ${ticks.length} ticks.`); await new Promise(resolve => setTimeout(resolve, 20)) } }
+    await until(() => held !== undefined)
+    const heldAt = ticks.length
+    await new Promise(resolve => setTimeout(resolve, 600))
+    const whileHeld = ticks.length - heldAt
+    const newest = await handles.at(-1).getWindow(0, 10)
+    stream.ack(held)
+    await until(() => ticks.length >= heldAt + 2)
+    const firstState = handles[0].getSnapshot().state
+    stream.cancel()
+    const end = await stream.done
+    return { whileHeld, rows: newest.count, columns: newest.colEnd, firstState, end: end.ok ? end.value.ended : end.code, released: handles.every(handle => handle.getSnapshot().state === 'released'), streams: client.liveStreams }
+  })
+  expect(relayed).toEqual({ whileHeld: 0, rows: 5, columns: 3, firstState: 'released', end: 'cancelled', released: true, streams: 0 })
+  console.log('Live relay passed: ticks from the backend reach the page through the worker, wait for their acknowledgement, and release their tables.')
+
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
   await page.reload()
@@ -189,8 +226,11 @@ try {
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
-    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
-    if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    // Windows Authentication has no Password field; SQL Server Authentication's starts empty.
+    if (liveUser) {
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     await expect(lostServerRows(page)).toHaveCount(0)

@@ -264,6 +264,16 @@ export const commandCatalog = {
       { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
+  // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
+  // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
+  'connection.environment': {
+    title: 'Set Connection Environment…', category: 'Connection', icon: 'tag', keywords: ['environment', 'production', 'prod', 'staging', 'test', 'development', 'label', 'tag'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    menus: [
+      { menu: 'query.connection', group: '2_change', order: 2, title: 'Environment…' },
+      { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
+  },
   // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
   'connection.reconnect': {
     title: 'Reconnect…', category: 'Connection', icon: 'plug', keywords: ['lost', 'restart'], precondition: 'hasLostConnection && backendReady',
@@ -489,6 +499,15 @@ export const commandCatalog = {
   'view.toggleFullScreen': {
     title: 'Toggle Full Screen', category: 'View', icon: 'screen-full', role: 'togglefullscreen', keybindings: [{ win: 'f11', linux: 'f11', mac: 'ctrl+meta+f', native: true }],
     menus: [{ menu: 'view', group: '4_zoom', order: 4, title: 'Full Screen', mnemonic: 'f' }]
+  },
+  // Toasts never take focus by themselves: this moves it to the newest, where Tab reaches its buttons and Escape dismisses it.
+  'notifications.focus': {
+    title: 'Focus Notifications', category: 'View', icon: 'bell', keywords: ['toast', 'notification', 'message'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
+  },
+  'notifications.clearAll': {
+    title: 'Clear All Notifications', category: 'View', icon: 'clear-all', keywords: ['toast', 'notification', 'dismiss'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
   },
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
   'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },

@@ -1,0 +1,896 @@
+{
+  "comment": "Shape of the SSIS catalog (SSISDB) per SQL Server band. Written by backend/Varia.Backend.Tests with VARIA_TEST_SQL_SCRATCH=1, VARIA_TEST_SSIS=1 and VARIA_UPDATE_SSIS_MANIFEST=1; tests/fixtures/ssisdb/schema.sql is generated from it (npx vitest run tests/ssisdb-fixtures.test.ts -u). Do not edit by hand.",
+  "catalogs": [
+    {
+      "band": 17,
+      "source": "backup",
+      "productVersion": "17.0.1000.7",
+      "schemaVersion": "8",
+      "schemaBuild": "17.0.1000.7",
+      "database": {"compatibilityLevel":170,"readCommittedSnapshot":false,"collation":"SQL_Latin1_General_CP1_CI_AS"},
+      "properties": {
+        "DEFAULT_EXECUTION_MODE": "0",
+        "ENCRYPTION_ALGORITHM": "AES_256",
+        "MAX_PROJECT_VERSIONS": "10",
+        "OPERATION_CLEANUP_ENABLED": "TRUE",
+        "RETENTION_WINDOW": "365",
+        "SCHEMA_BUILD": "17.0.1000.7",
+        "SCHEMA_VERSION": "8",
+        "SERVER_CUSTOMIZED_LOGGING_LEVEL": "",
+        "SERVER_LOGGING_LEVEL": "1",
+        "SERVER_OPERATION_ENCRYPTION_LEVEL": "2",
+        "VERSION_CLEANUP_ENABLED": "TRUE"
+      },
+      "views": {
+        "alwayson_replicas": [
+          {"name":"server_name","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":false},
+          {"name":"state","type":"tinyint","maxLength":1,"precision":3,"scale":0,"nullable":false}
+        ],
+        "catalog_properties": [
+          {"name":"property_name","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":false},
+          {"name":"property_value","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":false}
+        ],
+        "customized_logging_levels": [
+          {"name":"level_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"profile_value","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"events_value","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"created_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false}
+        ],
+        "effective_object_permissions": [
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"permission_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true}
+        ],
+        "environment_references": [
+          {"name":"reference_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"project_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"reference_type","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"environment_folder_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"environment_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"validation_status","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"last_validation_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "environment_variables": [
+          {"name":"variable_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"environment_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"type","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"sensitive","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true}
+        ],
+        "environments": [
+          {"name":"environment_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"folder_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"created_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false}
+        ],
+        "event_message_context": [
+          {"name":"context_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"event_message_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"context_depth","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"package_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"context_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"context_source_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"context_source_id","type":"nvarchar","maxLength":76,"precision":0,"scale":0,"nullable":true},
+          {"name":"property_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"property_value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true},
+          {"name":"event_message_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true}
+        ],
+        "event_messages": [
+          {"name":"event_message_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"operation_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"message_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"message_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"message_source_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"message","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"extended_info_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"package_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":true},
+          {"name":"event_name","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"message_source_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"message_source_id","type":"nvarchar","maxLength":76,"precision":0,"scale":0,"nullable":true},
+          {"name":"subcomponent_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"package_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"execution_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"threadID","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"message_code","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"event_message_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true}
+        ],
+        "executable_statistics": [
+          {"name":"statistics_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"executable_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"execution_duration","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"execution_result","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"execution_value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true}
+        ],
+        "executables": [
+          {"name":"executable_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"executable_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"executable_guid","type":"nvarchar","maxLength":76,"precision":0,"scale":0,"nullable":true},
+          {"name":"package_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"package_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true}
+        ],
+        "execution_component_phases": [
+          {"name":"phase_stats_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"package_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"task_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":false},
+          {"name":"subcomponent_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"phase","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"execution_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true}
+        ],
+        "execution_data_statistics": [
+          {"name":"data_stats_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"package_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"task_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"dataflow_path_id_string","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"dataflow_path_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"source_component_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"destination_component_name","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"rows_sent","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"execution_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true}
+        ],
+        "execution_data_taps": [
+          {"name":"data_tap_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"package_path","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"dataflow_path_id_string","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true},
+          {"name":"dataflow_task_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true},
+          {"name":"max_rows","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"filename","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":true}
+        ],
+        "execution_parameter_values": [
+          {"name":"execution_parameter_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"parameter_data_type","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"parameter_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"parameter_value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true},
+          {"name":"sensitive","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"required","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"value_set","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"runtime_override","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false}
+        ],
+        "execution_property_override_values": [
+          {"name":"property_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"property_path","type":"nvarchar","maxLength":8000,"precision":0,"scale":0,"nullable":false},
+          {"name":"property_value","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"sensitive","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false}
+        ],
+        "executions": [
+          {"name":"execution_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"folder_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"project_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"package_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"reference_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"reference_type","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":true},
+          {"name":"environment_folder_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"environment_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"project_lsn","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"executed_as_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"executed_as_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"use32bitruntime","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"operation_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"status","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"caller_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"caller_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"process_id","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"stopped_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":true},
+          {"name":"stopped_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"dump_id","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true},
+          {"name":"server_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"machine_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"worker_agent_id","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true},
+          {"name":"total_physical_memory_kb","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"available_physical_memory_kb","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"total_page_file_kb","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"available_page_file_kb","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"cpu_count","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"executed_count","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true}
+        ],
+        "explicit_object_permissions": [
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"principal_id","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"permission_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"is_deny","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"grantor_id","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true}
+        ],
+        "extended_operation_info": [
+          {"name":"info_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"operation_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"object_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"reference_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"status","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "folders": [
+          {"name":"folder_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"created_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false}
+        ],
+        "master_properties": [
+          {"name":"property_name","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":false},
+          {"name":"property_value","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":false}
+        ],
+        "object_parameters": [
+          {"name":"parameter_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"project_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"object_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"parameter_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"data_type","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"required","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"sensitive","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"design_default_value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true},
+          {"name":"default_value","type":"sql_variant","maxLength":8016,"precision":0,"scale":0,"nullable":true},
+          {"name":"value_type","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"value_set","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"referenced_variable_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"validation_status","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"last_validation_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "object_versions": [
+          {"name":"object_version_lsn","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"object_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"created_by","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"restored_by","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"last_restored_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "operation_messages": [
+          {"name":"operation_message_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"operation_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"message_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"message_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"message_source_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"message","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"extended_info_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true}
+        ],
+        "operations": [
+          {"name":"operation_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"operation_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"object_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":true},
+          {"name":"status","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"caller_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"caller_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"process_id","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"stopped_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":true},
+          {"name":"stopped_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"server_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"machine_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"operation_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true}
+        ],
+        "packages": [
+          {"name":"package_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":false},
+          {"name":"package_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"package_format_version","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"version_major","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"version_minor","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"version_build","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"version_comments","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"version_guid","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":false},
+          {"name":"project_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"entry_point","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"validation_status","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"last_validation_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "projects": [
+          {"name":"project_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"folder_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"description","type":"nvarchar","maxLength":2048,"precision":0,"scale":0,"nullable":true},
+          {"name":"project_format_version","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"deployed_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"deployed_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"last_deployed_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"created_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false},
+          {"name":"object_version_lsn","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"validation_status","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"last_validation_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true}
+        ],
+        "validations": [
+          {"name":"validation_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":false},
+          {"name":"environment_scope","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"validate_type","type":"char","maxLength":1,"precision":0,"scale":0,"nullable":false},
+          {"name":"folder_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"project_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"project_lsn","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"use32bitruntime","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":true},
+          {"name":"reference_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"operation_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":false},
+          {"name":"object_name","type":"nvarchar","maxLength":520,"precision":0,"scale":0,"nullable":true},
+          {"name":"object_type","type":"smallint","maxLength":2,"precision":5,"scale":0,"nullable":true},
+          {"name":"object_id","type":"bigint","maxLength":8,"precision":19,"scale":0,"nullable":true},
+          {"name":"start_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"end_time","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":true},
+          {"name":"status","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":false},
+          {"name":"caller_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":false},
+          {"name":"caller_name","type":"sysname","maxLength":256,"precision":0,"scale":0,"nullable":false},
+          {"name":"process_id","type":"int","maxLength":4,"precision":10,"scale":0,"nullable":true},
+          {"name":"stopped_by_sid","type":"varbinary","maxLength":85,"precision":0,"scale":0,"nullable":true},
+          {"name":"stopped_by_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"dump_id","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":true},
+          {"name":"server_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true},
+          {"name":"machine_name","type":"nvarchar","maxLength":256,"precision":0,"scale":0,"nullable":true}
+        ],
+        "worker_agent_perfcounter": [
+          {"name":"WorkerAgentId","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":false},
+          {"name":"PerfCounterName","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":false},
+          {"name":"PerfCounterValue","type":"float","maxLength":8,"precision":53,"scale":0,"nullable":false},
+          {"name":"TimeStamp","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false}
+        ],
+        "worker_agents": [
+          {"name":"WorkerAgentId","type":"uniqueidentifier","maxLength":16,"precision":0,"scale":0,"nullable":false},
+          {"name":"IsEnabled","type":"bit","maxLength":1,"precision":1,"scale":0,"nullable":false},
+          {"name":"DisplayName","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":true},
+          {"name":"Description","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"MachineName","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":true},
+          {"name":"Tags","type":"nvarchar","maxLength":-1,"precision":0,"scale":0,"nullable":true},
+          {"name":"UserAccount","type":"nvarchar","maxLength":512,"precision":0,"scale":0,"nullable":true},
+          {"name":"LastOnlineTime","type":"datetimeoffset","maxLength":10,"precision":34,"scale":7,"nullable":false}
+        ]
+      },
+      "procedures": {
+        "add_data_tap": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@task_package_path","type":"nvarchar","maxLength":-1,"output":false},
+          {"name":"@dataflow_path_id_string","type":"nvarchar","maxLength":8000,"output":false},
+          {"name":"@data_filename","type":"nvarchar","maxLength":8000,"output":false},
+          {"name":"@max_rows","type":"int","maxLength":4,"output":false,"default":"NULL"},
+          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "add_data_tap_by_guid": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@dataflow_task_guid","type":"uniqueidentifier","maxLength":16,"output":false},
+          {"name":"@dataflow_path_id_string","type":"nvarchar","maxLength":8000,"output":false},
+          {"name":"@data_filename","type":"nvarchar","maxLength":8000,"output":false},
+          {"name":"@max_rows","type":"int","maxLength":4,"output":false,"default":"NULL"},
+          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "add_execution_worker": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@workeragent_id","type":"uniqueidentifier","maxLength":16,"output":false}
+        ],
+        "check_schema_version": [
+          {"name":"@use32bitruntime","type":"smallint","maxLength":2,"output":false}
+        ],
+        "clear_object_parameter_value": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false,"default":"NULL"},
+          {"name":"@parameter_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "configure_catalog": [
+          {"name":"@property_name","type":"nvarchar","maxLength":510,"output":false},
+          {"name":"@property_value","type":"nvarchar","maxLength":510,"output":false}
+        ],
+        "create_customized_logging_level": [
+          {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@level_description","type":"nvarchar","maxLength":-1,"output":false,"default":"NULL"},
+          {"name":"@profile_value","type":"bigint","maxLength":8,"output":false,"default":"0"},
+          {"name":"@events_value","type":"bigint","maxLength":8,"output":false,"default":"0"},
+          {"name":"@level_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "create_environment": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_description","type":"nvarchar","maxLength":2048,"output":false,"default":"NULL"}
+        ],
+        "create_environment_reference": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@reference_type","type":"char","maxLength":1,"output":false},
+          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false,"default":"NULL"},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":true}
+        ],
+        "create_environment_variable": [
+          {"name":"@folder_name","type":"sysname","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@variable_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@data_type","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@sensitive","type":"bit","maxLength":1,"output":false},
+          {"name":"@value","type":"sql_variant","maxLength":8016,"output":false},
+          {"name":"@description","type":"nvarchar","maxLength":2048,"output":false,"default":"NULL"}
+        ],
+        "create_execution": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"},
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@runinscaleout","type":"bit","maxLength":1,"output":false,"default":"NULL"},
+          {"name":"@useanyworker","type":"bit","maxLength":1,"output":false,"default":"1"},
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":true}
+        ],
+        "create_execution_dump": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false}
+        ],
+        "create_folder": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@folder_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "delete_customized_logging_level": [
+          {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "delete_environment": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "delete_environment_reference": [
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false}
+        ],
+        "delete_environment_variable": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@variable_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "delete_folder": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "delete_project": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "delete_worker_agent": [
+          {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false}
+        ],
+        "deny_permission": [
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@object_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@principal_id","type":"int","maxLength":4,"output":false},
+          {"name":"@permission_type","type":"smallint","maxLength":2,"output":false}
+        ],
+        "deploy_packages": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@packages_table","type":"Package_Table_Type","maxLength":-1,"output":false},
+          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "deploy_project": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_stream","type":"varbinary","maxLength":-1,"output":false},
+          {"name":"@operation_id","type":"bigint","maxLength":8,"output":true,"default":"NULL"}
+        ],
+        "disable_worker_agent": [
+          {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false}
+        ],
+        "enable_scaleout": [],
+        "enable_worker_agent": [
+          {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false}
+        ],
+        "get_parameter_values": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
+        ],
+        "get_project": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "grant_permission": [
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@object_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@principal_id","type":"int","maxLength":4,"output":false},
+          {"name":"@permission_type","type":"smallint","maxLength":2,"output":false}
+        ],
+        "move_environment": [
+          {"name":"@source_folder","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@destination_folder","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "move_project": [
+          {"name":"@source_folder","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@destination_folder","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "remove_data_tap": [
+          {"name":"@data_tap_id","type":"bigint","maxLength":8,"output":false}
+        ],
+        "rename_customized_logging_level": [
+          {"name":"@old_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@new_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "rename_environment": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@new_environment_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "rename_folder": [
+          {"name":"@old_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@new_name","type":"nvarchar","maxLength":256,"output":false}
+        ],
+        "restore_project": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@object_version_lsn","type":"bigint","maxLength":8,"output":false}
+        ],
+        "revoke_permission": [
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@object_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@principal_id","type":"int","maxLength":4,"output":false},
+          {"name":"@permission_type","type":"smallint","maxLength":2,"output":false}
+        ],
+        "set_customized_logging_level_description": [
+          {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@level_description","type":"nvarchar","maxLength":-1,"output":false}
+        ],
+        "set_customized_logging_level_value": [
+          {"name":"@level_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_value","type":"bigint","maxLength":8,"output":false}
+        ],
+        "set_environment_property": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_value","type":"nvarchar","maxLength":2048,"output":false}
+        ],
+        "set_environment_reference_type": [
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@reference_type","type":"char","maxLength":1,"output":false},
+          {"name":"@environment_folder_name","type":"nvarchar","maxLength":256,"output":false,"default":"NULL"}
+        ],
+        "set_environment_variable_property": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@variable_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@property_value","type":"nvarchar","maxLength":8000,"output":false}
+        ],
+        "set_environment_variable_protection": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@variable_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@sensitive","type":"bit","maxLength":1,"output":false}
+        ],
+        "set_environment_variable_value": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@environment_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@variable_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@value","type":"sql_variant","maxLength":8016,"output":false}
+        ],
+        "set_execution_parameter_value": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@parameter_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@parameter_value","type":"sql_variant","maxLength":8016,"output":false}
+        ],
+        "set_execution_property_override_value": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@property_path","type":"nvarchar","maxLength":8000,"output":false},
+          {"name":"@property_value","type":"nvarchar","maxLength":-1,"output":false},
+          {"name":"@sensitive","type":"bit","maxLength":1,"output":false}
+        ],
+        "set_folder_description": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@folder_description","type":"nvarchar","maxLength":-1,"output":false}
+        ],
+        "set_object_parameter_value": [
+          {"name":"@object_type","type":"smallint","maxLength":2,"output":false},
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@parameter_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@parameter_value","type":"sql_variant","maxLength":8016,"output":false},
+          {"name":"@object_name","type":"nvarchar","maxLength":520,"output":false,"default":"NULL"},
+          {"name":"@value_type","type":"char","maxLength":1,"output":false,"default":"'V'"}
+        ],
+        "set_worker_agent_property": [
+          {"name":"@WorkerAgentId","type":"uniqueidentifier","maxLength":16,"output":false},
+          {"name":"@PropertyName","type":"nvarchar","maxLength":512,"output":false},
+          {"name":"@PropertyValue","type":"nvarchar","maxLength":-1,"output":false}
+        ],
+        "start_execution": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false},
+          {"name":"@retry_count","type":"int","maxLength":4,"output":false,"default":"0"}
+        ],
+        "startup": [],
+        "stop_operation": [
+          {"name":"@operation_id","type":"bigint","maxLength":8,"output":false}
+        ],
+        "update_logdb_info": [
+          {"name":"@server_name","type":"nvarchar","maxLength":-1,"output":false},
+          {"name":"@connection_string","type":"nvarchar","maxLength":-1,"output":false}
+        ],
+        "update_master_address": [
+          {"name":"@MasterAddress","type":"nvarchar","maxLength":512,"output":false}
+        ],
+        "validate_package": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@package_name","type":"nvarchar","maxLength":520,"output":false},
+          {"name":"@validation_id","type":"bigint","maxLength":8,"output":true},
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@environment_scope","type":"char","maxLength":1,"output":false,"default":"'D'"},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
+        ],
+        "validate_project": [
+          {"name":"@folder_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@project_name","type":"nvarchar","maxLength":256,"output":false},
+          {"name":"@validate_type","type":"char","maxLength":1,"output":false,"default":"'F'"},
+          {"name":"@validation_id","type":"bigint","maxLength":8,"output":true},
+          {"name":"@use32bitruntime","type":"bit","maxLength":1,"output":false,"default":"0"},
+          {"name":"@environment_scope","type":"char","maxLength":1,"output":false,"default":"'D'"},
+          {"name":"@reference_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
+        ]
+      },
+      "functions": {
+        "dm_execution_performance_counters": [
+          {"name":"@execution_id","type":"bigint","maxLength":8,"output":false,"default":"NULL"}
+        ],
+        "get_operation_log_size": [
+          {"name":"","type":"bigint","maxLength":8,"output":true}
+        ],
+        "get_version_log_size": [
+          {"name":"","type":"bigint","maxLength":8,"output":true}
+        ]
+      },
+      "identities": [
+        "internal.catalog_encryption_keys.key_id",
+        "internal.customized_logging_levels.level_id",
+        "internal.data_type_mapping.mapping_id",
+        "internal.environment_permissions.id",
+        "internal.environment_references.reference_id",
+        "internal.environment_variables.variable_id",
+        "internal.environments.environment_id",
+        "internal.event_message_context.context_id",
+        "internal.event_message_context_scaleout.context_id",
+        "internal.executable_statistics.statistics_id",
+        "internal.executables.executable_id",
+        "internal.execution_component_phases.phase_stats_id",
+        "internal.execution_data_statistics.data_stats_id",
+        "internal.execution_data_taps.data_tap_id",
+        "internal.execution_parameter_values.execution_parameter_id",
+        "internal.execution_property_override_values.property_id",
+        "internal.extended_operation_info.info_id",
+        "internal.folder_permissions.id",
+        "internal.folders.folder_id",
+        "internal.object_parameters.parameter_id",
+        "internal.object_versions.object_version_lsn",
+        "internal.operation_messages.operation_message_id",
+        "internal.operation_os_sys_info.info_id",
+        "internal.operation_permissions.id",
+        "internal.operations.operation_id",
+        "internal.packages.package_id",
+        "internal.project_permissions.id",
+        "internal.projects.project_id"
+      ],
+      "indexes": [
+        {"table":"internal.alwayson_support_state","name":"PK__alwayson__37F8F951264544E2","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["server_name"]},
+        {"table":"internal.catalog_encryption_keys","name":"PK_Encryption_Keys","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["key_id"]},
+        {"table":"internal.catalog_properties","name":"PK_ISServer_Property","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["property_name"]},
+        {"table":"internal.customized_logging_levels","name":"PK_Levels","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["level_id"]},
+        {"table":"internal.customized_logging_levels","name":"Unique_level_name","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["name"]},
+        {"table":"internal.data_type_mapping","name":"PK_Data_Type_Mapping","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["mapping_id"]},
+        {"table":"internal.data_type_mapping","name":"Unique_data_type_mapping","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["ssis_data_type","sql_data_type"]},
+        {"table":"internal.environment_permissions","name":"PK_Environment_Permissions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["id"]},
+        {"table":"internal.environment_permissions","name":"Unique_EnvironmentPermissions","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["object_id","permission_type","sid"]},
+        {"table":"internal.environment_references","name":"PK_environment_references","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["reference_id"]},
+        {"table":"internal.environment_variables","name":"PK_Environment_Variables","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["variable_id"]},
+        {"table":"internal.environment_variables","name":"Unique_Environment_Variable","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["environment_id","name"]},
+        {"table":"internal.environments","name":"PK_Environments","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["environment_id"]},
+        {"table":"internal.environments","name":"Unique_Folder_Environment","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["environment_name","folder_id"]},
+        {"table":"internal.event_message_context","name":"IX_EventMessageContext_EventMessageId","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["event_message_id"]},
+        {"table":"internal.event_message_context","name":"IX_EventMessageContext_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id","event_message_id"]},
+        {"table":"internal.event_message_context","name":"PK_Event_Message_Context","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["context_id"]},
+        {"table":"internal.event_message_context_scaleout","name":"IX_EventMessageContextScaleout_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id","event_message_guid"]},
+        {"table":"internal.event_messages","name":"IX_EventMessages_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id"]},
+        {"table":"internal.event_messages","name":"PK_Event_Messages","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["event_message_id"]},
+        {"table":"internal.event_messages_scaleout","name":"IX_EventMessagesScaleout_Guid","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["event_message_guid"]},
+        {"table":"internal.event_messages_scaleout","name":"IX_EventMessagesScaleout_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id"]},
+        {"table":"internal.executable_statistics","name":"IX_ExecutableStatistics_Execution_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["execution_id"]},
+        {"table":"internal.executable_statistics","name":"PK_Executable_statistics","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["statistics_id"]},
+        {"table":"internal.executables","name":"PK_Executables","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["executable_id"]},
+        {"table":"internal.execution_component_phases","name":"PK_Execution_component_phases","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["phase_stats_id"]},
+        {"table":"internal.execution_component_phases","name":"Unique_sequence_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["execution_id","sequence_id"]},
+        {"table":"internal.execution_data_statistics","name":"PK_Execution_data_statistics","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["data_stats_id"]},
+        {"table":"internal.execution_data_taps","name":"PK_Execution_data_taps","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["data_tap_id"]},
+        {"table":"internal.execution_parameter_values","name":"IX_ExecutionParameterValue_ExecutionId","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["execution_id"]},
+        {"table":"internal.execution_parameter_values","name":"IX_ExecutionParameterValue_ExecutionIdObjectType","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["execution_id","object_type"]},
+        {"table":"internal.execution_parameter_values","name":"PK_Execution_Parameter_value","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["execution_parameter_id"]},
+        {"table":"internal.execution_property_override_values","name":"IX_ExecutionPropertyOverrideValues_ExecutionId","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["execution_id"]},
+        {"table":"internal.execution_property_override_values","name":"PK_Execution_Property_Override_Value","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["property_id"]},
+        {"table":"internal.executions","name":"PK_Executions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["execution_id"]},
+        {"table":"internal.extended_operation_info","name":"PK_Operation_Info","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["info_id"]},
+        {"table":"internal.folder_permissions","name":"PK_Folder_Permissions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["id"]},
+        {"table":"internal.folder_permissions","name":"Unique_FolderPermissions","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["object_id","permission_type","sid"]},
+        {"table":"internal.folders","name":"PK_Folders","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["folder_id"]},
+        {"table":"internal.folders","name":"Unique_folder_name","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["name"]},
+        {"table":"internal.job_worker_agents","name":"PK_job_worker_agents","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["JobId","WorkerAgentId"]},
+        {"table":"internal.job_worker_agents_history","name":"PK_job_worker_agents_history","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["JobId","WorkerAgentId"]},
+        {"table":"internal.jobs","name":"index_job_iscancelled","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["IsCancelled"]},
+        {"table":"internal.jobs","name":"PK_Jobs","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["JobId"]},
+        {"table":"internal.jobs_history","name":"PK_Jobs_History","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["JobId"]},
+        {"table":"internal.machine_properties","name":"PK_machine_properties","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["WorkerAgentId","PropertyName"]},
+        {"table":"internal.master_properties","name":"PK_Master_Property","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["property_name"]},
+        {"table":"internal.object_parameters","name":"IX_internal_object_parameters_inc","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["project_id","project_version_lsn"]},
+        {"table":"internal.object_parameters","name":"PK_Object_Parameters","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["parameter_id"]},
+        {"table":"internal.object_versions","name":"PK_Object_Versions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["object_version_lsn"]},
+        {"table":"internal.operation_messages","name":"IX_OperationMessages_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id"]},
+        {"table":"internal.operation_messages","name":"PK_Operation_Messages","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["operation_message_id"]},
+        {"table":"internal.operation_messages_scaleout","name":"IX_OperationMessagesScaleout_event_message_guid","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["event_message_guid"]},
+        {"table":"internal.operation_messages_scaleout","name":"IX_OperationMessagesScaleout_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id"]},
+        {"table":"internal.operation_os_sys_info","name":"IX_OsSysInfo_Operation_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["operation_id"]},
+        {"table":"internal.operation_os_sys_info","name":"PK_Operation_Os_Sys_Info","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["info_id"]},
+        {"table":"internal.operation_permissions","name":"PK_Operation_Permissions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["id"]},
+        {"table":"internal.operation_permissions","name":"Unique_OperationPermissions","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["object_id","permission_type","sid"]},
+        {"table":"internal.operations","name":"IX_Operations_object_id","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["object_id"]},
+        {"table":"internal.operations","name":"PK_Operations","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["operation_id"]},
+        {"table":"internal.packages","name":"IX_Packages_Name","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["name"]},
+        {"table":"internal.packages","name":"PK_Packages","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["package_id"]},
+        {"table":"internal.project_permissions","name":"PK_Project_Permissions","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["id"]},
+        {"table":"internal.project_permissions","name":"Unique_ProjectPermissions","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["object_id","permission_type","sid"]},
+        {"table":"internal.projects","name":"IX_Projects_Name","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["name"]},
+        {"table":"internal.projects","name":"PK_Projects","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["project_id"]},
+        {"table":"internal.projects","name":"Unique_Project_FolderName","type":"NONCLUSTERED","primaryKey":false,"unique":true,"keys":["name","folder_id"]},
+        {"table":"internal.tasks","name":"index_tasks_ReadyForDispatchTime","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["ReadyForDispatchTime"]},
+        {"table":"internal.tasks","name":"index_tasks_Status","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["Status"]},
+        {"table":"internal.tasks","name":"PK__tasks__7C6949B1E5B4E9AA","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["TaskId"]},
+        {"table":"internal.tasks_history","name":"index_tasks_history_jobid","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["JobId"]},
+        {"table":"internal.tasks_history","name":"PK__tasks_hi__7C6949B1DEB15888","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["TaskId"]},
+        {"table":"internal.validations","name":"PK_Validations","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["validation_id"]},
+        {"table":"internal.worker_agent_perfcounter","name":"index_worker_agent_perfcounter_TimeStampAndWorkerAgentId","type":"NONCLUSTERED","primaryKey":false,"unique":false,"keys":["WorkerAgentId","TimeStamp"]},
+        {"table":"internal.worker_agents","name":"PK_Worker_Agents","type":"CLUSTERED","primaryKey":true,"unique":true,"keys":["WorkerAgentId"]}
+      ],
+      "foreignKeys": [
+        {"name":"FK_EnvironmentPermissions_ObjectId_Environments","child":"internal.environment_permissions","parent":"internal.environments","onDelete":"CASCADE","columns":["object_id -> environment_id"]},
+        {"name":"FK_Environments_FolderId_Folders","child":"internal.environments","parent":"internal.folders","onDelete":"NO_ACTION","columns":["folder_id -> folder_id"]},
+        {"name":"FK_EnvironmentVariables_EnvironmentId_Environments","child":"internal.environment_variables","parent":"internal.environments","onDelete":"CASCADE","columns":["environment_id -> environment_id"]},
+        {"name":"FK_EventMessage_Operations","child":"internal.event_messages","parent":"internal.operations","onDelete":"NO_ACTION","columns":["operation_id -> operation_id"]},
+        {"name":"FK_EventMessageContext_EventMessageId_EventMessages","child":"internal.event_message_context","parent":"internal.event_messages","onDelete":"CASCADE","columns":["event_message_id -> event_message_id"]},
+        {"name":"FK_EventMessagecontext_Operations","child":"internal.event_message_context","parent":"internal.operations","onDelete":"NO_ACTION","columns":["operation_id -> operation_id"]},
+        {"name":"FK_EventMessages_OperationMessageId_OperationMessage","child":"internal.event_messages","parent":"internal.operation_messages","onDelete":"CASCADE","columns":["event_message_id -> operation_message_id"]},
+        {"name":"FK_ExecCompPhases_ExecutionId_Executions","child":"internal.execution_component_phases","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_ExecDataStat_ExecutionId_Executions","child":"internal.execution_data_statistics","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_ExecDataTaps_ExecutionId_Executions","child":"internal.execution_data_taps","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_Executables","child":"internal.executables","parent":"internal.projects","onDelete":"CASCADE","columns":["project_id -> project_id"]},
+        {"name":"FK_ExecutableStatistics_ExecutableId_Executables","child":"internal.executable_statistics","parent":"internal.executables","onDelete":"CASCADE","columns":["executable_id -> executable_id"]},
+        {"name":"FK_ExecutableStatistics_ExecutionId_Executions","child":"internal.executable_statistics","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_ExecutionParameterValue_ExecutionId_Executions","child":"internal.execution_parameter_values","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_ExecutionPropertyOverrideValue_ExecutionId_Executions","child":"internal.execution_property_override_values","parent":"internal.executions","onDelete":"CASCADE","columns":["execution_id -> execution_id"]},
+        {"name":"FK_Executions_ExecutionId_Operations","child":"internal.executions","parent":"internal.operations","onDelete":"CASCADE","columns":["execution_id -> operation_id"]},
+        {"name":"FK_FolderPermissions_ObjectId_Folders","child":"internal.folder_permissions","parent":"internal.folders","onDelete":"CASCADE","columns":["object_id -> folder_id"]},
+        {"name":"FK_job_worker_agents_history_JobId","child":"internal.job_worker_agents_history","parent":"internal.jobs_history","onDelete":"CASCADE","columns":["JobId -> JobId"]},
+        {"name":"FK_job_worker_agents_JobId","child":"internal.job_worker_agents","parent":"internal.jobs","onDelete":"CASCADE","columns":["JobId -> JobId"]},
+        {"name":"FK_machine_properties_WorkerAgentId","child":"internal.machine_properties","parent":"internal.worker_agents","onDelete":"CASCADE","columns":["WorkerAgentId -> WorkerAgentId"]},
+        {"name":"FK_ObjectParameters_ProjectId_Projects","child":"internal.object_parameters","parent":"internal.projects","onDelete":"CASCADE","columns":["project_id -> project_id"]},
+        {"name":"FK_ObjectParameters_ProjectVersionLsn_ObjectVersions","child":"internal.object_parameters","parent":"internal.object_versions","onDelete":"CASCADE","columns":["project_version_lsn -> object_version_lsn"]},
+        {"name":"FK_OperationInfo_Operations","child":"internal.extended_operation_info","parent":"internal.operations","onDelete":"CASCADE","columns":["operation_id -> operation_id"]},
+        {"name":"FK_OperationMessages_OperationId_Operations","child":"internal.operation_messages","parent":"internal.operations","onDelete":"CASCADE","columns":["operation_id -> operation_id"]},
+        {"name":"FK_OperationPermissions_ObjectId_Operations","child":"internal.operation_permissions","parent":"internal.operations","onDelete":"CASCADE","columns":["object_id -> operation_id"]},
+        {"name":"FK_OssysInfo_Operations","child":"internal.operation_os_sys_info","parent":"internal.operations","onDelete":"CASCADE","columns":["operation_id -> operation_id"]},
+        {"name":"FK_Packages_ProjectId_Projects","child":"internal.packages","parent":"internal.projects","onDelete":"CASCADE","columns":["project_id -> project_id"]},
+        {"name":"FK_Packages_ProjectVersionLsn_ObjectVersions","child":"internal.packages","parent":"internal.object_versions","onDelete":"CASCADE","columns":["project_version_lsn -> object_version_lsn"]},
+        {"name":"FK_ProjectEnvironment_ProjectId_Projects","child":"internal.environment_references","parent":"internal.projects","onDelete":"CASCADE","columns":["project_id -> project_id"]},
+        {"name":"FK_ProjectPermissions_ObjectId_Projects","child":"internal.project_permissions","parent":"internal.projects","onDelete":"CASCADE","columns":["object_id -> project_id"]},
+        {"name":"FK_Projects_FolderId_Folders","child":"internal.projects","parent":"internal.folders","onDelete":"NO_ACTION","columns":["folder_id -> folder_id"]},
+        {"name":"FK_tasks_history_JobId","child":"internal.tasks_history","parent":"internal.jobs_history","onDelete":"CASCADE","columns":["JobId -> JobId"]},
+        {"name":"FK_tasks_JobId","child":"internal.tasks","parent":"internal.jobs","onDelete":"CASCADE","columns":["JobId -> JobId"]},
+        {"name":"FK_Validations_ValidationId_Operations","child":"internal.validations","parent":"internal.operations","onDelete":"CASCADE","columns":["validation_id -> operation_id"]},
+        {"name":"FK_worker_agent_perfcounter_WorkerAgentId","child":"internal.worker_agent_perfcounter","parent":"internal.worker_agents","onDelete":"CASCADE","columns":["WorkerAgentId -> WorkerAgentId"]}
+      ],
+      "sqlAuthRefused": [
+        "add_data_tap",
+        "add_data_tap_by_guid",
+        "add_execution_worker",
+        "check_schema_version",
+        "clear_object_parameter_value",
+        "configure_catalog",
+        "create_environment",
+        "create_environment_reference",
+        "create_environment_variable",
+        "create_execution",
+        "create_execution_dump",
+        "create_folder",
+        "delete_environment",
+        "delete_environment_reference",
+        "delete_environment_variable",
+        "delete_folder",
+        "delete_project",
+        "deny_permission",
+        "deploy_packages",
+        "deploy_project",
+        "get_project",
+        "grant_permission",
+        "move_environment",
+        "move_project",
+        "remove_data_tap",
+        "rename_environment",
+        "rename_folder",
+        "restore_project",
+        "revoke_permission",
+        "set_environment_property",
+        "set_environment_reference_type",
+        "set_environment_variable_property",
+        "set_environment_variable_protection",
+        "set_environment_variable_value",
+        "set_execution_parameter_value",
+        "set_execution_property_override_value",
+        "set_folder_description",
+        "set_object_parameter_value",
+        "start_execution",
+        "stop_operation",
+        "validate_package",
+        "validate_project"
+      ],
+      "typeMapping": {
+        "Boolean": ["bigint","bit","int","smallint","tinyint"],
+        "Byte": ["bigint","bit","int","smallint","tinyint"],
+        "DateTime": ["datetime","datetime2","smalldatetime"],
+        "Decimal": ["decimal","float","numeric","real"],
+        "Double": ["decimal","float","numeric","real"],
+        "Int16": ["bigint","bit","int","smallint","tinyint"],
+        "Int32": ["bigint","bit","int","smallint","tinyint"],
+        "Int64": ["bigint","bit","int","smallint","tinyint"],
+        "SByte": ["bigint","bit","int","smallint","tinyint"],
+        "Single": ["decimal","float","numeric","real"],
+        "String": ["char","nchar","nvarchar"],
+        "UInt32": ["bigint","bit","int","smallint","tinyint"],
+        "UInt64": ["bigint","bit","int","smallint","tinyint"]
+      },
+      "errors": {
+        "27100": "The input parameter, '%ls', cannot be null. Provide a valid value for this parameter.",
+        "27101": "The value specified for the input parameter, '%ls', is not valid. Provide a valid value for this parameter.",
+        "27103": "Cannot find the execution instance '%I64d' because it does not exist or you do not have sufficient permissions.",
+        "27104": "Cannot find the folder '%ls' because it does not exist or you do not have sufficient permissions.",
+        "27109": "Cannot find the project '%ls' because it does not exist or you do not have sufficient permissions.",
+        "27121": "The project is currently running or has completed. An instance of execution can only be started once.",
+        "27123": "The operation cannot be started by an account that uses SQL Server Authentication. Start the operation with an account that uses Integrated Authentication.",
+        "27124": "Integration Services server cannot stop the operation. The specified operation with ID '%I64d' is not valid or is not running.",
+        "27125": "Integration Services server cannot stop the operation. The specified operation is not in a consistent state and cannot be stopped.",
+        "27126": "Integration Services server cannot stop the operation. The specified operation is already in Stopping state.",
+        "27138": "The input parameter cannot be null. Provide a valid value for the parameter.",
+        "27143": "Cannot access the operation with ID, '%I64d'. Verify that the user has appropriate permissions.",
+        "27146": "Cannot access the package or the package does not exist. Verify that the package exists and that the user has permissions to it.",
+        "27147": "The data type of the input value is not compatible with the data type of the '%ls'.",
+        "27176": "The parameter '%ls' does not exist or you do not have sufficient permissions.",
+        "27178": "Unable to execute the project named '%ls'. You do not have sufficient permissions.",
+        "27188": "Only members of the ssis_admin or sysadmin server roles can create, delete, or rename a catalog folder.",
+        "27195": "The operation failed because the execution timed out.",
+        "27224": "The parameter value cannot be changed after the execution has been started."
+      }
+    }
+  ]
+}

@@ -91,7 +91,11 @@ export const contrastPairs: readonly ContrastPair[] = [
     ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
-  ...text(['notifications.foreground'], ['notifications.background']),
+  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
+  // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
+  ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
+  ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
@@ -175,6 +179,8 @@ export const contrastPairs: readonly ContrastPair[] = [
 
   // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
   ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
+  // Environment tags (PROD, STAGING, TEST) also label the Connect dialog's history rows, the selected one included.
+  ...(['critical', 'info', 'neutral'] as const).flatMap(tone => text([toneKeys(tone).foreground], [...activeSelection, toneKeys(tone).background])),
   // Empty states and inline errors: the title and line, the error glyph and message, and their outlined actions.
   ...text(['emptyState.titleForeground', 'emptyState.foreground', 'descriptionForeground', 'foreground', 'errorForeground', 'button.secondaryForeground'], ...contentSurfaces),
   ...graphic(['button.border'], ...contentSurfaces),

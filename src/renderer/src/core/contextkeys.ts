@@ -12,6 +12,7 @@ import type { BackendSnapshot } from '../services/backend'
 import type { LiveConnection } from '../services/connections'
 import type { ExplorerContextState } from '../explorer/ExplorerService'
 import type { InputModeSnapshot } from './input-mode'
+import type { NotificationSnapshot } from './notifications'
 import { onUnexpectedError } from './errors'
 import type { Disposable, ExternalStore } from './types'
 
@@ -76,6 +77,8 @@ export interface ContextInputs {
   readonly designer?: DesignerContextState
   /** The Database Properties documents' keys; without them, those keys are false. */
   readonly properties?: PropertiesContextState
+  /** A toast is showing or waiting (`hasNotifications`). */
+  readonly notifications?: boolean
 }
 /** Every context key from service snapshots and focus facts; without focus, the focus keys are false or ''. */
 export function computeContextKeys(inputs: ContextInputs): ContextKeys {
@@ -97,7 +100,8 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
     anyDocumentConnected: documents.documents.some(document => isQueryDocument(document) && !!document.connectionId && connections.some(connection => connection.id === document.connectionId && !connection.lost)),
-    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes?.output, ...inputs.explorer, scriptingRunning: !!inputs.scriptingRunning
+    queryRunning: !!active && !!inputs.queries[active.id]?.running, hasResults: !!active && !!inputs.results?.[active.id], outputPaneVisible: !!inputs.panes?.output, ...inputs.explorer, scriptingRunning: !!inputs.scriptingRunning,
+    hasNotifications: !!inputs.notifications
   })
 }
 
@@ -125,6 +129,8 @@ export interface ContextKeyOptions {
   readonly designer?: ExternalStore<DesignerContextState>
   /** The Database Properties documents' keys. */
   readonly properties?: ExternalStore<PropertiesContextState>
+  /** The toasts (`hasNotifications`). */
+  readonly notifications?: ExternalStore<NotificationSnapshot>
   readonly editor?: () => FocusEditor<Element> | undefined
   readonly activeElement?: () => Element | null
 }
@@ -138,7 +144,7 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.properties].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.properties, options.notifications].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
@@ -147,13 +153,14 @@ export class ContextKeyService implements Disposable {
       quickInputVisible: !!options.quickInput?.getSnapshot().visible, wordWrap: editor.wordWrap, whitespace: editor.whitespace, lineNumbers: editor.lineNumbers, bookmarks: options.bookmarks?.getSnapshot().counts, backendStatus: options.backend.getSnapshot().state.status,
       panes: options.panes?.getSnapshot(), explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
-      recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot()
+      recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(),
+      notifications: !!options.notifications && options.notifications.getSnapshot().visible.length > 0
     }
   }
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.properties?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.properties?.getSnapshot(), options.notifications?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }

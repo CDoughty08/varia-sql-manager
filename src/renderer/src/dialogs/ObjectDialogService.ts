@@ -43,7 +43,7 @@ export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; refresh(id?: number): void }
+  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number): void }
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
@@ -227,7 +227,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
   private refreshListing(open: OpenObjectDialog): void {
     const folder = this.options.explorer.listingFolderOf(open.nodeId)
-    if (folder !== undefined) this.options.explorer.refresh(folder)
+    if (folder !== undefined) this.options.explorer.reconcile(folder)
   }
   /** A server that disconnects leaves only Close; its request is cancelled. */
   private connectionsChanged(): void {

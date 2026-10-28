@@ -43,6 +43,15 @@ describe('built-in theme contrast', () => {
       for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
     }
   })
+  it('checks everything a toast draws over its own background, which a theme can set apart', () => {
+    const toast = (foreground: string, ...background: string[]) => ({ foreground, background: ['notifications.background', ...background] })
+    const expected = [
+      ...['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'].map(key => ({ ...toast(key), minimum: 4.5 })),
+      { ...toast('button.secondaryHoverForeground', 'button.secondaryHoverBackground'), minimum: 4.5 },
+      ...['button.border', 'focusBorder', 'notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'].map(key => ({ ...toast(key), minimum: 3 }))
+    ]
+    for (const pair of expected) expect(contrastPairs).toContainEqual(pair)
+  })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
     const foregrounds = colorKeys.filter(key => /[Ff]oreground$/.test(key))

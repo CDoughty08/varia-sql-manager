@@ -70,8 +70,23 @@ try {
   await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
   await application.evaluate(installActionsStub, actionsStubData())
   await connect('server-a')
+  // A row moves when a folder above it finishes loading, as Views does when Tables' rows arrive. Here Views' row moves
+  // between the press on its chevron and the release, once, so that click is lost: expanding the path must click again
+  // rather than wait for an expansion that never comes (a Windows run failed so).
+  await page.evaluate(({ twistie, label }) => {
+    const move = event => {
+      const row = event.target.closest?.('[role="treeitem"]')
+      if (!event.target.closest?.(twistie) || row?.querySelector(label)?.textContent !== 'Views') return
+      window.removeEventListener('pointerdown', move, true)
+      row.style.translate = `0 ${row.offsetHeight}px`
+      setTimeout(() => { row.style.translate = '' }, 50)
+      window.__variaMovedPress = true
+    }
+    window.addEventListener('pointerdown', move, true)
+  }, { twistie: part.explorerTwistie, label: part.explorerLabel })
   // Top down, so no row moves once its own folder has loaded: a right-click must land on the row it selects.
   for (const path of [['server-a', 'Databases', 'System Databases'], tablesPath, [...appData, 'Views'], [...appData, 'Programmability', 'Stored Procedures']]) await expandExplorerPath(page, ...path)
+  expect(await page.evaluate(() => window.__variaMovedPress)).toBe(true)
   await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
 
   // 1. SSMS's order: the query items, Script … as, Copy Name, then Rename and Delete, then Refresh; SQL Server's own

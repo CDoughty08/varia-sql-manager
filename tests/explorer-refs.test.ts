@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { folderIds, kindScopes, kindSpecs, nodeKinds, scopeFields, type KindScope, type NodeKind } from '../src/shared/explorer/catalog'
-import { displayText, insertTextFor, kindScope, quoteName, refKey, type ExplorerNodeRef, type ObjectRef } from '../src/shared/explorer/refs'
-import { explorerCancelParamsSchema, explorerChildrenParamsSchema, explorerFilterSchema, ident, nodeRefSchema, objectRefSchema } from '../src/shared/explorer/schema'
+import { explorerLimits, folderIds, kindScopes, kindSpecs, maxNameOf, nodeKinds, scopeFields, type KindScope, type KindSpec, type NodeKind } from '../src/shared/explorer/catalog'
+import { displayText, insertTextFor, kindScope, quoteName, refKey, type ExplorerChildrenParams, type ExplorerNodeRef, type ObjectRef } from '../src/shared/explorer/refs'
+import {
+  childrenParamsProblems, explorerCancelParamsSchema, explorerChildrenParamsSchema, explorerFilterSchema, ident, nodeRefSchema, objectRefProblems, objectRefSchema, type KindSpecs
+} from '../src/shared/explorer/schema'
 
 const connectionId = '6f1c2b8e-3d4a-4f5b-9c6d-7e8f9a0b1c2d'
 /** The smallest valid ref of each kind. */
@@ -14,8 +17,14 @@ function minimal(kind: NodeKind): ObjectRef {
     case 'schemaObject': return { kind, database: 'db', schema: 's', name: 'n' }
     case 'child': return { kind, database: 'db', parent: { kind: kind === 'parameter' ? 'procedure' : 'table', schema: 's', name: 'p' }, name: kind === 'parameter' ? '@n' : 'n' }
     case 'childUnnamed': return { kind, database: 'db', parent: { kind: 'procedure', schema: 's', name: 'p' } }
+    case 'ssisCatalog': case 'ssisFolder': return { kind, name: 'n' }
+    case 'ssisFolderObject': return { kind, ssisFolder: 'f', name: 'n' }
+    case 'ssisProjectObject': return { kind, ssisFolder: 'f', ssisProject: 'p', name: 'n' }
   }
 }
+/** The catalogue with one kind changed: the mechanisms SSIS kinds use (S1b) are checked before any shipped kind uses them. */
+const variant = (kind: NodeKind, change: Partial<KindSpec>): KindSpecs => ({ ...kindSpecs, [kind]: { ...kindSpecs[kind], ...change } })
+const children = (node: ExplorerNodeRef, extra: Partial<ExplorerChildrenParams> = {}): ExplorerChildrenParams => ({ connectionId, requestId: randomUUID(), node, ...extra })
 const object = (ref: ObjectRef): ExplorerNodeRef => ({ type: 'object', object: ref })
 const params = (node: ExplorerNodeRef, extra: Record<string, unknown> = {}) => ({ connectionId, requestId: randomUUID(), node, ...extra })
 const tables: ExplorerNodeRef = { type: 'folder', owner: { kind: 'database', name: 'AppData' }, folder: 'tables' }
@@ -33,7 +42,8 @@ describe('node identity', () => {
         'searchPropertyList', 'planGuide'],
       schemaObject: ['table', 'view', 'synonym', 'procedure', 'function', 'sequence', 'type', 'tableType', 'xmlSchemaCollection', 'rule', 'default', 'securityPolicy'],
       child: ['column', 'key', 'constraint', 'trigger', 'index', 'statistic', 'parameter'],
-      childUnnamed: ['returnValue']
+      childUnnamed: ['returnValue'],
+      ssisCatalog: ['ssisCatalog'], ssisFolder: ['ssisFolder'], ssisFolderObject: ['ssisProject', 'ssisEnvironment'], ssisProjectObject: ['ssisPackage']
     }
     for (const scope of kindScopes) expect(nodeKinds.filter(kind => kindScope(kind) === scope), scope).toEqual(expected[scope])
   })
@@ -45,6 +55,41 @@ describe('node identity', () => {
     expect(refKey(connectionId, ref)).not.toBe(refKey(randomUUID(), ref))
     expect(refKey(connectionId, tables)).toBe(JSON.stringify([connectionId, 'folder', 'database', null, null, 'AppData', null, null, null, 'tables']))
   })
+  it('keeps every existing kind\'s key as it was before the SSIS fields', () => {
+    // Generated at 74d3ab7, before ObjectRef had SSIS fields: Object Explorer keys its selection, filters and expansion by these.
+    const golden = JSON.parse(readFileSync('tests/fixtures/explorer/ref-keys.json', 'utf8')) as { connectionId: string; ref: ExplorerNodeRef; key: string }[]
+    expect(golden.length).toBeGreaterThan(300)
+    // Every kind and folder but the SSIS ones (S1b), which came after the golden keys.
+    expect(new Set(golden.map(entry => entry.ref.type === 'object' ? entry.ref.object.kind : entry.ref.owner.kind))).toEqual(new Set(nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis'))))
+    expect(new Set(golden.flatMap(entry => entry.ref.type === 'folder' ? [entry.ref.folder] : []))).toEqual(new Set(folderIds.filter(id => id !== 'integrationServicesCatalogs' && !id.startsWith('ssis'))))
+    for (const entry of golden) expect(refKey(entry.connectionId, entry.ref), entry.key).toBe(entry.key)
+  })
+  it('keys the SSIS kinds and their folders with their folder and project appended', () => {
+    const catalog = object({ kind: 'ssisCatalog', name: 'SSISDB' })
+    const folder = object({ kind: 'ssisFolder', name: 'Finance' })
+    const project = object({ kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' })
+    const environment = object({ kind: 'ssisEnvironment', ssisFolder: 'Finance', name: 'Loads' })
+    const pkg = object({ kind: 'ssisPackage', ssisFolder: 'Finance', ssisProject: 'Loads', name: 'Daily.dtsx' })
+    expect(refKey(connectionId, catalog)).toBe(JSON.stringify([connectionId, 'object', 'ssisCatalog', null, null, 'SSISDB', null, null, null, null]))
+    expect(refKey(connectionId, project)).toBe(JSON.stringify([connectionId, 'object', 'ssisProject', null, null, 'Loads', null, null, null, null, 'Finance', null]))
+    expect(refKey(connectionId, pkg)).toBe(JSON.stringify([connectionId, 'object', 'ssisPackage', null, null, 'Daily.dtsx', null, null, null, null, 'Finance', 'Loads']))
+    expect(refKey(connectionId, { type: 'folder', owner: { kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' }, folder: 'ssisPackages' }))
+      .toBe(JSON.stringify([connectionId, 'folder', 'ssisProject', null, null, 'Loads', null, null, null, 'ssisPackages', 'Finance', null]))
+    const keys = [catalog, folder, project, environment, pkg, object({ kind: 'ssisProject', ssisFolder: 'Loads', name: 'Finance' })].map(ref => refKey(connectionId, ref))
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+  it('keys SSIS refs by folder and project, apart from every other ref', () => {
+    const plain = object({ kind: 'database', name: 'n' })
+    const keyed: ExplorerNodeRef[] = [plain, object({ kind: 'database', name: 'n', ssisFolder: 'f' }), object({ kind: 'database', name: 'n', ssisProject: 'f' }),
+      object({ kind: 'database', name: 'n', ssisFolder: 'f', ssisProject: 'p' }), object({ kind: 'database', name: 'n', ssisFolder: 'p', ssisProject: 'f' }),
+      object({ kind: 'database', name: 'n', ssisFolder: 'null' }), object({ kind: 'database', name: 'n', ssisFolder: 'f', ssisProject: 'null' }),
+      { type: 'folder', owner: { kind: 'database', name: 'n', ssisFolder: 'f' }, folder: 'tables' }, { type: 'folder', owner: { kind: 'database', name: 'n' }, folder: 'tables' }]
+    const keys = keyed.map(ref => refKey(connectionId, ref))
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(keys[3]).toBe(JSON.stringify([connectionId, 'object', 'database', null, null, 'n', null, null, null, null, 'f', 'p']))
+    expect(keys[1]).toBe(JSON.stringify([connectionId, 'object', 'database', null, null, 'n', null, null, null, null, 'f', null]))
+    expect(keys[0]).toBe(JSON.stringify([connectionId, 'object', 'database', null, null, 'n', null, null, null, null]))
+  })
   it('keys distinct refs apart, whatever their names hold', () => {
     const names = [']', '"', '\\', '\u0001', ',', 'null', '"null"', '["a","b"]', 'a', 'A', ' ', '😀', 'x'.repeat(128), 'dbo.Orders', 'dbo', 'Orders']
     const refs: ExplorerNodeRef[] = []
@@ -54,6 +99,7 @@ describe('node identity', () => {
         refs.push(object({ kind: 'table', database: 'db', schema: a, name: b }), object({ kind: 'view', database: 'db', schema: a, name: b }), object({ kind: 'user', database: a, name: b }))
         refs.push(object({ kind: 'column', database: 'db', parent: { kind: 'table', schema: a, name: b }, name: 'c' }))
         refs.push(object({ kind: 'returnValue', database: a, parent: { kind: 'function', schema: 's', name: b } }))
+        refs.push(object({ kind: 'database', ssisFolder: a, name: b }), object({ kind: 'database', ssisFolder: a, ssisProject: b, name: 'n' }), object({ kind: 'database', ssisProject: a, name: b }))
       }
     }
     refs.push(object({ kind: 'server' }), { type: 'folder', owner: { kind: 'server' }, folder: 'databases' })
@@ -66,7 +112,11 @@ describe('node identity', () => {
     expect(quoteName(' ')).toBe('[ ]')
   })
   it('inserts each kind\'s name in its style', () => {
-    const expected: Partial<Record<NodeKind, string | undefined>> = { server: undefined, returnValue: undefined, parameter: '@n' }
+    const expected: Partial<Record<NodeKind, string | undefined>> = {
+      server: undefined, returnValue: undefined, parameter: '@n',
+      // SSIS Catalog objects are not SQL objects: dragging them inserts nothing.
+      ssisCatalog: undefined, ssisFolder: undefined, ssisProject: undefined, ssisPackage: undefined, ssisEnvironment: undefined
+    }
     for (const kind of nodeKinds) {
       const style = kindSpecs[kind].insert
       const text = kind in expected ? expected[kind] : style === 'twoPart' ? '[s].[n]' : '[n]'
@@ -108,6 +158,60 @@ describe('explorer request schemas', () => {
       for (const field of forbidden) rejects(objectRefSchema, { ...ref, [field]: field === 'parent' ? { kind: 'table', schema: 's', name: 'p' } : 'x' })
     }
   })
+  it('checks each SSIS scope\'s fields, and refuses SSIS fields on every other kind', () => {
+    const scoped: [KindScope, NodeKind, ObjectRef][] = [
+      ['ssisCatalog', 'server', { kind: 'server', name: 'SSISDB' }],
+      ['ssisFolder', 'login', { kind: 'login', name: 'Finance' }],
+      ['ssisFolderObject', 'user', { kind: 'user', ssisFolder: 'Finance', name: 'Loads' }],
+      ['ssisProjectObject', 'table', { kind: 'table', ssisFolder: 'Finance', ssisProject: 'Loads', name: 'Daily.dtsx' }]
+    ]
+    for (const [scope, kind, ref] of scoped) {
+      const specs = variant(kind, { scope })
+      expect(objectRefProblems(ref, specs), scope).toEqual([])
+      for (const field of scopeFields[scope].required) {
+        const copy: Record<string, unknown> = { ...ref }
+        delete copy[field]
+        expect(objectRefProblems(copy as unknown as ObjectRef, specs), `${scope} ${field}`).toEqual([`A ${kind} needs a ${field}.`])
+      }
+      for (const field of scopeFields[scope].forbidden) {
+        expect(objectRefProblems({ ...ref, [field]: field === 'parent' ? { kind: 'table', schema: 's', name: 'p' } : 'x' }, specs), `${scope} ${field}`).toContain(`A ${kind} has no ${field}.`)
+      }
+    }
+    for (const kind of nodeKinds.filter(kind => !kindScope(kind).startsWith('ssis'))) for (const field of ['ssisFolder', 'ssisProject'] as const) {
+      expect(scopeFields[kindScope(kind)].forbidden, kind).toContain(field)
+      rejects(objectRefSchema, { ...minimal(kind), [field]: 'Finance' })
+    }
+    for (const field of ['ssisFolder', 'ssisProject'] as const) {
+      for (const value of ['', 'x'.repeat(129), '𝒜'.repeat(64) + 'a', 'a\u0000', 1]) {
+        expect(objectRefSchema.safeParse({ kind: 'server', [field]: value }).error?.issues.some(issue => issue.path[0] === field), `${field} ${String(value)}`).toBe(true)
+      }
+      expect(objectRefSchema.safeParse({ kind: 'server', [field]: 'x'.repeat(128) }).error?.issues.some(issue => issue.path[0] === field), field).toBe(false)
+    }
+  })
+  it('bounds names by kind: 128 unless the kind declares a longer one, never past the catalogue\'s maximum', () => {
+    expect(explorerLimits.maxName).toBe(260)
+    for (const kind of nodeKinds) {
+      const named = minimal(kind)
+      if (named.name === undefined) continue
+      const max = kind === 'ssisPackage' ? 260 : 128
+      expect(maxNameOf(kindSpecs[kind]), kind).toBe(max)
+      accepts(objectRefSchema, { ...named, name: 'x'.repeat(max) })
+      rejects(objectRefSchema, { ...named, name: 'x'.repeat(max + 1) })
+      rejects(objectRefSchema, { ...named, name: '𝒜'.repeat(max / 2) + 'a' })
+    }
+    // An SSIS package name may be longer than sysname; its folder and project may not.
+    expect(objectRefProblems({ kind: 'ssisPackage', ssisFolder: 'f', ssisProject: 'p', name: 'x'.repeat(261) })).toEqual(['A ssisPackage name has at most 260 UTF-16 code units.'])
+    rejects(objectRefSchema, { kind: 'ssisPackage', ssisFolder: 'x'.repeat(129), ssisProject: 'p', name: 'n' })
+    rejects(objectRefSchema, { kind: 'ssisProject', ssisFolder: 'f', name: 'x'.repeat(129) })
+    const packages = variant('login', { maxName: 260 })
+    expect(objectRefProblems({ kind: 'login', name: 'x'.repeat(260) }, packages)).toEqual([])
+    expect(objectRefProblems({ kind: 'login', name: 'x'.repeat(261) }, packages)).toEqual(['A login name has at most 260 UTF-16 code units.'])
+    expect(objectRefProblems({ kind: 'login', name: 'x'.repeat(129) })).toEqual(['A login name has at most 128 UTF-16 code units.'])
+    rejects(objectRefSchema, { kind: 'login', name: 'x'.repeat(261) })
+    // The other identity fields stay sysnames.
+    rejects(objectRefSchema, { kind: 'user', database: 'x'.repeat(129), name: 'n' })
+    rejects(objectRefSchema, { kind: 'column', database: 'db', parent: { kind: 'table', schema: 's', name: 'x'.repeat(129) }, name: 'c' })
+  })
   it('rejects extra keys, bad names, and children of the wrong parent', () => {
     rejects(objectRefSchema, { kind: 'database', name: 'db', extra: 1 })
     rejects(objectRefSchema, { kind: 'folder', name: 'db' })
@@ -142,7 +246,14 @@ describe('explorer request schemas', () => {
     rejects(nodeRefSchema, { type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'tables', extra: 1 })
     for (const folder of folderIds) expect(nodeRefSchema.safeParse({ type: 'folder', owner: { kind: 'server' }, folder }).success, folder).toBe(['databases', 'systemDatabases',
       'databaseSnapshots', 'serverSecurity', 'logins', 'serverRoles', 'credentials', 'cryptographicProviders', 'audits', 'serverAuditSpecifications', 'serverObjects',
-      'backupDevices', 'linkedServers', 'serverTriggers'].includes(folder))
+      'backupDevices', 'linkedServers', 'serverTriggers', 'integrationServicesCatalogs'].includes(folder))
+    accepts(nodeRefSchema, { type: 'folder', owner: minimal('ssisFolder'), folder: 'ssisProjects' })
+    accepts(nodeRefSchema, { type: 'folder', owner: minimal('ssisFolder'), folder: 'ssisEnvironments' })
+    accepts(nodeRefSchema, { type: 'folder', owner: minimal('ssisProject'), folder: 'ssisPackages' })
+    rejects(nodeRefSchema, { type: 'folder', owner: minimal('ssisProject'), folder: 'ssisProjects' })
+    rejects(nodeRefSchema, { type: 'folder', owner: minimal('ssisEnvironment'), folder: 'ssisPackages' })
+    rejects(nodeRefSchema, { type: 'folder', owner: minimal('ssisCatalog'), folder: 'ssisProjects' })
+    rejects(nodeRefSchema, { type: 'folder', owner: minimal('database'), folder: 'ssisPackages' })
   })
   it('accepts children requests within their bounds', () => {
     accepts(explorerChildrenParamsSchema, params(object({ kind: 'server' })))
@@ -170,6 +281,25 @@ describe('explorer request schemas', () => {
     rejects(explorerChildrenParamsSchema, params({ type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'programmability' }, { cursor: `v1.tables.${payload}` }))
     accepts(explorerChildrenParamsSchema, params({ type: 'folder', owner: minimal('procedure'), folder: 'parameters' }, { cursor: 'v1.parameters.WzEyXQ' }))
     accepts(explorerChildrenParamsSchema, params(tables, { cursor: `v1.tables.${'a'.repeat(1600)}` }))
+  })
+  it('accepts a cursor on an object whose kind lists rows after its folders, for that query only', () => {
+    const listing = variant('database', { list: 'schemas', rows: ['schema'] })
+    const database = object({ kind: 'database', name: 'db' })
+    const wrong = [['cursor', 'The cursor is not for this node.']]
+    expect(childrenParamsProblems(children(database, { cursor: 'v1.schemas.AQ' }), listing)).toEqual([])
+    expect(childrenParamsProblems(children(database), listing)).toEqual([])
+    expect(childrenParamsProblems(children(database, { cursor: 'v1.users.AQ' }), listing)).toEqual(wrong)
+    expect(childrenParamsProblems(children(database, { cursor: 'v1.schemas.AQ' }))).toEqual(wrong)
+    expect(childrenParamsProblems(children(object({ kind: 'server' }), { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
+    // A folder's cursor still names the folder's own query, whatever its owner lists.
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'tables' }, { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
+    // A folder without a query of its own takes no cursor, not even its owner's.
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'database', name: 'db' }, folder: 'programmability' }, { cursor: 'v1.schemas.AQ' }), listing)).toEqual(wrong)
+    const logins = variant('server', { list: 'logins', rows: ['login'] })
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'server' }, folder: 'serverSecurity' }, { cursor: 'v1.logins.AQ' }), logins)).toEqual(wrong)
+    expect(childrenParamsProblems(children({ type: 'folder', owner: { kind: 'server' }, folder: 'logins' }, { cursor: 'v1.logins.AQ' }), logins)).toEqual([])
+    expect(childrenParamsProblems(children(database, { filter: { name: { op: 'contains', value: 'x' } } }), listing)).toEqual([['filter', 'This folder cannot be filtered by name.']])
+    rejects(explorerChildrenParamsSchema, params(database, { cursor: 'v1.schemas.AQ' }))
   })
   it('accepts filters with the folder\'s properties and valid values only', () => {
     accepts(explorerChildrenParamsSchema, params(tables, { filter: { name: { op: 'contains', value: 'Ord' } } }))
