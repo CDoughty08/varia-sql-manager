@@ -104,7 +104,7 @@ internal static class ActivityChecks
         foreach (var bad in new[] { new ActivityRender(12, "box"), new ActivityRender(18, "box"), new ActivityRender(17, "azureSqlDatabase") })
         {
             try { ActivitySql.Statements("activity.overview", bad); }
-            catch (InvalidOperationException) { threw++; }
+            catch (RequestException error) when (error.Code == "BACKEND_ERROR") { threw++; }
         }
         check(threw == 3, "no SQL is rendered below SQL Server 2016, above the newest band, or for Azure SQL Database yet");
     }

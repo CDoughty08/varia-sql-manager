@@ -104,7 +104,8 @@ pages, limits, error codes, display formats, benchmarks).
   by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
-  the live gates and a per-statement budget, and its failures are values that back off.
+  the live gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values
+  that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
@@ -180,7 +181,8 @@ pages, limits, error codes, display formats, benchmarks).
   their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
   sent as the source's args), never in SQL. A session is one of Varia's pools only when its id is one Varia's own pooled
   or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the process id, host name
-  and program name a client claims at login alone.
+  and program name a client claims at login alone; ending a session refuses the wider set (`VariaSessions.Protected`: the
+  ledger's ids or those claims), since SqlClient's reconnect can move a held pool connection to an id the ledger lacks.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

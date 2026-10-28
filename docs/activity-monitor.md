@@ -68,8 +68,13 @@ this catalogue's ids and the others take a prefix, so sorting Processes never re
 | `recentQueries` | (none) | `queryHash` |
 
 Filters travel as the source's args: one per table (the view chip, the toggles, the filter box, column value filters, Hide
-benign waits), each replacing that table's, and a table without one shows the defaults. Facets count every row the probe
-read, before filters. The two `focus.*` series follow the Details flyout's session (`focusSession`, 0 for none).
+benign waits), each replacing that table's, and a table without one shows the defaults. Processes' facets count the rows
+its view chip and toggles show, before the filter box and column value filters, so they never offer a value only hidden
+sessions have, and a column's own value filter never empties its list. Processes arrives in Session ID order when no sort
+is set; the sessions statement ranks sessions only for its cap (sessions in a blocking wait, then sessions with a request).
+The two `focus.*` series follow the Details flyout's session (`focusSession`, 0 for none); the first sample after it
+names another session is marked `reset`, so a chart starts them again. Every sessions sample carries the status values
+`serverState` and `canKill`.
 
 Per-session rates key a session by its login time and a request by its id and start time, so a reused id never yields a
 rate across two sessions. The sessions statement returns each of a session's requests as its own row (MARS sessions run
@@ -474,7 +479,12 @@ Varia's: a client sets all three at login, so a pool session must also be one wh
 Object Actions connection to that server was given when it opened, and that it may still hold: an Object Actions
 session's until its connection closes, a pool session's while a connection holds it and for 10 minutes after the last
 closes, past the 4 to 8 minutes SqlClient keeps an idle pooled connection (SQL Server gives a freed id to the next
-client). A session that only claims them, under any other id, shows as itself.
+client). A session that only claims them, under any other id, shows as itself. The ledger can be wrong for a while:
+SqlClient's idle connection resiliency, which the Object Explorer and Scripting pools keep, can give a held connection a
+new session id without opening it again, so that session shows as itself and its old id, which SQL Server may give to
+another client, still counts. That only labels; ending a session (`VariaSessions.Protected`, for Kill) refuses every
+session that may be Varia's: the monitor's, one whose id the ledger names, and one that claims a pool's process,
+machine and program name under any id.
 Pool sessions show only with Varia's own on. "Query tab" marks a plain-name session of this process, never hidden: a
 query tab, which the document names by the tab that holds its session id, or a pooled connection of the Connect
 dialog's database list or a column list, which no tab holds and which shows as "Query tab".

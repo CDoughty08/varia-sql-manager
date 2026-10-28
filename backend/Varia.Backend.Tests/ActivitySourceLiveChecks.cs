@@ -139,9 +139,9 @@ internal static class ActivitySourceLiveChecks
                 && sessions.All(sample => sample.Tables?.Select(table => table.Table).Order().SequenceEqual([0, 1, 2]) == true) && overview.Count >= 2 && overview.All(sample => sample.Metrics?.Length == 21),
                 "the Activity Monitor source samples the overview's 21 series and the sessions probe's three tables (Processes, Blocking, Active Expensive Queries) on one connection: "
                 + string.Join("; ", errors.Take(3)));
-            check(sessions[0].Status is { Count: 2 } status && status[0] is { Id: "serverState", Value: 1 } && status[1] is { Id: "canKill", Value: 0 or 1 } && sessions.Skip(1).All(sample => sample.Status is null)
+            check(sessions.All(sample => sample.Status is [{ Id: "serverState", Value: 1 }, { Id: "canKill", Value: 0 or 1 }])
                 && sessions[0].Tables![0].Facets?.Any(facet => facet.Column == "login" && facet.Values.Count > 0) == true,
-                "the first sessions sample reports what the capability probe found (server state, Kill), and Processes sends its column facets");
+                "every sessions sample reports what the capability probe found (server state, Kill), and Processes sends its column facets");
             var rows = latest is null ? [] : Rows(service, latest.Tables!.Single(table => table.Table == 0));
             var monitor = rows.FirstOrDefault(row => row["sessionId"] == opened?.Spid?.ToString(CultureInfo.InvariantCulture));
             check(rows.Count >= 2 && monitor is { } own && own["varia"] == "Varia Activity Monitor" && own["application"]!.EndsWith(" - Activity Monitor", StringComparison.Ordinal) && own["login"] is { Length: > 0 },
@@ -223,8 +223,9 @@ internal static class ActivitySourceLiveChecks
         }
     }
 
-    /// <summary>The statuses (server state, Kill) come with the first sample on each new connection: the view's own session is
-    /// killed (this test's own view's, proved in the same batch), and the first sample on the session it reopens reports them again.</summary>
+    /// <summary>The statuses (server state, Kill) come with every sample, read by each new connection's capability probe: the
+    /// view's own session is killed (this test's own view's, proved in the same batch), and the samples on the session it
+    /// reopens report them.</summary>
     private static async Task ReconnectAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json)
     {
         var view = Subscribe(service, info.Id, json, null, ActivityReader.SessionsProbe);
@@ -246,8 +247,8 @@ internal static class ActivitySourceLiveChecks
             var recovered = await view.Recorder.WaitAsync(recorder => Reopened(recorder).Count >= 2, 20_000);
             var first = SamplesOf(view.Recorder, ActivityReader.SessionsProbe);
             var again = Reopened(view.Recorder);
-            check(killed == "1" && recovered && first[0].Status is { Count: 2 } && first[1].Status is null && again[0].Status is [{ Id: "serverState", Value: 1 }, { Id: "canKill" }] && again[1].Status is null,
-                "after the view's session is lost, the first sample on the session it reopens reports server state and Kill again, and the next does not ("
+            check(killed == "1" && recovered && first[0].Status is { Count: 2 } && again.Take(2).All(sample => sample.Status is [{ Id: "serverState", Value: 1 }, { Id: "canKill" }]),
+                "after the view's session is lost, the samples on the session it reopens report server state and Kill, as the new connection's capability probe read them ("
                 + killed + ", " + string.Join(",", again.Take(2).Select(sample => sample.Status?.Count ?? 0)) + ")");
         }
         finally { await Stop(view); }
@@ -474,6 +475,42 @@ internal static class ActivitySourceLiveChecks
                     + SamplesOf(recorder, ActivityReader.OverviewProbe).Count + " overview samples, " + string.Join(", ", overviewErrors.Select(error => error.Code + " " + error.Terminal + " " + string.Join("/", error.Series ?? []))));
             }
             finally { await Stop(hidden); }
+
+            // The same rule for a one-batch probe (LiveSql's path, which the SSIS sources take), registered through the test
+            // hook as the overview's: opened paused, it stops at its first tick with PERMISSION_DENIED and never runs its batch,
+            // which such a login could run (SELECT 1).
+            var batches = 0;
+            service.Live.TestSql = new LiveTestSql((probe, band) => probe == ActivityReader.OverviewProbe ? new LiveQuery(probe, band, "SELECT CONVERT(bigint, 1) AS one;", ["one"], null, null, []) : null);
+            service.Live.TestText = (probe, text) =>
+            {
+                if (probe == ActivityReader.OverviewProbe) Interlocked.Increment(ref batches);
+                return text;
+            };
+            var batchRecorder = new LiveRecorder(Interlocked.Increment(ref next));
+            var batchId = Guid.NewGuid().ToString();
+            var batch = new View(service.Live.SubscribeAsync(new LiveSubscribeArgs(batchId, connected.Id, "activity", [new LiveProbeArgs(ActivityReader.OverviewProbe, 2000, Paused: true)]),
+                batchRecorder.Context, json), batchRecorder, batchId);
+            try
+            {
+                var paused = await batchRecorder.WaitAsync(item => item.Opened is not null);
+                var opened = batchRecorder.Opened;
+                service.Live.Update(new LiveUpdateArgs(batchId, "activity", Probes: [new LiveProbeArgs(ActivityReader.OverviewProbe, Paused: false)]), json);
+                bool Stopped(LiveRecorder item) => item.Ticks.SelectMany(tick => tick.Errors ?? []).Any(error => error.Terminal) || batch.Task.IsCompleted;
+                var stopped = await batchRecorder.WaitAsync(Stopped, 20_000);
+                var errors = batchRecorder.Ticks.SelectMany(tick => tick.Errors ?? []).ToList();
+                var end = batch.Task.IsCompleted ? await batch.Task : null;
+                check(paused && opened is { Probes: [{ State: "ok" }] } && stopped && SamplesOf(batchRecorder, ActivityReader.OverviewProbe).Count == 0 && Volatile.Read(ref batches) == 0
+                    && (errors is [{ Code: "PERMISSION_DENIED", Terminal: true }] || errors.Count == 0 && end is { Code: "PERMISSION_DENIED" }),
+                    "a one-batch probe that needs server state, opened paused under a login without it, stops at its first tick with PERMISSION_DENIED and runs nothing: "
+                    + Volatile.Read(ref batches) + " batches, " + string.Join(", ", errors.Select(error => error.Code + " " + error.Terminal)) + (end is null ? "" : " ended " + end.Ended + " " + end.Code));
+            }
+            finally
+            {
+                service.Live.TestSql = null;
+                service.Live.TestText = null;
+                if (!batch.Task.IsCompleted) await Stop(batch);
+                else batchRecorder.Dispose();
+            }
         }
         finally
         {

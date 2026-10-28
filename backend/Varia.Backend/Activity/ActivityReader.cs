@@ -28,12 +28,13 @@ internal sealed class ActivityReader : ILiveSqlReader
     /// <summary>Statements that failed for good on this connection, by probe, render and statement: reported each sample, not
     /// run again until a new connection's capability probe.</summary>
     private readonly Dictionary<string, LiveProbeError> skipped = new(StringComparer.Ordinal);
-    private readonly HashSet<string> statusSent = new(StringComparer.Ordinal);
     /// <summary>Per probe: the server's ms_ticks and start time at its last sample (null when not read), the schedule's time it
     /// was taken at, and the probe's sample clock then.</summary>
     private readonly Dictionary<string, (long? Ticks, long? Start, long TakenAt, long Clock)> clocks = new(StringComparer.Ordinal);
     private readonly ActivityIoTotals io = new();
     private int focus;
+    /// <summary>The focus moved to another session since the last sessions sample: its series start again.</summary>
+    private bool focusMoved;
     private ServerProfile? profile;
 
     public ActivityReader(ILiveHost host, string connectionId, ActivityLiveArgs? args = null, ActivityCatalog? catalog = null)
@@ -81,7 +82,11 @@ internal sealed class ActivityReader : ILiveSqlReader
         lock (gate)
         {
             foreach (var dto in args.Filters ?? []) filters[dto!.Table!] = ActivityFilter.Compile(catalog, dto);
-            if (args.FocusSession is { } session) focus = session;
+            if (args.FocusSession is { } session && session != focus)
+            {
+                focus = session;
+                focusMoved = true;
+            }
         }
     }
 
@@ -108,12 +113,7 @@ internal sealed class ActivityReader : ILiveSqlReader
         if (result.Rows is not [var row, ..]) throw new InvalidOperationException("The capability probe returned no row.");
         var found = new ActivityCapabilities(result.Int(row, "spid") ?? 0, result.Int(row, "server_state") == 1, result.Int(row, "alter_any_connection") == 1,
             result.Int(row, "view_any_definition") == 1, result.Int(row, "spills") == 1);
-        lock (gate)
-        {
-            Capabilities = found;
-            // Each new connection reports what its login may do again.
-            statusSent.Clear();
-        }
+        lock (gate) Capabilities = found;
         // What failed on the last connection runs again: the login may since hold the permission, or this be another server.
         skipped.Clear();
         return (found.Spid, found.ServerState);
@@ -122,13 +122,15 @@ internal sealed class ActivityReader : ILiveSqlReader
     public async Task<LiveReaderSample> ReadAsync(SqlConnection connection, string prologue, LiveDue item, Func<string, string, string>? testText, CancellationToken token)
     {
         var spec = item.Probe.Spec;
-        var server = profile ?? throw new InvalidOperationException("The probe ran before the source opened.");
-        var capabilities = Capabilities ?? throw new InvalidOperationException("The probe ran before the capability probe.");
+        // The reader's own invariants are bugs, which end the view failed (BACKEND_ERROR): SqlSampler takes an
+        // InvalidOperationException for a broken connection, and would reconnect in a loop.
+        var server = profile ?? throw Bug("The probe ran before the source opened.");
+        var capabilities = Capabilities ?? throw Bug("The probe ran before the capability probe.");
         // The opened frame says so when the capability probe ran as the source opened; when it did not (every probe started
         // paused, the gates were full, the connect failed), the probe learns it here and stops, as it would have opened.
         if (spec.Permission == "serverState" && !capabilities.ServerState)
             return new(null, [], [LiveErrors.Create(spec.Id, "PERMISSION_DENIED", LiveErrors.PermissionMessage)], Sampled: false);
-        var band = ActivitySql.BandOf(server.Major, server.EngineEdition, server.CatalogBand) ?? throw new InvalidOperationException("The probe ran on a server the monitor does not serve.");
+        var band = ActivitySql.BandOf(server.Major, server.EngineEdition, server.CatalogBand) ?? throw Bug("The probe ran on a server the monitor does not serve.");
         var render = new ActivityRender(band, catalog.EditionOf(server.EngineEdition)!, capabilities.TotalSpills, capabilities.ServerState);
         var statements = ActivitySql.Statements(spec.Id, render);
         var results = new Dictionary<string, ActivityResult>(StringComparer.Ordinal);
@@ -165,7 +167,7 @@ internal sealed class ActivityReader : ILiveSqlReader
             return new(null, [], [errors.Count > 0 ? errors[0] with { Tables = null, Series = null } : LiveErrors.Create(spec.Id, "SQL_ERROR", "The probe read nothing.")], Sampled: false);
 
         if (spec.Id == OverviewProbe) return new(ActivityOverview.Raw([.. spec.Series.Select(series => series.Id)], results, catalog, io), [], errors);
-        if (spec.Id != SessionsProbe) throw new InvalidOperationException("No reader for this Activity Monitor probe.");
+        if (spec.Id != SessionsProbe) throw Bug("No reader for this Activity Monitor probe.");
         return Sessions(spec, sampleTime, results, errors, capabilities);
     }
 
@@ -173,12 +175,13 @@ internal sealed class ActivityReader : ILiveSqlReader
     {
         Dictionary<string, ActivityFilter> current;
         int focusSession;
-        bool sendStatus;
+        bool moved;
         lock (gate)
         {
             current = new(filters, StringComparer.Ordinal);
             focusSession = focus;
-            sendStatus = statusSent.Add(spec.Id);
+            moved = focusMoved;
+            focusMoved = false;
         }
         var (msTicks, startTicks) = ActivityOverview.Clock(results);
         var varia = new VariaSessions(catalog, Environment.ProcessId, host.Clients, host.OwnSessions(connectionId));
@@ -189,7 +192,8 @@ internal sealed class ActivityReader : ILiveSqlReader
         {
             var processes = Filter("sessions");
             var writer = sessions.SessionsWriter;
-            tables.Add(new(Index(spec, "sessions"), built.Sessions, built.SessionsMore, row => processes.Matches(writer.Reader(row), built.Facts.GetValueOrDefault(row))));
+            tables.Add(new(Index(spec, "sessions"), built.Sessions, built.SessionsMore, row => processes.Matches(writer.Reader(row), built.Facts.GetValueOrDefault(row)),
+                row => processes.Shows(built.Facts.GetValueOrDefault(row))));
             var chains = Filter("blocking");
             // Without the waiting tasks (no server state) the chains are unknown: the error names the table instead.
             if (results.ContainsKey("edges")) tables.Add(new(Index(spec, "blocking"), built.Blocking, built.BlockingMore, row => chains.Matches(sessions.BlockingWriter.Reader(row))));
@@ -201,8 +205,10 @@ internal sealed class ActivityReader : ILiveSqlReader
         }
         if (!capabilities.ServerState)
             errors.Add(LiveErrors.Create(spec.Id, "PERMISSION_DENIED", LiveErrors.PermissionMessage) with { Tables = [Index(spec, "blocking"), Index(spec, "activeQueries")] });
-        LiveStatus[]? status = sendStatus ? [new("serverState", capabilities.ServerState ? 1 : 0), new("canKill", capabilities.AlterAnyConnection ? 1 : 0)] : null;
-        return new(new LiveRawSample(msTicks, startTicks, [built.FocusCpuRate, built.FocusReadsRate], [null, null]), tables, errors, Status: status);
+        // Every sample says what the connection's login may do, so a view that attaches later, or keeps only the latest sample,
+        // knows it; two small values.
+        LiveStatus[] status = [new("serverState", capabilities.ServerState ? 1 : 0), new("canKill", capabilities.AlterAnyConnection ? 1 : 0)];
+        return new(new LiveRawSample(msTicks, startTicks, [built.FocusCpuRate, built.FocusReadsRate], [null, null]), tables, errors, Status: status, SeriesReset: moved);
     }
 
     /// <summary>The sample's time on the probe's own clock, in milliseconds: it moves by the server's clock (ms_ticks) between
@@ -225,7 +231,9 @@ internal sealed class ActivityReader : ILiveSqlReader
         return clock;
     }
 
-    private static int Index(LiveProbeJson spec, string table) => spec.Tables.FindIndex(entry => entry.Id == table) is >= 0 and var at ? at : throw new InvalidOperationException("Unknown live table " + table);
+    private static int Index(LiveProbeJson spec, string table) => spec.Tables.FindIndex(entry => entry.Id == table) is >= 0 and var at ? at : throw Bug("An Activity Monitor probe has no live table it builds.");
+
+    private static RequestException Bug(string message) => new("BACKEND_ERROR", message);
 
     /// <summary>The error with the tables and series the statements feed (their indexes in the probe's catalogue entry).</summary>
     internal static LiveProbeError Named(LiveProbeError error, LiveProbeJson spec, IEnumerable<ActivityStatement> statements)

@@ -38,7 +38,8 @@ internal sealed record ActivityCapabilities(int Spid, bool ServerState, bool Alt
 /// suffix. Those values are the client's own claims at login, so a pool session (Object Explorer, Scripting, Object Actions,
 /// the Activity Monitor, the SSIS pools), which the default filter hides, must also be a session id Varia's own connections
 /// were given when they opened (SqlConnection.ServerProcessId) and may still hold (OwnSessionLedger): a client that claims
-/// Varia's process, machine and program name under any other session id is shown as itself. Plain-name sessions are labelled "Query tab", a plain-name session of
+/// Varia's process, machine and program name under any other session id is shown as itself (though Protected refuses to
+/// end it). Plain-name sessions are labelled "Query tab", a plain-name session of
 /// this process (a query tab, or a pooled connection of the Connect dialog's database list), which the renderer names by the
 /// tab that holds the session id; they are never hidden. The monitor's own session is always one of its pool's.</summary>
 internal sealed class VariaSessions
@@ -76,6 +77,16 @@ internal sealed class VariaSessions
         if (hostProcessId != processId || programName is null || hostName is null || !programs.TryGetValue(Key(programName, hostName), out var found)) return (null, false);
         return found.Pool && !own.Contains(sessionId) ? (null, false) : found;
     }
+
+    /// <summary>Whether ending the session must be refused as Varia's own (the seam for Kill): the monitor's, one whose id the
+    /// ledger names, or one that claims a Varia pool's process, machine and program name under any id. The ledger alone is not
+    /// enough here: SqlClient's idle connection resiliency, which the Object Explorer and Scripting pools keep, can give a held
+    /// connection a new session id without opening it again, so the ledger may still name the old id (since given to another
+    /// client) and miss the new one. Refusing a session that only claims Varia's names, or holds an id Varia held, is the safe
+    /// failure; hiding from the default view stays with the ledger alone (Classify).</summary>
+    public bool Protected(int sessionId, int? hostProcessId, string? hostName, string? programName, int monitorSpid) =>
+        sessionId == monitorSpid || own.Contains(sessionId)
+        || hostProcessId == processId && programName is not null && hostName is not null && programs.TryGetValue(Key(programName, hostName), out var found) && found.Pool;
 }
 
 /// <summary>The overview's raw values: each series' value and base from the statements that ran (one that did not leaves its
@@ -196,8 +207,9 @@ internal sealed class ActivityRowWriter
 
     public LiveCell[] New() => Enumerable.Repeat(LiveCell.Null, index.Count).ToArray();
 
+    /// <summary>A column the catalogue lacks is a bug, which ends the view failed (BACKEND_ERROR), never a lost connection.</summary>
     public void Set(LiveCell[] cells, string column, LiveCell cell) =>
-        cells[index.TryGetValue(column, out var at) ? at : throw new InvalidOperationException("Unknown Activity Monitor column " + column)] = cell;
+        cells[index.TryGetValue(column, out var at) ? at : throw new RequestException("BACKEND_ERROR", "An Activity Monitor row names a column its table lacks.")] = cell;
 
     /// <summary>A cell's display text by column id, as the filter engine reads it.</summary>
     public Func<string, string?> Reader(LiveRow row) => column => index.TryGetValue(column, out var at) ? row.Cells[at].Text : null;
@@ -292,7 +304,9 @@ internal sealed class ActivitySessionRows(ActivityCatalog catalog)
                 if (grouped.Count == 0 || rows.Int(grouped[^1].Head, "session_id") != rows.Int(row, "session_id")) grouped.Add((row, []));
                 if (rows.Get(row, "request_id") is not null) grouped[^1].Requests.Add(row);
             }
-        var sessionRows = grouped.Take(sessionsCap).ToList();
+        // The statement ranks sessions for its cap (blocking waits first, then requests, then idle ones); Processes shows the
+        // ones it kept by Session ID, the catalogue's default order, so a session never moves as it starts or ends a request.
+        var sessionRows = grouped.Take(sessionsCap).OrderBy(group => rows!.Int(group.Head, "session_id") ?? 0).ToList();
         foreach (var (row, _) in sessionRows)
             if (rows!.Int(row, "blocking_session_id") is { } blocker and not 0 && rows.Int(row, "session_id") is { } waiter)
                 waits.Add(new(waiter, blocker, rows.Text(row, "wait_type"), rows.Long(row, "wait_time") ?? 0, rows.Text(row, "wait_resource"), FromTask: false));

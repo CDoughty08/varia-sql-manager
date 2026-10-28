@@ -210,6 +210,11 @@ internal static class ActivitySourceChecks
         var many = SessionResults(Enumerable.Range(1, (int)Catalog.Limit("sessions") + 1).Select(id => Session(id)));
         var capped = new ActivitySessionRows(Catalog).Build(many, 0, varia, 99, 0);
         check(capped.Sessions.Count == Catalog.Limit("sessions") && capped.SessionsMore == 1, "Processes keeps the catalogue's 10,000 sessions and counts the one read past them as cut");
+        // The statement ranks sessions for its cap: blocking waits first, then requests, then idle sessions.
+        var ranked = new ActivitySessionRows(Catalog).Build(SessionResults([WithRequest(Session(70), status: "suspended", blocker: 52, waitType: "LCK_M_S", waitTime: 10), WithRequest(Session(51)),
+            Session(52), Session(9, user: false)]), 0, varia, 99, 0);
+        var order = string.Join(",", ranked.Sessions.Select(item => Cell(writer, item, "sessionId")));
+        check(order == "9,51,52,70", "Processes arrives in the catalogue's default order, Session ID ascending, not the statement's ranking, so a sample with no sort keeps each session in its place: " + order);
         // A full row: every column has a value, so no column of the live table is left unwritten.
         var everything = WithRequest(Session(60, cpu: 10, reads: 10), cpu: 1, reads: 1, blocker: 61, waitType: "LCK_M_S", waitTime: 900, percent: 5);
         var filled = new ActivitySessionRows(Catalog);
@@ -354,14 +359,22 @@ internal static class ActivitySourceChecks
         var longName = new string('V', 120);
         check(Own([longName], 9).Classify(9, 4242, Host, (longName + " - Object Explorer")[..128], 99) == ("Varia Object Explorer", true),
             "a 120-character Application Name's pool session, its program name cut to 128 characters, is still Varia's Object Explorer");
+        // SqlClient's idle connection resiliency reconnected a held Scripting connection under a new session, 88: the ledger
+        // still names its old id, 74, which SQL Server has since given to another client, and not 88.
+        var reconnected = Own(["Varia SQL Manager"], 74);
+        check(reconnected.Classify(88, 4242, Host, "Varia SQL Manager - Scripting", 99) == (null, false) && reconnected.Protected(88, 4242, Host, "Varia SQL Manager - Scripting", 99)
+            && reconnected.Protected(74, 1234, "OTHER-PC", "SSMS", 99) && reconnected.Protected(99, null, null, null, 99)
+            && !reconnected.Protected(90, 1234, "OTHER-PC", "SSMS", 99) && !reconnected.Protected(91, 4242, Host, "Varia SQL Manager", 99),
+            "ending a session is refused for every session that may be Varia's (the monitor's, one the ledger names, one that claims a pool's process, machine and program name), so a pool session SqlClient reconnected under a new id is never ended, while hiding stays with the ledger; another client's session and a query tab are not refused");
         var builder = new ActivitySessionRows(Catalog);
         var results = SessionResults([Session(99, "Varia SQL Manager - Activity Monitor"), Session(100, "Varia SQL Manager"), Session(101, "Varia SQL Manager - Object Explorer"), Session(1, "", null, user: false)]);
         var sample = builder.Build(results, 0, Own(["Varia SQL Manager"], 101), 99, 0);
         var defaults = ActivityFilter.Compile(Catalog, new("sessions"));
         string Shown(ActivitySessionsSample built, ActivityFilter filter) => string.Join(",", built.Sessions.Where(row => filter.Matches(builder.SessionsWriter.Reader(row), built.Facts[row]))
             .Select(row => Cell(builder.SessionsWriter, row, "sessionId")));
-        check(Shown(sample, defaults) == "100" && Shown(sample, ActivityFilter.Compile(Catalog, new("sessions", ShowSystem: true, ShowVaria: true))) == "99,100,101,1"
-            && Cell(builder.SessionsWriter, sample.Sessions[1], "varia") == "Query tab" && Cell(builder.SessionsWriter, sample.Sessions[0], "varia") == "Varia Activity Monitor",
+        string? Label(int id) => Cell(builder.SessionsWriter, sample.Sessions.Single(row => Cell(builder.SessionsWriter, row, "sessionId") == id.ToString()), "varia");
+        check(Shown(sample, defaults) == "100" && Shown(sample, ActivityFilter.Compile(Catalog, new("sessions", ShowSystem: true, ShowVaria: true))) == "1,99,100,101"
+            && Label(100) == "Query tab" && Label(99) == "Varia Activity Monitor",
             "by default Processes hides SQL Server's sessions and Varia's pools, the monitor's own included, and always shows this window's query tabs, labelled");
         var limited = new ActivitySessionRows(Catalog).Build(SessionResults([Session(99, "Varia SQL Manager - Activity Monitor")]), 0, Own(["Varia SQL Manager"]), 99, 0, hideMonitor: false);
         check(Shown(limited, defaults) == "99", "without server state the monitor's own session, the only one SQL Server shows, is not hidden as a pool");
@@ -370,7 +383,9 @@ internal static class ActivitySourceChecks
     private static void Filters(Action<bool, string> check)
     {
         var builder = new ActivitySessionRows(Catalog);
-        var results = SessionResults([WithRequest(Session(51), status: "running"), Session(52, openTransactions: 2), WithRequest(Session(53), status: "suspended", blocker: 51, waitType: "LCK_M_S", waitTime: 50)],
+        // 54 runs an UPDATE inside its open transaction, so it is active, not idle with one; 55 rolls back.
+        var results = SessionResults([WithRequest(Session(51), status: "running"), Session(52, openTransactions: 2), WithRequest(Session(53), status: "suspended", blocker: 51, waitType: "LCK_M_S", waitTime: 50),
+                WithRequest(Session(54, openTransactions: 1), command: "UPDATE"), WithRequest(Session(55, openTransactions: 1), command: "KILLED/ROLLBACK", status: "suspended", percent: 10)],
             [new Dictionary<string, object?> { ["session_id"] = 53, ["exec_context_id"] = 0, ["blocking_session_id"] = 51, ["blocking_exec_context_id"] = 0, ["wait_type"] = "LCK_M_S", ["wait_duration_ms"] = 50L, ["resource_description"] = "x" }]);
         var sample = builder.Build(results, 0, Own([]), 99, 0);
         string Shown(string? view, string? text = null)
@@ -378,8 +393,10 @@ internal static class ActivitySourceChecks
             var filter = ActivityFilter.Compile(Catalog, new("sessions", view, Text: text));
             return string.Join(",", sample.Sessions.Where(row => filter.Matches(builder.SessionsWriter.Reader(row), sample.Facts[row])).Select(row => Cell(builder.SessionsWriter, row, "sessionId")));
         }
-        check(Shown("active") == "51,53" && Shown("blocked") == "53" && Shown("blocking") == "51" && Shown("idleOpenTransaction") == "52" && Shown(null, "lck_m_s") == "53" && Shown(null, "OPEN TRAN") == "52",
-            "the view chips and the filter box work on the rows the sessions probe builds: what each row's facts and cells say");
+        check(Shown("active") == "51,53,54,55" && Shown("blocked") == "53" && Shown("blocking") == "51" && Shown("idleOpenTransaction") == "52" && Shown("rollingBack") == "55"
+            && Shown(null, "lck_m_s") == "53" && Shown(null, "OPEN TRAN") == "52",
+            "the view chips and the filter box work on the rows the sessions probe builds: Idle with open transaction keeps only a session that runs nothing, not one running inside its transaction, and Rolling back only a KILLED/ROLLBACK: "
+            + Shown("active") + " | " + Shown("idleOpenTransaction") + " | " + Shown("rollingBack"));
     }
 
     private static void Args(Action<bool, string> check)
@@ -431,6 +448,8 @@ internal static class ActivitySourceChecks
         public readonly List<string> Ran = [];
         public bool ServerState = true;
         public Func<ActivityStatement, bool> Fails = _ => false;
+        /// <summary>The error SQL Server raises for a statement Fails names (Msg 300 unless a check says otherwise).</summary>
+        public (int Number, byte Level, string Message) Failure = (300, 14, "VIEW SERVER PERFORMANCE STATE permission was denied on object 'server', database 'master'.");
         public long Ticks = 10_000;
         public List<Dictionary<string, object?>> SessionRows = [];
         public List<Dictionary<string, object?>> Edges = [];
@@ -448,7 +467,7 @@ internal static class ActivitySourceChecks
         private Task<ActivityResult> Run(ActivityStatement statement, IReadOnlyDictionary<string, object> values)
         {
             Ran.Add(statement.Probe + " " + statement.Id + (IsLimited(statement) ? " limited" : ""));
-            if (Fails(statement)) throw ConnectionFailureChecks.Sql(300, 1, 14, "server", "VIEW SERVER PERFORMANCE STATE permission was denied on object 'server', database 'master'.");
+            if (Fails(statement)) throw ConnectionFailureChecks.Sql(Failure.Number, 1, Failure.Level, "server", Failure.Message);
             Dictionary<string, object?>[] rows = statement.Id switch
             {
                 "capabilities" => [new() { ["spid"] = 99, ["server_state"] = ServerState ? 1 : 0, ["alter_any_connection"] = 0, ["view_any_definition"] = 0, ["spills"] = 1 }],
@@ -547,15 +566,104 @@ internal static class ActivitySourceChecks
         reader.Apply(ActivityReader.Check(new(Filters: [new("blocking")]), Catalog));
         var third = Next(2_000);
         var filtersAfter = reader.Current.Filters.Keys.Order(StringComparer.Ordinal).ToList();
+        // The Details flyout moves to session 53: its series start again rather than join 51's.
+        reader.Apply(ActivityReader.Check(new(FocusSession: 53), Catalog));
+        var switched = Next(2_500);
+        reader.Apply(ActivityReader.Check(new(FocusSession: 53), Catalog));
+        var stayed = Next(3_000);
         reader.Apply(ActivityReader.Check(new(FocusSession: 0), Catalog));
-        var fourth = Next(2_500);
+        var fourth = Next(3_500);
         check(Shown(first, "sessions", "sessionId") == "53" && Shown(first, "activeQueries", "activeSessionId") == "51" && Shown(third, "sessions", "sessionId") == "53"
             && filtersAfter.SequenceEqual(["activeQueries", "blocking", "sessions"]),
             "an args update replaces the filters of the tables it names and keeps the others' (Processes stays on Blocked while Active Expensive Queries takes a text): "
             + Shown(first, "sessions", "sessionId") + " | " + Shown(first, "activeQueries", "activeSessionId") + " | " + string.Join(",", filtersAfter));
-        check(Focus(first) is null && Focus(second) == 500 && Focus(third) == 500 && Focus(fourth) is null && reader.Current.Focus == 0,
+        var focused = new[] { first, second, third, switched, stayed, fourth };
+        check(Focus(first) is null && Focus(second) == 500 && Focus(third) == 500 && Focus(switched) == 0 && Focus(fourth) is null && reader.Current.Focus == 0,
             "the focus series follow the session focusSession names, through updates that name only filters, until one names another (0: none): "
-            + string.Join(",", new[] { first, second, third, fourth }.Select(sample => Focus(sample)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-")));
+            + string.Join(",", focused.Select(sample => Focus(sample)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-")));
+        check(focused.Select(sample => sample.SeriesReset).SequenceEqual([true, false, false, true, false, true])
+            && SqlSampler.SeriesGap(null, true) == "reset" && SqlSampler.SeriesGap("late", true) == "reset" && SqlSampler.SeriesGap("baseline", true) == "baseline"
+            && SqlSampler.SeriesGap("resumed", true) == "resumed" && SqlSampler.SeriesGap(null, false) is null && SqlSampler.SeriesGap("late", false) == "late",
+            "the first sessions sample after focusSession names another session is marked reset, so a chart never joins one session's points to the next's; one that names the same session changes nothing: "
+            + string.Join(",", focused.Select(sample => sample.SeriesReset)));
+        check(focused.All(sample => sample.Status is [{ Id: "serverState", Value: 1 }, { Id: "canKill", Value: 0 }]),
+            "every sessions sample says what the connection's login may do (server state, Kill), so a view that attaches later or keeps only the latest sample knows it");
+
+        StatementErrors(check);
+        Facets(check);
+    }
+
+    /// <summary>D-am amendment 5: a lock wait, unlike a refusal, stops the statements after it for one sample and runs again on
+    /// the next; and the reader's own invariants are bugs, never a lost connection.</summary>
+    private static void StatementErrors(Action<bool, string> check)
+    {
+        var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];
+        var waits = new Scripted { SessionRows = [WithRequest(Session(51))] };
+        waits.Connect();
+        waits.Ran.Clear();
+        var waitsLeft = 1;
+        waits.Failure = (1222, 16, "Lock request time out period exceeded.");
+        waits.Fails = statement => statement.Id == "edges" && waitsLeft-- > 0;
+        var blocked = waits.Read(ActivityReader.SessionsProbe, "baseline");
+        var ranBlocked = string.Join(",", waits.Ran);
+        waits.Ran.Clear();
+        waits.Ticks += 2_000;
+        var next = waits.Read(ActivityReader.SessionsProbe);
+        var ranNext = string.Join(",", waits.Ran);
+        var unrun = ActivitySql.Statements(spec.Id, new(17, "box")).SkipWhile(statement => statement.Id != "edges").ToList();
+        int[] named = [.. ActivityReader.Named(LiveErrors.Create(spec.Id, "BLOCKED", "x"), spec, unrun).Tables!];
+        check(blocked.Sampled && blocked.Errors is [{ Code: "BLOCKED", Number: 1222, Terminal: false } wait] && wait.Tables!.SequenceEqual(named) && named.SequenceEqual([0, 1, 2])
+            && blocked.Tables.Select(table => table.Table).SequenceEqual([0])
+            && ranBlocked == "activity.sessions clock,activity.sessions sessions,activity.sessions edges"
+            && next.Sampled && next.Errors.Count == 0 && next.Tables.Select(table => table.Table).SequenceEqual([0, 1, 2])
+            && ranNext == "activity.sessions clock,activity.sessions sessions,activity.sessions edges,activity.sessions leadBatches,activity.sessions activeQueries",
+            "a lock wait in a middle statement (the waiting tasks) stops the statements after it, which the BLOCKED value names unrun, and the next sample runs every statement again: "
+            + ranBlocked + " | " + ranNext + " | " + string.Join(";", blocked.Errors.Select(error => error.Code + " [" + string.Join(",", error.Tables ?? []) + "]")));
+
+        string Outcome(Action run)
+        {
+            try { run(); return "ran"; }
+            catch (RequestException error) { return error.Code; }
+            catch (Exception error) { return error.GetType().Name; }
+        }
+        var unconnected = new Scripted();
+        var writer = new ActivityRowWriter(Catalog.Table("sessions"));
+        var outcomes = new[]
+        {
+            Outcome(() => unconnected.Read(ActivityReader.SessionsProbe, "baseline")),
+            Outcome(() => writer.Set(writer.New(), "noSuchColumn", LiveCell.Null)),
+            Outcome(() => ActivitySql.Statements("activity.nothing", new(17, "box")))
+        };
+        check(outcomes.All(outcome => outcome == "BACKEND_ERROR"),
+            "the reader's own invariants (a probe before the capability probe, a column its table lacks, a probe with no SQL) are BACKEND_ERROR, which ends the view failed, never the InvalidOperationException SqlSampler takes for a lost connection: "
+            + string.Join(", ", outcomes));
+    }
+
+    /// <summary>Processes' facets count the rows its view chip and toggles show, not the sessions they hide.</summary>
+    private static void Facets(Action<bool, string> check)
+    {
+        var spec = LiveCatalog.Current.Probes[ActivityReader.SessionsProbe];
+        var scripted = new Scripted { SessionRows = [WithRequest(Session(1, "", null, user: false), command: "LAZY WRITER", status: "background"), WithRequest(Session(51), command: "SELECT")] };
+        scripted.Connect();
+        var set = new LiveTableSet(new Varia.Backend.Results.ResultStore(1L << 30, 1L << 29), Guid.NewGuid().ToString(), LiveCatalog.Current.Limits);
+        var table = set.Snapshot(spec, 0);
+        string Commands(LiveReaderSample sample)
+        {
+            set.BeginTick();
+            var read = sample.Tables.Single(entry => entry.Table == 0);
+            var written = table.Write(read.Rows, new(View: read.View, FacetScope: read.FacetScope)).Sample!;
+            return written.Facets?.SingleOrDefault(facet => facet.Column == "command") is { } facet ? string.Join(",", facet.Values.Select(value => value.Text + " " + value.Count)) : "(unchanged)";
+        }
+        var hidden = Commands(scripted.Read(ActivityReader.SessionsProbe, "baseline"));
+        scripted.Reader.Apply(ActivityReader.Check(new(Filters: [new("sessions", ShowSystem: true)]), Catalog));
+        scripted.Ticks += 2_000;
+        var shown = Commands(scripted.Read(ActivityReader.SessionsProbe));
+        scripted.Reader.Apply(ActivityReader.Check(new(Filters: [new("sessions", ShowSystem: true, ColumnFilters: [new("command", ["SELECT"])])]), Catalog));
+        scripted.Ticks += 2_000;
+        var ownFilter = Commands(scripted.Read(ActivityReader.SessionsProbe));
+        check(hidden == "SELECT 1" && shown == "LAZY WRITER 1,SELECT 1" && ownFilter == "(unchanged)",
+            "Processes' facets count the sessions its view chip and toggles show: a hidden system session's command is offered only with System sessions on, and a column's own value filter never empties its list: "
+            + hidden + " | " + shown + " | " + ownFilter);
     }
 
     private static void Ledger(Action<bool, string> check)

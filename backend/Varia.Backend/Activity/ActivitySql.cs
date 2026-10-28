@@ -273,15 +273,15 @@ internal static partial class ActivitySql
     /// <summary>The probe's statements for a render, in the order they run. Azure SQL Database's variants arrive with AM6.</summary>
     public static IReadOnlyList<ActivityStatement> Statements(string probe, ActivityRender render)
     {
-        if (render.Band < ActivityCatalog.Current.MinBand || render.Band > ActivityCatalog.Current.MaxBand) throw new InvalidOperationException("No Activity Monitor SQL for this version band.");
-        if (!ActivityCatalog.Current.Available(render.Edition)) throw new InvalidOperationException("No Activity Monitor SQL for this kind of server yet.");
+        if (render.Band < ActivityCatalog.Current.MinBand || render.Band > ActivityCatalog.Current.MaxBand) throw new RequestException("BACKEND_ERROR", "No Activity Monitor SQL for this version band.");
+        if (!ActivityCatalog.Current.Available(render.Edition)) throw new RequestException("BACKEND_ERROR", "No Activity Monitor SQL for this kind of server yet.");
         return probe switch
         {
             "activity.overview" => Overview(),
             "activity.sessions" => Sessions(render.ServerState),
             "activity.resources" => Resources(),
             "activity.queries" => Queries(render.TotalSpills),
-            _ => throw new InvalidOperationException("Unknown Activity Monitor probe.")
+            _ => throw new RequestException("BACKEND_ERROR", "Unknown Activity Monitor probe.")
         };
     }
 

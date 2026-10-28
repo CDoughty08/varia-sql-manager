@@ -68,6 +68,8 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     private SqlConnection? connection;
     /// <summary>The session probe ran on the open connection (it waits for a gate, so a connection can open without it).</summary>
     private bool sessionRead;
+    /// <summary>What the last session probe found: whether the login reads server state.</summary>
+    private bool serverState = true;
     private string permission = "VIEW SERVER STATE";
     private int band;
     private int? spid;
@@ -180,6 +182,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         if (opened) reopenedSpid = session;
         spid = session;
         sessionRead = true;
+        serverState = allowed;
         return allowed;
     }
 
@@ -218,6 +221,14 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                     continue;
                 }
                 if (!sessionRead) await SessionAsync(token).ConfigureAwait(false);
+                // A probe that needs server state the login lacks runs nothing, as it would have opened unavailable had the
+                // session probe run then (the source opened paused, the gates were full, the connect failed), or as a new
+                // connection finds it. Terminal: the probe stops.
+                if (item.Probe.Spec.Permission == "serverState" && !serverState)
+                {
+                    errors.Add(LiveErrors.Create(id, "PERMISSION_DENIED", LiveErrors.PermissionMessage));
+                    continue;
+                }
                 budget.CancelAfter(item.BudgetMs);
                 var started = Stopwatch.GetTimestamp();
                 var read = byReader ? await sourceReader!.ReadAsync(connection!, prologue, item, testText, budget.Token).ConfigureAwait(false) : await ReadAsync(query!, item, budget.Token).ConfigureAwait(false);
@@ -238,7 +249,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 if (read.Raw is { } raw)
                 {
                     var result = deltas[id].Apply(raw, clientElapsed, item.EffectiveIntervalMs, item.Gap);
-                    (metrics, elapsed, gap) = (result.Values, result.ElapsedMs, result.Gap);
+                    (metrics, elapsed, gap) = (result.Values, result.ElapsedMs, SeriesGap(result.Gap, read.SeriesReset));
                 }
                 var (snapshots, appends, full) = Store(item, read.Tables);
                 samples.Add(new LiveSample(id, cost, item.EffectiveIntervalMs, elapsed, gap, item.Skipped, metrics, snapshots.Count > 0 ? snapshots : null, appends.Count > 0 ? appends : null,
@@ -286,6 +297,10 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         var cursors = tables.Cursors();
         return new(samples, errors, reopened, cursors.Count > 0 ? cursors : null);
     }
+
+    /// <summary>A sample whose series follow something else from now on (SeriesReset) is marked reset, unless it already starts
+    /// them again (baseline, resumed, reset); reset outranks late.</summary>
+    internal static string? SeriesGap(string? gap, bool seriesReset) => seriesReset && gap is null or "late" ? "reset" : gap;
 
     /// <summary>Starts each append table that has not started, or whose predicate (a restart filter) changed, then runs the
     /// probe's batch: the metrics row, then each table's result set. A statement that failed after earlier ones returned is
@@ -467,11 +482,11 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
         var snapshots = new List<LiveSnapshotSample>();
         var appends = new List<LiveAppendSample>();
         var full = new List<int>();
-        foreach (var (index, rows, more, view) in read)
+        foreach (var (index, rows, more, view, scope) in read)
         {
             if (spec.Tables[index].Mode == "snapshot")
             {
-                var write = tables.Snapshot(spec, index).Write(rows, new(item.Sort, spec.FilterMode == "memory" ? item.Filter : null, view, item.Tracks.GetValueOrDefault(index)), more);
+                var write = tables.Snapshot(spec, index).Write(rows, new(item.Sort, spec.FilterMode == "memory" ? item.Filter : null, view, item.Tracks.GetValueOrDefault(index), scope), more);
                 if (write.Sample is { } sample) snapshots.Add(sample);
                 if (write.Budget) full.Add(index);
             }

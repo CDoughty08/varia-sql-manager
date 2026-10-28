@@ -169,7 +169,8 @@ internal readonly record struct LiveTableWrite<T>(T? Sample, bool Budget) where 
 /// <summary>What a snapshot revision applies to the source's rows: the user's sort (catalogue column ids; the key breaks
 /// ties), a filter on stored cell text, the probe's row view (a predicate the source gives for the chosen view id) and the
 /// latest track list.</summary>
-internal sealed record LiveSnapshotSettings(LiveSortArgs[]? Sort = null, LiveFilterArgs? Filter = null, Func<LiveRow, bool>? View = null, LiveTrackArgs? Track = null);
+internal sealed record LiveSnapshotSettings(LiveSortArgs[]? Sort = null, LiveFilterArgs? Filter = null, Func<LiveRow, bool>? View = null, LiveTrackArgs? Track = null,
+    Func<LiveRow, bool>? FacetScope = null);
 
 /// <summary>The stored tables of one subscription (docs/ipc.md, Live subscriptions, Tables): every snapshot and append table
 /// of its probes, created on first use, sharing one memory limit (64 MiB, LiveBudget) within the live share of the result
@@ -307,7 +308,7 @@ internal sealed class LiveSnapshotTable
     public LiveTableWrite<LiveSnapshotSample> Write(IReadOnlyList<LiveRow> source, LiveSnapshotSettings settings, long more = 0)
     {
         var keyed = key.Length > 0;
-        var facets = spec.Facets is { Count: > 0 } named ? Facets(source, named) : null;
+        var facets = spec.Facets is { Count: > 0 } named ? Facets(source, named, settings.FacetScope) : null;
         var lingers = spec.Departed && keyed && settings.Track is not null;
         present.Clear();
         if (lingers) foreach (var row in source) present.Add(row.Key(key));
@@ -442,20 +443,22 @@ internal sealed class LiveSnapshotTable
         return row => columns.Any(column => row.Cells[column].Text?.Contains(text, StringComparison.OrdinalIgnoreCase) == true);
     }
 
-    /// <summary>Each facet column's distinct values over every row the source gave (NULL left out), most frequent first,
-    /// each cut at the facet text cap, at most the facet value count.</summary>
-    private List<LiveFacet> Facets(IReadOnlyList<LiveRow> source, List<string> named)
+    /// <summary>Each facet column's distinct values over the rows the source gave that its facet scope keeps (every row
+    /// without one; NULL left out), most frequent first, each cut at the facet text cap, at most the facet value count.</summary>
+    private List<LiveFacet> Facets(IReadOnlyList<LiveRow> source, List<string> named, Func<LiveRow, bool>? scope)
     {
         var limits = owner.Limits;
         var facets = new List<LiveFacet>();
+        // The scope is asked once a row, not once a row and column.
+        bool[]? kept = scope is null ? null : [.. source.Select(scope)];
         foreach (var id in named.Take(limits.FacetColumns))
         {
             var column = spec.Columns.FindIndex(item => item.Id == id);
             if (column < 0) continue;
             var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (var row in source)
+            for (var at = 0; at < source.Count; at++)
             {
-                if (row.Cells[column].Text is not { } text) continue;
+                if (kept?[at] == false || source[at].Cells[column].Text is not { } text) continue;
                 var value = CellFormat.Prefix(text, limits.FacetCharacters, out _).ToString();
                 counts[value] = counts.GetValueOrDefault(value) + 1;
             }
