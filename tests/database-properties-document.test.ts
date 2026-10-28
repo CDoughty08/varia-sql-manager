@@ -35,6 +35,8 @@ function opened(model = databaseModel()) {
   fixture.api.scriptObjectAction.mockImplementation(async params => ({ ok: true, value: { text: `ALTER DATABASE -- ${JSON.stringify(params.action === 'properties' ? params.changes : {})}`, database: 'master', warnings: [] } as ActionScriptResult }))
   const listing = vi.spyOn(fixture.explorer, 'listingFolderOf').mockReturnValue(3)
   const refresh = vi.spyOn(fixture.explorer, 'refresh').mockImplementation(() => {})
+  // After Apply, the listing folder changes in place (not deep), as Rename, Delete and the Table Designer do.
+  const reconcile = vi.spyOn(fixture.explorer, 'reconcile').mockImplementation(() => {})
   const { properties, documents } = fixture
   const id = properties.open(node())
   const state = () => properties.get(id)!
@@ -42,7 +44,7 @@ function opened(model = databaseModel()) {
   const edit = (key: string, value: string) => properties.updateDraft(id, setOption(draft(), key, value))
   const executes = () => fixture.api.executeObjectAction.mock.calls.map(([request]) => request as ActionRequest)
   const scripts = () => fixture.api.scriptObjectAction.mock.calls.map(([request]) => request as ActionRequest)
-  return { ...fixture, properties, documents, id, state, draft, edit, executes, scripts, clock, listing, refresh }
+  return { ...fixture, properties, documents, id, state, draft, edit, executes, scripts, clock, listing, refresh, reconcile }
 }
 
 describe('Database Properties as a document', () => {
@@ -85,7 +87,7 @@ describe('Database Properties as a document', () => {
     expect(properties.canRefresh(id)).toBe(true)
   })
   it('applies only what changed, stays open, reloads Databases and reads the database again', async () => {
-    const { properties, documents, id, state, edit, executes, api, refresh } = opened()
+    const { properties, documents, id, state, edit, executes, api, refresh, reconcile } = opened()
     await settled()
     // Nothing changed: Apply sends nothing and succeeds.
     expect(await properties.apply(id)).toBe(true)
@@ -96,7 +98,8 @@ describe('Database Properties as a document', () => {
     expect(state().phase).toBe('applying')
     expect(await applied).toBe(true)
     expect(executes()).toEqual([{ action: 'properties', target: appData, closeConnections: false, changes: { options: { recoveryModel: 'SIMPLE', autoClose: 'true' } }, connectionId: 'c1', requestId: expect.any(String) }])
-    expect(refresh.mock.calls).toEqual([[3]])
+    expect(reconcile.mock.calls).toEqual([[3]])
+    expect(refresh).not.toHaveBeenCalled()
     expect(api.describeObject).toHaveBeenCalledTimes(2)
     expect(state()).toMatchObject({ phase: 'ready', changed: false, notice: propertiesMessages.applied, steps: [{ status: 'done' }] })
     expect(documents.get(id)).toMatchObject({ dirty: false })

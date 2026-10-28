@@ -68,7 +68,7 @@ export interface DatabasePropertiesServiceOptions {
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; refresh(id?: number): void }
+  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number): void }
   readonly focusEditor?: () => void
   /** Focuses a document's view (the app's DOM); tests leave it out. */
   readonly focus?: (id: string) => void
@@ -447,7 +447,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   }
   private refreshListing(state: PropertiesState): void {
     if (state.listingFolder === undefined) return
-    try { this.options.explorer.refresh(state.listingFolder) } catch (failure) { onUnexpectedError(failure) }
+    try { this.options.explorer.reconcile(state.listingFolder) } catch (failure) { onUnexpectedError(failure) }
   }
   /** Only the active document renders: a close prompt's Save applies in the background, and one that needs the person comes forward. */
   private show(id: string): void { if (this.options.documents.getSnapshot().activeId !== id) this.options.documents.activate(id) }
