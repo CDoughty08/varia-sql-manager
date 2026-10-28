@@ -670,6 +670,34 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .designer-cell[data-active], .table-designer-splitter:focus-visible { outline: 1px solid CanvasText; }
   .designer-row[data-selected] .designer-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
 }
+/* Live charts (live/ChartView.ts): the consumer sizes .live-chart; the canvas takes what the legend and toggle leave. */
+.live-chart { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--varia-charts-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.live-chart-canvas { display: block; flex: 1; width: 100%; min-height: 0; outline: none; }
+.live-chart-canvas:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.live-chart-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0 0 4px; padding: 0; list-style: none; }
+.live-chart-legend li { display: flex; align-items: center; gap: 4px; }
+.live-chart-swatch { flex: none; width: 16px; height: 8px; }
+.live-chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 3px 7px; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
+.live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
+.live-chart[data-table] .live-chart-canvas { display: none; }
+/* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
+.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.live-chart-table-wrap:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+/* As wide as the plot it replaces, so the caption takes one line; the header stays in view as the rows scroll (on the
+   chart's surface, which LiveChart sets on the thead). */
+.live-chart-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
+.live-chart-table caption { padding-bottom: 2px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
+.live-chart-table thead { position: sticky; top: 0; z-index: 1; }
+.live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
+.live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
+.live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
+@media (forced-colors: active) {
+  .live-chart-swatch line { stroke: CanvasText; }
+  /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */
+  .live-chart-system { forced-color-adjust: none; color: CanvasText; background-color: Canvas; border-top-color: GrayText; }
+  .live-chart-toggle[aria-pressed="true"] { outline: 1px solid CanvasText; }
+}
 /* The states kit (src/renderer/src/kit): one empty state, inline errors, loading placeholders, status pills and tags,
    filter chips, live labels and metric tiles. Colour is never the only sign: pills and badges carry a word, an on chip
    a check mark, and a tile over its threshold a glyph. */
@@ -755,6 +783,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tile-unit { margin-left: 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); font-weight: 400; }
 .tile-context { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
 .tile-chart { min-width: 0; min-height: 0; }
+/* A tile's sparkline (live/LiveChart.tsx, variant sparkline on surface tile.background). */
+.tile-chart > .live-chart { height: 32px; }
 @media (forced-colors: active) {
   /* Forced colors drop fills: pills, badges and tiles keep an outline, and an on chip takes the selection colors. */
   .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }

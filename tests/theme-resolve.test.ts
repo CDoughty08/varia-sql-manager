@@ -20,7 +20,8 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 // bar's text, so a theme that recolors the bar keeps it readable. The states kit takes the design's pill tints and live
 // colors, but pill text uses the status surface texts (and a successText slot), which stay readable over selected rows and
 // tinted status bars where the plain status colors do not; skeleton bars use the pressed fill, as the hover fill is too
-// faint on dialogs.
+// faint on dialogs. charts.gray is not in the design: it is the review's color for a stacked chart's
+// Other, the neutral swatch.
 const specValues = `
 foreground #d9dce3 #1c1f26|descriptionForeground #9298a4 #5c6370|disabledForeground #9298a4 #5c6370|errorForeground #f39a9a #b42229
 warningForeground #e4bb6a #875800|successForeground #74d19c #146f3b|infoForeground #8f9cff #4453d0|focusBorder #8f9cff #4453d0
@@ -97,7 +98,9 @@ live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|ti
 tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.background #30343e #d6dae0
 connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
 connection.yellow #d8bf5e #8f6b00|connection.green #6fbf8a #2e7d4f|connection.blue #6ea4ea #2563a8|connection.purple #ab95ea #7a4bbf
-connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00`
+connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00
+charts.foreground #a3a9b5 #4d5461|charts.lines #262a31 #e3e6eb|charts.blue #3987e5 #2a78d6|charts.orange #d95926 #d4581f|charts.green #199e70 #12936a
+charts.yellow #c98500 #a87200|charts.purple #9085e9 #6250d6|charts.red #f39a9a #b42229|charts.gray #8d939f #6b7280`
 const specSyntax = { keyword: ['#93a4ff', '#3442c2'], operator: ['#9ea6b4', '#575e6b'], predefined: ['#d4a9f2', '#8338b4'], string: ['#9fd4a9', '#2c7440'],
   number: ['#e8b97d', '#965700'], comment: ['#868e9b', '#636a76'], identifier: ['#d9dce3', '#1c1f26'], delimiter: ['#9ea6b4', '#575e6b'] }
 
@@ -125,10 +128,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 233 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 242 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(233)
-    expect(new Set(colorKeys).size).toBe(233)
+    expect(colorKeys).toHaveLength(242)
+    expect(new Set(colorKeys).size).toBe(242)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -143,7 +146,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(233)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(242)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -245,7 +248,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(233)
+      expect(Object.keys(theme.colors)).toHaveLength(242)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

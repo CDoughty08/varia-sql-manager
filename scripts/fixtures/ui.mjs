@@ -127,6 +127,11 @@ export const part = {
   dockingPreview: '.docking-preview',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
+  // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
+  // status region says the same), the legend's line samples, and the scroll box that holds View as table.
+  chartTooltip: '.live-chart-tip',
+  chartSwatch: '.live-chart-swatch',
+  chartTableWrap: '.live-chart-table-wrap',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -321,3 +326,11 @@ export const quickInputRows = page => quickInput(page).getByRole('option')
 export const quickInputActive = page => quickInput(page).getByRole('option', { selected: true })
 /** The live region for a hint or an error under the input; it stays in place while empty. */
 export const quickInputMessage = page => quickInput(page).locator('[aria-live="polite"]')
+
+// Live charts (src/renderer/src/live/LiveChart.tsx), inside the box a suite mounted one in.
+export const chartTooltip = box => box.locator(part.chartTooltip)
+/** The legend, named after the chart's title: shown only for two or more series. */
+export const chartLegend = box => box.getByRole('list', { name: / series$/ })
+export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('line')
+/** View as table's scroll box, a region named after the chart's title. */
+export const chartTableRegion = box => box.getByRole('region', { name: / table$/ })

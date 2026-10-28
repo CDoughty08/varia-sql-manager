@@ -1068,6 +1068,51 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
   Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
   32 MiB in all, keeping the newest samples. It lives in renderer memory only, so it survives a backend restart.
+- **Charts.** `ChartView` (`live/ChartView.ts`, imperative like `GridView`) draws one probe's ring on a canvas, and
+  `LiveChart` (`live/LiveChart.tsx`) mounts it with its legend and "View as table"; React renders nothing per point.
+  Series are lines, a line over a faint area, or stacked bands parted by a one-pixel line of the surface; a chart is a
+  full chart (labels for the scale's top, or value and time axes) or a sparkline (one trace, no text). The window is the
+  last `spanMs` up to the newest sample, or up to a fixed time. A draw happens at most once an animation frame (a tick,
+  a ring resized by `LiveService` (`onRings`), a resize, a theme, forced-colors or color-scheme change asks for one), only
+  if the ring's revision, the window, the size, the pixel ratio, the theme, the forced palette or the crosshair changed (a crosshair or a color alone repaints from the columns, bands and layout the last draw reduced the window to, without reading its samples again), and only while the canvas is on screen (`IntersectionObserver`) and the
+  page is visible (`live.page`, test mode's `setPageHidden` included). Each series is reduced to the smallest and largest
+  value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
+  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks a line, and a lone
+  sample between gaps shows as a one-pixel tick. Stacked bands break at a gap flag or at a sample with no stacked value at
+  all; a series missing from a sample that has other stacked values counts as 0 in it (a column's band is the mean over
+  every such sample in the column), so its band drops onto the one below rather than breaking every band above it. A
+  series whose `index` the ring does not have reads as no value, never as a neighbour's. Colors come only from the
+  active theme's `charts.*` keys and the surface the chart sits on (series
+  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
+  status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
+  draws in `CanvasText`, `Canvas` and `GrayText` as the DOM resolves them at each draw (from a hidden element styled with
+  them), since a canvas keeps its own stale reading of those keywords when the contrast theme changes while forced colors
+  stay on; it draws without fills, and each series after the first takes the dash of its place in the chart, as the legend
+  shows it. A chart sits on `editor.background`, `panel.background` (the default), `editorWidget.background` or
+  `tile.background`: its end markers are ringed and its bands parted in that color, and series and text are checked
+  against all four. A tile's sparkline goes in the states kit's `Tile` chart slot (`<Tile><LiveChart variant="sparkline"
+  surface="tile.background" …/></Tile>`), 32 px tall. A change of device pixel ratio alone (a move to a display of another scale)
+  redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s and never while the canvas has
+  focus (a screen reader would read the whole name again at each change; it catches up on blur),
+  `aria-roledescription="chart"`, and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  the crosshair (or against the plot's right edge when neither side has room; one wider than the plot wraps between its
+  parts); a pointer held still keeps the crosshair under it as a live window moves, on the sample now nearest it; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
+  or a blur hides it (a keyboard crosshair whose sample a live window moves past stays on the window's oldest sample), and each step is announced through a polite status region (these are the chart's own keys, as the
+  grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
+  and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
+  plot's place, at its size and scrolling there (a focusable region named "<title> table", its header kept in view),
+  newest first, at most 120 rows or `tableRows` (a longer window is sampled evenly), a row marked when any sample since
+  the row before it follows a gap (never the oldest row: the flag of a view's first, baseline sample parts it from nothing shown); the table, `latest()` and the keys read the window,
+  not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
+  `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
+  from its catalogue; it draws at most 12 series (`chartLimits.series`), and its legend and table list the same ones.
+  A live window ends at the newest sample, so history stays in view when collection stops. Whether that sample reads as
+  "now" comes from the view, not from the spacing of the ring's samples (which a refresh, a back-off or a new interval
+  would mislead): `bindChart` follows the handle's snapshot, and the times read "now" and "ago" only while the probe is
+  `fresh` or `limited` and its newest sample came within twice its effective interval (so a resumed view is not "now"
+  until its first sample). Otherwise (paused, stale, failing, lost, ended) they read as clock times at once, and the name,
+  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
@@ -1076,7 +1121,7 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
 
-Later: `ChartView` (L4) and `LiveGrid` (L5) on these views.
+Later: `LiveGrid` (L5) on these views.
 
 ## Results port and results worker
 
@@ -1495,12 +1540,26 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
   update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
   memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
+  `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
+  pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
+  from the theme (the DOM's system colors, followed through a palette change, and dashes under forced colors), stacked
+  bands and where they break, crosshair dots on the bands, the 5 s accessible name held while focused, the keyboard and
+  pointer crosshair (a keyboard one kept on the oldest sample and a pointer's under the pointer as a live window moves, a
+  move repainted without reading the window again), the tooltip inside a narrow plot, series indexes the ring lacks,
+  stacked gaps, lone samples and missing values, the 12-series cap, linked charts, the table and `probeCurrent`'s bound;
+  `tests/live-service.test.ts` binds a chart to a view and checks that "now" follows the probe's state through an
+  interval change, a refresh, a back-off, a pause and a resume, and that a ring resize redraws a paused view's chart.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
   runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
   hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
-  closing, and a killed backend reported lost and back after Reconnect. `scripts/results-smoke.mjs` drives the grid on
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/chart-smoke.mjs` mounts charts of such
+  a view and reads their canvas pixels: the series in the theme's chart color, redrawn as ticks arrive and not while the
+  window is hidden, the accessible name (held while focused), the keyboard and pointer crosshair (a pointer held still near either edge
+  keeps its tooltip as the window moves; a narrow two-series chart keeps its tooltip inside the plot), the table (its caption,
+  header, focus ring and row cap), a legend of two series and none for one, a tile's sparkline (which takes no focus), a switch to Light, and
+  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.
@@ -1508,7 +1567,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -1541,7 +1600,9 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
-  planning, and the shared window cache (full, so every insert evicts).
+  planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
+  times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
+  with axes, into a context that only counts calls: what a live chart costs a frame at most.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
@@ -1575,6 +1636,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |

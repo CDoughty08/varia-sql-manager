@@ -88,7 +88,8 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
+  O(visible cells).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
@@ -107,7 +108,10 @@ pages, limits, error codes, display formats, benchmarks).
   the live gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values
   that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
+  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
+  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
+  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB

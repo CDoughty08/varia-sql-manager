@@ -1,3 +1,4 @@
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from './charts'
 import { sqlScopes, type ColorKey, type SqlScope } from './registry'
 import { statusTones, toneKeys } from './tones'
 
@@ -28,6 +29,7 @@ const dock: ColorKey[] = ['dock.background'], grid: ColorKey[] = ['resultsGrid.b
 const widgetInactiveSelection: ColorKey[] = ['editorWidget.background', 'list.inactiveSelectionBackground']
 const suggestFocus: ColorKey[] = ['editorWidget.background', 'quickInputList.focusBackground']
 const headerHover: ColorKey[] = ['resultsGrid.headerBackground', 'resultsGrid.hoverBackground']
+const surfacesOfCharts: ColorKey[][] = chartSurfaces.map(surface => [surface])
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
 /** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
@@ -172,6 +174,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
+  // Charts sit on documents, cards and widgets: their labels and legends are text, their series and status marks are
+  // graphics (WCAG 1.4.11).
+  ...text(['charts.foreground'], ...surfacesOfCharts),
+  ...graphic([...chartSeriesColors, ...chartStatusColors], ...surfacesOfCharts),
 
   // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
   ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
@@ -212,5 +218,6 @@ export const contrastExemptions: Readonly<Partial<Record<ColorKey, string>>> = {
   'statusBar.separatorForeground': 'Decorative divider between status items; the items carry the meaning.',
   'emptyState.iconForeground': 'Decorative glyph beside text that says the same thing.',
   'editorWhitespace.foreground': 'Decorative glyph beside the text: View White Space marks spaces and tabs the text already has.',
-  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.'
+  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.',
+  'charts.lines': 'Decorative grid lines; the values are in the axis labels, the crosshair tooltip and the data table.'
 }
