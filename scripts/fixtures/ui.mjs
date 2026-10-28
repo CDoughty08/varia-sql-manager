@@ -117,6 +117,8 @@ export const part = {
   modalBackdrop: '.modal-backdrop',
   // Table designer and the editor
   tableDesigner: '.table-designer',
+  // The document frame
+  documentHeader: '.document-header',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -309,6 +311,33 @@ export const optionsDescription = dialog => dialog.locator(part.optionsDescripti
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
 /** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
 export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
+
+// Document frames (src/renderer/src/kit/DocumentFrame.tsx): Activity Monitor, SSIS documents, properties as documents
+
+/** A document's frame, a region named by its title. */
+export const documentFrame = (page, title) => page.getByRole('region', named(title))
+/** The header row, for its height (it has no role of its own inside the frame's region). */
+export const documentHeader = frame => frame.locator(part.documentHeader)
+export const documentCrumbs = frame => frame.getByRole('navigation', { name: 'Location', exact: true }).getByRole('listitem')
+export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
+/** A section's item in the list by the section's id (its name says when the section needs attention). */
+export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
+export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')
+/** The one item the list's tab stop is on. */
+export const sectionTabStop = frame => sectionList(frame).locator('[tabindex="0"]')
+/** The scrolling column of sections, a tab stop named after the document. */
+export const sectionColumn = (frame, title) => frame.getByRole('region', named(title + ' sections'))
+/** A section in the column, a group named by its heading (not a landmark). */
+export const frameSection = (frame, title) => frame.getByRole('group', named(title))
+/** A collapsible section's heading button. */
+export const sectionToggle = section => section.getByRole('heading', { level: 2 }).getByRole('button')
+export const scriptDrawer = frame => frame.getByRole('region', { name: 'Script', exact: true })
+export const scriptToggle = frame => scriptDrawer(frame).getByRole('button', { name: 'Script', exact: true })
+export const scriptSplitter = frame => frame.getByRole('separator', { name: 'Resize Script', exact: true })
+/** The drawer's ways out (Open in Query Window, Save Script As…, Copy), by name, or all of them. */
+export const scriptActions = (frame, name) => scriptDrawer(frame).getByRole('group', { name: 'Script', exact: true }).getByRole('button', name === undefined ? {} : named(name))
+export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
+export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
 
 // Menus and the quick input
 
