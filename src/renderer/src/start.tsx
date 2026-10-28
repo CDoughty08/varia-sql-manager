@@ -50,7 +50,7 @@ export async function start(root: Root): Promise<void> {
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },
-      // Live views on the synthetic source, the SSIS tree's views, and the window's visibility (live-smoke.mjs, explorer-smoke.mjs).
+      // Live views on the synthetic source, the SSIS tree's views, and the window's visibility (live-smoke.mjs, electron-smoke.mjs).
       __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, workbench.ssisTree)
     })
   }

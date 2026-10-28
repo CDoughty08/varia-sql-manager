@@ -1,7 +1,7 @@
 // Renders the generated part of docs/integration-services.md from the catalogue: everything after `generatedMarker`.
 // tests/ssis-catalog.test.ts keeps the file in sync and leaves the hand-written part above the marker as it is.
 import {
-  catalogDatabase, catalogFingerprints, catalogProbeRetryMs, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
+  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
   valueTypes, finalStatuses, type CodeLabel
 } from './catalog.ts'
@@ -83,18 +83,22 @@ export function renderSsisDocs(): string {
     'the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.',
     '`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it): anyone',
     'else\'s sample runs a second constant query without it, so its fingerprint stays 0 and 0 for them. The first sample of a connection',
-    'is its baseline; a later one, or the first of a new view on the same connection (SSISDB closed and opened again, Object Explorer',
-    'shown again), reloads in the background only the listed nodes that show a view whose fingerprint changed, keeping expansion and',
-    'selection and announcing what was added or removed; a reload never opens a node, one that a collapsed node hides waits until it',
-    'shows, and one whose first listing is still on its way (it may have read the catalog before the change) reloads once that listing',
-    'answers. The view pauses 2 s',
+    'is its baseline, unless it came late: when SSISDB was already listed as the view opened (a view refused or ended and opened again,',
+    'live updates turned on while browsing) or the view failed or paused before it sampled, that sample reloads SSISDB deeply, since',
+    'what changed meanwhile would otherwise never show. A later sample, or the first of a new view on the same connection (SSISDB closed',
+    'and opened again, Object Explorer shown again), reloads in the background only the listed nodes that show a view whose fingerprint',
+    'changed, keeping expansion and selection and announcing what was added or removed; a reload never opens a node, one that a',
+    'collapsed node hides waits until it shows, and one with a listing on its way in it, above it or below it (a first listing, the',
+    'user\'s Refresh, an earlier reload, any of which may have read the catalog before the change) reloads once those listings answer, so',
+    'a Refresh is never restarted or made shallower. The view pauses 2 s',
     'after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog\'s database, READ',
     'UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view',
     '(`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or',
     'restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server',
     `or the window has no room for another live view, the backend restarted it) opens again after ${seconds(catalogProbeRetryMs.first)}, doubling to ${seconds(catalogProbeRetryMs.max)} while it keeps`,
-    'ending before a sample. One that the login cannot read or open, or whose sign-in is refused, stops for good (`PERMISSION_DENIED`,',
-    '`LOGIN_FAILED`): SSISDB reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of',
+    'ending before a sample. One that no retry would fix stops for good: the login cannot read the catalog or its sign-in is refused, the',
+    'catalog lacks a view or column the probe reads, the request was refused as malformed, or the window closed',
+    `(${catalogProbeFinalCodes.map(code).join(', ')}). SSISDB then reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of`,
     'the Integration Services Catalogs folder or of its server, or closing and opening SSISDB, tries again (a Refresh elsewhere does not).',
     '',
     table(['Fingerprint', 'Catalog view', 'Object Explorer reloads'], catalogFingerprints.map(fingerprint => [code(fingerprint.id), code(fingerprint.view),

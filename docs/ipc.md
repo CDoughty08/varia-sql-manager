@@ -328,8 +328,9 @@ catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog nod
 login may not open `NO_DB_ACCESS`. While a catalog node is open, the renderer keeps the tree current through the `ssis.catalog`
 live source ([Live subscriptions](#live-subscriptions)): a catalog view whose fingerprint changed reconciles, in the
 background, only the listed nodes that show it (docs/integration-services.md, The live tree). The view runs only while the
-catalog node shows; one that ends opens again after a back-off (2 s doubling to 60 s), unless it ended `PERMISSION_DENIED` or
-`LOGIN_FAILED`: the catalog node then notes why until a refresh of it, of a node in it or of its server (`explorer.refreshed`
+catalog node shows; one that ends opens again after a back-off (2 s doubling to 60 s), unless it ended `PERMISSION_DENIED`,
+`LOGIN_FAILED`, `NOT_SUPPORTED` (the catalog lacks a view or column the probe reads), `INVALID_PARAMS` or `PORT_CLOSED`
+(`catalogProbeFinalCodes`): the catalog node then notes why until a refresh of it, of a node in it or of its server (`explorer.refreshed`
 names the refreshed node), or until it is closed and opened again. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
 target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
 `{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database

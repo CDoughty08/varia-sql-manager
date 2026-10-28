@@ -456,6 +456,9 @@ try {
   // keeps its row and stays expanded, and only the Projects folder is listed again. Closing SSISDB ends the probe.
   const ssisViews = () => page.evaluate(() => window.__variaLive.ssisTree())
   await expect.poll(async () => (await ssisViews()).map(view => view.connectionId)).toEqual([idB])
+  // The tree's view is an ordinary LiveService view, which snapshot() finds by its id although no test opened it.
+  const [{ id: treeView }] = await ssisViews()
+  await expect.poll(async () => (await page.evaluate(id => window.__variaLive.snapshot(id), treeView))?.status).toBe('live')
   const probes = (await calls()).filter(call => call.method === 'live.subscribe' && call.params.source === 'ssis.catalog')
   expect(probes.map(call => [call.params.connectionId, call.params.probes])).toEqual([[idB, [{ probe: 'ssis.catalogProbe', intervalMs: 30_000 }]]])
   const ssisPath = ['server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects']

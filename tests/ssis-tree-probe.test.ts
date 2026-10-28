@@ -6,13 +6,13 @@ import { explorerChildrenParamsSchema } from '../src/shared/explorer/schema'
 import type { LiveSpec, LiveOwner, LiveHandle, AppliedTick, LiveSnapshot } from '../src/renderer/src/live/LiveService'
 import type { LiveProbeError, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
-import { catalogFingerprints, catalogFingerprintStatus, catalogProbeRetryMs as ssisTreeRetryMs } from '../src/shared/ssis/catalog'
+import { catalogFingerprints, catalogFingerprintStatus, catalogProbeFinalCodes, catalogProbeRetryMs as ssisTreeRetryMs } from '../src/shared/ssis/catalog'
 import { EventBus } from '../src/renderer/src/core/events'
 import type { WorkbenchEvent } from '../src/renderer/src/core/types'
 import { ConnectionService } from '../src/renderer/src/services/connections'
-import { ExplorerService } from '../src/renderer/src/explorer/ExplorerService'
+import { ExplorerService, type TreeNode } from '../src/renderer/src/explorer/ExplorerService'
 import { rowTooltip } from '../src/renderer/src/explorer/ExplorerRow'
-import { SsisTreeProbe } from '../src/renderer/src/ssis/SsisTreeProbe'
+import { shownInExplorer, SsisTreeProbe } from '../src/renderer/src/ssis/SsisTreeProbe'
 import { connectionInfo, connectionOptions, manualTimers } from './fixtures/workbench'
 
 const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)) }
@@ -92,6 +92,11 @@ class FakeView {
   setProbe(probe: string, patch: unknown) { this.patches.push({ probe, patch }) }
   refreshes = 0
   refresh() { this.refreshes++ }
+  /** LiveService paused the view (Object Explorer or the window hidden), or let it go dormant. */
+  pause(status: 'paused' | 'dormant' = 'paused') {
+    this.snapshot = { ...this.snapshot, status, pausedBy: 'hidden' }
+    for (const listener of [...this.statusListeners]) listener()
+  }
   dispose() { this.disposed = true }
   tick(status: ReadonlyMap<string, number> | undefined, errors?: LiveProbeError[]) {
     const tick: LiveTick = {
@@ -109,7 +114,7 @@ const fingerprints = (changes: Record<string, number> = {}) => new Map(catalogFi
 const disposals: (() => void)[] = []
 afterEach(() => { disposals.splice(0).forEach(dispose => dispose()) })
 
-function fixture(settings: Partial<SettingsValues> = {}) {
+function fixture(settings: Partial<SettingsValues> = {}, extra: { shown?: (explorer: ExplorerService, catalog: TreeNode) => boolean } = {}) {
   const backend = fakeBackend()
   const connections = new ConnectionService(), events = new EventBus(), emitted: WorkbenchEvent[] = []
   events.subscribe(event => emitted.push(event))
@@ -128,7 +133,8 @@ function fixture(settings: Partial<SettingsValues> = {}) {
   const settingListeners = new Set<() => void>()
   const settingsSource = { getSnapshot: () => ({ values }), subscribe: (listener: () => void) => { settingListeners.add(listener); return () => settingListeners.delete(listener) } }
   const setSettings = (patch: Partial<SettingsValues>) => { values = { ...values, ...patch }; settingListeners.forEach(listener => listener()) }
-  const probe = new SsisTreeProbe({ explorer, live, explorerVisible, settings: settingsSource, events, timers })
+  const shown = extra.shown
+  const probe = new SsisTreeProbe({ explorer, live, explorerVisible, settings: settingsSource, events, timers, ...shown ? { shown: (catalog: TreeNode) => shown(explorer, catalog) } : {} })
   disposals.push(() => { probe.dispose(); explorer.dispose() })
   const connect = (n = 1) => connections.add({ ...connectionInfo(cid(n), 1), server: `server-${n}.example` }, connectionOptions)
   const rows = () => Array.from(explorer.getSnapshot().rows.ids).filter(id => id > 0).map(id => explorer.node(id)!)
@@ -192,11 +198,29 @@ describe('SsisTreeProbe: the view\'s life', () => {
       await settle()
     }
     expect(f.views.map(view => view.spec.connectionId)).toEqual([cid(1), cid(2)])
+    f.views[0].tick(fingerprints())
+    expect(f.probe.fingerprints(cid(1))).toEqual(fingerprints())
     f.connections.remove(cid(1))
     await settle()
     expect(f.views[0].owner.connectionId?.()).toBeUndefined()
     expect(f.views[0].disposed).toBe(true)
     expect(f.views[1].disposed).toBe(false)
+    // The fingerprints of a server that left the tree are forgotten: a new connection to it starts from a baseline.
+    expect(f.probe.fingerprints(cid(1))).toBeUndefined()
+  })
+  it('gives the view no connection once its server\'s backend is lost, and closes it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB')
+    const [view] = f.views
+    expect(view.owner.connectionId?.()).toBe(cid(1))
+    f.connections.markLostBefore(2)
+    await settle()
+    // The lost server keeps its row, so only its lost flag tells LiveService that the view's connection is gone.
+    expect(f.explorer.node(f.find('server-1.example'))!.lost).toBe(true)
+    expect(view.owner.connectionId?.()).toBeUndefined()
+    expect(view.disposed).toBe(true)
   })
   it('follows the settings: off closes every view and on opens them again; a new interval goes to the running views', async () => {
     const f = fixture()
@@ -330,6 +354,8 @@ describe('SsisTreeProbe: reloading what changed', () => {
     expect(f.loads(before)).toEqual(['integrationServicesCatalogs'])
     expect(f.labels().slice(1)).toEqual(['  Integration Services Catalogs'])
     expect(view.disposed).toBe(true)
+    // A catalog created again later starts from a baseline, not from the dropped one's fingerprints.
+    expect(f.probe.fingerprints(cid(1))).toBeUndefined()
     // Another error is a value the next sample retries: nothing reloads.
     expect(f.probe.connections).toEqual([])
   })
@@ -372,6 +398,7 @@ describe('SsisTreeProbe: reloading what changed', () => {
     await settle()
     await f.open('Integration Services Catalogs')
     const release = f.hold('ssisCatalog:SSISDB')
+    const before = f.sent.length
     f.explorer.expand(f.find('SSISDB'))
     await settle()
     const view = f.views[0]
@@ -379,9 +406,52 @@ describe('SsisTreeProbe: reloading what changed', () => {
     f.state.catalog.folders.Sales = { projects: {}, environments: {} }
     view.tick(fingerprints({ foldersCount: 2, foldersChecksum: 7 }))
     await settle()
+    // The user's listing keeps its place: it is neither cancelled nor asked for again until it answers.
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB'])
+    expect(f.api.explorerCancel).not.toHaveBeenCalled()
     release()
     await settle()
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB', 'ssisCatalog:SSISDB'])
     expect(f.labels()).toEqual(expect.arrayContaining(['      Finance', '      Sales']))
+  })
+  it('lets the user\'s Refresh of a listed folder finish, deeply, when a change to it is seen meanwhile, and then reloads it', async () => {
+    const { f, view } = await opened()
+    // F5 on Projects, to see a package added to Loads, while a project is deployed elsewhere.
+    f.state.catalog.folders.Finance.projects.Loads.push('Weekly.dtsx')
+    const release = f.hold('ssisProjects')
+    const before = f.sent.length
+    f.explorer.refresh(f.find('Projects'))
+    await settle()
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    view.tick(fingerprints({ projectsCount: 2, projectsChecksum: 7 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisProjects'])
+    expect(f.api.explorerCancel).not.toHaveBeenCalled()
+    release()
+    await settle()
+    // The Refresh reloads Loads and its Packages below; the change reloads Projects once everything below has answered.
+    expect(f.loads(before)).toEqual(['ssisProjects', 'ssisProject:Loads', 'ssisPackages', 'ssisProjects'])
+    expect(f.api.explorerCancel).not.toHaveBeenCalled()
+    expect(f.labels()).toEqual(expect.arrayContaining(['              Weekly.dtsx', '          Nightly']))
+  })
+  it('waits for the user\'s Refresh above a folder that changed, so the Refresh still reloads what is below it', async () => {
+    const { f, view } = await opened()
+    f.state.catalog.folders.Finance.projects.Loads.push('Weekly.dtsx')
+    const release = f.hold('ssisFolder:Finance')
+    const before = f.sent.length
+    f.explorer.refresh(f.find('Finance'))
+    await settle()
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    view.tick(fingerprints({ projectsCount: 2, projectsChecksum: 7 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisFolder:Finance'])
+    release()
+    await settle()
+    const loads = f.loads(before)
+    expect(loads.slice(0, -1).sort()).toEqual(['ssisEnvironments', 'ssisFolder:Finance', 'ssisPackages', 'ssisProject:Loads', 'ssisProjects'])
+    expect(loads.at(-1)).toBe('ssisProjects')
+    expect(f.api.explorerCancel).not.toHaveBeenCalled()
+    expect(f.labels()).toEqual(expect.arrayContaining(['              Weekly.dtsx', '          Nightly']))
   })
   it('reloads at once after Varia\'s own change and has the view sample now, and hands a document the last fingerprints', async () => {
     const { f, view } = await opened()
@@ -397,6 +467,79 @@ describe('SsisTreeProbe: reloading what changed', () => {
     expect(view.refreshes).toBe(1)
     view.tick(fingerprints({ environmentsCount: 2 }))
     expect(f.probe.fingerprints(cid(1))?.get('environmentsCount')).toBe(2)
+  })
+})
+
+describe('SsisTreeProbe: a baseline that came late', () => {
+  /** SSISDB > Finance > Projects open, with Loads listed under Projects. */
+  async function browse(f: ReturnType<typeof fixture>) {
+    await f.open('SSISDB', 'Finance', 'Projects')
+    expect(f.labels()).toContain('          Loads')
+  }
+  it('reloads SSISDB deeply on the first sample of a view the window refused while the user browsed', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs')
+    f.refuse.next = { code: 'TOO_MANY_REQUESTS', message: 'This window has too many live views open.' }
+    await browse(f)
+    expect(f.views[0].disposed).toBe(true)
+    // A project deployed elsewhere before the view could open: its first sample already counts it.
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    f.advance(ssisTreeRetryMs.first)
+    const view = f.views[1]
+    const before = f.sent.length
+    view.tick(fingerprints({ projectsCount: 2 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB', 'ssisFolder:Finance', 'ssisProjects'])
+    expect(f.labels()).toContain('          Nightly')
+    // That sample is the baseline from then on.
+    const after = f.sent.length
+    view.tick(fingerprints({ projectsCount: 2 }))
+    await settle()
+    expect(f.sent.length).toBe(after)
+  })
+  it('reloads SSISDB deeply on the first sample after the view\'s first ticks failed', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB')
+    const [view] = f.views
+    view.tick(undefined, [{ probe: 'ssis.catalogProbe', code: 'BLOCKED', message: 'Another session held a lock this view needed for more than a second. It tries again.', retryInMs: 30_000, terminal: false }])
+    await f.open('Finance', 'Projects')
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    const before = f.sent.length
+    view.tick(fingerprints({ projectsCount: 2 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB', 'ssisFolder:Finance', 'ssisProjects'])
+    expect(f.labels()).toContain('          Nightly')
+  })
+  it('reloads SSISDB deeply on the first sample after the view paused before sampling', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects')
+    const [view] = f.views
+    view.pause()
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    const before = f.sent.length
+    view.tick(fingerprints({ projectsCount: 2 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB', 'ssisFolder:Finance', 'ssisProjects'])
+  })
+  it('reloads SSISDB deeply on the first sample when live updates are turned on after browsing', async () => {
+    const f = fixture({ 'integrationServices.treeLive': false })
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs')
+    await browse(f)
+    f.state.catalog.folders.Finance.projects.Nightly = ['Nightly.dtsx']
+    f.setSettings({ 'integrationServices.treeLive': true })
+    const before = f.sent.length
+    f.views[0].tick(fingerprints({ projectsCount: 2 }))
+    await settle()
+    expect(f.loads(before)).toEqual(['ssisCatalog:SSISDB', 'ssisFolder:Finance', 'ssisProjects'])
+    expect(f.labels()).toContain('          Nightly')
   })
 })
 
@@ -476,6 +619,23 @@ describe('SsisTreeProbe: only while SSISDB shows', () => {
     await settle()
     expect(f.views).toHaveLength(3)
     expect(f.probe.connections).toEqual([cid(1)])
+  })
+  it('asks the container that shows the catalogs whether SSISDB shows, when one is given (F7\'s Integration Services)', async () => {
+    let elsewhere = true
+    const f = fixture({}, { shown: (explorer, catalog) => elsewhere || shownInExplorer(explorer, catalog) })
+    f.connect()
+    await settle()
+    await f.open('Integration Services Catalogs', 'SSISDB')
+    f.explorer.collapse(f.find('server-1.example'))
+    await settle()
+    // Object Explorer hides SSISDB, yet the other container still shows it: the view stays.
+    expect(f.views).toHaveLength(1)
+    expect(f.views[0].disposed).toBe(false)
+    elsewhere = false
+    f.explorer.expand(f.find('server-1.example'))
+    f.explorer.collapse(f.find('server-1.example'))
+    await settle()
+    expect(f.views[0].disposed).toBe(true)
   })
   it('keeps an empty SSISDB unwatched while its folder is collapsed', async () => {
     const f = fixture()
@@ -579,6 +739,19 @@ describe('SsisTreeProbe: a view that stopped', () => {
     await settle()
     expect(f.views).toHaveLength(4)
     expect(f.views[3].disposed).toBe(false)
+  })
+  it('stops for good, with the note and no retry, on every final code: a catalog without what the probe reads among them', async () => {
+    expect(catalogProbeFinalCodes).toEqual(['PERMISSION_DENIED', 'LOGIN_FAILED', 'NOT_SUPPORTED', 'INVALID_PARAMS', 'PORT_CLOSED'])
+    for (const code of catalogProbeFinalCodes) {
+      const f = await openedCatalog()
+      f.views[0].end(code, 'This view is not available on this server.')
+      await settle()
+      expect(f.explorer.node(f.find('SSISDB'))!.note, code).toEqual({ label: '(not updating)', sentence: 'Live updates stopped. This view is not available on this server. Refresh SSISDB to try again.' })
+      expect(f.pending.size, code).toBe(0)
+      f.advance(10 * ssisTreeRetryMs.max)
+      expect(f.views, code).toHaveLength(1)
+      disposals.splice(0).forEach(dispose => dispose())
+    }
   })
   it('tries a view that stopped for good again only on a refresh of SSISDB, of what is in it, of its folder or of its server', async () => {
     const f = fixture()
