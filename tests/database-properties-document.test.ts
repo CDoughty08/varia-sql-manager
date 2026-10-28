@@ -9,6 +9,7 @@ import { setOption } from '../src/renderer/src/dialogs/database-properties'
 import { selectSection, setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { previewDelayMs, propertiesMessages } from '../src/renderer/src/properties/DatabasePropertiesService'
+import type { ConnectionService } from '../src/renderer/src/services/connections'
 import { databaseModel } from './fixtures/database-properties'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions, explorerAnswer, manualTimers, readyBackend, workbenchFixture } from './fixtures/workbench'
@@ -21,6 +22,8 @@ const node = (object: ObjectRef = appData, connectionId = 'c1', id = 12): Explor
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
 const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } }
 const inUse = { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } as const
+/** Connects `id` to `server`, as the Connect dialog does (a new connection, even to a server connected before). */
+const connectionsAdd = (connections: ConnectionService, id: string, server: string) => connections.add({ ...connectionInfo(id), server }, connectionOptions)
 
 /** A workbench whose describe answers Database Properties' model, on manual timers so the Script preview's delay is the test's. */
 function opened(model = databaseModel()) {
@@ -273,15 +276,144 @@ describe('Database Properties as a document', () => {
     expect(commands.isEnabled('databaseProperties.apply', { tabId: id })).toBe(false)
     expect(commands.isEnabled('databaseProperties.discard', { tabId: id })).toBe(true)
   })
-  it('can Refresh again once a reconnect moves it to the new connection', async () => {
-    const { id, commands, connections, connect, documents } = opened()
+  it('can Refresh again once Reconnect moves it from a lost connection to the new one', async () => {
+    const { id, commands, connections, targets, documents } = opened()
     await settled()
-    connections.remove('c1')
-    connect(connectionInfo('c2'))
+    // The backend moved on: the connection is lost, and only Reconnect replaces it (App.connect: replace, then retarget).
+    connections.markLostBefore(2)
     expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(false)
-    // What TargetService.retarget does for a document that follows its server.
-    documents.update(id, { connectionId: 'c2' })
+    connections.replace('c1', { ...connectionInfo('c2', 2), server: 'c1.example' }, connectionOptions)
+    targets.retarget('c1', 'c2')
+    expect(documents.get(id)?.connectionId).toBe('c2')
     expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
+  })
+  it('comes back on the new connection when Properties is chosen again after Disconnect and Connect, and reads the database again', async () => {
+    const { id, properties, commands, connections, targets, documents, api, state } = opened()
+    await settled()
+    // What App.disconnect does: the connection goes, and its documents are told they have none (a custom one keeps its id).
+    connections.remove('c1')
+    targets.update(id, { connectionId: undefined })
+    expect(state().error?.message).toBeUndefined()
+    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(false)
+    // Connecting again makes a new connection: nothing moves the document until Properties on that database is chosen.
+    connectionsAdd(connections, 'c2', 'c1.example')
+    expect(documents.get(id)?.connectionId).toBe('c1')
+    // Another server's Properties is another document.
+    connectionsAdd(connections, 'c3', 'c3.example')
+    const other = properties.open(node(appData, 'c3', 20))
+    expect(other).not.toBe(id)
+    const describes = api.describeObject.mock.calls.length
+    expect(properties.open(node(appData, 'c2', 21))).toBe(id)
+    expect(documents.get(id)?.connectionId).toBe('c2')
+    expect(documents.getSnapshot().activeId).toBe(id)
+    expect(documents.getSnapshot().documents.filter(document => document.kind === 'databaseProperties')).toHaveLength(2)
+    // Clean, so it reads the database again on the new connection, and Refresh and Apply work there.
+    expect(api.describeObject.mock.calls.slice(describes)).toEqual([[expect.objectContaining({ connectionId: 'c2', target: appData })]])
+    await settled()
+    expect(state()).toMatchObject({ phase: 'ready', stale: false })
+    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
+  })
+  it('keeps its changes and an unknown outcome when it comes back on a new connection, and says how to get there', async () => {
+    const { id, properties, connections, targets, documents, api, state, edit, commands } = opened()
+    await settled()
+    edit('autoClose', 'true')
+    const execute = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(execute.promise)
+    const applied = properties.apply(id)
+    await vi.waitFor(() => expect(state().phase).toBe('applying'))
+    connections.remove('c1')
+    targets.update(id, { connectionId: undefined })
+    execute.resolve(done)
+    expect(await applied).toBe(false)
+    expect(state()).toMatchObject({ stale: true, changed: true, error: { message: propertiesMessages.connectionLost } })
+    expect(propertiesMessages.connectionLost).toMatch(/connect to it again and choose Properties on this database/)
+    expect(propertiesMessages.disconnected).toMatch(/connect to it again and choose Properties on this database/)
+    connectionsAdd(connections, 'c2', 'c1.example')
+    const describes = api.describeObject.mock.calls.length
+    expect(properties.open(node(appData, 'c2', 22))).toBe(id)
+    // The draft and the unknown outcome stay: Discard Changes, then Refresh, now on the new connection.
+    expect(api.describeObject.mock.calls.length).toBe(describes)
+    expect(state()).toMatchObject({ stale: true, changed: true, error: { message: propertiesMessages.connectionLost } })
+    expect(documents.get(id)?.connectionId).toBe('c2')
+    await commands.execute('databaseProperties.discard', { tabId: id }, 'toolbar')
+    expect(commands.isEnabled('databaseProperties.refresh', { tabId: id })).toBe(true)
+  })
+  it('applies only to the database it read, and keeps the way to read it again when another has taken its name', async () => {
+    const { properties, id, state, edit, api, executes, scripts, commands } = opened(databaseModel({ general: { ...databaseModel().general, id: 7 } }))
+    await settled()
+    edit('autoClose', 'true')
+    properties.setFrame(id, setScriptOpen(state().frame, true))
+    const replaced = { code: 'NOT_FOUND', message: 'The database [AppData] is not the one these properties were read from: it was renamed, dropped or replaced since. Read its properties again.', retryable: true } as const
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: replaced } })
+    expect(await properties.apply(id)).toBe(false)
+    const identity = { id: 7, created: '2026-01-02T03:04:05.000' }
+    expect(executes()).toEqual([expect.objectContaining({ identity })])
+    expect(state()).toMatchObject({ phase: 'ready', error: replaced })
+    // Discard Changes keeps the message, as Refresh is still to come; Refresh reads whatever database has the name now.
+    await commands.execute('databaseProperties.discard', { tabId: id }, 'toolbar')
+    expect(state().error).toEqual(replaced)
+    await commands.execute('databaseProperties.refresh', { tabId: id }, 'toolbar')
+    await settled()
+    expect(state().error).toBeUndefined()
+    // The Script preview names it too.
+    edit('autoShrink', 'true')
+    await properties.deliver(id, 'clipboard')
+    expect(scripts().at(-1)).toMatchObject({ identity })
+  })
+  it('makes Apply agree with what it shows: a row another edit greys goes back to what was read, so the document is clean', async () => {
+    const { properties, id, state, edit, api, documents, commands } = opened(databaseModel({}, { autoCreateStatistics: 'false', autoCreateIncrementalStatistics: 'false' }))
+    await settled()
+    edit('autoCreateStatistics', 'true')
+    edit('autoCreateIncrementalStatistics', 'true')
+    expect(state()).toMatchObject({ changed: true })
+    // Auto Create Statistics back to False greys incremental statistics, whose change Apply would never send.
+    edit('autoCreateStatistics', 'false')
+    expect(state()).toMatchObject({ changed: false, draft: { options: { autoCreateStatistics: 'false', autoCreateIncrementalStatistics: 'false' } } })
+    expect(documents.get(id)?.dirty).toBe(false)
+    expect(properties.canApply(id)).toBe(false)
+    expect(properties.canRefresh(id)).toBe(true)
+    // Closing asks nothing and fails nothing.
+    await commands.execute('file.close', { tabId: id }, 'toolbar')
+    expect(api.confirmClose).not.toHaveBeenCalled()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(documents.get(id)).toBeUndefined()
+  })
+  it('does not hold up closing the window when a clean document\'s read completes meanwhile', async () => {
+    const { properties, api, files, documents } = opened()
+    await settled()
+    const describe = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(describe.promise)
+    properties.open(node({ kind: 'database', name: 'Sales' }, 'c1', 13))
+    const hold = deferred<void>()
+    const closing = files.closeWindow(() => hold.promise)
+    await settled()
+    describe.resolve({ ok: true, value: { databaseProperties: databaseModel({ general: { ...databaseModel().general, name: 'Sales' } }), elapsedMs: 1 } as ActionDescribeResult })
+    await settled()
+    hold.resolve()
+    await closing
+    expect(files.getSnapshot().error).toBe('')
+    expect(api.closeWindow).toHaveBeenCalledTimes(1)
+    expect(documents.getSnapshot().documents.some(document => document.kind === 'databaseProperties')).toBe(true)
+  })
+  it('keeps Object Explorer\'s Disconnect from cutting its Apply short, as for a running query', async () => {
+    const { properties, id, state, edit, api, connections, commands, quickInput } = opened()
+    await settled()
+    connectionsAdd(connections, 'c2', 'c2.example')
+    const server = (connectionId: string) => ({ target: { kind: 'explorer' as const, node: { ...node({ kind: 'server' }, connectionId, 1), kind: 'server' as const, label: 'server' } } })
+    expect(commands.isEnabled('connection.disconnect', server('c1'))).toBe(true)
+    edit('autoClose', 'true')
+    const execute = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(execute.promise)
+    const applied = properties.apply(id)
+    await vi.waitFor(() => expect(state().phase).toBe('applying'))
+    expect(commands.isEnabled('connection.disconnect', server('c1'))).toBe(false)
+    expect(commands.isEnabled('connection.disconnect', server('c2'))).toBe(true)
+    await commands.execute('connection.disconnect', undefined, 'palette')
+    expect(quickInput.getSnapshot().rows.map(row => [row.item.id, row.item.disabled, row.item.disabledHint])).toEqual([['c1', true, propertiesMessages.applying], ['c2', undefined, undefined]])
+    quickInput.hide('cancel')
+    execute.resolve(done)
+    expect(await applied).toBe(true)
+    expect(commands.isEnabled('connection.disconnect', server('c1'))).toBe(true)
   })
   it('names the way out of an unknown outcome that is enabled: Discard Changes while the draft has changes, then Refresh', async () => {
     const { properties, id, state, edit, api, commands } = opened()

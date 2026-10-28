@@ -86,10 +86,10 @@ export function FilesSection({ state, model, draft, editable, errors, service }:
     <h3 className="properties-group-title" id={`${state.id}-files-grid`}>Database files</h3>
     <div className="properties-table">
       <table className="object-dialog-grid" aria-labelledby={`${state.id}-files-grid`}>
-        <thead><tr><th scope="col">Logical Name</th><th scope="col">File Type</th><th scope="col">Filegroup</th><th scope="col">Size (MB)</th><th scope="col">Autogrowth / Maxsize</th><th scope="col">Path</th><th scope="col">File Name</th></tr></thead>
+        <thead><tr><th scope="col">Logical Name</th><th scope="col" data-wrap="never">File Type</th><th scope="col">Filegroup</th><th scope="col" data-wrap="never">Size (MB)</th><th scope="col">Autogrowth / Maxsize</th><th scope="col">Path</th><th scope="col">File Name</th></tr></thead>
         <tbody>{model.files.map(file => <tr key={file.name}>
-          <td><bdi>{displayText(file.name)}</bdi></td><td>{fileTypeLabel[file.type]}</td><td><bdi>{file.type === 'log' ? notApplicable : displayText(file.filegroup ?? '')}</bdi></td>
-          <td>{file.type === 'filestream' ? '' : file.sizeMb.toLocaleString()}</td><td>{autogrowthText(file.growth, file.type)}</td><td><bdi>{displayText(file.path)}</bdi></td><td><bdi>{displayText(file.fileName)}</bdi></td>
+          <td><bdi>{displayText(file.name)}</bdi></td><td data-wrap="never">{fileTypeLabel[file.type]}</td><td><bdi>{file.type === 'log' ? notApplicable : displayText(file.filegroup ?? '')}</bdi></td>
+          <td data-wrap="never">{file.type === 'filestream' ? '' : file.sizeMb.toLocaleString()}</td><td>{autogrowthText(file.growth, file.type)}</td><td data-wrap="anywhere"><bdi>{displayText(file.path)}</bdi></td><td><bdi>{displayText(file.fileName)}</bdi></td>
         </tr>)}</tbody>
       </table>
     </div>
@@ -111,7 +111,7 @@ function FilegroupsSection({ state, model }: Pick<SectionProps, 'state' | 'model
       {rows.length === 0 ? <p className="field-note">None.</p> : <div className="properties-table">
         <table className="object-dialog-grid" aria-labelledby={id}>
           <thead><tr><th scope="col">Name</th><th scope="col">{key === 'rows' ? 'Files' : 'FILESTREAM Files'}</th>{columns.map(column => <th key={column} scope="col">{headers[column]}</th>)}</tr></thead>
-          <tbody>{rows.map(row => <tr key={row.name}><td><bdi>{displayText(row.name)}</bdi></td><td>{row.files}</td>{columns.map(column => <td key={column}>{yes(row[column])}</td>)}</tr>)}</tbody>
+          <tbody>{rows.map(row => <tr key={row.name}><td><bdi>{displayText(row.name)}</bdi></td><td data-wrap="never">{row.files}</td>{columns.map(column => <td key={column} data-wrap="never">{yes(row[column])}</td>)}</tr>)}</tbody>
         </table>
       </div>}
     </div>
@@ -137,7 +137,11 @@ export function OptionField({ def, state, model, draft, editable, errors, servic
   const choices = optionChoices(def, model)
   if (control === 'fact') {
     const shown = choices.find(choice => choice.value === value)?.label ?? value
-    return <PropertyField id={id} label={def.label} labelFor={false} description={def.description}><span id={id} className="property-value">{shown || '—'}</span></PropertyField>
+    // A stop of its own, as SSMS's read-only grid rows can be selected: focus shows its description in the hint strip, and
+    // a screen reader hears its label, value and description (read-only text, never a live region).
+    return <PropertyField id={id} label={def.label} labelFor={false} description={def.description}>
+      <span id={id} className="property-value" role="textbox" aria-readonly="true" tabIndex={0} aria-labelledby={`${id}-label`} {...fieldAria(id, { description: def.description })}>{shown || '—'}</span>
+    </PropertyField>
   }
   return <PropertyField id={id} label={def.label} changed={changed} labelFor={control !== 'segmented'} {...text}>
     {control === 'switch' && <Switch id={id} checked={value === 'true'} disabled={disabled} changed={changed} states={switchStates(def)} {...aria} onChange={checked => change(checked ? 'true' : 'false')} />}
@@ -202,8 +206,10 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   const sections: FrameSection[] = dialogSpecs.databaseProperties.pages.map(page => ({ id: page.id, title: page.title, problem: problems.has(page.id), content: content(page.id) }))
   const stopped = state.error?.code === 'CANCELLED'
   // The way out the message names: Refresh, or, while the draft whose outcome is unknown still holds changes, Discard Changes first.
-  const recovery = (state.stale || state.phase === 'loadFailed') && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
-    : state.stale && properties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => properties.discard(state.id) }] : []
+  // NOT_FOUND: the database went, or another has taken its name since it was read, so what is shown must be read again.
+  const reread = state.stale || state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND'
+  const recovery = reread && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
+    : reread && properties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => properties.discard(state.id) }] : []
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
     {state.error && <InlineError message={state.error.message} code={state.error.code} role={stopped ? 'status' : 'alert'} context={`Database Properties - ${state.label} on ${state.server}`}

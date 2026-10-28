@@ -213,12 +213,33 @@ try {
   await windowSize([1280, 800])
   /** Whether any of the elements cuts its text: wider or taller content than its box. */
   const cut = locator => locator.evaluateAll(elements => elements.filter(element => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1).map(element => element.textContent))
+  /** The words split across lines (Not Applicabl|e): each word of the elements' text must sit on one line, wherever the text wraps. */
+  const brokenWords = locator => locator.evaluateAll(elements => {
+    const broken = []
+    for (const cell of elements) {
+      const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        for (const match of node.data.matchAll(/\S+/g)) {
+          const range = document.createRange()
+          range.setStart(node, match.index)
+          range.setEnd(node, match.index + match[0].length)
+          const lines = new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size
+          if (lines > 1) broken.push(match[0])
+        }
+      }
+    }
+    return broken
+  })
   const properties = () => documentFrame(page, 'AppData')
   const propertiesTab = () => documentTab(page, 'Database Properties - AppData')
   const verb = name => documentVerb(properties(), 'AppData', name)
   const sectionList = () => sectionListOf(properties())
   const fact = label => propertyFact(properties(), label)
-  await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
+  // Tables has just reloaded after the Delete, which can re-render the tree under the press, so it repeats until its row's menu opens.
+  await expect(async () => {
+    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
+    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+  }).toPass()
   await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
   await expect(properties()).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -238,6 +259,8 @@ try {
   await expect(fact('Last Database Backup')).toHaveText('None')
   await expect(fact('Number of Users')).toHaveText('4')
   await expect(frameSection(properties(), 'General').locator('input, select, textarea')).toHaveCount(0)
+  // No row here has a description, so the hint strip is not there at all: no blank band under the rows.
+  await expect(fieldHint(properties())).toBeHidden()
   await page.screenshot({ path: resolve('artifacts', 'database-properties-general-dark.png') })
   // The section list answers SSMS's page keys from the focused section.
   await expect(sectionList().getByRole('button', { name: 'General' })).toBeFocused()
@@ -268,16 +291,18 @@ try {
   await expect(autoClose).not.toBeChecked()
   await expect(autoClose).toHaveAccessibleDescription(autoCloseDescription)
   await expect(hint).not.toHaveText(autoCloseDescription)
-  const hintHeight = await hint.evaluate(element => element.getBoundingClientRect().height)
   await autoClose.focus()
   await expect(hint).toHaveText(`Auto Close ${autoCloseDescription}`)
   expect(await cut(hint)).toEqual([])
-  // The pointer's row wins while it is there, and the longest description wraps whole within the strip's two lines.
+  // The pointer's row wins while it is there, and the longest description wraps whole within the strip's two lines. The
+  // strip lies over the rows, so neither showing it nor changing its text moves the row under the pointer.
   const pointed = propertyRow(properties(), 'Date Correlation Optimization Enabled')
+  await pointed.scrollIntoViewIfNeeded()
+  const pointedTop = (await pointed.boundingBox()).y
   await pointed.hover()
   await expect(hint).toHaveAttribute('data-field', /dateCorrelationOptimization$/)
   expect(await cut(hint)).toEqual([])
-  expect(await hint.evaluate(element => element.getBoundingClientRect().height)).toBe(hintHeight)
+  expect((await pointed.boundingBox()).y).toBe(pointedTop)
   await page.mouse.move(0, 0)
   await expect(hint).toHaveAttribute('data-field', /autoClose$/)
   await page.keyboard.press('Space')
@@ -289,6 +314,17 @@ try {
   await expect(unsavedMark(propertiesTab())).toHaveCount(1)
   await expect(verb('Apply')).toBeEnabled()
   await expect(verb('Refresh')).toBeDisabled()
+  // Tab stops at a read-only row too, as SSMS's read-only rows can be selected: a screen reader hears its label, value and
+  // description, and the hint strip shows the description.
+  const trustworthy = properties().getByRole('textbox', { name: 'Trustworthy', exact: true })
+  for (let presses = 0; presses < 80 && !await trustworthy.evaluate(element => element === document.activeElement); presses++) await page.keyboard.press('Tab')
+  await expect(trustworthy).toBeFocused()
+  await expect(trustworthy).toHaveAttribute('aria-readonly', 'true')
+  await expect(trustworthy).toHaveText('False')
+  const trustworthyDescription = await properties().locator(`[id="${await trustworthy.getAttribute('id')}-description"]`).textContent()
+  expect(trustworthyDescription.length).toBeGreaterThan(10)
+  await expect(trustworthy).toHaveAccessibleDescription(trustworthyDescription)
+  await expect(hint).toHaveText(`Trustworthy ${trustworthyDescription}`)
   await page.screenshot({ path: resolve('artifacts', 'database-properties-options-dark.png') })
   // The Script drawer previews only the changes, and Copy takes what it shows; the document stays as it was.
     // A text box keeps its value with LF line ends; Copy takes the script as the backend wrote it.
@@ -296,7 +332,7 @@ try {
   await scriptToggle(properties()).click()
   await expect(drawerText(properties())).toHaveValue(shownScript)
   expect((await stubCalls('actions.script')).at(-1)).toEqual({ action: 'properties', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'database', name: 'AppData' },
-    closeConnections: false, changes: { options: { recoveryModel: 'SIMPLE', autoClose: 'true' } } })
+    closeConnections: false, changes: { options: { recoveryModel: 'SIMPLE', autoClose: 'true' } }, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
   const scriptRequests = (await stubCalls('actions.script')).length
   await scriptActions(properties(), 'Copy').click()
   await expect(scriptNotice(properties()).filter({ hasText: 'Script copied to the clipboard.' })).toHaveCount(1)
@@ -326,8 +362,15 @@ try {
   await sectionList().getByRole('button', { name: 'Files' }).click()
   await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr')).toHaveCount(2)
   await expect(properties().getByRole('table', { name: 'Database files', exact: true }).locator('tbody tr').first().locator('td')).toHaveText(['AppData', 'ROWS Data', 'PRIMARY', '8', 'By 64 MB, Unlimited', 'C:\\Data', 'AppData.mdf'])
-  // No cell is cut: the grid sizes its columns to their text and wraps what does not fit.
+  // No cell is cut: the grids size their columns to their text and wrap what does not fit. Only a path breaks inside a
+  // word (the log file's long one takes the width the rest leave), so names and words read whole (never Not Applicabl|e),
+  // and the grid still fits its width at 1280 × 800.
+  const filesGrid = properties().getByRole('table', { name: 'Database files', exact: true })
   expect(await cut(properties().getByRole('table').locator('th, td'))).toEqual([])
+  expect(await brokenWords(filesGrid.locator('th, td:not(:nth-child(6))'))).toEqual([])
+  expect(await brokenWords(properties().getByRole('table', { name: 'Rows', exact: true }).locator('th, td'))).toEqual([])
+  expect(await filesGrid.evaluate(grid => grid.parentElement.scrollWidth - grid.parentElement.clientWidth)).toBe(0)
+  await page.screenshot({ path: resolve('artifacts', 'database-properties-files-dark.png') })
   const owner = page.getByRole('dialog', { name: 'Select Database Owner', exact: true })
   await properties().getByRole('button', { name: 'Browse for the owner', exact: true }).click()
   await expect(owner.getByLabel('Logins:', { exact: true })).toBeFocused()

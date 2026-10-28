@@ -309,14 +309,16 @@ not reachable from the wire.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
-`{ databaseProperties: { general, options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
+`{ databaseProperties: { general (with `id`, the database_id, and `created`), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
 (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel,
 pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }, elapsedMs }`, where `options` and
 `scoped` map the catalogue's option keys (docs/object-actions.md) to tokens. `actions.script` and `actions.execute` take
-`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? } }`:
+`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? }, identity?: { id, created } }`:
 only changed values, at least one and at most 512 statements, each key a settable option with one of its tokens (an
 integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
-Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
+Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. `identity` is the database the document read (database_id ≥ 1 and create_date as the describe writes it,
+`yyyy-MM-ddTHH:mm:ss.fff`): the preflight answers `NOT_FOUND` for a database that has taken the name since (renamed,
+dropped or restored meanwhile), before anything runs, for Script too. Script always
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
 Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
 connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and

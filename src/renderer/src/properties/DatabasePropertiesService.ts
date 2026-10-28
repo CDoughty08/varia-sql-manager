@@ -4,7 +4,7 @@ import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, Datab
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
-import { databaseChanged, draftErrors, type DatabaseDraft } from '../dialogs/database-properties'
+import { databaseChanged, draftErrors, settledDraft, type DatabaseDraft } from '../dialogs/database-properties'
 import { databasePropertiesDefinition, type BuiltRequest } from '../dialogs/definitions'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
@@ -38,8 +38,13 @@ export interface PropertiesState {
   readonly phase: PropertiesPhase
   readonly model?: DatabasePropertiesModel
   readonly draft?: DatabaseDraft
-  /** Moves with every edit: the close prompt's "changed while confirming", and which draft the Script preview shows. */
+  /** Moves with every draft change, a read included: which draft the Script preview shows. */
   readonly revision: number
+  /**
+   * Moves only with the person's edits (and Discard Changes): the revision the close prompt and a window close compare, so
+   * a read that completes meanwhile is not taken for a change nobody has seen.
+   */
+  readonly edits: number
   /** The draft differs from what the database has. */
   readonly changed: boolean
   /** Whether the last Apply completed is unknown (the server or backend went, or Stop got no answer): Apply waits for a Refresh. */
@@ -60,7 +65,7 @@ export interface PropertiesSnapshot { readonly documents: Readonly<Record<string
 
 export interface DatabasePropertiesServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot' | 'subscribe'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { listingFolderOf(nodeId: number): number | undefined; refresh(id?: number): void }
@@ -73,13 +78,13 @@ export interface DatabasePropertiesServiceOptions {
 
 export const propertiesMessages = {
   applied: 'The changes were applied.',
-  disconnected: 'The server was disconnected. Connect to it again, then Refresh.',
+  disconnected: 'The server was disconnected. Reconnect, or connect to it again and choose Properties on this database, to read it again.',
   // Whether an Apply ran is unknown: the fields lock and Refresh waits for a clean draft, so the way out is Discard Changes, then Refresh.
   /** Stop, when the backend could not confirm in time that SQL Server ended the statement. */
   stopped: 'The changes were stopped, but SQL Server did not confirm it in time, so whether they were applied is unknown. Discard Changes, then Refresh to read the database again.',
   stale: 'Whether the last changes were applied is unknown. Discard Changes, then Refresh to read the database again before applying more.',
   /** The server's connection went while the changes were being applied. */
-  connectionLost: 'The server was disconnected while the changes were being applied, so whether they were applied is unknown. Connect to it again, then Discard Changes and Refresh.',
+  connectionLost: 'The server was disconnected while the changes were being applied, so whether they were applied is unknown. Reconnect, or connect to it again and choose Properties on this database, then Discard Changes and Refresh.',
   backendLost: 'The SQL backend stopped while the changes were being applied, so whether they were applied is unknown. Discard Changes, then Refresh to read the database again.',
   /** Apply ran, but reading the database again failed: said before the read's error, so the Apply is never taken for a failure. */
   appliedUnread: 'The changes were applied, but the database could not be read again:',
@@ -141,14 +146,19 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
     if (!target) throw new Error('Select a database in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
-    const existing = Object.values(this.getSnapshot().documents).find(state => state.target.name === target.name && this.options.documents.get(state.id)?.connectionId === node.connectionId)
+    const documents = Object.values(this.getSnapshot().documents).filter(state => state.target.name === target.name)
+    const existing = documents.find(state => this.connectionOf(state.id) === node.connectionId)
     if (existing) { this.options.documents.activate(existing.id); return existing.id }
+    // A document whose server was disconnected (or lost) is the one Properties on that database brings back, moved to the
+    // new connection: connecting again makes a new connection, and nothing else would ever move it there.
+    const orphan = documents.find(state => !this.live(state.id) && this.follows(state.id, connection.server))
+    if (orphan) { this.rebind(orphan.id, connection); return orphan.id }
     const label = scriptObjectLabel(target)
     const document = this.options.documents.openCustom('databaseProperties', dialogTitle('databaseProperties', label), connection.id, target.name ?? 'master')
     const listingFolder = this.options.explorer.listingFolderOf(node.id)
     this.put({
       id: document.id, target, label, server: connection.server, ...connection.login ? { login: connection.login } : {}, ...listingFolder === undefined ? {} : { listingFolder },
-      phase: 'loading', revision: 0, changed: false, stale: false, frame: initialFrameState(sections), script: { state: 'idle', message: noScriptNotice }
+      phase: 'loading', revision: 0, edits: 0, changed: false, stale: false, frame: initialFrameState(sections), script: { state: 'idle', message: noScriptNotice }
     })
     void this.describe(document.id)
     return document.id
@@ -164,8 +174,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   updateDraft(id: string, patch: Partial<DatabaseDraft>): void {
     const state = this.get(id)
     if (!state?.model || !state.draft || !this.canEdit(id)) return
-    const draft = { ...state.draft, ...patch }, changed = databaseChanged(state.model, draft)
-    this.patch(id, { draft, changed, revision: state.revision + 1, notice: undefined, ...state.error?.code === 'NOT_SUPPORTED' ? { error: undefined } : {} })
+    const draft = settledDraft(state.model, { ...state.draft, ...patch }, state.target), changed = databaseChanged(state.model, draft)
+    this.patch(id, { draft, changed, revision: state.revision + 1, edits: state.edits + 1, notice: undefined, ...state.error?.code === 'NOT_SUPPORTED' ? { error: undefined } : {} })
     this.options.documents.setDirty(id, changed)
     this.schedulePreview(id)
   }
@@ -173,11 +183,14 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     const state = this.get(id)
     return !!state?.model && !!state.draft && state.changed && state.phase !== 'applying' && state.phase !== 'confirming'
   }
-  /** Discard Changes: the draft goes back to what was read. While the last outcome is unknown its message stays, since Refresh is still to come. */
+  /**
+   * Discard Changes: the draft goes back to what was read. While the last outcome is unknown, or the database read is gone
+   * from its name, its message stays, since Refresh is still to come.
+   */
   discard(id: string): void {
     const state = this.get(id)
     if (!state?.model || !state.draft || state.phase === 'applying' || state.phase === 'confirming') return
-    this.patch(id, { draft: definition.initialDraft(state.model, state.target), changed: false, revision: state.revision + 1, ...state.stale ? {} : { error: undefined }, notice: undefined, steps: undefined })
+    this.patch(id, { draft: definition.initialDraft(state.model, state.target), changed: false, revision: state.revision + 1, edits: state.edits + 1, ...state.stale || state.error?.code === 'NOT_FOUND' ? {} : { error: undefined }, notice: undefined, steps: undefined })
     this.options.documents.setDirty(id, false)
     this.schedulePreview(id)
   }
@@ -397,7 +410,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /** File › Save and the close prompt's Save: the document comes forward first, so its progress and Stop show while it applies. */
   save(id: string): Promise<boolean> { this.show(id); return this.apply(id) }
   canClose(id: string): string | undefined { const phase = this.get(id)?.phase; return phase === 'applying' || phase === 'confirming' ? propertiesMessages.applying : undefined }
-  revision(id: string): number { return this.get(id)?.revision ?? 0 }
+  revision(id: string): number { return this.get(id)?.edits ?? 0 }
   focus(id: string): void { this.options.focus?.(id) }
   /** A document stays with its server, as its title names it: a reconnect moves it only to a connection to that server. */
   follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
@@ -461,6 +474,20 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
       return !!was && was.changed === keys.changed && was.applicable === keys.applicable && was.applying === keys.applying && was.refreshable === keys.refreshable
     })
     if (!same) this.contextStore.set({ byDocument })
+  }
+  /**
+   * Moves a document whose connection went to a new connection to its server, and brings it forward. A clean one reads
+   * the database again, as Properties always shows what is there now; one with changes, or whose last Apply has an
+   * unknown outcome, keeps them and its message until Discard Changes and Refresh.
+   */
+  private rebind(id: string, connection: LiveConnection): void {
+    this.options.documents.update(id, { connectionId: connection.id })
+    const state = this.get(id)
+    if (!state) return
+    // The login can differ from the one it was read with; a message that only said the server went no longer applies.
+    this.patch(id, { login: connection.login, ...!state.stale && state.error?.code === 'CONNECTION_LOST' ? { error: undefined } : {} })
+    this.options.documents.activate(id)
+    if (this.canRefresh(id)) this.refresh(id)
   }
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {

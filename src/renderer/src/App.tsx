@@ -199,6 +199,9 @@ export default function App() {
 
   async function disconnect(id: string) {
     if (queries.isConnectionRunning(id)) return
+    // A document's Apply or Save on it would be cancelled partway without asking (its menu item is greyed for the same reason).
+    const busy = documents.connectionBusy(id)
+    if (busy) { setExplorerError(busy); return }
     try {
       await documents.runTask(async () => {
         // Its queries' open transactions are asked about once, then each is committed or rolled back in its own session;

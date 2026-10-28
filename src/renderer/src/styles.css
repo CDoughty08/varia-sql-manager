@@ -822,9 +822,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .document-status { display: flex; align-items: center; gap: var(--varia-space-1); margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); overflow-wrap: anywhere; }
 .document-banner > .inline-error { padding: 0; }
 /* Property sheets (Database Properties as a document): label and control side by side, the note and error under the
-   control. A field's description shows whole in the hint strip under the sections while its row is hovered or holds
-   focus; the strip keeps its height, so showing it never moves a row (a click that moves focus would otherwise land on
-   a row that just moved). The sections column is the container the sheet's layout follows. */
+   control. A field's description shows whole in the hint strip at the bottom of the sections column while its row is
+   hovered or holds focus. The sections column is the container the sheet's layout follows. */
 .document-sections { container: document-sections / inline-size; }
 .properties-fields { display: flex; flex-direction: column; gap: var(--varia-space-1); }
 .property-field { display: grid; grid-template-columns: minmax(160px, 30%) minmax(0, 360px); align-items: center; column-gap: var(--varia-space-3); padding: var(--varia-space-0) 0; }
@@ -838,10 +837,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .property-field, .property-facts { grid-template-columns: minmax(0, 1fr); }
   .property-field-note, .property-field-error { grid-column: 1; }
 }
-/* The hint strip: two lines kept whether or not it shows a description, so the sections above do not resize under the
-   pointer; they hold the longest description in a document about 700 px wide, and a narrower one grows to fit it. */
-.field-hint { flex: none; box-sizing: border-box; min-height: calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px); padding: var(--varia-space-1) var(--varia-space-4); border-top: 1px solid transparent; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
-.field-hint:not(:empty) { border-top-color: var(--varia-panel-border); }
+/* The hint strip, pinned to the bottom of the sections column over its rows: it takes no room, so showing it never moves
+   a row under the pointer (a click that moves focus would otherwise land on a row that just moved), and while it is empty
+   nothing shows. Its dock ends the column's content with two lines, the longest description in a document about 700 px
+   wide (a narrower one grows upward over the rows), so the last row scrolls clear of it, and focus scrolls a row above it.
+   The pointer passes through to the row beneath. */
+.document-sections:has(> .field-hint-dock) { scroll-padding-bottom: calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px); }
+.field-hint-dock { position: sticky; bottom: 0; height: calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px); margin: 0 calc(-1 * var(--varia-space-4)); pointer-events: none; }
+.field-hint { position: absolute; right: 0; bottom: 0; left: 0; box-sizing: border-box; min-height: 100%; padding: var(--varia-space-1) var(--varia-space-4); border-top: 1px solid var(--varia-panel-border); background: var(--varia-editor-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); overflow-wrap: anywhere; }
+.field-hint:empty { display: none; }
 .field-hint-label { color: var(--varia-foreground); font-weight: 600; }
 .property-field-note, .property-field-error { display: flex; align-items: flex-start; gap: var(--varia-space-1); }
 .property-field-note { color: var(--varia-descriptionForeground); }
@@ -852,6 +856,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Every property control greys the same way, the words beside a switch with it. */
 .property-input:disabled, .property-browse:disabled, .segmented-option:disabled, .switch:disabled, .switch:disabled + .switch-state { opacity: .5; }
 .property-value { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; unicode-bidi: isolate; user-select: text; }
+.property-value:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .properties-owner { display: flex; gap: var(--varia-space-1); width: min(100%, 360px); min-width: 0; }
 .properties-owner > .property-input { flex: 1; width: auto; }
 .property-browse { flex: none; padding: 0 var(--varia-space-2); border-color: var(--varia-button-border); }
@@ -861,9 +866,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .property-fact > dd { min-width: 0; margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; unicode-bidi: isolate; user-select: text; }
 .properties-group-title { margin: var(--varia-space-3) 0 var(--varia-space-1); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-weight: 600; }
 .properties-table { max-width: 100%; overflow: auto; }
-/* The document has room the modal had not: its grids size columns to their text and wrap a long path, never cutting it. */
+/* The document has room the modal had not: its grids size columns to their text and wrap a long path, never cutting it.
+   Names keep their words whole (break-word: the auto layout gives a column its longest word, and only a word wider than
+   the whole grid breaks); anywhere there would let the layout size every column to one letter and split words that fit
+   (Not Applicabl|e). The path alone breaks anywhere: it takes the width the rest leave, so the grid fits without a
+   horizontal scroll. The columns of a few short words (types, sizes, counts, Yes or No) never wrap. */
 .properties-table > .object-dialog-grid { table-layout: auto; }
-.properties-table > .object-dialog-grid th, .properties-table > .object-dialog-grid td { white-space: normal; overflow-wrap: anywhere; text-overflow: clip; }
+.properties-table > .object-dialog-grid th, .properties-table > .object-dialog-grid td { white-space: normal; overflow-wrap: break-word; text-overflow: clip; }
+.properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
+.properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
 /* A switch: a checkbox drawn as a track and thumb. On, the thumb moves right and the track fills; the words beside it
    say the state too. State changes are instant, as selection is. */

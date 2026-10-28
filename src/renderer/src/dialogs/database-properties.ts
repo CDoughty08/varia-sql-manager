@@ -93,6 +93,20 @@ export function setOption(draft: DatabaseDraft, key: string, text: string): Data
   if (!def) return draft
   return isScoped(def) ? { ...draft, scoped: { ...draft.scoped, [key]: text } } : { ...draft, options: { ...draft.options, [key]: text } }
 }
+/**
+ * The draft with every greyed row back at what was read. A row another edit greys (Auto Create Incremental Statistics
+ * once Auto Create Statistics is False) is never sent, so it must not hold a change either: the document would be dirty
+ * with nothing for Apply to run.
+ */
+export function settledDraft(model: DatabasePropertiesModel, draft: DatabaseDraft, target: ObjectRef): DatabaseDraft {
+  let settled = draft
+  for (const def of [...databaseOptionDefs, ...scopedConfigurationDefs]) {
+    const read = modelValue(model, def)
+    if (read === undefined || draftValue(settled, def) === read || !optionState(def, model, settled, target).disabled) continue
+    settled = setOption(settled, def.key, read)
+  }
+  return settled
+}
 
 const range = (def: DatabaseOptionDef) => def.range ? `a whole number from ${def.range.min.toLocaleString('en-US')} to ${def.range.max.toLocaleString('en-US')}` : 'one of its values'
 const readOnlyOrder = optionDef('readOnly')!.smoOrder
@@ -137,7 +151,9 @@ export function databaseRequest(target: ObjectRef, model: DatabasePropertiesMode
   if (Object.keys(options).length) changes.options = options
   if (Object.keys(scoped).length) changes.scoped = scoped
   if (draft.owner !== (model.general.owner ?? '') && !ownerState(model, target).disabled) changes.owner = draft.owner
-  return Object.keys(changes).length ? { action: 'properties', target, closeConnections: false, changes } : undefined
+  // The database it was read from, so neither Apply nor Script changes another that has taken its name since.
+  const identity = model.general.id === undefined ? {} : { identity: { id: model.general.id, created: model.general.created } }
+  return Object.keys(changes).length ? { action: 'properties', target, closeConnections: false, changes, ...identity } : undefined
 }
 
 /** The model after OK failed: when other connections were in the way (IN_USE), the session count the dialog opened with

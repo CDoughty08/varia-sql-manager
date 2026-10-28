@@ -40,6 +40,9 @@ internal static partial class DatabaseAlter
     private static partial Regex IntegerPattern();
     [GeneratedRegex(@"^[A-Za-z0-9_]{1,128}\z")]
     private static partial Regex CollationPattern();
+    /// <summary>create_date as the describe writes it (DatabaseProperties.Iso).</summary>
+    [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\z")]
+    private static partial Regex IdentityCreated();
 
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>
     public static OptionJson? Option(ActionsCatalog catalog, string key) =>
@@ -61,6 +64,7 @@ internal static partial class DatabaseAlter
         if (args.NewName is not null || args.DeleteHistory is not null) throw Invalid("properties takes no new name or delete options.");
         if (args.CloseConnections is not { } close || args.Changes is not { } changes) throw Invalid("closeConnections and changes are required.");
         if (args.Target.Kind != "database") throw Invalid("only a database has properties.");
+        if (args.Identity is { } identity && (identity.Id < 1 || identity.Created is null || !IdentityCreated().IsMatch(identity.Created))) throw Invalid("identity.");
         if (changes.Owner is not null && !ExplorerRefs.Ident(changes.Owner)) throw Invalid("owner.");
         void Check(Dictionary<string, string>? values, IReadOnlyDictionary<string, OptionJson> options, string what)
         {

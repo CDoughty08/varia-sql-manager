@@ -104,6 +104,17 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
+  /**
+   * Why a connection cannot be disconnected now: a custom document on it is running DDL (an Apply or a Save), which a
+   * disconnect would cancel partway without asking. Undefined when none is.
+   */
+  connectionBusy(connectionId: string): string | undefined {
+    for (const document of this.getSnapshot().documents) {
+      const refusal = document.connectionId === connectionId ? this.closeRefusal(document.id) : undefined
+      if (refusal) return refusal
+    }
+    return undefined
+  }
   /** Focus to the active document: the editor's text, or the custom document's own element. */
   focusActive(): void {
     const id = this.getSnapshot().activeId, provider = this.provider(id)

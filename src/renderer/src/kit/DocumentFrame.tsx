@@ -185,7 +185,7 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   /** Sections with a list beside them; without them the frame shows `children` under the header. */
   readonly sections?: readonly FrameSection[]
   readonly children?: ReactNode
-  /** A strip under the content and over the Script drawer: a property sheet's FieldHintStrip. */
+  /** What the content column ends with, pinned to its bottom edge over the rows: a property sheet's FieldHintStrip. */
   readonly hint?: ReactNode
   /** The document's frame state (its service keeps it); needed with sections or a Script drawer. */
   readonly frame?: FrameState
@@ -208,8 +208,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
     {banner && <div className="document-banner">{banner}</div>}
-    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
-    {hint}
+    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} hint={hint} /> : <div className="document-content">{children}{hint}</div>}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}
   </div>
@@ -220,7 +219,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
  * section in view, checked once a frame. Near the end, where the last sections cannot reach the top, the one chosen
  * stays marked (`spySection`).
  */
-function SectionedBody({ id, title, sections, frame, onFrame }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void }) {
+function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void; readonly hint?: ReactNode }) {
   const content = useRef<HTMLDivElement>(null)
   // The latest frame and handler for the scroll callback, which runs a frame after the render that set it up.
   const latest = useRef({ frame, onFrame, sections })
@@ -266,6 +265,7 @@ function SectionedBody({ id, title, sections, frame, onFrame }: { readonly id: s
         only go from heading to heading. */}
     <div className="document-content document-sections" ref={content} onScroll={scrolled} role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}
+      {hint}
     </div>
   </div>
 }

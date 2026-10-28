@@ -47,15 +47,16 @@ export function FieldHints({ children }: { readonly children: ReactNode }) {
 }
 
 /**
- * The strip under a property sheet's sections that shows the hovered or focused field's whole description (Calm Pro:
- * a description on hover or focus, no empty well). It keeps its height whether or not it shows text, so the sections
- * never resize under the pointer; screen readers have each description as its control's description already, so the
- * strip is hidden from them.
+ * The strip that shows the hovered or focused field's whole description (Calm Pro: a description on hover or focus, no
+ * empty well). It ends the sections column and is pinned to its bottom edge, over the rows: it takes no room, so showing
+ * it never moves a row under the pointer, and it is not there at all while it has nothing to say. Its dock keeps two lines
+ * at the end of the column, so the last row scrolls clear of it. Screen readers have each description as its control's
+ * description already, so the strip is hidden from them.
  */
 export function FieldHintStrip(props: { readonly hint?: FieldHint }) {
   const shown = useContext(HintContext), hint = props.hint ?? shown
-  return <div className="field-hint" aria-hidden="true" data-field={hint?.id}>
-    {hint && <><span className="field-hint-label">{hint.label}</span> {hint.description}</>}
+  return <div className="field-hint-dock" aria-hidden="true">
+    <div className="field-hint" data-field={hint?.id}>{hint && <><span className="field-hint-label">{hint.label}</span> {hint.description}</>}</div>
   </div>
 }
 

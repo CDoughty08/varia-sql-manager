@@ -28,7 +28,7 @@ const declared = (selector: string, property: string, at: readonly string[] = []
 /** Database Properties' sections as a loaded document renders them, without the workbench. */
 function sectionProps(): SectionProps {
   const model = databaseModel(), target = { kind: 'database', name: 'AppData' } as const
-  const state: PropertiesState = { id: 'doc', target, label: 'AppData', server: 'srv', phase: 'ready', model, draft: initialDatabaseDraft(model), revision: 1, changed: false, stale: false, frame: initialFrameState([]), script: { state: 'idle', message: '' } }
+  const state: PropertiesState = { id: 'doc', target, label: 'AppData', server: 'srv', phase: 'ready', model, draft: initialDatabaseDraft(model), revision: 1, edits: 0, changed: false, stale: false, frame: initialFrameState([]), script: { state: 'idle', message: '' } }
   return { state, model, draft: state.draft!, editable: true, errors: new Map(), service: { updateDraft: () => {} } as unknown as DatabasePropertiesService }
 }
 
@@ -107,18 +107,25 @@ describe('property sheet hints and sections', () => {
     expect(shownHint(nextHints(nextHints(hints, 'hovered', 'a', undefined), 'focused', 'c', undefined))).toBeUndefined()
     expect(nextHints(hints, 'hovered', 'a', autoClose)).toBe(hints)
   })
-  it('shows the whole description in the strip, hidden from screen readers, which have it as the control\'s description', () => {
-    expect(html(createElement(FieldHintStrip, { hint: autoClose }))).toBe('<div class="field-hint" aria-hidden="true" data-field="a"><span class="field-hint-label">Auto Close</span> Shuts down cleanly.</div>')
-    expect(html(createElement(FieldHintStrip))).toBe('<div class="field-hint" aria-hidden="true"></div>')
+  it('shows the whole description in the strip, hidden from screen readers, which have it as the control\'s description, and nothing without one', () => {
+    expect(html(createElement(FieldHintStrip, { hint: autoClose }))).toBe('<div class="field-hint-dock" aria-hidden="true"><div class="field-hint" data-field="a"><span class="field-hint-label">Auto Close</span> Shuts down cleanly.</div></div>')
+    // Empty, so :empty hides it: no blank well where no row has a description (General, Filegroups).
+    expect(html(createElement(FieldHintStrip))).toBe('<div class="field-hint-dock" aria-hidden="true"><div class="field-hint"></div></div>')
   })
-  it('shows what Varia does not change as plain text, never as a live region', () => {
+  it('shows what Varia does not change as read-only text that takes focus, named by its label and described, never as a live region', () => {
     const props = sectionProps()
     const facts = allDefs.filter(def => fieldControl(def) === 'fact' && props.model.options[def.key] !== undefined)
     expect(facts.length).toBeGreaterThan(3)
+    expect(facts.some(def => def.description)).toBe(true)
     for (const def of facts) {
-      const field = html(createElement(OptionField, { ...props, def }))
+      const field = html(createElement(OptionField, { ...props, def })), id = `properties-doc-${def.key}`
       expect(field, def.key).not.toMatch(/<output|role="status"|aria-live/)
-      expect(field, def.key).toContain(`<span id="properties-doc-${def.key}" class="property-value">`)
+      // A stop of its own, as SSMS's read-only rows can be selected: focus fills the hint strip, and a screen reader hears
+      // the label, the value and the description rather than run-on text.
+      const described = def.description ? ` aria-describedby="${id}-description"` : ''
+      expect(field, def.key).toContain(`<span id="${id}" class="property-value" role="textbox" aria-readonly="true" tabindex="0" aria-labelledby="${id}-label"${described}>`)
+      expect(field, def.key).toContain(`<label id="${id}-label"`)
+      if (def.description) expect(field, def.key).toContain(`id="${id}-description"`)
     }
   })
   it('puts Files\' facts and its Owner field in groups of their own', () => {
@@ -154,14 +161,19 @@ describe('Database Properties document rules', () => {
 })
 
 describe('property sheet styles', () => {
-  it('shows a description whole in a strip that keeps its height, never cut in the row, and always shows notes and errors', () => {
+  it('shows a description whole in a strip laid over the rows, never cut in the row, and always shows notes and errors', () => {
     // The row has no description of its own to cut or to show: the strip under the sections shows it, wrapping.
     expect(rules.filter(rule => rule.selector.includes('.property-field-description'))).toEqual([])
     expect(valueOf('.property-field', 'grid-template-columns')).toBe('minmax(160px, 30%) minmax(0, 360px)')
-    expect([valueOf('.field-hint', 'flex'), valueOf('.field-hint', 'overflow-wrap'), valueOf('.field-hint', 'min-height')]).toEqual(['none', 'anywhere', 'calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px)'])
+    // The strip lies over the rows at the bottom of the column (sticky, its text out of the flow), so showing it moves no
+    // row; the pointer passes through it; empty, it is not there at all, so no blank well shows where no row has a description.
+    expect([valueOf('.field-hint-dock', 'position'), valueOf('.field-hint-dock', 'bottom'), valueOf('.field-hint-dock', 'pointer-events'), valueOf('.field-hint-dock', 'height')])
+      .toEqual(['sticky', '0', 'none', 'calc(2 * var(--varia-line-xs) + 2 * var(--varia-space-1) + 1px)'])
+    expect([valueOf('.field-hint', 'position'), valueOf('.field-hint', 'bottom'), valueOf('.field-hint', 'overflow-wrap'), valueOf('.field-hint:empty', 'display')]).toEqual(['absolute', '0', 'anywhere', 'none'])
+    expect(valueOf('.field-hint', 'background')).toBe('var(--varia-editor-background)')
     expect(rules.filter(rule => rule.selector.startsWith('.field-hint')).flatMap(rule => rule.declarations).map(declaration => declaration.property)).not.toContain('white-space')
-    // Showing text changes only a colour: the border is there, transparent, while the strip is empty.
-    expect(valueOf('.field-hint:not(:empty)', 'border-top-color')).toBe('var(--varia-panel-border)')
+    // Focus scrolls a row above the strip rather than under it.
+    expect(valueOf('.document-sections:has(> .field-hint-dock)', 'scroll-padding-bottom')).toBe(valueOf('.field-hint-dock', 'height'))
     expect(computed(['.property-field-note']).get('display')).toBe('flex')
     expect(computed(['.property-field-error']).get('color')).toBe('var(--varia-errorForeground)')
   })
@@ -196,11 +208,18 @@ describe('property sheet styles', () => {
     // No property rule follows the frame's width, which counts the section list too.
     expect(rules.filter(rule => rule.at.some(at => /^@container \(/.test(at)) && /\.propert/.test(rule.selector))).toEqual([])
   })
-  it('sizes the files and filegroups grids to their text and wraps a long value rather than cutting it', () => {
+  it('sizes the files and filegroups grids to their text and wraps a long value rather than cutting it, keeping words whole that fit', () => {
     expect(declared('.properties-table > .object-dialog-grid', 'table-layout')).toBe('auto')
+    // anywhere would let the auto layout size each column to one letter and split words that fit (Not Applicabl|e).
     for (const cell of ['.properties-table > .object-dialog-grid td', '.properties-table > .object-dialog-grid th']) {
-      expect([declared(cell, 'white-space'), declared(cell, 'overflow-wrap'), declared(cell, 'text-overflow')], cell).toEqual(['normal', 'anywhere', 'clip'])
+      expect([declared(cell, 'white-space'), declared(cell, 'overflow-wrap'), declared(cell, 'text-overflow')], cell).toEqual(['normal', 'break-word', 'clip'])
     }
+    expect(declared('.properties-table > .object-dialog-grid [data-wrap="never"]', 'white-space')).toBe('nowrap')
+    // Only the path breaks anywhere: it takes the width the names and words leave.
+    expect(declared('.properties-table > .object-dialog-grid [data-wrap="anywhere"]', 'overflow-wrap')).toBe('anywhere')
+    const files = html(createElement(FilesSection, sectionProps()))
+    expect([...files.matchAll(/<th scope="col" data-wrap="never">([^<]+)<\/th>/g)].map(match => match[1])).toEqual(['File Type', 'Size (MB)'])
+    expect([...files.matchAll(/<td data-wrap="anywhere"><bdi>([^<]+)<\/bdi>/g)].map(match => match[1])).toEqual(['C:\\Data', 'C:\\Data'])
   })
   it('sizes its fields from the control token and checks the controls\' contrast on the document', () => {
     expect(densityUse.control).toContain('.property-input')
