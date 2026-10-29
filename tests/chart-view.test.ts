@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { LiveProbeId } from '../src/shared/live/catalog'
+import { liveUnits, type LiveProbeId } from '../src/shared/live/catalog'
 import { chartSeriesColors } from '../src/shared/theme/charts'
 import { resolveBuiltin } from '../src/shared/theme/resolve'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpan, niceCeiling } from '../src/renderer/src/live/chart-format'
@@ -43,6 +43,9 @@ describe('chart text', () => {
     expect(formatChartValue(13.1 * 1048576, 'bytesPerSecond')).toBe('13.1 MB/s')
     expect(formatChartValue(512, 'bytesPerSecond')).toBe('512 B/s')
     expect(formatChartValue(0.25, 'count')).toBe('0.25')
+    // The Activity Monitor's page life expectancy is in seconds.
+    expect(formatChartValue(3725, 'seconds')).toBe('3,725 s')
+    for (const unit of liveUnits) expect(formatChartValue(1, unit)).toMatch(/^1( |\/|$)/)
     expect(formatChartValue(Number.NaN, 'count')).toBe('no value')
   })
   it('rounds scale tops up to 1, 2, 2.5 or 5 times a power of ten', () => {

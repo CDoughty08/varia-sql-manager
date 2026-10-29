@@ -3,11 +3,14 @@
 // (src/shared/live/schema.ts), docs/live.md and the backend read it, the backend through liveCatalogJson() embedded as
 // Live/live-catalog.json (a vitest file snapshot keeps that copy in sync). Erasable TypeScript (no enums), so Node's
 // type stripping can load it as well.
+import {
+  activityBands, activityEditions, activityLiveProbes, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, waitCategories
+} from '../activity/catalog.ts'
 import { limits } from '../ipc/wire/protocol.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
-export const liveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count'] as const
+export const liveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count', 'seconds'] as const
 export type LiveUnit = typeof liveUnits[number]
 /** A snapshot table is replaced by each sample (a new stored result, two revisions kept); an append table grows. */
 export type LiveTableMode = 'snapshot' | 'append'
@@ -82,7 +85,8 @@ export interface LiveProbeSpec {
    *  unavailable (NOT_SUPPORTED) and never runs. Absent: everywhere its source runs. */
   readonly gates?: { readonly minMajor: number; readonly editions: readonly number[] }
   /** serverState: the probe reads server DMVs, so it needs VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later) or
-   *  VIEW SERVER STATE (earlier versions, Managed Instance); without it, it opens unavailable (PERMISSION_DENIED). */
+   *  VIEW SERVER STATE (earlier versions, Managed Instance); without it, it opens unavailable (PERMISSION_DENIED), or, when
+   *  the source could not ask as it opened, stops at its first tick with that error. */
   readonly permission?: 'serverState'
 }
 export interface LiveSourceSpec {
@@ -118,7 +122,7 @@ export const defaultBatchRows = 5000
 export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
-  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview',
+  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
   'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
@@ -129,13 +133,58 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
     description: 'Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.'
   },
   activity: {
-    id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
-    description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
+    id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: activityLiveProbes,
+    description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its probes, tables, columns and series come from the Activity Monitor\'s catalogue (docs/activity-monitor.md). Each probe runs several statements (Activity/ActivitySql.cs), and one the login may not run fails alone, naming what it feeds. Args: one filter per table (Processes\' view chip and toggles, the filter box, column value filters, Hide benign waits) and the Details flyout\'s session (focusSession).'
   },
   explorer: {
     id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'],
     description: 'The states Object Explorer shows as chips on its nodes (docs/object-explorer.md, Live status): one view per connected server and login while Object Explorer shows, on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master on box servers and Managed Instance, so it never holds the database a connection opened in. It never reloads the tree.'
   }
+}
+
+type ActivityLiveProbe = typeof activityLiveProbes[number]
+/** What each Activity Monitor probe is, for docs/live.md. */
+const activityDescriptions: { readonly [P in ActivityLiveProbe]: string } = {
+  'activity.overview': 'The server at a glance, in seven statements: SQL Server\'s CPU (its schedulers\' non-preemptive time) and scheduler delay, waiting tasks (wait time less signal wait of every type that is not benign), database I/O and its latency (moved only by databases read in both samples, so one dropped or closed takes only its own counts with it), batch requests, compilations and re-compilations, blocked sessions and the longest block, active requests, user sessions and logins, runnable tasks per scheduler and the work queue, memory grants, page life expectancy, deadlocks and lock waits. Rates use the server\'s own clock (ms_ticks), and a restart starts them again; a statement the login may not run leaves only its own series null.',
+  'activity.sessions': 'Processes (one row per session, its MARS requests folded), the blocking chains as rows (built in the backend from task waits, each session once) and Active Expensive Queries, from one sample. Rates are per session and per request between samples, keyed by login time and each request\'s id and start time, so a reused id never gives a rate across two sessions and a MARS session\'s requests never stand in for each other. Varia\'s own sessions are marked, and system sessions and Varia\'s pools are hidden unless the filter shows them. Without server state, Processes shows only the monitor\'s own session and the other two tables report PERMISSION_DENIED without running SQL. Its two series follow the Details flyout\'s session (focusSession).',
+  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, declared now so the frame shapes are fixed.'
+}
+
+/** The Activity Monitor's probes as live entries, built from its catalogue (src/shared/activity/catalog.ts), so the two never
+ *  disagree. A metrics probe's series go through the backend's delta engine by their kind; a snapshot probe works out its
+ *  series from per-row baselines itself, so they arrive as gauges. */
+function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSpec } {
+  const editions = Object.values(activityEditions).filter(edition => edition.available).flatMap(edition => [...edition.editions])
+  const entry = (id: ActivityLiveProbe): LiveProbeSpec => {
+    const spec = probeSpecs[id]
+    const series = probeSeries(id).map((seriesId): LiveSeriesSpec => {
+      const category = waitCategories.find(item => 'wait.' + item.id === seriesId)
+      if (category) return { id: seriesId, unit: 'msPerSecond', label: category.label + ' waits', counter: 'gauge' }
+      const known = seriesSpecs[seriesId]
+      return { id: seriesId, unit: known.liveUnit, label: known.label, counter: spec.kind === 'metrics' ? known.kind : 'gauge' }
+    })
+    const tables = spec.tables.map((table): LiveTableSpec => {
+      const table$ = tableSpecs[table]
+      return {
+        id: table, mode: 'snapshot', columns: table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })),
+        key: table$.key.map(item => liveColumnId(table, item)), rowCap: table$.rowCap,
+        ...table$.departedLinger ? { departed: true } : {},
+        ...table$.facetColumns?.length ? { facets: table$.facetColumns.map(item => liveColumnId(table, item)) } : {}
+      }
+    })
+    const pending = pendingProbes[id]
+    return {
+      id, source: 'activity', label: spec.title, description: activityDescriptions[id] + (pending ? ' ' + pending : ''),
+      intervalMs: { default: spec.defaultIntervalMs, min: spec.minIntervalMs, max: spec.maxIntervalMs },
+      budgetMs: { min: limits.live.budgetMs.min, max: spec.budgetMs }, maxDutyCycle: spec.maxDutyCycle, gates: { minMajor: activityBands.min, editions },
+      ...spec.minGapMs ? { minGapMs: spec.minGapMs } : {},
+      // Without server state the sessions probe still shows the monitor's own session; the others need it.
+      ...id === 'activity.sessions' ? { status: Object.keys(activityStatuses) } : { permission: 'serverState' as const },
+      ...series.length ? { series } : {},
+      ...tables.length ? { tables, filterMode: spec.filterMode } : {}
+    }
+  }
+  return { 'activity.overview': entry('activity.overview'), 'activity.sessions': entry('activity.sessions'), 'activity.resources': entry('activity.resources') }
 }
 
 export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
@@ -175,19 +224,7 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
       columns: [column('rowId', 'int'), ...Array.from({ length: 22 }, (_, index) => column('c' + (index + 1), wideTypes[index % wideTypes.length]))]
     }]
   },
-  'activity.overview': {
-    id: 'activity.overview', source: 'activity', label: 'Overview', intervalMs: { default: 2000, min: 1000, max: limits.live.intervalMs.max },
-    description: 'The server at a glance, in one DMV query: SQL Server\'s CPU (its schedulers\' non-preemptive time), runnable tasks, batch requests, compilations and re-compilations per second, and user sessions. Rates use the server\'s own clock (ms_ticks), and a restart starts them again.',
-    maxDutyCycle: 0.2, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] }, permission: 'serverState',
-    series: [
-      { id: 'cpuPercent', unit: 'percent', label: 'SQL Server CPU (non-preemptive)', counter: 'cpuPercent' },
-      { id: 'runnableTasks', unit: 'count', label: 'Runnable tasks', counter: 'gauge' },
-      { id: 'batchRequests', unit: 'perSecond', label: 'Batch requests/sec', counter: 'rate' },
-      { id: 'compilations', unit: 'perSecond', label: 'SQL compilations/sec', counter: 'rate' },
-      { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
-      { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
-    ]
-  },
+  ...activityLiveEntries(),
   'explorer.databases': {
     id: 'explorer.databases', source: 'explorer', label: 'Database states', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: boxAndManaged },
     description: 'The databases that are not plainly online and open to everyone, from sys.databases: their state (sys.databases.state), user access (0 multi, 1 single, 2 restricted), read-only and standby flags. Needs no server permission; a login sees the databases sys.databases shows it.',

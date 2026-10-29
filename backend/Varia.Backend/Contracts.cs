@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Varia.Backend.Activity;
 
 namespace Varia.Backend;
 
@@ -105,6 +106,9 @@ internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] 
 /// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
 internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
     int? LateEvery = null, JsonElement? Start = null);
+/// <summary>The Activity Monitor's args (src/shared/activity/schema.ts, activityLiveArgsSchema): one filter per table, and the
+/// session the sessions probe's two series follow (0: none). Activity/ActivityReader.cs checks them as zod does.</summary>
+internal sealed record ActivityLiveArgs(List<ActivityFilterDto?>? Filters = null, int? FocusSession = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,

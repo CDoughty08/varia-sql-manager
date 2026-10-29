@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveSqlReader.cs` (multi-statement sources), `Activity/ActivityReader.cs` and `ActivityRows.cs` (the Activity Monitor source), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -838,7 +838,7 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now) and Object Explorer's `explorer` (the
+Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, and `activity.resources`, declared but not sampled yet) and Object Explorer's `explorer` (the
 status chips: database states, restore progress, running Agent jobs, availability group health). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
@@ -861,7 +861,17 @@ the column, and each column is named once per table (or once for all). A view mu
 (`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
 errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }`, a sampling period below the 1 s
 minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
-error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. A source
+error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. `activity`
+takes `{ filters?: activity filter[1..7], focusSession?: 0..32,767 }` (`activityLiveArgsSchema`), at least one member: one filter
+per table (`activityFilterSchema`: Processes' view chip and System and Varia toggles, the filter box ≤ 400 characters, ≤ 8
+column value filters of ≤ 50 values ≤ 256 characters on the table's facet columns, Hide benign waits on Resource Waits), and
+the session the sessions probe's two series follow (the Details flyout; 0 for none). The first sessions sample after
+`focusSession` names another session is marked `gap: 'reset'`, so a chart starts the series again rather than join one
+session's points to the next's. An update replaces the filters of the
+tables it names and keeps the others; a table without one shows the catalogue's defaults (system sessions, Varia's pools and
+benign waits hidden). The Activity Monitor's column ids are unique within a probe (its first table keeps the catalogue's ids,
+the others take a prefix: `chainSessionId`, `activeCpuMs`; docs/activity-monitor.md), so one sort list orders each table by
+its own columns and never reorders another. A source
 whose append tables can start elsewhere than their first row takes `start` (`liveStartSchema`): `'beginning'`,
 `{ tail: 1..200,000 }` (the last rows) or `{ before: 1..2^53−1 }` (the rows before an id, ending there). Tracking names a keyed
 snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F, and `linger` says how many
@@ -914,7 +924,9 @@ from its own state; the writers do the rest.
   decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
   revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
   keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
-  values over every row the source gave (before the view and filter; NULL left out), most frequent first, at most 100 of at
+  values over every row the source gave that its facet scope keeps (before the view and filter; NULL left out; the
+  Activity Monitor's Processes counts only the rows its view chip and toggles show, before its filter box and column value
+  filters, so it never offers a value only hidden sessions have, and a column's own filter never empties its list), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
   not fit is left out (`more`) for a later tick to send.
@@ -1050,13 +1062,31 @@ no live gate (a server that stopped answering a login never holds one that views
 is reported for that tick's other due probes rather than tried again at once. Opening connects and runs one session
 probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
 SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
-a parameter. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
+a parameter. The Activity Monitor's source runs its capability probe in its place (Activity/ActivitySql.cs `Capabilities`):
+the session id and whether the login reads server state, may end sessions (ALTER ANY CONNECTION) and sees every file's name
+(VIEW ANY DEFINITION), and whether the query statistics have spills; its sessions probe sends the first two as the status
+values `serverState` and `canKill` with every sample (each new connection's capability probe reads them again), so a
+view that attaches later, or keeps only the latest sample, knows them. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
 from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
 `NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
+When the session probe did not run as the source opened (every probe paused, the gates full, the connect failed), such a
+probe opens `ok` and stops at its first tick with a terminal `PERMISSION_DENIED`, running nothing; so does one whose new
+connection's session probe finds the permission gone. SqlSampler checks this for every probe, one-batch or reader.
 A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
 its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
 the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
-more than `LOCK_TIMEOUT`. Probe SQL is constant text per probe and band in `Live/LiveSql.cs`: one batch per probe, its metrics
+more than `LOCK_TIMEOUT`. A source with several statements per probe (`ILiveSqlReader`; the Activity Monitor's
+`ActivityReader`) runs them one at a time on the same connection within that one budget and builds the probe's series and
+rows in C#; its statements are `ActivitySql`'s constant text, checked by their own lint and the live lint, each read checked
+against the columns it declares (a mismatch is a bug: `BACKEND_ERROR`). A statement the login may not run (`PERMISSION_DENIED`)
+or the server lacks (`NOT_SUPPORTED`) fails alone: the sample goes on, an error beside it names the tables and series that
+statement feeds, and it is not run again on that connection, only reported each sample (each new connection's capability
+probe runs it again: the login may since hold the permission, or the connection reach another server). A lock wait or another statement
+error stops the probe's statements: what was read arrives and the error names the rest; a probe that read nothing reports
+its first error and backs off; a lost connection or the budget fails the probe as below. Without server state the sessions
+probe reads one statement (the caller's own session: SQL Server shows such a login nothing else) and reports Blocking and
+Active Expensive Queries as `PERMISSION_DENIED` beside each sample without SQL. Probe SQL of the other sources is constant
+text per probe and band in `Live/LiveSql.cs` (none ships yet; the live checks register theirs): one batch per probe, its metrics
 row (when it has series) with the columns it declares, mapped to the catalogue's series, then one result set per table, in
 catalogue order, whose column names and types must be the table's (the types live tables store: integers, text, bit, float,
 real, decimal, the date and time types and uniqueidentifier; a column of another type, or a query that does not read each of
@@ -1091,11 +1121,17 @@ kind in the catalogue: `gauge` (as read), `rate` and `msPerSecond` (change per s
 counter's change; none when the base did not move) and `cpuPercent` (100 × Δ CPU ms / (elapsed × schedulers), 0 to 100).
 Elapsed time is the server's own (Δ`ms_ticks` of `sys.dm_os_sys_info`) when the probe reads it, so a slow round trip never
 skews a rate, and the backend's clock otherwise; `elapsedMs` reports it. A changed start time (a restart) drops every
-baseline (`gap: 'reset'`); a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
+baseline (`gap: 'reset'`), and a reader's series that follow something else from a sample on (the Activity Monitor's focus
+series, another session) mark that sample `reset` too; a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
 pause and the first after a lost connection (which may have reached another server) have no rates (`baseline`,
 `resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
 while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines for snapshot rates (L2b's tables): keyed by an
-identity column (a session's login time), bounded by the row cap, dropped after two samples absent.
+identity column (a request's start time), bounded by the row cap, dropped after two samples absent, and each with the time
+it was read at on the probe's sample clock, so a row missing from a sample gets a rate over its own span when it returns.
+The Activity Monitor's per-session CPU and reads use their own rule (`SessionRates` in `Activity/ActivityRows.cs`): a
+session's counters take in a request's work only when it ends, on a smaller scale than the request reported, so each
+running request (by id and start time; a MARS session has several) counts by its own change, a new one whole, and the ended
+ones only beyond what they had counted (never negative, nothing twice).
 
 **Resume tokens** (`Live/LiveResume.cs`): base64url of `{"v":1,"source":…,"cursors":[[probe,table,settledId],…]}`, at
 most 256 characters (a set of cursors that would not fit makes no token), parsed strictly against the subscription's

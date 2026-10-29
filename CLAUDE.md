@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 892 offline
-  checks; how many depends on the server version and authentication (1422 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 944 offline
+  checks; how many depends on the server version and authentication (1491 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -110,10 +110,12 @@ pages, limits, error codes, display formats, benchmarks).
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
+  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
+  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
-  the live gates and a per-statement budget, and its failures are values that back off.
+  the live gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values
+  that back off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
@@ -190,8 +192,14 @@ pages, limits, error codes, display formats, benchmarks).
   `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
   statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
   names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
-  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant. Filters run
-  in backend memory over a sample (`ActivityFilter`), never in SQL. The session actions (`Activity/SessionActions.cs`)
+  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
+  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
+  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
+  sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when its id is one
+  Varia's own pooled or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the
+  process id, host name and program name a client claims at login alone; `VariaSessions.Protected` (the ledger's ids or
+  those claims) is the wider set a refusal can use, since SqlClient's reconnect can move a held pool connection to an id
+  the ledger lacks. The session actions (`Activity/SessionActions.cs`)
   have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
   gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
   checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and

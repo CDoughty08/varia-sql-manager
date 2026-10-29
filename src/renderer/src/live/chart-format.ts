@@ -17,7 +17,7 @@ function formatRate(bytes: number): string {
   return `${formatNumber(value)} ${byteUnits[unit]}`
 }
 
-/** A value as a chart labels it: "93 %", "1,234/s", "12 ms", "2,840 ms/s", "13.1 MB/s", "84". Missing values say so. */
+/** A value as a chart labels it: "93 %", "1,234/s", "12 ms", "2,840 ms/s", "13.1 MB/s", "300 s", "84". Missing values say so. */
 export function formatChartValue(value: number, unit: LiveUnit): string {
   if (!Number.isFinite(value)) return 'no value'
   switch (unit) {
@@ -26,6 +26,7 @@ export function formatChartValue(value: number, unit: LiveUnit): string {
     case 'ms': return `${formatNumber(value)} ms`
     case 'msPerSecond': return `${formatNumber(value)} ms/s`
     case 'bytesPerSecond': return formatRate(value)
+    case 'seconds': return `${formatNumber(value)} s`
     case 'count': return formatNumber(value)
   }
 }

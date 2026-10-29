@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Varia.Backend.Activity;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 
@@ -35,7 +36,7 @@ internal static class LiveDataChecks
         {
             var recorder = new LiveRecorder(++next);
             var id = Guid.NewGuid().ToString();
-            var task = service.Live.SubscribeAsync(new LiveSubscribeArgs(id, connectionId, "activity", [new LiveProbeArgs(LiveSql.OverviewProbe, intervalMs)]), recorder.Context, json);
+            var task = service.Live.SubscribeAsync(new LiveSubscribeArgs(id, connectionId, "activity", [new LiveProbeArgs(ActivityReader.OverviewProbe, intervalMs)]), recorder.Context, json);
             return (task, recorder, id);
         }
         static async Task<LiveEnd> Stop((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) view)
@@ -93,10 +94,15 @@ internal static class LiveDataChecks
         var (overview, sampled, ticks) = measured;
         var opened = overview.Recorder.Opened;
         var samples = ticks.Where(tick => tick.Samples.Count > 0).Select(tick => tick.Samples[0]).ToList();
+        // Every series of the activity catalogue's overview: gauges from the first sample, rates from the second; a ratio (I/O
+        // latency) has no value when its base did not move (no reads in the interval).
+        var series = LiveCatalog.Current.Probes[ActivityReader.OverviewProbe].Series;
+        bool Valid(double? value, bool required) => value is { } v ? double.IsFinite(v) && v >= 0 : !required;
         check(sampled && ticks.All(tick => tick.Errors is null && tick.Samples.Count == 1) && opened is { Source: "activity", Band: >= LiveSql.MinBand and <= LiveSql.MaxBand, Spid: > 0, Isolation: "readUncommitted", Probes: [{ State: "ok" }] }
-            && samples[0] is { Gap: "baseline", Metrics: [null, >= 0, null, null, null, >= 1] }
-            && samples.Skip(1).All(sample => sample.Metrics is { Length: 6 } metrics && metrics.All(value => value is { } v && double.IsFinite(v) && v >= 0) && metrics[0] <= 100 && sample.EffectiveIntervalMs == 2000),
-            "activity.overview opens on the server's band and its own session, reading uncommitted; its baseline carries gauges only, and the next samples every series (CPU 0 to 100 %): "
+            && series.Count == 21 && samples[0] is { Gap: "baseline", Metrics: { Length: 21 } baseline } && series.Select((spec, at) => spec.Counter == "gauge" ? Valid(baseline[at], true) : baseline[at] is null).All(ok => ok)
+            && samples.Skip(1).All(sample => sample.Metrics is { Length: 21 } metrics && series.Select((spec, at) => Valid(metrics[at], spec.Counter != "ratio")).All(ok => ok)
+                && metrics[series.FindIndex(spec => spec.Id == "cpuPercent")] <= 100 && metrics[series.FindIndex(spec => spec.Id == "userSessions")] >= 1 && sample.EffectiveIntervalMs == 2000),
+            "activity.overview opens on the server's band and its own session, reading uncommitted; its baseline carries its gauges only, and the next samples every series of the activity catalogue (CPU 0 to 100 %): "
             + string.Join(" | ", ticks.Select(tick => string.Join(",", tick.Errors?.Select(error => error.Code) ?? []) + string.Join(",", tick.Samples.Select(sample => sample.Gap + " " + string.Join(",", sample.Metrics ?? []))))));
         // ms_ticks is read at some point while a statement runs, so the server's elapsed time lies between the backend's
         // clock less the later statement's cost and plus the earlier one's (ms_ticks has the system timer's resolution).

@@ -160,6 +160,7 @@ DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
 ActivityChecks.Run(Check);
+ActivitySourceChecks.Run(Check);
 await ActivityActionChecks.RunAsync(Check, json);
 using (var offline = new SqlService())
 {
@@ -500,6 +501,7 @@ try
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityLiveChecks.RunAsync(Check, service, info);
+    await ActivitySourceLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
