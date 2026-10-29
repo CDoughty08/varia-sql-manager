@@ -27,8 +27,17 @@ let page = await app.firstWindow()
 page.setDefaultTimeout(15000)
 /** Resizes the window itself (not an emulated viewport), so container queries and the panes' measure see real sizes. */
 async function size(width, height) {
-  await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [width, height])
-  await expect.poll(() => page.evaluate(() => [window.innerWidth, window.innerHeight])).toEqual([width, height])
+  const display = await app.evaluate(({ BrowserWindow, screen }, [w, h]) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    window.setContentSize(w, h)
+    return screen.getDisplayMatching(window.getBounds()).size
+  }, [width, height])
+  const inner = () => page.evaluate(() => [window.innerWidth, window.innerHeight])
+  if (width < display.width && height < display.height) return expect.poll(inner).toEqual([width, height])
+  // X11 keeps a window inside its screen (Linux CI's 1600 x 1000 xvfb screen left 1599 x 999), while Windows lets it grow
+  // past its 1024 x 768 display: a size the display cannot hold settles at most a few pixels inside it.
+  const near = (got, wanted, limit) => got <= wanted && got >= Math.min(wanted, limit) - 8
+  await expect.poll(async () => { const [w, h] = await inner(); return near(w, width, display.width) && near(h, height, display.height) }).toBe(true)
 }
 await size(1500, 960)
 const failures = []
