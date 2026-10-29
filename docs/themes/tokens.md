@@ -184,7 +184,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `tab.inactiveBackground` | VS Code | `@editorGroupHeader.tabsBackground` | `#111317` | `#f7f8fa` | Hidden tabs of the focused dock group. |
 | `tab.unfocusedActiveBackground` | VS Code | `$canvas` | `#16181d` | `#ffffff` | Visible tab of an unfocused dock group. |
 | `tab.unfocusedInactiveBackground` | VS Code | `@tab.inactiveBackground` | `#111317` | `#f7f8fa` | Hidden tabs of an unfocused dock group. |
-| `tab.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the visible tab of the focused dock group. |
+| `tab.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the visible tab of the focused dock group, and the title in the header of a document. |
 | `tab.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of the focused dock group. |
 | `tab.unfocusedActiveForeground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Label of the visible tab of an unfocused dock group. |
 | `tab.unfocusedInactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Labels of hidden tabs of an unfocused dock group. |
@@ -216,8 +216,8 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `documentTabs.closeForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Close buttons of query tabs. |
 | `documentTabs.iconForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | SQL badge of query tabs. |
 | `documentTabs.modifiedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Dot that marks a query with unsaved changes. |
-| `breadcrumb.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | The bar that names an XML, JSON or execution plan document opened from the results. |
-| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#9298a4` | `#5c6370` | Unused since the query status bar replaced the query context line; themes that set it stay valid. |
+| `breadcrumb.foreground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results. |
+| `breadcrumb.separatorForeground` | Varia | `@breadcrumb.foreground` | `#9298a4` | `#5c6370` | The chevrons between the steps of the location in a document header. |
 
 ### Editor, widgets, and empty states
 
