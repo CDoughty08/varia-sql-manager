@@ -86,14 +86,27 @@ internal static class SsisActionLiveChecks
     private static async Task<long> StopOperationsAsync(Func<string, string?, Task<SqlRun>> exec, string? status) =>
         long.Parse((await exec("SELECT COUNT(*) FROM [catalog].[operations] WHERE operation_type = 202" + (status is null ? "" : " AND status = " + status) + ";", null)).Scalar!, CultureInfo.InvariantCulture);
 
-    /// <summary>The write's server session once it waits on another session's lock, or null if it is never seen blocked (30 s).</summary>
-    private static async Task<string?> BlockedSessionAsync(SqlService service, string requestId, Task request, Func<string, string?, Task<SqlRun>> exec)
+    /// <summary>The statement Stop Operation's preflight waits in: OperationPreflight's SELECT, after its SET LOCK_TIMEOUT.</summary>
+    private static string PreflightSelect => SsisSql.OperationPreflight[(SsisSql.OperationPreflight.IndexOf('\n', StringComparison.Ordinal) + 1)..].TrimEnd(';');
+
+    /// <summary>The write's server session once its preflight waits on the holder's lock, or null if it is never seen so (30 s).
+    /// Being blocked is not enough: the step after the preflight waits on the holder too, and a session ended there has already
+    /// passed the preflight. Only the preflight's own SELECT, at its lock timeout, waiting for a shared lock the holder's session
+    /// holds, with most of that timeout left, is still in the preflight when the KILL lands.</summary>
+    private static async Task<string?> BlockedSessionAsync(SqlService service, string requestId, Task request, Func<string, string?, Task<SqlRun>> exec, string holder)
     {
+        var lockTimeout = SsisCatalog.Current.Limit("preflightLockTimeoutMs");
         var watch = Stopwatch.StartNew();
         while (watch.ElapsedMilliseconds < 30_000 && !request.IsCompleted)
         {
             if (service.SsisActions.SessionOf(requestId) is { } session
-                && (await exec("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE session_id = " + session + " AND blocking_session_id <> 0;", null)).Scalar == "1")
+                && (await exec("SELECT r.blocking_session_id, r.lock_timeout, r.wait_type, r.wait_time, SUBSTRING(t.text, r.statement_start_offset / 2 + 1, "
+                    + "(CASE r.statement_end_offset WHEN -1 THEN DATALENGTH(t.text) ELSE r.statement_end_offset END - r.statement_start_offset) / 2 + 1) "
+                    + "FROM sys.dm_exec_requests AS r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t WHERE r.session_id = " + session + ";", null)).Sets[0].FirstOrDefault() is
+                    [var blocker, var timeout, "LCK_M_S", var waited, var statement]
+                && blocker == holder && timeout == lockTimeout.ToString(CultureInfo.InvariantCulture)
+                && long.Parse(waited!, CultureInfo.InvariantCulture) < lockTimeout / 2
+                && statement?.TrimEnd(';', ' ', '\r', '\n') == PreflightSelect)
                 return session.ToString(CultureInfo.InvariantCulture);
             await Task.Delay(50);
         }
@@ -171,11 +184,16 @@ internal static class SsisActionLiveChecks
     {
         var options = service.Ssis.Options;
         var target = await ExecutionAsync(exec, start: true);
-        async Task<T> Holding<T>(string table, string key, Func<Task<T>> run)
+        // A writer's uncommitted change to the row, rolled back after `run` (which gets the holder's server session). Not an XLOCK
+        // taken by a SELECT: a READ COMMITTED reader skips the row lock on a page whose last change is older than the database's
+        // oldest active transaction, so whether that lock held the preflight depended on what else began in the database.
+        async Task<T> Holding<T>(string table, string key, Func<string, Task<T>> run)
         {
             var holder = Guid.NewGuid().ToString();
-            await exec("BEGIN TRANSACTION; SELECT 1 FROM [catalog].[" + table + "] WITH (XLOCK, ROWLOCK, HOLDLOCK) WHERE " + key + " = " + target + ";", holder);
-            try { return await run(); }
+            var held = (await exec("BEGIN TRANSACTION; UPDATE [catalog].[" + table + "] SET [stopped_by_name] = N'Varia lock holder' WHERE " + key + " = " + target + ";\n"
+                + "SELECT CONCAT(@@ROWCOUNT, ' ', @@SPID);", holder)).Scalar!.Split(' ');
+            if (held[0] != "1") throw new InvalidOperationException("The lock holder changed " + held[0] + " rows of " + table + ".");
+            try { return await run(held[1]); }
             finally
             {
                 await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, holder);
@@ -188,7 +206,7 @@ internal static class SsisActionLiveChecks
         // path: that row stays Running, and the reply says so.
         var running = await StopOperationsAsync(exec, "2");
         var watch = Stopwatch.StartNew();
-        var (stopped, facts, stoppedMs) = await Holding("executions", "execution_id", async () =>
+        var (stopped, facts, stoppedMs) = await Holding("executions", "execution_id", async _ =>
         {
             using var stop = new CancellationTokenSource();
             var requestId = Guid.NewGuid().ToString();
@@ -233,18 +251,21 @@ internal static class SsisActionLiveChecks
         string? killed;
         try
         {
-            (timedOut, blocked, blockedMs, lost, killed) = await Holding("operations", "operation_id", async () =>
+            (timedOut, blocked, blockedMs, lost, killed) = await Holding("operations", "operation_id", async holder =>
             {
                 var first = await StopAsync(service, info.Id, target);
                 options.PreflightBudget = new SsisOptions().PreflightBudget;
                 var waited = Stopwatch.StartNew();
                 var second = await StopAsync(service, info.Id, target);
                 var secondMs = waited.ElapsedMilliseconds;
-                // This run's own write session, ended while its preflight waits.
+                // This run's own write session, ended while its preflight waits. One never seen there is stopped instead, so that a
+                // write waiting on the holder answers (and fails the check) rather than waiting for it.
+                using var stop = new CancellationTokenSource();
                 var requestId = Guid.NewGuid().ToString();
-                var request = StopAsync(service, info.Id, target, requestId: requestId);
-                var session = await BlockedSessionAsync(service, requestId, request, exec);
+                var request = StopAsync(service, info.Id, target, stop.Token, requestId);
+                var session = await BlockedSessionAsync(service, requestId, request, exec, holder);
                 if (session is not null) await exec("KILL " + session + ";", null);
+                else stop.Cancel();
                 return (first, second, secondMs, await request, session);
             });
         }
@@ -255,7 +276,7 @@ internal static class SsisActionLiveChecks
             && lost.Error.Message == "The connection to the server was lost before Varia could stop operation " + target + ", so nothing changed. Try again."
             && await StopOperationsAsync(exec, null) == stops,
             "a preflight behind a writer's lock answers TIMEOUT past its budget, BLOCKED after its 10 s lock timeout, and CONNECTION_LOST saying nothing changed when its connection is lost, "
-            + "before the catalog is asked (" + blockedMs + " ms, session " + (killed ?? "never seen blocked") + "): " + Dump(timedOut) + Dump(blocked) + Dump(lost));
+            + "before the catalog is asked (" + blockedMs + " ms, session " + (killed ?? "never seen waiting in the preflight") + "): " + Dump(timedOut) + Dump(blocked) + Dump(lost));
         await exec("EXEC [catalog].[varia_fake_finish] " + target + ", 3;", null);
     }
 
