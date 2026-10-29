@@ -23,7 +23,9 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
+// Three app phases (the dialog, Remember password, environment labels with the query bar's narrow layouts) take about five
+// minutes on a Windows runner, so the bound that catches a hang leaves them room.
+const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 480000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
 // Environment labels' phase: the fake backend behind main's real request, history and library handlers.
@@ -586,7 +588,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs, the query bar and the status bar, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
@@ -872,7 +874,7 @@ async function rememberPassword() {
 
 /**
  * Environment labels through main's own handlers and the fake backend: chosen in the Connect dialog and saved with the
- * history entry, shown as a tag on the server's Object Explorer row, its query tab, the query status bar and the window's
+ * history entry, shown as a tag on the server's Object Explorer row, its query tab, the query bar and the window's
  * status bar, changed from the server's menu, and dropped when the form moves to another server.
  */
 async function environmentLabels() {
@@ -883,15 +885,16 @@ async function environmentLabels() {
   await launch({ ...launchOptions, env: fake }, 'fake')
   const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server.toLowerCase() === 'prod-server')?.options.environment
   const tag = place => environmentPill(page, place)
-  // The active query's facts are in the window's status bar, after the backend's state and its tag: the tag shows there
-  // once, not again before the server.
+  // The query bar leads its server with the tag. The active query's facts are in the window's status bar, after the
+  // backend's state and its tag: the tag shows there once, not again before the server, and the classic query status bar
+  // (off by default) shows none.
   async function shows(text, tone) {
-    for (const place of ['explorer', 'tab', 'status']) {
+    for (const place of ['explorer', 'tab', 'query', 'status']) {
       await expect(tag(place), place).toHaveText(text)
       await expect(tag(place), place).toHaveAttribute('data-tone', tone)
     }
     await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
-    await expect(tag('query')).toHaveCount(0)
+    await expect(tag('queryStatus')).toHaveCount(0)
     // Beside the backend's state, not in it: its tooltip and text stay the backend's.
     await expect(backendReady(page, 'fake')).toHaveText('Ready')
   }
@@ -1042,8 +1045,9 @@ async function environmentLabels() {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(activeDocument(page).locator(part.statusPill)).toHaveText('STAGING')
+  await expect(tag('query')).toHaveText('STAGING')
   await expect(tag('status')).toHaveText('STAGING')
-  await expect(tag('query')).toHaveCount(0)
+  await expect(tag('queryStatus')).toHaveCount(0)
   expect(await saved()).toBe('Staging')
   // A connect without a label (the history not loaded yet) keeps the entry's, and main says which, so it is shown.
   const typed = await page.evaluate(async () => {
