@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
-import { documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -62,7 +62,7 @@ async function run(sql, timeout = 60000) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
   await page.keyboard.press('F5')
-  await expect(status()).toContainText(/^Query executed successfully\./, { timeout })
+  await expect(status()).toContainText(/^Completed · /, { timeout })
 }
 
 async function launch(env) {
@@ -79,7 +79,8 @@ async function launch(env) {
   })
   // Closing a typed query asks first; answer Don't Save.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await statusBar(page).getByText(/· Ready/).waitFor({ timeout: 60000 })
+  // The fake backend (VARIA_TEST_BACKEND) says its runtime is 'fake'; the Release backend names its .NET.
+  await backendReady(page, env.VARIA_TEST_BACKEND ? 'fake' : undefined).waitFor({ timeout: 60000 })
   await page.evaluate(gridPart => {
     /** What grid 0 shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {
@@ -186,7 +187,7 @@ try {
   await page.keyboard.insertText('-- varia-fake: sets=W1*1000000@250000')
   const streamStart = { task: await taskSeconds(), wall: performance.now() }
   await page.keyboard.press('F5')
-  await expect(status()).toContainText('Query executed successfully.', { timeout: 60000 })
+  await expect(status()).toContainText(/^Completed · /, { timeout: 60000 })
   const streamSeconds = (performance.now() - streamStart.wall) / 1000, streamBusy = await taskSeconds() - streamStart.task
   await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
   record('grid.stream.busyPercent', streamBusy / streamSeconds * 100, '%', `main-thread task time ${streamBusy.toFixed(2)} s of ${streamSeconds.toFixed(1)} s while 1,000,000 rows streamed at 250,000 a second`)

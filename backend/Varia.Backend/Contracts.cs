@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Varia.Backend.Activity;
 
 namespace Varia.Backend;
 
@@ -52,7 +53,9 @@ internal sealed record TableColumnsResult(List<ColumnInfo> Columns, bool Truncat
 internal sealed record QueryFailure(string Code, string Message, int BatchNumber, int Iteration);
 /// <summary>Seq orders it with the results.memory events: the status bar applies only a figure newer than the last it showed.</summary>
 internal sealed record ResultBudget(long UsedBytes, long GlobalBytes, long QueryBytes, long Seq);
-/// <summary>One line of the Messages tab: kind is "info" or "error" (SQL errors, cancellation and timeout, shown in red).</summary>
+/// <summary>One line of the Messages tab: kind is "info" (Varia's row counts and notes), "print" (PRINT and RAISERROR with
+/// severity 10 or less), "server" (SQL Server's other informational messages: warnings, SET STATISTICS output, DBCC) or "error"
+/// (SQL errors, cancellation and timeout, shown in red).</summary>
 internal sealed record MessageEntry(string Text, string Kind);
 /// <summary>The query.execute summary: rows stay in the backend's result store and are read with results.read. CompletedAt
 /// is the backend's local time with 7 fractional digits, as SSMS prints "Completion time:". Status is completed, completedWithErrors
@@ -103,6 +106,9 @@ internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] 
 /// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
 internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
     int? LateEvery = null, JsonElement? Start = null);
+/// <summary>The Activity Monitor's args (src/shared/activity/schema.ts, activityLiveArgsSchema): one filter per table, and the
+/// session the sessions probe's two series follow (0: none). Activity/ActivityReader.cs checks them as zod does.</summary>
+internal sealed record ActivityLiveArgs(List<ActivityFilterDto?>? Filters = null, int? FocusSession = null);
 /// <summary>ssis.operations' args (src/shared/ssis/schema.ts SsisOperationsArgs): the Operations view's filters, each absent one
 /// no filter. Live/SsisOperations.cs re-checks every member and bound.</summary>
 internal sealed record SsisOperationsLiveArgs(string[]? Kinds = null, int[]? Statuses = null, string? Folder = null, string? Project = null, string? Package = null, bool? Prefix = null,
@@ -183,7 +189,10 @@ internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId,
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null);
+/// <summary>Which database Database Properties read (database_id and create_date as the describe writes it): its preflight
+/// refuses a database that has taken the name since, after a rename, a drop or a restore.</summary>
+internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
@@ -191,7 +200,7 @@ internal sealed record ActionWarningDto(string Text, bool Blocking);
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
-    string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null);
+    string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);
 internal sealed record GrowthDto(bool Enabled, string? Unit = null, long? By = null, long? MaxMb = null);
 /// <summary>Type: rows, log or filestream. Path is the folder and FileName the file of physical_name.</summary>
 internal sealed record DatabaseFileDto(string Name, string Type, string? Filegroup, double SizeMb, GrowthDto Growth, string Path, string FileName, bool IsPrimary);
@@ -243,12 +252,26 @@ internal sealed record SsisPackageModel(string View, long Id, string Folder, str
 internal sealed record SsisVariableDto(string Name, string Type, string? Description, bool Sensitive, string? Value);
 internal sealed record SsisEnvironmentModel(string View, long Id, string Folder, string Name, string? Description, string CreatedBy, string Created, List<SsisVariableDto> Variables, bool Truncated);
 /// <summary>ssis.execute's action (src/shared/ssis/schema.ts SsisAction): the verb and its own members, null for other verbs'.
-/// SsisActionService.Validate refuses a member its verb does not take.</summary>
-internal sealed record SsisActionDto(string Verb, long? OperationId = null);
+/// SsisActionService.Validate refuses a member its verb does not take.
+/// Create Catalog's Password is the catalog's encryption password: the request is sensitive, and the record never prints it.</summary>
+internal sealed record SsisActionDto(string Verb, long? OperationId = null, string? Password = null, bool? EnableClr = null, bool? StartupProcedure = null)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Verb = ").Append(Verb).Append(", OperationId = ").Append(OperationId).Append(", Password = ").Append(Password is null ? "null" : "<redacted>")
+            .Append(", EnableClr = ").Append(EnableClr).Append(", StartupProcedure = ").Append(StartupProcedure);
+        return true;
+    }
+}
 /// <summary>ssis.execute: Revision is a describe's, only for a verb that takes one.</summary>
 internal sealed record SsisExecuteArgs(string ConnectionId, string RequestId, SsisActionDto Action, string? Revision = null);
 /// <summary>The steps the write ran, in order (none when it was refused first), or Error.</summary>
 internal sealed record SsisExecuteResult(List<ActionStepDto> Steps, long ElapsedMs, SsisError? Error = null);
+/// <summary>ssis.catalogSetup (src/shared/ssis/schema.ts): what Create Catalog's dialog reads.</summary>
+internal sealed record SsisCatalogSetupArgs(string ConnectionId, string RequestId);
+/// <summary>What Create Catalog will do on the server: SsisCatalogSetup in src/shared/ssis/schema.ts.</summary>
+internal sealed record SsisCatalogSetupDto(string Catalog, bool ClrEnabled, bool StartupDefault, string BackupFile, string DataFile, string LogFile);
+internal sealed record SsisCatalogSetupResult(SsisCatalogSetupDto? Setup, long ElapsedMs, SsisError? Error = null);
 /// <summary>activity.details (src/shared/activity/schema.ts): one session by its id and login time (server local time,
 /// yyyy-MM-ddTHH:mm:ss.fffffff); Text asks for one text whole, Locks also reads its locks. SessionActions re-checks every bound.</summary>
 internal sealed record ActivityDetailsArgs(string ConnectionId, string RequestId, int SessionId, string LoginTime, string? Text = null, bool? Locks = null);
@@ -280,8 +303,30 @@ internal sealed record ActivityKillOutcomeDto(int SessionId, string Outcome, str
 internal sealed record ActivityKillResult(List<ActivityKillOutcomeDto> Results, long ElapsedMs, ActivityError? Error = null);
 
 /// <summary>What the Connect dialog shows under a failed connection: SQL Server's error number, state and class (level), and
-/// the server that answered. Never the connection string or the password.</summary>
-internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server);
+/// the server that answered, plus <c>Reason</c> "certificate" when the server's TLS certificate was not trusted (the dialog
+/// offers to trust it). <c>Exception</c> comes only with BACKEND_ERROR: the unexpected exception's types and HRESULTs for
+/// Copy details (<see cref="ErrorDetailsLimits.Summary"/>), never its message. Never the connection string or the password.</summary>
+internal sealed record ErrorDetails(int? Number, int? State, int? Class, string? Server, string? Reason = null, string? Exception = null);
+
+internal static class ErrorDetailsLimits
+{
+    /// <summary>The longest exception summary the details carry; main refuses a longer one.</summary>
+    internal const int MaxExceptionLength = 512;
+    /// <summary>The reason a certificate failure carries, the only reason there is.</summary>
+    internal const string Certificate = "certificate";
+
+    /// <summary>"System.InvalidOperationException (0x80131509) &gt; System.DllNotFoundException (0x80131524)": the types and
+    /// HRESULTs from the outer exception inwards, at most four, cut at 512 characters. Messages are left out because they can
+    /// hold paths, names or SQL text.</summary>
+    internal static string Summary(Exception error)
+    {
+        var parts = new List<string>();
+        for (Exception? current = error; current is not null && parts.Count < 4; current = current.InnerException)
+            parts.Add($"{current.GetType().FullName} (0x{current.HResult:X8})");
+        var text = string.Join(" > ", parts);
+        return text.Length > MaxExceptionLength ? text[..MaxExceptionLength] : text;
+    }
+}
 
 internal sealed class RequestException(string code, string message, ErrorDetails? details = null) : Exception(message)
 {

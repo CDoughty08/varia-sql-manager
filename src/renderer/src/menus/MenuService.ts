@@ -12,6 +12,7 @@ import type { CommandService } from '../core/commands'
 import { onUnexpectedError } from '../core/errors'
 import type { FocusAdapter } from '../core/focus'
 import type { KeyDownEvent } from '../core/keybindings'
+import { SnapshotStore } from '../core/store'
 import type { Timers } from '../core/timers'
 import type { Disposable } from '../core/types'
 import type { Anchor, Rect } from './geometry'
@@ -122,6 +123,8 @@ export class MenuService implements Disposable {
   private marked?: Element
   /** The same for an open native menu. */
   private nativeMarked?: Element
+  /** The element an open context menu is for, so a menu button can say whether its menu is open (aria-expanded). */
+  readonly menuFor = new (class extends SnapshotStore<Element | undefined> { set(value: Element | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   /** A widget scrolled to show its active item for a keyboard menu: that scroll does not close the menu. */
   private revealed?: { readonly widget: Element; readonly top: number }
   private readonly native?: NativeMenuPresenter
@@ -211,14 +214,15 @@ export class MenuService implements Disposable {
     this.openFor(event.target as Element | null, { kind: 'point', x: event.clientX, y: event.clientY }, false)
   }
   /**
-   * Shift+F10 and the context-menu key: the focused element's menu, below it, with its first item active. A widget that
-   * keeps focus on itself and names its active item with `aria-activedescendant` (Object Explorer's tree) gets that
-   * item's menu.
+   * An element's menu, below it. Shift+F10 and the context-menu key open the focused element's, with its first item
+   * active and access keys shown; a menu button (a panel's ⋯) opens its own the same way from the keyboard, and as a
+   * pointer menu from a click. A widget that keeps focus on itself and names its active item with
+   * `aria-activedescendant` (Object Explorer's tree) gets that item's menu.
    */
-  openForElement(element: Element | null, _how: { keyboard: true }): boolean {
+  openForElement(element: Element | null, how: { keyboard: boolean }): boolean {
     const item = activeDescendant(element)
     if (item && element) this.reveal(element, item)
-    return this.openFor(item ?? element, undefined, true, item ? element ?? undefined : undefined)
+    return this.openFor(item ?? element, undefined, how.keyboard, item ? element ?? undefined : undefined)
   }
 
   /** A menubar button activated without a pointer press (assistive technology): toggles its menu. */
@@ -329,6 +333,7 @@ export class MenuService implements Disposable {
     this.controller.openContext(items, anchor, { keyboard, label: contextMenuLabels[menu] })
     if (this.controller.view.source !== 'context') return false
     if (mark) { mark.setAttribute('data-menu-target', ''); this.marked = mark }
+    this.menuFor.set(mark)
     return true
   }
   /** Main shows the menu at the pointer, or below what a keyboard-opened menu is for; if it cannot, `fallback` does. */
@@ -336,12 +341,14 @@ export class MenuService implements Disposable {
     this.unmarkNative()
     mark?.setAttribute('data-menu-target', '')
     this.nativeMarked = mark
+    this.menuFor.set(mark)
     const at = anchor.kind === 'point' ? anchor : anchor.kind === 'below' ? { x: anchor.rect.left, y: anchor.rect.bottom } : { x: anchor.rect.right, y: anchor.rect.top }
     const unmark = () => { if (mark && this.nativeMarked === mark) this.unmarkNative() }
     native.show(menu, items, at, { closed: unmark, failed: () => { unmark(); fallback() } })
   }
   private unmarkNative(): void {
     this.nativeMarked?.removeAttribute('data-menu-target')
+    if (this.nativeMarked && this.menuFor.getSnapshot() === this.nativeMarked) this.menuFor.set(undefined)
     this.nativeMarked = undefined
   }
   /** Below the item (the editor's caret), kept within the widget that names it as its active item. */
@@ -387,6 +394,7 @@ export class MenuService implements Disposable {
   private closed(reason: CloseReason): void {
     this.tabbedIn = false
     this.marked?.removeAttribute('data-menu-target')
+    if (this.marked && this.menuFor.getSnapshot() === this.marked) this.menuFor.set(undefined)
     this.marked = undefined
     // Activation restores focus itself, just before its command; a menu replacing this one keeps the original target.
     if (reason === 'replace') { this.replacing = true; return }
@@ -396,6 +404,7 @@ export class MenuService implements Disposable {
     this.detach?.()
     this.native?.dispose()
     this.unmarkNative()
+    this.menuFor.clear()
     this.controller.dispose()
     this.subscriptions.forEach(subscription => subscription.dispose())
     this.access.dispose()

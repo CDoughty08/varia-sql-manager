@@ -25,7 +25,8 @@
     "statusBar.foreground": { "dark": "#cfeff2", "light": "#0b3d4a" },
     "list.inactiveSelectionBackground": { "dark": "$accent/20", "light": "$accent/10" },
     "resultsGrid.nullForeground": { "dark": "#c8a96b", "light": "#7a5a1e" },
-    "editorLineNumber.foreground": { "dark": "#7b8794" }
+    "editorLineNumber.foreground": { "dark": "#7b8794" },
+    "list.highlightForeground": { "light": "$textAccent" }
   },
   "tokenColors": [
     { "name": "Keywords", "scope": ["keyword", "storage.type"], "settings": { "foreground": "$accent", "fontStyle": "bold" } },

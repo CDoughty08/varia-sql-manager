@@ -23,7 +23,8 @@ describe('generated command documentation', () => {
     expect(docs).toContain('| Redo | `edit.redo` | Ctrl+Y *, Ctrl+Shift+Z * | Ctrl+Y *, Ctrl+Shift+Z * | ⇧⌘Z * | Always | Edit › Redo; Text field context menu › Redo |')
     expect(docs).toContain('| Show Context Menu (not in the palette) | `workbench.showContextMenu` | Shift+F10, Menu | Shift+F10, Menu | ⇧F10 | `!quickInputVisible` | — |')
     expect(docs).toContain('Query tab context menu › Open Containing Folder (Windows, Linux only); Query tab context menu › Reveal in Finder (macOS only) |')
-    expect(docs).toContain('| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) |')
+    const where = '(`editorFocus \\|\\| queryBarFocus`)'
+    expect(docs).toContain('| Execute | `query.execute` | ' + [`F5 ${where}, Ctrl+Enter ${where}, Ctrl+E ${where}`, `F5 ${where}, Ctrl+Enter ${where}, Ctrl+E ${where}`, `F5 ${where}, ⌘↩ ${where}`].join(' | ') + ' |')
     expect(docs).toContain('| Toggle Word Wrap | `editor.toggleWordWrap` | Alt+Z | Alt+Z | — | Always; checked when `editorWordWrap` | Edit › Advanced › Word Wrap |')
     expect(docs).toContain('| Uncomment Selection | `edit.uncommentLines` | Ctrl+K Ctrl+U * | Ctrl+K Ctrl+U * | ⌘K ⌘U * | `activeDocumentIsText` | Edit › Advanced › Uncomment Selection |')
     // Varia's own editor chords are marked like Monaco's: the editor dispatches them.

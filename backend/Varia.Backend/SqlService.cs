@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
@@ -28,7 +29,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read", "results.close", "explorer.children", "results.copy", "results.export",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
-        "ssis.describe", "ssis.execute"
+        "ssis.describe", "ssis.execute", "ssis.catalogSetup"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -50,6 +51,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
+    /// <summary>The connection id each pooled or Object Actions connection was made for, so opening it records its session.</summary>
+    private readonly ConditionalWeakTable<SqlConnection, Owner> owners = [];
+    private readonly OwnSessionLedger ownSessions = new();
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
@@ -131,7 +135,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         Methods = hooks ? [.. MethodNames, SynthesizeMethod] : MethodNames;
         // Registers the Entra provider with SqlClient before any connection string can name it.
         entra = EntraService.Shared;
-        Open = (connection, token) => entra.OpenPooledAsync(connection, token, OpenConnection);
+        Open = async (connection, token) =>
+        {
+            await entra.OpenPooledAsync(connection, token, OpenConnection);
+            Record(connection);
+        };
         explorer = new ExplorerService(this);
         scripting = new ScriptingService(this);
         actions = new ActionService(this);
@@ -179,6 +187,45 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// CONNECTION_LOST value and a new session id in the next tick, never a silent reconnect under the old one.</summary>
     SqlConnection ILiveHost.PoolConnection(string connectionId, string? database, string suffix) => PoolConnection(connectionId, database, suffix, reconnect: false);
     Task ILiveHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+    IReadOnlyCollection<VariaClient> ILiveHost.Clients => [.. connections.Values.Select(text => new SqlConnectionStringBuilder(text)).Select(builder => new VariaClient(builder.ApplicationName, Workstation(builder))).Distinct()];
+
+    /// <summary>The host name SqlClient sends at login: the Workstation ID when one is set, else this machine's name.</summary>
+    internal static string Workstation(SqlConnectionStringBuilder builder) => builder.WorkstationID is { Length: > 0 } id ? id : Environment.MachineName;
+
+    IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId) => ownSessions.Sessions(connectionId, ServerOf);
+    /// <summary>Varia's own session ids (the checks record and read them).</summary>
+    internal OwnSessionLedger OwnSessions => ownSessions;
+
+    private sealed record Owner(string ConnectionId, bool Pooled);
+
+    /// <summary>Marks a connection made for a connection id under one of Varia's own program names (a pool's, Object
+    /// Actions'), so <see cref="Open"/> records the session it is given. Every such connection must be made through here.</summary>
+    private SqlConnection Owned(SqlConnection connection, string connectionId)
+    {
+        owners.AddOrUpdate(connection, new(connectionId, new SqlConnectionStringBuilder(connection.ConnectionString).Pooling));
+        return connection;
+    }
+
+    /// <summary>Records the session id an owned connection was given as it opened (a pooled connection keeps its physical
+    /// session's), and lets it go as the connection closes, so the Activity Monitor knows Varia's own sessions by what Varia
+    /// holds, not by what a client may claim at login. Done in <see cref="Open"/>, so every host that opens an owned connection
+    /// records it.</summary>
+    private void Record(SqlConnection connection)
+    {
+        if (!owners.TryGetValue(connection, out var owner) || connection.State != System.Data.ConnectionState.Open || !connections.ContainsKey(owner.ConnectionId)) return;
+        var session = connection.ServerProcessId;
+        ownSessions.Opened(owner.ConnectionId, session, owner.Pooled);
+        System.Data.StateChangeEventHandler? closed = null;
+        closed = (_, change) =>
+        {
+            if (change.CurrentState == System.Data.ConnectionState.Open) return;
+            connection.StateChange -= closed;
+            ownSessions.Closed(owner.ConnectionId, session);
+        };
+        connection.StateChange += closed;
+        // A connection that closed before the handler was in place said so to nobody.
+        if (connection.State != System.Data.ConnectionState.Open) closed(connection, new(System.Data.ConnectionState.Open, connection.State));
+    }
     bool IActivityHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
     ServerProfile? IActivityHost.Profile(string connectionId) => ((ILiveHost)this).Profile(connectionId);
     SqlConnection IActivityHost.MonitorConnection(string connectionId) => PoolConnection(connectionId, null, LiveConnections.ServerSuffix, reconnect: false);
@@ -208,7 +255,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "results.read" or "results.copy" or "results.export" => RequestLane.Results,
         "explorer.children" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
-        "ssis.describe" or "ssis.execute" => RequestLane.Ssis,
+        "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
@@ -267,6 +314,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
+        "ssis.catalogSetup" => await ssis.CatalogSetupAsync(Read<SsisCatalogSetupArgs>(parameters, json), Token(context)),
         "live.subscribe" => await live.SubscribeAsync(Read<LiveSubscribeArgs>(parameters, json), context, json),
         "live.update" => live.Update(Read<LiveUpdateArgs>(parameters, json), json),
         "activity.details" => await sessionActions.DetailsAsync(Read<ActivityDetailsArgs>(parameters, json), Token(context)),
@@ -316,8 +364,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     }
 
     /// <summary>Opens connections made from a connected profile: query sessions, Object Explorer, Script As, object actions,
-    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser). The
-    /// live checks replace it to fail as an expired Kerberos ticket does.</summary>
+    /// and database and column lists (<see cref="OpenConnection"/>, then the Entra mapping, which never opens a browser), and
+    /// records the session of a connection made through <see cref="Owned"/>. The live checks replace it to fail as an
+    /// expired Kerberos ticket does.</summary>
     internal Func<SqlConnection, CancellationToken, Task> Open { get; set; }
     /// <summary>The open inside <see cref="Open"/>; the live checks replace it to fail as a revoked Entra sign-in does, so the
     /// mapping around it is the production one.</summary>
@@ -445,6 +494,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
+        ownSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
@@ -497,7 +547,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = false, ConnectRetryCount = 0, CommandTimeout = 0, InitialCatalog = "master" };
         var name = builder.ApplicationName + " - Object Actions";
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
-        return new SqlConnection(builder.ConnectionString);
+        return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
     Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
@@ -586,7 +636,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         builder.ApplicationName = name.Length > 128 ? name[..128] : name;
         if (database is not null) builder.InitialCatalog = database;
         if (pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
-        return new SqlConnection(builder.ConnectionString);
+        return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
 
     private async Task<List<DatabaseInfo>> DatabasesAsync(ConnectionArgs args, CancellationToken token)
@@ -729,7 +779,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
             {
-                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
+                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message, InformationalKind(error)); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
                 lock (errors)
@@ -765,7 +815,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         void Report(SqlException error)
         {
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
                 else if (!Delivered(item)) Raise(Describe(item));
             if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
@@ -1007,7 +1057,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // Messages delivered with the exception (e.g. PRINT before a severe error, or the error itself) belong in Messages,
             // in order, except errors InfoMessage already reported.
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
                 else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
             if (details.Count == 0)
@@ -1165,6 +1215,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>"Changed database context to 'x'." (5701) and "Changed language setting to x." (5703): SQL Server sends
     /// them for USE, a session's login, and the toolbar's database change, and SSMS leaves them out of Messages.</summary>
     private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
+    /// <summary>PRINT arrives as number 0 and RAISERROR as 50000 or a user message's number (above 50000): what the script itself
+    /// printed, which opens the Messages strip. Every other informational number is SQL Server's own (8153's NULL warning,
+    /// STATISTICS output, DBCC, sp_rename's caution).</summary>
+    private static MessageKind InformationalKind(SqlError error) => InformationalKind(error.Number);
+    internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
     /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
     /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were
@@ -1428,6 +1483,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         ssisActions.CancelAll();
         live.CancelAll();
     }
+    public void DrainCommitted() => ssisActions.DrainCommitted();
     public void Dispose()
     {
         memoryTimer?.Dispose();

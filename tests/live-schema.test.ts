@@ -60,13 +60,27 @@ describe('live request schemas', () => {
     expect(ok(fixture.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(false)
     expect(ok(fixtureTest.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(true)
   })
-  it('accepts the Activity Monitor source on the production port, with no args', () => {
+  it('accepts the Activity Monitor source on the production port, with its own args', () => {
     const activity = (patch: Record<string, unknown> = {}) => ({ t: 'live', rid: 1, generation: 1, params: subscribe({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }], ...patch }) })
     expect(ok(portRequestSchema, activity())).toBe(true)
     expect(ok(portRequestSchema, activity({ args: {} }))).toBe(false)
     expect(ok(portRequestSchema, activity({ probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] }))).toBe(false)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 5000 }], refresh: true } })).toBe(true)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { rows: 1 } } })).toBe(false)
+    // One subscription per monitor: the three probes, one filter per table and the Details flyout's session.
+    const probes = [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'login', descending: false }, { column: 'activeCpuMs', descending: true }] },
+      { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+    const args = { filters: [{ table: 'sessions', view: 'blocked', showVaria: true, columnFilters: [{ column: 'login', values: ['app'] }] }, { table: 'waitTypes', hideBenign: false }], focusSession: 32_767 }
+    expect(ok(portRequestSchema, activity({ probes, args }))).toBe(true)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { focusSession: 0 } } })).toBe(true)
+    for (const bad of [
+      { focusSession: 32_768 }, { focusSession: -1 }, { filters: [] }, { filters: [{ table: 'sessions' }, { table: 'sessions' }] }, { filters: [{ table: 'files', view: 'all' }] },
+      { filters: [{ table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] }] }, { filters: [{ table: 'sessions', text: 'x'.repeat(401) }] }, { columns: ['login'] }, { focusSession: 1, rank: 'cpu' }
+    ]) expect(ok(portRequestSchema, activity({ args: bad })), JSON.stringify(bad)).toBe(false)
+    // Sort names live column ids, unique within a probe, so sorting Processes never reorders the Blocking tree.
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'chainDepth', descending: false }] }] }))).toBe(true)
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'Session ID', descending: false }] }] }))).toBe(false)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', track: [{ probe: 'activity.sessions', table: 1, seq: 1, keys: ['60'] }] } })).toBe(true)
   })
   it('is strict and bounded at every level', () => {
     const schema = testLiveSubscribeParamsSchema

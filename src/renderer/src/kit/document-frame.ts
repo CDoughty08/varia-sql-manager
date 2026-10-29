@@ -43,6 +43,14 @@ export function selectSection(state: FrameState, sections: readonly Pick<Section
   return state.section === id && collapsed === state.collapsed ? state : { ...state, section: id, collapsed }
 }
 
+/**
+ * The section a remounted frame (a tab switched back to) scrolls to, so the content shows the section the list marks:
+ * undefined for the first, which an unscrolled column already shows, and for one the frame no longer has.
+ */
+export function restoredSection(state: FrameState, sections: readonly Pick<SectionInfo, 'id'>[]): string | undefined {
+  return state.section !== sections[0]?.id && sections.some(section => section.id === state.section) ? state.section : undefined
+}
+
 /** Scrolling moves the current section without opening anything. */
 export function scrolledTo(state: FrameState, id: string): FrameState {
   return state.section === id || !id ? state : { ...state, section: id }

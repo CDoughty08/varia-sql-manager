@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 867 offline
-  checks; how many depends on the server version and authentication (1378 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 985 offline
+  checks; how many depends on the server version and authentication (1562 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -47,11 +47,13 @@ pages, limits, error codes, display formats, benchmarks).
   database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
   print the secret. Without them the offline checks cover Entra through a fake token source.
 - SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
-  `tests/fixtures/ssisdb/`); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
+  `tests/fixtures/ssisdb/`) and, where Integration Services is installed, runs Create Catalog's dry run (the catalog
+  backup restored by Varia's own steps as `VariaScratch_…_ssiscc`, no server-level changes); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` (and its tree probe, read only) and of the Integration Services
   catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
   rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
-  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) may, on a
-  server whose owner allows it. docs/integration-services.md records what is verified.
+  create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) creates and
+  drops it, on a server whose owner allows it and only when the server has no `SSISDB`: it never drops a catalog it did
+  not create. docs/integration-services.md records what is verified.
 - Cloud sessions: the hook starts the `varia-sql` Docker container (SQL Server 2022, `sa`, localhost:1433) and exports
   those variables when it is ready. If Docker is unavailable, live checks are skipped rather than failing.
 - Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory and write screenshots to `artifacts/`. Every
@@ -95,13 +97,14 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/`, `results/` and `live/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
+  O(visible cells).
   Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
   tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
-- Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
+- Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
   EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
   worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
@@ -109,12 +112,21 @@ pages, limits, error codes, display formats, benchmarks).
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
+  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
+  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
-  Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
-  the live gates and a per-statement budget, and its failures are values that back off.
+  Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
+  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
+  gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values that back
+  off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
+  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
+  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
+  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
+  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
+  the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -142,7 +154,7 @@ pages, limits, error codes, display formats, benchmarks).
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
-  gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
+  gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
@@ -158,7 +170,7 @@ pages, limits, error codes, display formats, benchmarks).
 - Object actions (Select Top 1000 Rows, Rename, Delete, Properties), their dialogs, pages and database options live only
   in `src/shared/actions/catalog.ts` and `database.ts`; after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
-  only in `ActionService`: on its own unpooled connection (the application name plus " - Object Actions", never retried),
+  only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
   forms for the others), where names, the database a batch runs in included, go in as parameters through server-side
@@ -183,14 +195,21 @@ pages, limits, error codes, display formats, benchmarks).
   `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
   statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
   names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
-  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered; the offline lint renders and checks every variant. Filters run
-  in backend memory over a sample (`ActivityFilter`), never in SQL. The session actions (`Activity/SessionActions.cs`)
+  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
+  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
+  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
+  sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when its id is one
+  Varia's own pooled or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the
+  process id, host name and program name a client claims at login alone; `VariaSessions.Protected` (the ledger's ids or
+  those claims) is the wider set a refusal can use, since SqlClient's reconnect can move a held pool connection to an id
+  the ledger lacks. The session actions (`Activity/SessionActions.cs`)
   have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
   gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
   checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
   only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, error codes, features, limits) live only in
-  `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's catalogue. After changing it, regenerate
+- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, Object Explorer verbs and their commands,
+  documents, error codes, features, limits) live only in `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object
+  Explorer's catalogue. After changing it, regenerate
   the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
   backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read on the
   SSIS read pool (and by a write's preflight in its own connection) (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
@@ -205,8 +224,14 @@ pages, limits, error codes, display formats, benchmarks).
   outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
   lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
   box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
-  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
-  names, values, SQL or messages.
+  (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. The
+  catalogue's server verbs (scope `server`; Create Catalog) are the second DDL path: the same connection rules but in
+  `master`, with commands only from `SsisCreateSql` (`ServerCommands(verb)`, every one checked by `SsisCreateSql.Lint`:
+  values as parameters, dynamic SQL only where SQL Server takes a literal, built from `QUOTENAME` or the server's quote
+  escape `REPLACE(… COLLATE Latin1_General_BIN2, N'''', N'''''')`), the database name from the catalogue (or the internal
+  `SsisOptions.CreateScratch` of the dry run), never a request field; Stop cancels any statement but the restore (whose
+  reply waits for it to end), and a Stop or failure after the restore removes exactly what the request made, waiting at
+  most 30 s per lock. Never log names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
   the Scripting page's entries come from `src/shared/scripting/options.ts`), with defaults, bounds, platforms and zod
   schemas built from the definitions. Only main reads and writes `settings.json` (`SettingsStore`: overrides only, read

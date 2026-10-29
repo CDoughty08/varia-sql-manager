@@ -62,6 +62,22 @@ export const activityFilterSchema = z.object({
   })
 }) satisfies z.ZodType<ActivityFilter>
 
+export interface ActivityLiveArgs {
+  /** One per table; an update replaces only the tables it names. */
+  readonly filters?: readonly ActivityFilter[]
+  /** The session the sessions probe's focus series follow (the Details flyout); 0 follows none. */
+  readonly focusSession?: number
+}
+
+/** The live layer's `args.activity` (src/shared/live/schema.ts): bounded, strict, one filter per table. */
+export const activityLiveArgsSchema = z.object({
+  filters: z.array(activityFilterSchema).min(1).max(activityTables.length).optional(),
+  focusSession: z.number().int().min(0).max(activityLimits.sessionId).optional()
+}).strict().superRefine((args, context) => {
+  const tables = args.filters?.map(filter => filter.table) ?? []
+  if (new Set(tables).size !== tables.length) context.addIssue({ code: 'custom', path: ['filters'], message: 'One filter per table.' })
+  if (args.filters === undefined && args.focusSession === undefined) context.addIssue({ code: 'custom', message: 'The args change nothing.' })
+}) satisfies z.ZodType<ActivityLiveArgs>
 // --- Session actions: activity.details and activity.kill ----------------------------------------------------------------
 
 /** A session's login time as sys.dm_exec_sessions has it (server local time, no offset): `2026-10-22T06:50:12.347`. With

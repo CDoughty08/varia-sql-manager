@@ -26,6 +26,9 @@ export interface MethodPolicy<M extends BackendMethod = BackendMethod> {
   readonly backstopMs?: (params: BackendMethods[M]['params']) => number
   /** The request carries a password: its frame is zeroed once written. */
   readonly sensitive?: boolean
+  /** While such a request is pending, how long a generation main closes may run after its stdin ends before main kills it, in ms
+   *  (at least the usual stop grace): the backend first finishes work that must not end half done. */
+  readonly drainMs?: (params: BackendMethods[M]['params']) => number
   /** Its EVENT frames are charged against its credit, and only one may be unacknowledged (docs/ipc.md, Live
    *  subscriptions). Only live.subscribe sets it; such a request has no DATA frames. */
   readonly creditedEvents?: boolean
@@ -37,6 +40,9 @@ const backstopGraceMs = 5000
 /** How long an Entra MFA connect or Load databases may wait for the browser sign-in (the backend's own limit). */
 export const entraSignInMs = 180_000
 const signIn = (params: { authentication: string }) => params.authentication === 'entraMfa' ? entraSignInMs : 0
+/** A closing generation's grace while Create Catalog runs: the backend's own wait for one past its restore (the SSIS catalogue's
+ *  createDrainMs, 120 s) plus room for the rest of its shutdown. */
+export const createCatalogDrainMs = 130_000
 
 export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } = {
   'system.health': control,
@@ -76,9 +82,13 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
-  // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) always ends them. Sensitive,
-  // because later verbs carry sensitive parameter and variable values.
-  'ssis.execute': { kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true },
+  // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) ends them, except Create
+  // Catalog once its restore began, which finishes or removes what it created, also when its generation is closed (a quit, a
+  // reload, Restart Backend), so main waits longer before it kills that generation. Sensitive: Create Catalog carries the
+  // catalog's encryption password, and later verbs sensitive parameter and variable values.
+  'ssis.execute': { kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true, drainMs: params => params.action.verb === 'createCatalog' ? createCatalogDrainMs : 0 },
+  // Create Catalog's dialog read answers its own 40 s budget as a TIMEOUT value, as a describe does.
+  'ssis.catalogSetup': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // Activity Monitor's session actions. Details answers its own 10 s budget as an error: TIMEOUT value, inside this deadline;
   // main cancels it from the renderer (varia:activity-cancel). Kill answers its own 25 s budget the same way, with the
   // outcomes of the sessions it tried, so the deadline never leaves a kill's outcome unknown; it is never re-sent.

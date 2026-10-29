@@ -158,6 +158,9 @@ export function stopNotice(operation: SelectedOperation, result: ApiResult<SsisE
  */
 export class SsisOperationsService extends SnapshotStore<SsisOperationsSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'ssisOperations' as const
+  /** A live view with nothing to save: File › Save is not offered on it, and Save All passes it by. */
+  readonly saves = false
+  readonly inSaveAll = false
   private readonly newId: () => string
   private readonly registration: Disposable
   private readonly stopSettings: () => void

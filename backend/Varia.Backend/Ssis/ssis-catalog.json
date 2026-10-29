@@ -1,8 +1,10 @@
 {
   "actions": [
-    {"procedures":["stop_operation"],"revision":false,"steps":["Stop the operation"],"title":"Stop Operation","verb":"stopOperation","windowsAuthOnBox":true}
+    {"procedures":["stop_operation"],"revision":false,"scope":"catalog","steps":["Stop the operation"],"title":"Stop Operation","verb":"stopOperation","windowsAuthOnBox":true},
+    {"procedures":[],"revision":false,"scope":"server","steps":["Enable CLR integration","Restore the catalog database","Create the master key","Register the Integration Services assembly and startup procedure","Create the maintenance job"],"title":"Create Catalog","verb":"createCatalog","windowsAuthOnBox":false}
   ],
   "catalogDatabase": "SSISDB",
+  "createCatalog": {"assemblyFile":"Microsoft.SqlServer.IntegrationServices.Server.dll","backupFiles":[{"file":"SSISDBBackup.bak","since":13}],"cleanupStep":"Remove the incomplete catalog"},
   "errors": [
     {"code":"CATALOG_MISSING","retryable":false},
     {"code":"NO_DB_ACCESS","retryable":false},
@@ -21,11 +23,14 @@
     {"code":"NOT_STARTED","retryable":false},
     {"code":"NOT_RUNNING","retryable":true},
     {"code":"CANCELLED","retryable":true},
+    {"code":"CATALOG_EXISTS","retryable":false},
+    {"code":"CLR_REQUIRED","retryable":false},
+    {"code":"CONFIGURATION_PENDING","retryable":false},
     {"code":"SQL_ERROR","retryable":true}
   ],
   "features": ["customizedLoggingLevels","scaleOut","eventMessageGuid","executedCount","operationLogSize","checkSchemaVersion"],
   "finalStatuses": [3,4,6,7,9],
-  "limits": {"cancelIds":64,"describeBytes":4000000,"describeMs":40000,"description":1024,"gateWaitMs":30000,"messageChars":2048,"name":128,"operationsCountMs":30000,"operationsDefaultRows":1000,"operationsDefaultWindowHours":24,"operationsRefresh":256,"operationsRows":10000,"operationsWindowHours":8760,"packageName":260,"preflightLockTimeoutMs":10000,"preflightMs":25000,"profileLockTimeoutMs":1000,"readLockTimeoutMs":5000,"readPerConnection":2,"readTotal":4,"registered":256,"registeredWrites":64,"revision":64,"rows":2048,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64,"value":4000,"writePerConnection":1,"writeTotal":2},
+  "limits": {"cancelIds":64,"catalogPassword":128,"createDrainMs":120000,"describeBytes":4000000,"describeMs":40000,"description":1024,"gateWaitMs":30000,"messageChars":2048,"name":128,"operationsCountMs":30000,"operationsDefaultRows":1000,"operationsDefaultWindowHours":24,"operationsRefresh":256,"operationsRows":10000,"operationsWindowHours":8760,"packageName":260,"preflightLockTimeoutMs":10000,"preflightMs":25000,"profileLockTimeoutMs":1000,"readLockTimeoutMs":5000,"readPerConnection":2,"readTotal":4,"registered":256,"registeredWrites":64,"restoreStopMs":30000,"revision":64,"rows":2048,"serverPath":1024,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64,"value":4000,"writePerConnection":1,"writeTotal":2},
   "loggingLevels": [{"code":0,"label":"None"},{"code":1,"label":"Basic"},{"code":2,"label":"Performance"},{"code":3,"label":"Verbose"},{"code":4,"label":"Runtime lineage","since":13},{"code":100,"label":"Custom","since":13}],
   "messageTypes": [{"code":-1,"label":"Unknown","tone":"info"},{"code":10,"label":"Pre-validate","tone":"info"},{"code":20,"label":"Post-validate","tone":"info"},{"code":30,"label":"Pre-execute","tone":"info"},{"code":40,"label":"Post-execute","tone":"info"},{"code":50,"label":"Status change","tone":"info"},{"code":60,"label":"Progress","tone":"muted"},{"code":70,"label":"Information","tone":"info"},{"code":80,"label":"Variable value changed","tone":"info"},{"code":90,"label":"Diagnostic","tone":"muted"},{"code":100,"label":"Query cancel","tone":"info"},{"code":110,"label":"Warning","tone":"warning"},{"code":120,"label":"Error","tone":"error"},{"code":130,"label":"Task failed","tone":"error"},{"code":140,"label":"Diagnostic (extended)","tone":"info"},{"code":200,"label":"Custom","tone":"info"},{"code":400,"label":"Non-diagnostic","tone":"info"}],
   "openStatuses": [1,2,5,8],

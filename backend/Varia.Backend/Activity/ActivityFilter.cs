@@ -77,21 +77,7 @@ internal sealed class ActivityFilter
     /// category) only for Resource Waits.</summary>
     public bool Matches(Func<string, string?> cell, SessionFacts facts = default, bool benign = false)
     {
-        if (benign && hideBenign) return false;
-        if (view is not null)
-        {
-            if (facts.System && !showSystem || facts.VariaPool && !showVaria) return false;
-            var shown = view switch
-            {
-                "active" => facts.Active,
-                "blocked" => facts.Blocked,
-                "blocking" => facts.Blocking,
-                "idleOpenTransaction" => facts.IdleOpenTransaction,
-                "rollingBack" => facts.RollingBack,
-                _ => true
-            };
-            if (!shown) return false;
-        }
+        if (!Shows(facts, benign)) return false;
         if (text is not null && !textColumns.Any(column => cell(column)?.Contains(text, StringComparison.OrdinalIgnoreCase) == true)) return false;
         foreach (var (column, values, blanks, nonBlanks) in columns)
         {
@@ -100,5 +86,24 @@ internal sealed class ActivityFilter
             if (!(blank ? blanks : nonBlanks || values.Contains(value!))) return false;
         }
         return true;
+    }
+
+    /// <summary>Whether a row passes the view chip and toggles (and Hide benign waits), before the filter box and the column
+    /// value filters: the rows a table's facets count, so the values offered are ones the grid can show, and a column's own
+    /// value filter never empties its list.</summary>
+    public bool Shows(SessionFacts facts = default, bool benign = false)
+    {
+        if (benign && hideBenign) return false;
+        if (view is null) return true;
+        if (facts.System && !showSystem || facts.VariaPool && !showVaria) return false;
+        return view switch
+        {
+            "active" => facts.Active,
+            "blocked" => facts.Blocked,
+            "blocking" => facts.Blocking,
+            "idleOpenTransaction" => facts.IdleOpenTransaction,
+            "rollingBack" => facts.RollingBack,
+            _ => true
+        };
     }
 }

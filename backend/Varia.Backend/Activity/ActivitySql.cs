@@ -5,8 +5,9 @@ using Varia.Backend.Explorer;
 namespace Varia.Backend.Activity;
 
 /// <summary>Everything a statement's text depends on: the version band (13 = SQL Server 2016 to 17 = 2025), the kind of
-/// server, and whether sys.dm_exec_query_stats has total_spills (2016 SP2 and 2017 CU3 onward).</summary>
-internal readonly record struct ActivityRender(int Band, string Edition, bool TotalSpills = false);
+/// server, whether sys.dm_exec_query_stats has total_spills (2016 SP2 and 2017 CU3 onward), and whether the login reads
+/// server state (without it the sessions probe reads only what SQL Server shows of the caller's own session).</summary>
+internal readonly record struct ActivityRender(int Band, string Edition, bool TotalSpills = false, bool ServerState = true);
 
 /// <summary>A typed parameter of a statement; values never reach the text.</summary>
 internal sealed record ActivityParameter(string Name, SqlDbType Type, int Size = 0);
@@ -23,10 +24,10 @@ internal sealed record ActivityStatement(string Probe, string Id, string Text, I
 
 /// <summary>The Activity Monitor's constant SQL: one text per probe, statement and render, written from Microsoft Learn's
 /// documented DMV columns (never SSMS's). Values are parameters; no metadata built-ins, temp tables, tempdb writes,
-/// sys.sysprocesses or locks DMV; every TOP is ordered. The offline lint renders and checks every variant. The session
-/// actions' statements have two exemptions, each held to one statement: Details' on-demand locks statement reads
-/// sys.dm_tran_locks, and Kill's batch runs one dynamic KILL built from its int parameter. The capability probe (AM1) will
-/// join with its own.</summary>
+/// sys.sysprocesses or locks DMV; every TOP is ordered. The offline lint renders and checks every variant. Three
+/// statements have exemptions, each held to that statement: Details' on-demand locks statement reads sys.dm_tran_locks,
+/// Kill's batch runs one dynamic KILL built from its int parameter, and the capability probe (<see cref="Capabilities"/>)
+/// is the only statement that may ask what the login may do.</summary>
 internal static partial class ActivitySql
 {
     /// <summary>A probe never waits more than a second behind a lock and loses deadlocks (D-live's live prologue).</summary>
@@ -75,10 +76,13 @@ internal static partial class ActivitySql
             + "   OR (p.object_name LIKE N'%:General Statistics%' AND p.counter_name = N'Logins/sec');",
             ["object_name", "counter_name", "instance_name", "cntr_value", "cntr_type"], [],
             ["batchRequests", "compilations", "recompilations", "grantsPending", "grantsOutstanding", "lockWaits", "deadlocks", "pageLifeExpectancy", "logins"], CounterLiterals),
+        // Per database, so a database that leaves the view (dropped, offline, closed) takes only its own counts with it
+        // (ActivityIoTotals), never a step down in the server's.
         new("activity.overview", "io",
-            "SELECT SUM(f.num_of_bytes_read) AS bytes_read, SUM(f.num_of_bytes_written) AS bytes_written, SUM(f.num_of_reads) AS reads, SUM(f.num_of_writes) AS writes,\n"
-            + "       SUM(f.io_stall_read_ms) AS read_stall_ms, SUM(f.io_stall_write_ms) AS write_stall_ms\nFROM sys.dm_io_virtual_file_stats(NULL, NULL) AS f;",
-            ["bytes_read", "bytes_written", "reads", "writes", "read_stall_ms", "write_stall_ms"], [], ["ioMegabytes", "readLatency", "writeLatency"], NoLiterals),
+            "SELECT f.database_id, SUM(f.num_of_bytes_read) AS bytes_read, SUM(f.num_of_bytes_written) AS bytes_written, SUM(f.num_of_reads) AS reads,\n"
+            + "       SUM(f.num_of_writes) AS writes, SUM(f.io_stall_read_ms) AS read_stall_ms, SUM(f.io_stall_write_ms) AS write_stall_ms\n"
+            + "FROM sys.dm_io_virtual_file_stats(NULL, NULL) AS f GROUP BY f.database_id;",
+            ["database_id", "bytes_read", "bytes_written", "reads", "writes", "read_stall_ms", "write_stall_ms"], [], ["ioMegabytes", "readLatency", "writeLatency"], NoLiterals),
         // Classified in C# by the catalogue's map; only rows with time.
         new("activity.overview", "waits",
             "SELECT w.wait_type, w.wait_time_ms, w.signal_wait_time_ms FROM sys.dm_os_wait_stats AS w WHERE w.wait_time_ms > 0;",
@@ -96,42 +100,58 @@ internal static partial class ActivitySql
             ["user_sessions", "active_requests"], [], ["activeRequests", "userSessions"], NoLiterals)
     ];
 
-    private static IReadOnlyList<ActivityStatement> Sessions() =>
+    private static readonly string[] SessionColumns =
+    [
+        "session_id", "login_time", "host_process_id", "is_user_process", "login_name", "original_login_name", "host_name", "program_name", "client_interface_name", "status",
+        "database_id", "database_name", "cpu_time", "reads", "writes", "logical_reads", "memory_usage", "open_transaction_count", "last_request_start_time", "last_request_end_time",
+        "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_rank", "request_count",
+        "lowest_request_id", "request_status", "command", "start_time", "total_elapsed_time", "request_cpu_time", "request_logical_reads", "blocking_session_id", "wait_type",
+        "wait_time", "wait_resource", "last_wait_type", "request_open_transactions", "percent_complete", "granted_query_memory", "dop", "query_hash", "request_database_id"
+    ];
+
+    // A session's requests, each its own row, ranked within the session (a blocked one first, else the lowest id): the first
+    // row gives Processes its request columns, and each row's own CPU and reads let per-session rates follow every request by
+    // its id and start time, so one MARS request never stands in for another. The session's request count, lowest id and
+    // whether any of its requests waits on another session ride on every row.
+    private const string Requests =
+        "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.cpu_time, q.logical_reads, q.blocking_session_id,\n"
+        + "                  q.wait_type, q.wait_time, q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash,\n"
+        + "                  q.database_id, ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
+        + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
+        + "                  MAX(CASE WHEN q.blocking_session_id <> 0 THEN 1 ELSE 0 END) OVER (PARTITION BY q.session_id) AS session_blocked\n"
+        + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id\n";
+
+    private const string RequestColumns =
+        "       r.request_id, r.request_rank, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time,\n"
+        + "       r.cpu_time AS request_cpu_time, r.logical_reads AS request_logical_reads, r.blocking_session_id, r.wait_type, r.wait_time, r.wait_resource, r.last_wait_type,\n"
+        + "       r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory, r.dop, r.query_hash, r.database_id AS request_database_id,\n";
+
+    /// <summary>One row per request (one for a session without any) of the first @rowCap sessions in <paramref name="order"/>,
+    /// then session id: @rowCap (the cap plus one, to see truncation) counts sessions, so a session's requests are never cut apart.</summary>
+    private static string SessionRows(string sessionColumns, string from, string order) =>
+        "SELECT " + string.Join(",\n       ", SessionColumns.Chunk(10).Select(chunk => string.Join(", ", chunk.Select(column => "x." + column)))) + "\n"
+        + "FROM (" + sessionColumns + RequestColumns + "       DENSE_RANK() OVER (ORDER BY " + order + ", s.session_id) AS session_order\n" + from + ") AS x\n"
+        + "WHERE x.session_order <= @rowCap\nORDER BY x.session_order, x.request_rank;";
+
+    private static IReadOnlyList<ActivityStatement> Sessions(bool serverState) => !serverState ? [LimitedSessions] :
     [
         Clock("activity.sessions"),
-        // One row per session, so @rowCap (the cap plus one, to see truncation) counts sessions. MARS requests fold here: a
-        // blocked request (else the lowest) gives the request columns, and the request count, CPU and reads cover them all.
         // Sessions in a blocking wait, as waiter or blocker, come first and then sessions with a request, so truncation drops
         // idle sessions and never a session the edges name.
         new("activity.sessions", "sessions",
-            "SELECT TOP (@rowCap) s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
-            + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
-            + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
-            + "       g.name AS workload_group, c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n"
-            + "       r.request_id, r.request_count, r.lowest_request_id, r.status AS request_status, r.command, r.start_time, r.total_elapsed_time, r.request_cpu_ms,\n"
-            + "       r.request_logical_reads, r.request_reads, r.request_writes, r.blocking_session_id, r.wait_type, r.wait_time,\n"
-            + "       r.wait_resource, r.last_wait_type, r.open_transaction_count AS request_open_transactions, r.percent_complete, r.granted_query_memory,\n"
-            + "       r.dop, r.query_hash, r.database_id AS request_database_id\n"
-            + "FROM sys.dm_exec_sessions AS s\n"
-            + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
-            + "LEFT JOIN (SELECT q.session_id, q.request_id, q.status, q.command, q.start_time, q.total_elapsed_time, q.blocking_session_id, q.wait_type, q.wait_time,\n"
-            + "                  q.wait_resource, q.last_wait_type, q.open_transaction_count, q.percent_complete, q.granted_query_memory, q.dop, q.query_hash, q.database_id,\n"
-            + "                  ROW_NUMBER() OVER (PARTITION BY q.session_id ORDER BY CASE WHEN q.blocking_session_id > 0 THEN 0 ELSE 1 END, q.request_id) AS request_rank,\n"
-            + "                  COUNT(*) OVER (PARTITION BY q.session_id) AS request_count, MIN(q.request_id) OVER (PARTITION BY q.session_id) AS lowest_request_id,\n"
-            + "                  SUM(q.cpu_time) OVER (PARTITION BY q.session_id) AS request_cpu_ms, SUM(q.logical_reads) OVER (PARTITION BY q.session_id) AS request_logical_reads,\n"
-            + "                  SUM(q.reads) OVER (PARTITION BY q.session_id) AS request_reads, SUM(q.writes) OVER (PARTITION BY q.session_id) AS request_writes\n"
-            + "           FROM sys.dm_exec_requests AS q) AS r ON r.session_id = s.session_id AND r.request_rank = 1\n"
-            + "LEFT JOIN (SELECT DISTINCT v.session_id FROM sys.dm_os_waiting_tasks AS w CROSS APPLY (VALUES (w.session_id), (w.blocking_session_id)) AS v(session_id)\n"
-            + "           WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id) AS e ON e.session_id = s.session_id\n"
-            + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
-            + "LEFT JOIN sys.dm_resource_governor_workload_groups AS g ON g.group_id = s.group_id\n"
-            + "ORDER BY CASE WHEN e.session_id IS NOT NULL OR r.blocking_session_id <> 0 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END, s.session_id;",
-            ["session_id", "login_time", "host_process_id", "is_user_process", "login_name", "original_login_name", "host_name", "program_name", "client_interface_name", "status",
-                "database_id", "database_name", "cpu_time", "reads", "writes", "logical_reads", "memory_usage", "open_transaction_count", "last_request_start_time", "last_request_end_time",
-                "transaction_isolation_level", "workload_group", "client_net_address", "net_transport", "encrypt_option", "auth_scheme", "request_id", "request_count", "lowest_request_id",
-                "request_status", "command", "start_time", "total_elapsed_time", "request_cpu_ms", "request_logical_reads", "request_reads", "request_writes", "blocking_session_id", "wait_type",
-                "wait_time", "wait_resource", "last_wait_type", "request_open_transactions", "percent_complete", "granted_query_memory", "dop", "query_hash", "request_database_id"],
-            [Int("@rowCap")], ["sessions", "blocking", "activeQueries", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals),
+            SessionRows("SELECT s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
+                + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
+                + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
+                + "       g.name AS workload_group, c.client_net_address, c.net_transport, c.encrypt_option, c.auth_scheme,\n",
+                "FROM sys.dm_exec_sessions AS s\n"
+                + "LEFT JOIN sys.dm_exec_connections AS c ON c.session_id = s.session_id AND c.parent_connection_id IS NULL\n"
+                + Requests
+                + "LEFT JOIN (SELECT DISTINCT v.session_id FROM sys.dm_os_waiting_tasks AS w CROSS APPLY (VALUES (w.session_id), (w.blocking_session_id)) AS v(session_id)\n"
+                + "           WHERE w.session_id IS NOT NULL AND w.blocking_session_id IS NOT NULL AND w.blocking_session_id <> w.session_id) AS e ON e.session_id = s.session_id\n"
+                + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n"
+                + "LEFT JOIN sys.dm_resource_governor_workload_groups AS g ON g.group_id = s.group_id\n",
+                "CASE WHEN e.session_id IS NOT NULL OR r.session_blocked = 1 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END"),
+            SessionColumns, [Int("@rowCap")], ["sessions", "blocking", "activeQueries", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals),
         // Task-level blocking waits; a parallel query's waits on itself are left out.
         new("activity.sessions", "edges",
             "SELECT TOP (@edgeCap) w.session_id, w.exec_context_id, w.blocking_session_id, w.blocking_exec_context_id, w.wait_type, w.wait_duration_ms,\n"
@@ -170,6 +190,31 @@ internal static partial class ActivitySql
                 "max_used_memory_kb", "grant_wait_ms", "query_hash", "plan_handle", "statement_start_offset", "statement_end_offset", "statement_text"],
             [Int("@take")], ["activeQueries"], NoLiterals)
     ];
+
+    // Without server state SQL Server shows only the caller's own session in sys.dm_exec_sessions and sys.dm_exec_requests,
+    // and refuses the clock, connections, waiting tasks and workload groups (300, 297): the same columns, those as NULL.
+    private static readonly ActivityStatement LimitedSessions = new("activity.sessions", "sessions",
+        SessionRows("SELECT s.session_id, s.login_time, s.host_process_id, s.is_user_process, s.login_name, s.original_login_name, s.host_name,\n"
+            + "       s.program_name, s.client_interface_name, s.status, s.database_id, d.name AS database_name, s.cpu_time, s.reads, s.writes, s.logical_reads,\n"
+            + "       s.memory_usage, s.open_transaction_count, s.last_request_start_time, s.last_request_end_time, s.transaction_isolation_level,\n"
+            + "       CONVERT(sysname, NULL) AS workload_group, CONVERT(varchar(48), NULL) AS client_net_address, CONVERT(nvarchar(40), NULL) AS net_transport,\n"
+            + "       CONVERT(nvarchar(40), NULL) AS encrypt_option, CONVERT(nvarchar(40), NULL) AS auth_scheme,\n",
+            "FROM sys.dm_exec_sessions AS s\n" + Requests + "LEFT JOIN sys.databases AS d ON d.database_id = COALESCE(r.database_id, s.database_id)\n",
+            "CASE WHEN r.session_blocked = 1 THEN 0 WHEN r.session_id IS NOT NULL THEN 1 ELSE 2 END"),
+        SessionColumns, [Int("@rowCap")], ["sessions", "focus.cpuRate", "focus.logicalReadsRate"], NoLiterals);
+
+    /// <summary>The capability probe: once per opened connection, before any sample, the session's id and what the login may
+    /// do: read server state (the permission is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER
+    /// STATE before and on Managed Instance), end sessions (ALTER ANY CONNECTION), see every file's name (VIEW ANY DEFINITION),
+    /// and whether the query statistics have spills. The only Activity Monitor SQL that may call HAS_PERMS_BY_NAME and
+    /// COL_LENGTH, as ServerProfile's probe may.</summary>
+    public static readonly ActivityStatement Capabilities = new(ActivityCatalog.CapabilityProbe, "capabilities",
+        "SELECT @@SPID AS spid, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0)) AS server_state,\n"
+        + "       CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY CONNECTION'), 0)) AS alter_any_connection,\n"
+        + "       CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW ANY DEFINITION'), 0)) AS view_any_definition,\n"
+        + "       CASE WHEN COL_LENGTH(N'sys.dm_exec_query_stats', N'total_spills') IS NULL THEN 0 ELSE 1 END AS spills;",
+        ["spid", "server_state", "alter_any_connection", "view_any_definition", "spills"], [new("@permission", SqlDbType.NVarChar, 128)], [],
+        new HashSet<string> { "N'ALTER ANY CONNECTION'", "N'VIEW ANY DEFINITION'", "N'sys.dm_exec_query_stats'", "N'total_spills'" });
 
     private static IReadOnlyList<ActivityStatement> Resources() =>
     [
@@ -355,17 +400,17 @@ internal static partial class ActivitySql
     /// <summary>The probe's (or session action's) statements for a render, in the order they run. Azure SQL Database's variants arrive with AM6.</summary>
     public static IReadOnlyList<ActivityStatement> Statements(string probe, ActivityRender render)
     {
-        if (render.Band < ActivityCatalog.Current.MinBand || render.Band > ActivityCatalog.Current.MaxBand) throw new InvalidOperationException("No Activity Monitor SQL for this version band.");
-        if (!ActivityCatalog.Current.Available(render.Edition)) throw new InvalidOperationException("No Activity Monitor SQL for this kind of server yet.");
+        if (render.Band < ActivityCatalog.Current.MinBand || render.Band > ActivityCatalog.Current.MaxBand) throw new RequestException("BACKEND_ERROR", "No Activity Monitor SQL for this version band.");
+        if (!ActivityCatalog.Current.Available(render.Edition)) throw new RequestException("BACKEND_ERROR", "No Activity Monitor SQL for this kind of server yet.");
         return probe switch
         {
             "activity.overview" => Overview(),
-            "activity.sessions" => Sessions(),
+            "activity.sessions" => Sessions(render.ServerState),
             "activity.resources" => Resources(),
             "activity.queries" => Queries(render.TotalSpills),
             "activity.details" => Details(),
             "activity.kill" => [Kill()],
-            _ => throw new InvalidOperationException("Unknown Activity Monitor probe or method.")
+            _ => throw new RequestException("BACKEND_ERROR", "Unknown Activity Monitor probe or method.")
         };
     }
 
@@ -380,13 +425,15 @@ internal static partial class ActivitySql
         return major < catalog.MinBand ? null : Math.Min(major, catalog.MaxBand);
     }
 
-    /// <summary>Every render the lint checks: each band, each available kind of server, and both spill variants.</summary>
+    /// <summary>Every render the lint checks: each band, each available kind of server, both spill variants, with and without
+    /// server state.</summary>
     public static IEnumerable<ActivityRender> Renders()
     {
         var catalog = ActivityCatalog.Current;
-        foreach (var edition in new[] { "box", "managedInstance", "azureSqlDatabase" }.Where(catalog.Available))
-            for (var band = catalog.MinBand; band <= catalog.MaxBand; band++)
-                foreach (var spills in new[] { false, true }) yield return new(band, edition, spills);
+        foreach (var state in new[] { true, false })
+            foreach (var edition in new[] { "box", "managedInstance", "azureSqlDatabase" }.Where(catalog.Available))
+                for (var band = catalog.MinBand; band <= catalog.MaxBand; band++)
+                    foreach (var spills in new[] { false, true }) yield return new(band, edition, spills, state);
     }
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
@@ -398,6 +445,8 @@ internal static partial class ActivitySql
         .. CatalogSql.Builtins, "DB_NAME(", "FILE_NAME(", "OBJECT_ID(", "INDEXPROPERTY(", "SERVERPROPERTY(", "HAS_PERMS_BY_NAME(", "COL_LENGTH(", "sys.sysprocesses", "sys.sysperfinfo",
         "fn_varbintohexstr", "dm_tran_locks", "sp_executesql", "tempdb"
     ];
+    /// <summary>What the capability probe alone may call.</summary>
+    private static readonly string[] CapabilityTokens = ["HAS_PERMS_BY_NAME(", "COL_LENGTH("];
     /// <summary>Columns and views that appear only from a version band, or with a capability, or on one kind of server.</summary>
     private static readonly (string Token, int Since)[] Gates = [("total_cpu_usage_ms", 13), ("total_scheduler_delay_ms", 13), ("r.dop", 13), ("total_grant_kb", 13), ("dm_exec_input_buffer", 13), ("dm_exec_session_wait_stats", 13)];
     private static readonly string[] SpillTokens = ["total_spills", "last_spills"];
@@ -437,9 +486,11 @@ internal static partial class ActivitySql
         var text = statement.Text;
         var problems = new List<string>();
         var code = Regex.Replace(LiteralPattern().Replace(text, "''"), @"--[^\n]*|/\*.*?\*/", " ", RegexOptions.Singleline);
-        // Only Details' on-demand locks statement reads sys.dm_tran_locks.
+        var capabilities = statement == Capabilities;
+        // Only the capability probe asks what the login may do, and only Details' on-demand locks statement reads sys.dm_tran_locks.
         foreach (var token in Forbidden)
-            if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(token == "dm_tran_locks" && IsLocks(statement))) problems.Add("uses " + token);
+            if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(capabilities && CapabilityTokens.Contains(token)) && !(token == "dm_tran_locks" && IsLocks(statement)))
+                problems.Add("uses " + token);
         if (code.Contains('#')) problems.Add("names a temporary object");
         // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it. @kill_text appears only
         // where it is declared and run, so no assignment (SELECT @kill_text = ...) can feed EXEC other text.
@@ -464,7 +515,7 @@ internal static partial class ActivitySql
         {
             if (probe.Maxdop1 && statement.Id != "clock" && !text.EndsWith("OPTION (MAXDOP 1);", StringComparison.Ordinal)) problems.Add("does not end with OPTION (MAXDOP 1)");
         }
-        else if (!Methods.Contains(statement.Probe)) problems.Add("belongs to no probe");
+        else if (!capabilities && !Methods.Contains(statement.Probe)) problems.Add("belongs to no probe");
         if (!text.TrimEnd().EndsWith(';')) problems.Add("does not end with a semicolon");
         foreach (Match literal in LiteralPattern().Matches(text))
             if (!statement.Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
@@ -482,12 +533,13 @@ internal static partial class ActivitySql
         return problems;
     }
 
-    /// <summary>Every statement of every probe, session action and render, with its problems.</summary>
+    /// <summary>Every statement of every probe, session action and render, and the capability probe, with its problems.</summary>
     public static IEnumerable<(string Name, List<string> Problems)> Lint()
     {
         foreach (var render in Renders())
             foreach (var probe in ActivityCatalog.Current.Probes.Keys.Concat(Methods))
                 foreach (var statement in Statements(probe, render))
-                    yield return ($"{probe} {statement.Id} ({render.Edition} band {render.Band}{(render.TotalSpills ? ", spills" : "")})", Lint(statement, render));
+                    yield return ($"{probe} {statement.Id} ({render.Edition} band {render.Band}{(render.TotalSpills ? ", spills" : "")}{(render.ServerState ? "" : ", limited")})", Lint(statement, render));
+        yield return ("capabilities", Lint(Capabilities, new(ActivityCatalog.Current.MinBand, "box")));
     }
 }

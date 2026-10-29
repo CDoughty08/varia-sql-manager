@@ -4,13 +4,13 @@ import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } fr
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
-import type { ErrorCode } from './ipc/wire/protocol'
+import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
-import type { SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
+import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
@@ -137,8 +137,13 @@ export interface ResultDescriptor {
   truncated?: TruncationReason
   incomplete: boolean
 }
-/** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
-export interface MessageEntry { text: string; kind: 'info' | 'error' }
+/**
+ * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); what the script
+ * printed (PRINT, RAISERROR with severity 10 or less) is `print`, which opens the Messages strip under the results; SQL
+ * Server's other informational messages (warnings such as 8153, SET STATISTICS output, DBCC) are `server`, which show in the
+ * strip without opening it; Varia's own lines (row counts, notes) are `info`.
+ */
+export interface MessageEntry { text: string; kind: 'info' | 'server' | 'print' | 'error' }
 export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
@@ -269,9 +274,11 @@ export interface RpcMethods {
   'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
   /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
   'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
-  /** Changes the SSIS Catalog (Stop Operation) on its own unpooled connection after a preflight; never re-sent, and only Stop
-   *  (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
+  /** Changes the SSIS Catalog (Stop Operation, Create Catalog) on its own unpooled connection after a preflight; never re-sent,
+   *  and only Stop (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
   'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
+  /** What Create Catalog would do on the server (its dialog's read), on the SSIS read pool; it changes nothing. */
+  'ssis.catalogSetup': { params: SsisCatalogSetupRequest; result: SsisCatalogSetupResult }
   /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
   'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
   /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
@@ -306,9 +313,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
-/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
- *  server that answered (at most 256 characters). Never the connection string or the password. */
-export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
+ *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
+ *  trusted. `exception` comes only with BACKEND_ERROR: the unexpected exception's types and HRESULTs (at most 512
+ *  characters), for Copy details. Never the connection string, the password, or an exception's message. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string; reason?: ErrorReason; exception?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
  *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
@@ -410,8 +419,11 @@ export interface VariaApi {
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
   describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
-  /** Runs an SSIS Catalog action (Stop Operation). Refusals and failures come back as `result.error` with the steps that ran. */
+  /** Runs an SSIS Catalog action (Stop Operation, Create Catalog). Refusals and failures come back as `result.error` with the
+   *  steps that ran. */
   executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
+  /** Reads what Create Catalog would do on a server, or why it cannot (`result.error`). */
+  catalogSetupSsis(params: SsisCatalogSetupRequest): Promise<ApiResult<SsisCatalogSetupResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

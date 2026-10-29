@@ -194,15 +194,16 @@ describe('default keybindings', () => {
     const macEditing = ['edit.findNext', 'edit.findNext', 'edit.findPrevious', 'edit.findPrevious', 'edit.goToLine', 'edit.makeUppercase', 'edit.makeLowercase', ...bookmarksAndSnippets]
     const clipboard = ['edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'], display = ['view.zoomIn', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.toggleDevTools']
     const output = ['output.copy', 'output.copyWithHeaders', 'output.selectAll', 'output.saveResultsAs']
+    const monitor = ['activity.refresh', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     for (const platform of ['win32', 'linux'] as const) {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
-        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...display, ...output])
+        'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties',
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...monitor, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
-      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'query.changeDatabase',
-      'document.next', 'document.previous', ...native, ...macEditing,
+      'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshOperations', 'ssis.refreshProperties', 'query.changeDatabase',
+      'document.next', 'document.previous', ...native, ...macEditing, 'activity.open', ...monitor,
       'preferences.options', ...display, ...output])
     expect(defaultRules('win32').find(rule => rule.command === 'window.close')?.chords).toEqual(['alt+f4'])
     expect(defaultRules('linux').find(rule => rule.command === 'window.close')?.chords).toEqual(['ctrl+q'])
@@ -210,7 +211,7 @@ describe('default keybindings', () => {
   it('pick the first one-chord rule as the primary, native or not', () => {
     expect(primaryRule('edit.redo', 'win32')).toMatchObject({ chords: ['ctrl+y'], native: true })
     expect(primaryRule('edit.redo', 'darwin')).toMatchObject({ chords: ['shift+meta+z'], native: true })
-    expect(primaryRule('query.execute', 'linux')).toMatchObject({ chords: ['f5'], whenSource: 'editorFocus', native: false })
+    expect(primaryRule('query.execute', 'linux')).toMatchObject({ chords: ['f5'], whenSource: 'editorFocus || queryBarFocus', native: false })
     expect(primaryRule('file.saveAs', 'darwin')?.chords).toEqual(['shift+meta+s'])
     expect(primaryRule('window.explorer', 'win32')?.chords).toEqual(['f8'])
     expect(primaryRule('file.close', 'linux')?.chords).toEqual(['ctrl+w'])
@@ -238,16 +239,18 @@ describe('default keybindings', () => {
     const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine' }, linux: { e: 'query.execute', g: 'edit.goToLine' }, darwin: {} }
+    // SSMS's search box key; Linux and macOS quit with it.
+    const search: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { q: 'workbench.search' }, linux: {}, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {
         const input = event(shiftKey ? character.toUpperCase() : character, letter(character), { [primary]: true, shiftKey })
         const name = `${shiftKey ? 'shift+' : ''}${character}`
-        expect(commandFor(input, platform), `${platform} ${name}`).toBe(name === 'shift+s' ? saveKeys[platform] : legacy[name] ?? palette[name])
-        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? added[platform][name])
+        expect(commandFor(input, platform), `${platform} ${name}`).toBe(name === 'shift+s' ? saveKeys[platform] : legacy[name] ?? palette[name] ?? search[platform][name])
+        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? search[platform][name] ?? added[platform][name])
         for (const extra of ['altKey', platform === 'darwin' ? 'ctrlKey' : 'metaKey']) {
-          // ⌥⌘S is Save All on macOS.
-          const saveAll = platform === 'darwin' && extra === 'altKey' && character === 's' && !shiftKey ? 'file.saveAll' : undefined
+          // ⌥⌘S is Save All on macOS, and ⌥⌘A the Activity Monitor (SSMS's Ctrl+Alt+A, which AltGr takes elsewhere).
+          const saveAll = platform === 'darwin' && extra === 'altKey' && !shiftKey ? ({ s: 'file.saveAll', a: 'activity.open' } as Record<string, CommandId>)[character] : undefined
           expect(commandFor(event(character, letter(character), { [primary]: true, shiftKey, [extra]: true }), platform), `${platform} ${extra} ${character}`).toBe(saveAll)
         }
       }
@@ -255,6 +258,12 @@ describe('default keybindings', () => {
       expect(commandFor(f5, platform, { editorFocus: true })).toBe('query.execute')
       expect(commandFor(enter, platform, { editorFocus: true, inputFocus: true })).toBe('query.execute')
       expect(commandFor(f5, platform, { activePanel: 'output' })).toBeUndefined()
+      // The query's bar shows F5 on Execute: its keys run the query from the bar's buttons and lists too.
+      for (const focus of [{ activePanel: 'editor', queryBarFocus: true }, { activePanel: 'editor', queryBarFocus: true, inputFocus: true }] as const) {
+        expect(commandFor(f5, platform, focus)).toBe('query.execute')
+        expect(commandFor(enter, platform, focus)).toBe('query.execute')
+      }
+      expect(commandFor(f5, platform, { activePanel: 'editor' })).toBeUndefined()
       expect(commandFor(enter, platform, {})).toBeUndefined()
     }
     expect(commandFor(event('n', 'KeyN', { ctrlKey: true, altKey: true }), 'win32')).toBeUndefined()

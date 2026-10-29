@@ -3,7 +3,8 @@
 // read it, the backend embedding ssisCatalogJson() as Ssis/ssis-catalog.json (a vitest file snapshot keeps that copy in
 // sync). The tree's SSIS kinds and folders are Object Explorer's (src/shared/explorer/catalog.ts). Erasable TypeScript (no
 // enums), so Node's type stripping can load it too.
-import type { NodeKind } from '../explorer/catalog.ts'
+import type { FolderId, NodeKind } from '../explorer/catalog.ts'
+import type { IconId } from '../icons.ts'
 
 /** SSMS fixes the catalog's name; only the backend's internal test option points it at a fake catalog. */
 export const catalogDatabase = 'SSISDB'
@@ -150,26 +151,211 @@ export const describeTargets: { readonly [V in SsisDescribeView]: NodeKind } = {
   catalog: 'ssisCatalog', folder: 'ssisFolder', project: 'ssisProject', package: 'ssisPackage', environment: 'ssisEnvironment'
 }
 
-/** What ssis.execute does (D-ssis 4.4), by verb: its title, the steps it runs in order (one statement each, reported back
- *  as done, failed, cancelled or skipped), the only catalog procedures its statements may call (SsisSql's write lint),
- *  whether it takes a describe's `revision` (a write that changes what a document showed compares it first), and whether
- *  SSISDB refuses it to a SQL Server login on a box server (S0, docs/integration-services.md 14.7: error 27123), which the
- *  backend answers WINDOWS_AUTH_REQUIRED before it connects. Later verbs (execute, validate, configure, …) append. */
+/** `validation_status` of a project, package or reference: the catalog writes 'N' when it deploys one (the fake catalog's
+ *  procedures do as the real ones). Other codes are shown as the catalog stores them until a real catalog records them. */
+export const validationStatuses: readonly { readonly code: string; readonly label: string }[] = [
+  { code: 'N', label: 'Not validated' }
+]
+
+/**
+ * The documents SSIS verbs open: one per tree kind they describe, a non-modal tab named as SSMS names the dialog
+ * ("Folder Properties - Finance"), read with `view`. Each document kind is the node kind it shows.
+ */
+export const ssisDocumentKinds = ['ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment'] as const
+export type SsisDocumentKind = typeof ssisDocumentKinds[number]
+export type SsisPropertiesView = Exclude<SsisDescribeView, 'catalog'>
+export interface SsisDocumentSpec {
+  readonly title: string
+  readonly view: SsisPropertiesView
+  /** The tab's icon: the tree kind's own. */
+  readonly icon: IconId
+  /** What the object is, as a sentence names it ("the folder"). */
+  readonly noun: string
+  /** Its sections, in order; the list beside them names them. */
+  readonly sections: readonly { readonly id: string; readonly title: string }[]
+}
+const general = { id: 'general', title: 'General' }, parameterSection = { id: 'parameters', title: 'Parameters' }
+export const ssisDocumentSpecs: { readonly [K in SsisDocumentKind]: SsisDocumentSpec } = {
+  ssisFolder: { title: 'Folder Properties', view: 'folder', icon: 'folder-library', noun: 'folder', sections: [general] },
+  ssisProject: {
+    title: 'Project Properties', view: 'project', icon: 'project', noun: 'project',
+    sections: [general, { id: 'packages', title: 'Packages' }, parameterSection, { id: 'references', title: 'References' }]
+  },
+  ssisPackage: { title: 'Package Properties', view: 'package', icon: 'package', noun: 'package', sections: [general, parameterSection] },
+  ssisEnvironment: { title: 'Environment Properties', view: 'environment', icon: 'symbol-variable', noun: 'environment', sections: [general, { id: 'variables', title: 'Variables' }] }
+}
+export const isSsisDocumentKind = (kind: unknown): kind is SsisDocumentKind => typeof kind === 'string' && (ssisDocumentKinds as readonly string[]).includes(kind)
+/** The tab's name, as SSMS titles the dialog: "Package Properties - Daily.dtsx". */
+export const ssisDocumentName = (kind: SsisDocumentKind, name: string): string => `${ssisDocumentSpecs[kind].title} - ${name}`
+
+/**
+ * SSIS verbs (D-ssis 3.1): what Object Explorer's SSIS nodes offer, one command each. `document` verbs open a document,
+ * `confirm` ones ask first and `inline` ones edit the tree row; `writes` marks those that change the catalog (none yet).
+ * `defaultAction` is what Enter and a double-click on the node do, as in SSMS. Later verbs (Active Operations, Execute,
+ * Configure, …) append, with their gates.
+ */
+export const ssisVerbs = [
+  'folderProperties',
+  'projectProperties',
+  'packageProperties',
+  'environmentProperties'
+] as const
+export type SsisVerb = typeof ssisVerbs[number]
+export type SsisVerbClass = 'document' | 'confirm' | 'inline'
+export type SsisCommandId = 'ssis.folderProperties' | 'ssis.projectProperties' | 'ssis.packageProperties' | 'ssis.environmentProperties' | 'ssis.refreshProperties'
+export interface SsisVerbSpec {
+  /** The palette's title; menus show `menuTitle`. */
+  readonly title: string
+  readonly menuTitle: string
+  readonly mnemonic: string
+  readonly group: string
+  readonly order: number
+  /** The tree kinds that offer it. */
+  readonly kinds: readonly NodeKind[]
+  readonly class: SsisVerbClass
+  readonly document?: SsisDocumentKind
+  readonly writes: boolean
+  readonly defaultAction?: true
+  readonly command: SsisCommandId
+}
+// The access key is Object Explorer's Properties (P), which these nodes do not offer.
+const properties = (kind: SsisDocumentKind, extra: Partial<SsisVerbSpec> = {}): Omit<SsisVerbSpec, 'command'> => ({
+  title: ssisDocumentSpecs[kind].title, menuTitle: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, kinds: [kind], class: 'document', document: kind, writes: false, ...extra
+})
+export const ssisVerbSpecs: { readonly [V in SsisVerb]: SsisVerbSpec } = {
+  folderProperties: { ...properties('ssisFolder'), command: 'ssis.folderProperties' },
+  projectProperties: { ...properties('ssisProject'), command: 'ssis.projectProperties' },
+  // SSMS opens a package's and an environment's properties on a double-click (U3 section 1).
+  packageProperties: { ...properties('ssisPackage', { defaultAction: true }), command: 'ssis.packageProperties' },
+  environmentProperties: { ...properties('ssisEnvironment', { defaultAction: true }), command: 'ssis.environmentProperties' }
+}
+/** '' = not offered; 'disabled' = shown greyed (for a later gate, such as Windows authentication); 'enabled'. */
+export type SsisVerbState = '' | 'disabled' | 'enabled'
+/** Each verb's state for a node kind. */
+export function ssisVerbMenuState(kind: NodeKind | 'folder' | undefined): Readonly<Record<SsisVerb, SsisVerbState>> {
+  return Object.fromEntries(ssisVerbs.map(verb => [verb, kind !== undefined && kind !== 'folder' && ssisVerbSpecs[verb].kinds.includes(kind) ? 'enabled' : ''])) as Record<SsisVerb, SsisVerbState>
+}
+/** The verb Enter and a double-click run on a node of this kind, if any. */
+export function ssisDefaultVerb(kind: NodeKind | 'folder' | undefined): SsisVerb | undefined {
+  return kind === undefined || kind === 'folder' ? undefined : ssisVerbs.find(verb => ssisVerbSpecs[verb].defaultAction && ssisVerbSpecs[verb].kinds.includes(kind))
+}
+const pascal = <S extends string>(text: S) => (text.charAt(0).toUpperCase() + text.slice(1)) as Capitalize<S>
+export type SsisVerbContextKey = `ssisVerb${Capitalize<SsisVerb>}`
+export const ssisVerbContextKey = (verb: SsisVerb): SsisVerbContextKey => `ssisVerb${pascal(verb)}`
+export type SsisVerbContextValues = { readonly [K in SsisVerbContextKey]: SsisVerbState }
+/** The state context keys a selection publishes: `ssisVerb<Verb>`. */
+export const ssisVerbContextValues = (state: Readonly<Record<SsisVerb, SsisVerbState>>): SsisVerbContextValues =>
+  Object.fromEntries(ssisVerbs.map(verb => [ssisVerbContextKey(verb), state[verb]])) as SsisVerbContextValues
+
+/** A command catalogue entry, in the shape of `CommandDescriptor`. */
+export interface SsisCommandEntry {
+  readonly title: string
+  readonly category: 'Integration Services'
+  readonly icon: 'settings-gear' | 'refresh'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+  readonly keybindings?: readonly { readonly key: string; readonly when: string }[]
+  readonly menus?: readonly { readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly title: string; readonly mnemonic: string; readonly when: string }[]
+}
+const nodeIs = (kinds: readonly NodeKind[]) => kinds.length === 1 ? `explorerNode == '${kinds[0]}'` : `(${kinds.map(kind => `explorerNode == '${kind}'`).join(' || ')})`
+/** The SSIS commands: one per verb, and Refresh for the properties documents (F5 there, as in Object Explorer). */
+export function ssisCommandEntries(): { readonly [K in SsisCommandId]: SsisCommandEntry } {
+  const verbs = Object.fromEntries(ssisVerbs.map(verb => {
+    const spec = ssisVerbSpecs[verb], key = ssisVerbContextKey(verb), noun = spec.document ? ssisDocumentSpecs[spec.document].noun : 'object'
+    const entry: SsisCommandEntry = {
+      title: spec.title, category: 'Integration Services', icon: 'settings-gear', keywords: ['ssis', 'properties', 'catalog', noun], precondition: `backendReady && ${key} == 'enabled'`,
+      unavailableHint: `Select an SSIS Catalog ${noun} in Object Explorer.`,
+      // The keys describe the selection, which a node's menu has just selected; naming the node's kind too keeps the item off
+      // the empty area's menu, and says it never shows beside Object Explorer's own Properties (same access key).
+      menus: [{ menu: 'explorer.context', group: spec.group, order: spec.order, title: spec.menuTitle, mnemonic: spec.mnemonic, when: `${nodeIs(spec.kinds)} && ${key} != ''` }]
+    }
+    return [spec.command, entry]
+  }))
+  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes, and
+  // an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now: focus in a monitor means no SSIS document is active.
+  const refresh: SsisCommandEntry = {
+    title: 'Refresh Properties', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'catalog'], precondition: 'backendReady && activeDocumentIsSsis',
+    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus" }]
+  }
+  return { ...verbs, 'ssis.refreshProperties': refresh } as { readonly [K in SsisCommandId]: SsisCommandEntry }
+}
+/** What ssis.execute does (D-ssis 4.4), by verb: its title, the steps it runs in order (reported back as done, failed,
+ *  cancelled or skipped), the only catalog procedures its statements may call (SsisSql's write lint), whether it takes a
+ *  describe's `revision` (a write that changes what a document showed compares it first), whether SSISDB refuses it to a
+ *  SQL Server login on a box server (S0, docs/integration-services.md 14.7: error 27123), which the backend answers
+ *  WINDOWS_AUTH_REQUIRED before it connects, and where it runs: `catalog` verbs in the catalog's database, one statement
+ *  per step, `server` verbs (Create Catalog) in master from their own templates and lint (SsisCreateSql). Later verbs
+ *  (execute, validate, configure, …) append. */
 export interface SsisActionSpec {
   readonly title: string
   readonly steps: readonly string[]
   readonly procedures: readonly string[]
   readonly revision: boolean
   readonly windowsAuthOnBox: boolean
+  readonly scope: 'catalog' | 'server'
 }
 export const ssisActions = {
   /** catalog.stop_operation: an execution or validation that runs stops after its current work (Stopping, then Canceled). */
-  stopOperation: { title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true }
+  stopOperation: { title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true, scope: 'catalog' },
+  /** SSMS 22's Create Catalog (Catalog.Create): CLR when the user agreed to it, the restore of the Integration Services catalog
+   *  backup, the master key, the ISSERVER assembly's trust and `sp_ssis_startup`, and the maintenance job. The catalog's own
+   *  procedures do not exist yet, so it calls none; SQL Server logins that are sysadmin may run it, as in SSMS. */
+  createCatalog: {
+    title: 'Create Catalog', procedures: [], revision: false, windowsAuthOnBox: false, scope: 'server',
+    steps: ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+  }
 } as const satisfies { readonly [verb: string]: SsisActionSpec }
 export type SsisActionVerb = keyof typeof ssisActions
 export const ssisActionVerbs = Object.keys(ssisActions) as SsisActionVerb[]
 /** catalog.operations.operation_type values Stop Operation applies to: executions and validations. */
 export const stoppableOperationTypes = [200, 300, 301] as const
+
+/** What Create Catalog restores and trusts, as SSMS 22 finds them: the files Integration Services installs in its
+ *  `<DTSPath>Binn` folder (the registry's `SSISSetupDTSPath` for the server's version, read on the server), the catalog
+ *  backup by the first band that names it so, and the step a failure after the restore adds to remove what was created.
+ *  SSMS 22's Catalog.Create passes the one literal `SSISDBBackup.bak` to CatalogHelper.GetCatalogBackupPath for every
+ *  version, and SQL Server 2016 to 2025 install that name (`SSISDB.bak` is no file Integration Services installs). */
+export const createCatalog = {
+  backupFiles: [{ since: 13, file: 'SSISDBBackup.bak' }],
+  assemblyFile: 'Microsoft.SqlServer.IntegrationServices.Server.dll',
+  cleanupStep: 'Remove the incomplete catalog'
+} as const
+/** The catalog backup's file name on a server of this band. */
+export const catalogBackupFile = (band: number): string => createCatalog.backupFiles.find(item => band >= item.since)?.file ?? createCatalog.backupFiles[createCatalog.backupFiles.length - 1].file
+
+/**
+ * What the tree's live probe (`ssis.catalogProbe` in src/shared/live/catalog.ts) fingerprints: one catalog view each, sent
+ * as two status values, `<id>Count` (its rows) and `<id>Checksum` (a checksum of the columns the tree and its documents
+ * show), and what Object Explorer reloads when one changes: rows of these kinds, or these folders. References, parameters
+ * and catalog properties show in no tree row; documents that show them read the same fingerprints.
+ */
+export interface CatalogFingerprint {
+  readonly id: string
+  readonly view: string
+  readonly reloads: { readonly kinds?: readonly NodeKind[]; readonly folders?: readonly FolderId[] }
+}
+export const catalogFingerprints: readonly CatalogFingerprint[] = [
+  { id: 'folders', view: 'catalog.folders', reloads: { kinds: ['ssisCatalog'] } },
+  { id: 'projects', view: 'catalog.projects', reloads: { folders: ['ssisProjects'] } },
+  { id: 'packages', view: 'catalog.packages', reloads: { folders: ['ssisPackages'] } },
+  { id: 'environments', view: 'catalog.environments', reloads: { folders: ['ssisEnvironments'] } },
+  // An environment's row shows its variable count.
+  { id: 'variables', view: 'catalog.environment_variables', reloads: { folders: ['ssisEnvironments'] } },
+  { id: 'references', view: 'catalog.environment_references', reloads: {} },
+  { id: 'parameters', view: 'catalog.object_parameters', reloads: {} },
+  { id: 'properties', view: 'catalog.catalog_properties', reloads: {} }
+]
+/** A tree view of the catalog that ended for now (no room for it on the server or in the window, the backend restarted it)
+ *  opens again after `first` ms, doubling to `max` while it keeps ending before a sample. */
+export const catalogProbeRetryMs = { first: 2_000, max: 60_000 } as const
+/**
+ * Why a tree view of the catalog ends for good, which no retry fixes: the login's access or sign-in, a catalog that lacks
+ * a view or column the probe reads (NOT_SUPPORTED), a request refused as malformed, or a workbench that closed.
+ */
+export const catalogProbeFinalCodes = ['PERMISSION_DENIED', 'LOGIN_FAILED', 'NOT_SUPPORTED', 'INVALID_PARAMS', 'PORT_CLOSED'] as const
+/** The status values of `ssis.catalogProbe`, in order: each fingerprint's count, then its checksum. */
+export const catalogFingerprintStatus: readonly string[] = catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum'])
 
 /**
  * The Operations view's kind filter (D-ssis 6.2): the operation types each kind holds. `other` is every type the others do
@@ -225,6 +411,12 @@ export const ssisErrorRetryable = {
   /** Varia's Stop ended a write's request before it changed anything, or at the step the reply names (for Stop Operation, the
    *  catalog may then list its own Stop operation as Running until SQL Server restarts). */
   CANCELLED: true,
+  /** Create Catalog on a server whose catalog database already exists: SSMS supports one catalog. */
+  CATALOG_EXISTS: false,
+  /** Create Catalog when CLR integration is off and the request did not agree to enable it. */
+  CLR_REQUIRED: false,
+  /** Create Catalog would enable CLR while other sp_configure changes wait for a RECONFIGURE, which would apply them too. */
+  CONFIGURATION_PENDING: false,
   SQL_ERROR: true
 } as const
 export type SsisErrorCode = keyof typeof ssisErrorRetryable
@@ -266,6 +458,17 @@ export const ssisLimits = {
   preflightMs: 25_000,
   /** How long a stopped write's reply waits for SQL Server to end its statement, then answers CANCELLED (outcome unknown). */
   stopGraceMs: 10_000,
+  /** How long a backend that is shutting down (stdin ended: a quit, a closed window, a reload or Restart Backend) waits for a
+   *  Create Catalog past its restore to finish or remove what it created; main's grace for that generation is longer. A Stop or
+   *  a disconnect waits as long past stopGraceMs, then answers that the outcome is not known yet. */
+  createDrainMs: 120_000,
+  /** How long Create Catalog's restore runs on after a Stop, a disconnect or a shutdown before SQL Server is asked to end it too
+   *  (then the removal drops the database it left restoring): a restore waiting on a lock must not hold the dialog for ever. */
+  restoreStopMs: 30_000,
+  /** Create Catalog's encryption password, in UTF-16 code units; the server's password policy applies too. */
+  catalogPassword: 128,
+  /** A path Create Catalog reads on the server (the catalog backup, the assembly, the database files). */
+  serverPath: 1_024,
   /** The Operations view (the ssis.operations live source): the most operations its window holds, how many it holds unless
    *  told otherwise, the open ones one tick reads again, the longest window in hours (a year, the catalog's longest
    *  retention), and how often it counts the last 24 hours by status. */
@@ -290,6 +493,7 @@ export function ssisCatalogJson(): string {
     '{',
     `  "actions": ${block(ssisActionVerbs.map(verb => ({ verb, ...ssisActions[verb] })))},`,
     `  "catalogDatabase": ${line(catalogDatabase)},`,
+    `  "createCatalog": ${line(createCatalog)},`,
     `  "errors": ${block(ssisErrorCodes.map(code => ({ code, retryable: ssisErrorRetryable[code] })))},`,
     `  "features": ${line(ssisFeatures)},`,
     `  "finalStatuses": ${line(finalStatuses)},`,

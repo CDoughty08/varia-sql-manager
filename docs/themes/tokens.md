@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (241)
+## Color keys (258)
 
 ### Base
 
@@ -89,9 +89,9 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `descriptionForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Secondary text: hints, captions, and explanations. |
 | `disabledForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels. |
 | `errorForeground` | VS Code | `$error` | `#f39a9a` | `#b42229` | Error text. |
-| `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text. |
+| `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text, and the results head's icon for a run that completed with errors or was cancelled. |
 | `successForeground` | Varia | `$success` | `#74d19c` | `#146f3b` | Success text, such as the Execute button and confirmations. |
-| `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. Not used yet; reserved for notifications. |
+| `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. |
 | `focusBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Focus ring around the focused control. |
 | `icon.foreground` | VS Code | `$icon` | `#a3a9b5` | `#4d5461` | Default glyph color. |
 | `widget.shadow` | VS Code | `$shadow` | `#00000085` | `#10182824` | Shadow of dialogs, floating dock groups, and editor widgets. |
@@ -113,6 +113,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `titleBar.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Line below the title bar. |
 | `titleBar.iconForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Application icon in the title bar. |
 | `titleBar.controlsForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable. Made opaque over `titleBar.activeBackground`. |
+| `commandCenter.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Search box in the title bar (the command centre). |
+| `commandCenter.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Search box text, icon and key. |
+| `commandCenter.activeBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Search box while hovered. |
+| `commandCenter.border` | VS Code | `$controlBorder/45` | `#6b728673` | `#878e9b73` | Outline of the search box. |
 | `menubar.selectionBackground` | VS Code | `$active` | `#30343e` | `#d6dae0` | Open title-bar menu. |
 | `menubar.selectionForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Label of the open title-bar menu. |
 | `menubar.selectionBorder` | VS Code | `$accent/0` | `#8f9cff00` | `#4453d000` | Outline of the open, hovered, or focused title-bar menu; none by default. |
@@ -154,26 +158,30 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | Key | Source | Default | Varia Dark | Varia Light | Description |
 | --- | --- | --- | --- | --- | --- |
 | `sideBar.background` | VS Code | `$sideBar` | `#111317` | `#f7f8fa` | Object Explorer. |
-| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Side bar section titles. Not used yet; reserved for side bar section titles. |
+| `sideBarTitle.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Section titles of side panels, such as the Object Explorer header. |
 | `sideBarSectionHeader.border` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Lines around the Object Explorer toolbar and footer. |
 | `list.hoverBackground` | VS Code | `$hover` | `#262a32` | `#dfe2e7` | Hovered list row (command palette rows included). |
 | `list.activeSelectionBackground` | VS Code | `$selectionStrong` | `#29314f` | `#d9e0fb` | Selected row of a focused list. |
 | `list.activeSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of a focused list. |
-| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#21273b` | `#e7ebfc` | Selected row of an unfocused list, and the selected result set. |
+| `list.inactiveSelectionBackground` | VS Code | `$selection` | `#21273b` | `#e7ebfc` | Selected row of an unfocused list, the selected result set, and the selected view (Results, Messages, Execution plan) in the results head. |
 | `list.inactiveSelectionForeground` | VS Code | `$text` | `#d9dce3` | `#1c1f26` | Text of the selected row of an unfocused list. |
 | `list.focusOutline` | VS Code | `@focusBorder` | `#8f9cff` | `#4453d0` | Outline of the focused list row, such as the selected Object Explorer row while the tree has focus. |
 | `list.highlightForeground` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Characters that match a filter, such as in the command palette. |
 | `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Row of the active query's server. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$sideBar` | `#111317` | `#f7f8fa` | Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). |
+| `objectExplorer.activeConnectionForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Glyph at the end of the active query's server row. |
 | `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
 | `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text after a row's label, such as a column's type or a database's state. |
-| `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (filtered) marker and loading progress next to folder labels. |
+| `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Item counts at the end of folder rows, the (filtered) marker and loading progress. |
 | `objectExplorer.chevronForeground` | Varia | `$iconMuted` | `#7f8694` | `#6b7280` | Expand and collapse chevrons. |
 | `objectExplorer.folderIconForeground` | Varia | `$iconFolder` | `#bfa878` | `#7d6532` | Folder glyphs. |
 | `objectExplorer.objectIconForeground` | Varia | `$icon` | `#a3a9b5` | `#4d5461` | Glyphs of tables and other objects. |
 | `objectExplorer.actionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Object Explorer toolbar icons. |
+| `objectExplorer.connectedIndicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot at the end of a connected server's row. |
+| `objectExplorer.connectionErrorIndicator` | Varia | `@errorForeground` | `#f39a9a` | `#b42229` | Ring at the end of a server's row while its connection fails to load. |
+| `objectExplorer.disconnectedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Ring at the end of a server's row once its connection was lost with the SQL backend. |
 
 ### Dock and docking compass
 
@@ -251,10 +259,10 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | --- | --- | --- | --- | --- | --- |
 | `panel.background` | VS Code | `$panel` | `#16181d` | `#ffffff` | Output panel. |
 | `panel.border` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Lines inside the output panel. |
-| `panelTitle.background` | Varia | `$panel` | `#16181d` | `#ffffff` | Output panel tab bar. |
-| `panelTitle.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Active output tab, and the selected tab of the connection dialog. |
-| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Inactive output tabs. |
-| `panelTitle.activeBorder` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Underline of the active output tab. |
+| `panelTitle.background` | Varia | `$panel` | `#16181d` | `#ffffff` | The results head: the bar with the Results, Messages and Execution plan views and the run summary. |
+| `panelTitle.activeForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Text of the selected Results, Messages or Execution plan view, and of the selected tab of the connection dialog. |
+| `panelTitle.inactiveForeground` | VS Code | `$textMuted` | `#9298a4` | `#5c6370` | Text of the views not selected in the results head. |
+| `panelTitle.activeBorder` | VS Code | `$accent` | `#8f9cff` | `#4453d0` | Underline of the selected tab of the connection dialog (History or Browse, Connection Properties or Connection String). The results head marks its selected view with list.inactiveSelectionBackground instead. |
 | `badge.background` | VS Code | `$active` | `#30343e` | `#d6dae0` | Count badges on output tabs. |
 | `badge.foreground` | VS Code | `$textSecondary` | `#bcc1cb` | `#3a404b` | Count badge text. |
 | `resultsGrid.background` | Varia | `@panel.background` | `#16181d` | `#ffffff` | Results grid. |
@@ -323,12 +331,12 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `dialog.labelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Field labels in dialogs. |
 | `dialog.descriptionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Secondary text in dialogs. |
 | `settings.headerForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Section headings in dialogs. |
-| `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
-| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. Not used yet; reserved for notifications. |
-| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. Not used yet; reserved for notifications. |
-| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. Not used yet; reserved for notifications. |
-| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. Not used yet; reserved for notifications. |
-| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. Not used yet; reserved for notifications. |
+| `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts, above the status bar at the bottom right. |
+| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. |
+| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. |
+| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. |
+| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. |
+| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. |
 | `quickInput.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Command palette and pickers (quick input). |
 | `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Command palette text. |
 | `quickInputTitle.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Title row of pickers that have one. |
@@ -381,6 +389,20 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `connection.purple` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Purple connection color. |
 | `connection.default` | Varia | `$neutral` | `#8d939f` | `#6b7280` | Swatch of connections without a color. |
 | `connection.favoriteForeground` | Varia | `$yellow` | `#d8bf5e` | `#8f6b00` | Favorite star in the connection dialog. |
+
+### Charts
+
+| Key | Source | Default | Varia Dark | Varia Light | Description |
+| --- | --- | --- | --- | --- | --- |
+| `charts.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Chart labels, legends, and the crosshair. |
+| `charts.lines` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Chart grid lines and baseline. |
+| `charts.blue` | VS Code | `$chart1` | `#3987e5` | `#2a78d6` | First series of a chart; series take blue, orange, green, yellow, then purple. |
+| `charts.orange` | VS Code | `$chart2` | `#d95926` | `#d4581f` | Second series of a chart. |
+| `charts.green` | VS Code | `$chart3` | `#199e70` | `#12936a` | Third series of a chart. |
+| `charts.yellow` | VS Code | `$chart4` | `#c98500` | `#a87200` | Fourth series of a chart. |
+| `charts.purple` | VS Code | `$chart5` | `#9085e9` | `#6250d6` | Fifth series of a chart. |
+| `charts.red` | VS Code | `$error` | `#f39a9a` | `#b42229` | A status mark on a chart, such as a failed execution on a timeline; never the color of a series. |
+| `charts.gray` | Varia | `$neutral` | `#8d939f` | `#6b7280` | "Other" in a stacked chart: everything the named series leave out. |
 
 ## SQL syntax scopes (16)
 

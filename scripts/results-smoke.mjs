@@ -10,7 +10,12 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
+  statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -64,8 +69,8 @@ async function typeSql(sql) {
 async function run(sql, { running = false } = {}) {
   await typeSql(sql)
   await page.keyboard.press('F5')
-  if (running) await expect(status()).toContainText('Executing query…')
-  else await expect(status()).toContainText(/^Query (executed successfully|completed with errors)\./)
+  if (running) await expect(status()).toContainText(/^Executing · /)
+  else await expect(status()).toContainText(/^Completed( with errors)? · /)
 }
 /** The active cell as screen readers find it: the element `aria-activedescendant` names, with its row and column. */
 const active = (index = 0) => grid(index).evaluate(root => {
@@ -187,7 +192,7 @@ async function focusRingPixels() {
 }
 
 try {
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   // A hidden window draws about once a second; the grid's frames and the scroll steps need real ones.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
   // Closing an unsaved query asks first; answer Don't Save.
@@ -222,9 +227,9 @@ try {
     const end = await active()
     expect(end).toMatchObject({ role: 'gridcell', column: 7, selected: 'true' })
     expect(end.row).toBeGreaterThan(1000)
-    await expect(status()).toContainText('Executing query…')
+    await expect(status()).toContainText(/^Executing · /)
     await rm(join(control, 'hold', 'query.execute'))
-    await expect(status()).toContainText('Query executed successfully.', { timeout: 30000 })
+    await expect(status()).toContainText(/^Completed · /, { timeout: 30000 })
     await expect(status()).toContainText('200,000 rows')
     await expect(grid()).toHaveAttribute('aria-busy', 'false')
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 200,000 rows, 8 columns')
@@ -378,6 +383,11 @@ try {
   await page.emulateMedia({ forcedColors: null })
   await page.keyboard.press('Tab')
   await expect(splitter).toBeFocused()
+  // The next set's caption comes first: its Collapse button and Save Results As, then its grid.
+  await page.keyboard.press('Tab')
+  await expect(resultToggle(page, 1)).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(outputPane(page).getByRole('button', { name: 'Save Result 2 As…', exact: true })).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(grid(1)).toBeFocused()
   await measured('a thousand stacked sets', async () => {
@@ -395,6 +405,166 @@ try {
     expect(most).toBeLessThanOrEqual(12)
   })
   console.log('Results checks: stacked grids split the pane equally, resize by mouse and keys, and a thousand sets mount at most 12 grids.')
+
+  // 4b. The results head and captions: one run summary; a small set sized to its rows and the rest to the large one,
+  // with no outer scroll bar; a caption names its set and collapses it; splitters keep to each set's floor; headers show
+  // SQL types; the Messages strip opens for PRINT and errors; the Execution plan view lists a run's plans.
+  await run('-- varia-fake: sets=N1*3,W1*2000 messages=2')
+  await expect(status()).toHaveText(/^Completed · 2,003 rows · \d+\.\d{3} s · \d\d:\d\d:\d\d$/)
+  await expect(status()).toHaveAttribute('title', 'Query executed successfully. · 00:00:00 · 2,003 rows')
+  await expect(status().locator('[data-icon="pass"]')).toHaveCount(1)
+  // PRINT-like messages opened the strip under the grids, with its one line.
+  await expect(messagesStrip(page)).toHaveText('Messages · 2 · no errors')
+  // Its name says what the Messages tab's does, without the drawn dots.
+  await expect(messagesStrip(page)).toHaveAccessibleName('Messages, 2 messages, no errors')
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect(outputPane(page).getByRole('tabpanel').getByRole('log', { name: 'Messages', exact: true })).toContainText('Message 2')
+  const captions = page.locator(part.resultCaption)
+  await expect(captions).toHaveCount(2)
+  await expect(captions.nth(0)).toContainText('Result 1')
+  await expect(captions.nth(0)).toContainText('3 rows · 7 columns')
+  await expect(captions.nth(1)).toContainText('2,000 rows · 8 columns')
+  await expect(resultToggle(page, 0)).toHaveAttribute('aria-expanded', 'true')
+  const fitted = async () => {
+    const [small, large] = await heights()
+    const shown = await scroller(0).evaluate(element => element.scrollHeight <= element.clientHeight + 1)
+    const stack = await page.locator(part.resultStack).evaluate(element => element.scrollHeight <= element.clientHeight + 1)
+    return { smaller: small < large, shown, stack }
+  }
+  // The 3-row set shows every row without scrolling; the 2,000-row set takes the rest; the stack itself fits.
+  await expect.poll(fitted).toEqual({ smaller: true, shown: true, stack: true })
+  // Collapsing a set leaves its caption; its grid goes and the other set grows; expanding brings it back.
+  const [, before] = await heights()
+  await resultToggle(page, 0).click()
+  await expect(resultToggle(page, 0)).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('[data-result-grid]')).toHaveCount(1)
+  await expect.poll(async () => (await heights())[0]).toBe(await captions.nth(0).evaluate(element => element.getBoundingClientRect().height))
+  await expect.poll(async () => (await heights())[1]).toBeGreaterThan(before)
+  // Beside a collapsed set the splitter only divides: it has no value, takes no focus, and a drag moves nothing.
+  await expect(resultSplitters(page)).toHaveCount(0)
+  const divider = outputPane(page).getByRole('separator')
+  await expect(divider).toHaveCount(1)
+  await expect(divider).not.toHaveAttribute('tabindex', /./)
+  const collapsedHeights = await heights(), line = await divider.boundingBox()
+  await page.mouse.move(line.x + 40, line.y + line.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(line.x + 40, line.y + line.height / 2 + 30, { steps: 3 })
+  await page.mouse.up()
+  expect(await heights()).toEqual(collapsedHeights)
+  await resultToggle(page, 0).click()
+  await expect(page.locator('[data-result-grid]')).toHaveCount(2)
+  await expect.poll(fitted).toEqual({ smaller: true, shown: true, stack: true })
+  // The 3-row set is shorter than four rows: ArrowUp on the splitter below it keeps it at its rows (it never grows), and
+  // the splitter's value lies within its range.
+  const sized = await heights()
+  await resultSplitters(page).first().focus()
+  await page.keyboard.press('ArrowUp')
+  await page.waitForTimeout(100)
+  expect((await heights())[0]).toBe(sized[0])
+  const bounds = (await resultSplitters(page).first().evaluate(element => ['aria-valuenow', 'aria-valuemin', 'aria-valuemax'].map(name => Number(element.getAttribute(name)))))
+  expect(bounds[0]).toBeGreaterThanOrEqual(bounds[1])
+  expect(bounds[0]).toBeLessThanOrEqual(bounds[2])
+  // ArrowDown grows it by a row, and Enter goes back to sizing by rows.
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(async () => Math.round((await heights())[0] - sized[0])).toBe(20)
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await heights())[0]).toBe(sized[0])
+  // Headers show each column's SQL type, drawn after the name and kept out of its accessible name.
+  await expect(header('id', grid(1))).toHaveCount(1)
+  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('int')
+  await expect(header('amount', grid(1)).locator(gridPart.columnType)).toHaveText('decimal(18,2)')
+  expect((await computed(header('amount', grid(1)).locator(gridPart.columnType))).color).toBe(await tokenColor('resultsGrid.headerDescriptionForeground'))
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.showColumnTypes': false }))).ok).toBe(true)
+  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('')
+  expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.showColumnTypes': null }))).ok).toBe(true)
+  await expect(header('id', grid(1)).locator(gridPart.columnType)).toHaveText('int')
+  // Closed, the strip stays closed for the run; the next run's PRINT output opens it again.
+  await messagesStrip(page).click()
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'false')
+  await expect(outputPane(page).getByRole('tabpanel').getByRole('log')).toHaveCount(0)
+  await run('-- varia-fake: sets=N1*3 messages=1')
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect(messagesStrip(page)).toHaveText('Messages · 1 · no errors')
+  // An error opens it too and counts there, while the run stays on Results.
+  await messagesStrip(page).click()
+  await run('-- varia-fake: sets=N1*3 errors=1')
+  await expect(messagesStrip(page)).toHaveText('Messages · 1 · 1 error')
+  await expect(messagesStrip(page)).toHaveAccessibleName('Messages, 1 message, 1 error')
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await expect(errorMessages(page)).toContainText('Fake error 1.')
+  // Closed, its line shows the first error's message, which describes it.
+  await messagesStrip(page).click()
+  await expect(messagesStrip(page)).toContainText('Fake error 1.')
+  await expect(messagesStrip(page)).toHaveAccessibleDescription('Fake error 1.')
+  await messagesStrip(page).click()
+  // A run without messages has no strip.
+  await run('-- varia-fake: sets=N1*3')
+  await expect(messagesStrip(page)).toHaveCount(0)
+  // The Execution plan view: only for a run that returned plans, each opened as a .sqlplan document.
+  await expect(outputTab(/^Execution plan/)).toHaveCount(0)
+  await run('SELECT 1 -- XML_PLAN_FIXTURE')
+  // Two one-row sets that fit keep their rows, the second right under the first: what is left stays below the last one.
+  await expect(page.locator('[data-result-grid]')).toHaveCount(2)
+  await expect.poll(async () => { const [first, second] = await heights(); return Math.abs(first - second) <= 1 }).toBe(true)
+  expect(await page.locator(part.resultItem).evaluateAll(items => { const [first, second] = items.map(item => item.getBoundingClientRect()); return second.top - first.bottom })).toBeLessThanOrEqual(6)
+  expect(await page.locator(part.resultStack).evaluate((stack, item) => stack.getBoundingClientRect().bottom - [...stack.querySelectorAll(item)].at(-1).getBoundingClientRect().bottom, part.resultItem)).toBeGreaterThan(40)
+  await expect(outputTab(/^Execution plan/)).toHaveAccessibleName('Execution plan, 1 plan')
+  await outputTab(/^Execution plan/).click()
+  await expect(planList(page).getByRole('listitem')).toHaveCount(1)
+  await expect(planList(page).getByRole('listitem')).toContainText('Execution plan 1Batch 2 of 3 · Result 2')
+  // The arrow keys reach it like the other views.
+  await outputTab(/^Execution plan/).focus()
+  await page.keyboard.press('Home')
+  await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('End')
+  await expect(outputTab(/^Execution plan/)).toHaveAttribute('aria-selected', 'true')
+  await planList(page).getByRole('button', { name: 'Open Execution plan 1', exact: true }).click()
+  await expect(activeDocument(page)).toContainText('ExecutionPlan1.sqlplan')
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
+  await page.screenshot({ path: resolve('artifacts', 'results-head.png') })
+  console.log('Results checks: one run summary, captions that collapse, small sets sized to their rows, header types, the Messages strip and the Execution plan view.')
+
+  // 4c. At the default split of a 1280x800 window the Messages strip yields to the results: an error does not open it over
+  // the grids, its line shows the error's message, and a data row stays in view. Opened by hand, it shows the error.
+  const fullSize = await page.evaluate(() => [innerWidth, innerHeight])
+  const resize = async (width, height) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+  }
+  await resize(1280, 800)
+  await application.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('layout.reset').click())
+  /** Whether an element lies inside the output view, and how many of a grid's data rows show whole in the stack. */
+  const inView = locator => locator.evaluate((element, view) => { const box = element.getBoundingClientRect(), outer = element.closest(view).getBoundingClientRect(); return box.height > 0 && box.top >= outer.top - 0.5 && box.bottom <= outer.bottom + 0.5 }, '[role="tabpanel"]')
+  const rowsShown = (index = 0) => grid(index).evaluate((root, stack) => {
+    const scroller = root.querySelector('[tabindex="-1"]').getBoundingClientRect(), view = root.closest(stack).getBoundingClientRect()
+    const top = Math.max(scroller.top, view.top) + 22, bottom = Math.min(scroller.bottom, view.bottom)
+    return [...root.querySelectorAll('[role="row"]')].filter(row => { const box = row.getBoundingClientRect(); return box.height > 0 && row.querySelector('[role="gridcell"]') && box.top >= top - 0.5 && box.bottom <= bottom + 0.5 }).length
+  }, part.resultStack)
+  for (const sql of ['-- varia-fake: sets=N1*50,N1*50,N1*50,N1*50,N1*50 messages=1 errors=1', '-- varia-fake: sets=N1*3,W1*2000 messages=2 errors=1']) {
+    await run(sql)
+    await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'false')
+    await expect(messagesStrip(page)).toContainText(/ · 1 error/)
+    await expect(messagesStrip(page)).toContainText('Fake error 1.')
+    expect(await inView(messagesStrip(page))).toBe(true)
+    await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+  }
+  await page.screenshot({ path: resolve('artifacts', 'results-default-split.png') })
+  // Opened by hand it takes at least a few lines and shows the first error, not the tail.
+  await messagesStrip(page).click()
+  await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(() => inView(errorMessages(page).first())).toBe(true)
+  await messagesStrip(page).click()
+  // One set in a pane too short for a caption, a header and four rows shows its grid without the caption.
+  await resize(1024, 700)
+  await run('-- varia-fake: sets=N1*3')
+  await expect.poll(() => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)).toBeLessThan(26 + 22 + 4 * 20 + 2)
+  await expect(page.locator(part.resultCaption)).toHaveCount(0)
+  await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)
+  await resize(...fullSize)
+  await enlargeOutput(page)
+  console.log('Results checks: at the default split the Messages strip yields to the grids and shows the first error in its line.')
 
   // 5. ARIA: after each grid key the active descendant is a selected gridcell at the active row and column, labelled
   // with its text and what it is.
@@ -541,7 +711,8 @@ try {
   await expect.poll(() => widthOf(header('name'))).toBeLessThan(initial / 2)
   expect(await clipped()).toBe(true)
   // Only the current cell's column (the first) is marked, as before the drag.
-  expect(await grid().locator(gridPart.selectedColumnHeader).allTextContents()).toEqual(['id'])
+  await expect(grid().locator(gridPart.selectedColumnHeader)).toHaveCount(1)
+  await expect(grid().locator(gridPart.selectedColumnHeader)).toHaveAccessibleName('id')
   const narrowed = await header('name').boundingBox()
   await page.mouse.dblclick(narrowed.x + narrowed.width - 1, narrowed.y + narrowed.height / 2)
   await expect.poll(() => widthOf(header('name'))).toBeCloseTo(initial, 0)
@@ -627,6 +798,82 @@ try {
   await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
   expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  // The saves above ended in view and showed no toast. One that ends while its query is in the background says so in a
+  // toast with Show results, which Focus Notifications reaches from the keyboard.
+  const toast = toasts(page)
+  await expect(toast).toHaveCount(0)
+  await run('-- varia-fake: sets=W1*5000')
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await page.keyboard.press('Control+N')
+  await expect(queryTabs()).toHaveCount(2)
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(toast).toHaveAttribute('data-severity', 'info')
+  // Focused, it says its severity and then its sentence.
+  await expect(toast).toHaveAccessibleName('Information')
+  await expect(toast).toHaveAccessibleDescription('Saved 5,000 rows to background.csv.')
+  await expect(toastMessage(toast)).toHaveText('Saved 5,000 rows to background.csv.')
+  await expect(toastAnnouncer(page)).toHaveText('Saved 5,000 rows to background.csv.')
+  // Above the status bar, inside the window, and not focused: a toast never takes focus by itself.
+  const [toastBox, statusBox] = [await toast.boundingBox(), await statusBar(page).boundingBox()]
+  expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(statusBox.y)
+  expect(toastBox.x + toastBox.width).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth))
+  await expect(toast).not.toBeFocused()
+  // Drawn over the dock (and, below, over a grid): what is laid out there must also be what the pointer reaches.
+  const onTop = () => toast.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return [[0.5, 0.5], [0.05, 0.1], [0.95, 0.9]].map(([x, y]) => element.contains(document.elementFromPoint(box.left + box.width * x, box.top + box.height * y)))
+  })
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast.png') })
+  const focusNotifications = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('focus notifications')
+    await expect(quickInputActive(page)).toContainText('View: Focus Notifications')
+    await page.keyboard.press('Enter')
+    await expect(toast).toBeFocused()
+  }
+  // The focused toast takes the theme's focus ring, as its buttons do; Tab reaches Show results, and Escape there
+  // dismisses the toast and gives focus back to the query it came from.
+  await textbox().focus()
+  await focusNotifications()
+  expect(await toast.evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineColor] }))
+    .toEqual(['solid', '2px', await tokenColor('focusBorder')])
+  await page.keyboard.press('Tab')
+  await expect(toast.getByRole('button', { name: 'Show results', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(toast).toHaveCount(0)
+  await expect(textbox()).toBeFocused()
+  // The dismissed toast's sentence leaves the live region, so the same sentence again (below) changes it and is read.
+  const politeRegion = toastAnnouncer(page)
+  await expect(politeRegion).toHaveText('')
+  // Again, held while the second query shows a grid where the toast appears, and this time Show results, clicked with
+  // the pointer (which waits until nothing covers it), goes back to the first.
+  await run('-- varia-fake: sets=W1*5000')
+  await queryTabs().first().click()
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await queryTabs().nth(1).click()
+  await expect(cell(0, 0)).toBeVisible()
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(politeRegion).toHaveText('Saved 5,000 rows to background.csv.')
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast-grid.png') })
+  await toast.getByRole('button', { name: 'Show results', exact: true }).click({ timeout: 5000 })
+  await expect(toast).toHaveCount(0)
+  await expect(queryTabs().first()).toHaveAttribute('aria-selected', 'true')
+  expect((await readFile(join(saveDir, 'background.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
+  await queryTabs().nth(1).click()
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
   // Back to the default (null resets), so the copies below have no header line.
   expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': null }))).ok).toBe(true)
   // Close Results (from the palette) frees the results and their windows; Messages stay.
@@ -688,11 +935,11 @@ try {
   await expect(queryStatus(page)).toHaveText('XML document')
   // A value's tab shows its kind by icon, not a text badge.
   await expect(kindIcon(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
-  await expect(activeDocument(page)).toHaveText(forXmlName)
+  await expect(activeDocument(page)).toHaveAccessibleName(forXmlName)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
-  await expect(server()).toBeDisabled()
-  await expect(server()).toHaveValue('')
-  await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
+  // A value has no server and never executes: it has no query bar.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(server()).toHaveCount(0)
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
   // Varia's own table icon, as in Object Explorer.
@@ -717,7 +964,8 @@ try {
   await cell(0, 0, grid(1)).click({ modifiers: ['Shift'] })
   await expect(queryTabs()).toHaveCount(1)
   await page.keyboard.press('Enter')
-  await expect(valueTab('ExecutionPlan1.sqlplan')).toHaveAttribute('aria-selected', 'true')
+  // The session's second plan document: the Execution plan view opened the first (section 4b).
+  await expect(valueTab('ExecutionPlan2.sqlplan')).toHaveAttribute('aria-selected', 'true')
   expect(await editorLanguage()).toBe('xml')
   await expect(queryStatus(page)).toHaveText('Execution plan')
   await expect(kindIcon(activeDocument(page), 'Execution plan')).toHaveAttribute('data-icon', 'execution-plan')
@@ -812,9 +1060,11 @@ try {
   await run('-- varia-fake: sets=N1*10 messages=3 errors=2 hold', { running: true })
   await outputTab(/^Messages/).click()
   await expect(messages(page)).toContainText('Message 3')
-  await expect(status()).toContainText('Executing query…')
-  // The query status bar's executing icon turns (Icon's spin), and stops under the smoke runs' reduced motion.
-  const spinner = queryStatus(page).locator(part.queryState + ' [data-icon="loading"]')
+  await expect(status()).toContainText(/^Executing · /)
+  // The results head's executing icon turns (Icon's spin), and stops under the smoke runs' reduced motion. The run's state
+  // shows there only: the status bar keeps the connection's facts.
+  await expect(queryStatus(page).locator('[data-icon="loading"]')).toHaveCount(0)
+  const spinner = status().locator('[data-icon="loading"]')
   await expect(spinner).toHaveClass(/\bcodicon-modifier-spin\b/)
   const turning = () => spinner.evaluate(element => getComputedStyle(element).animationName)
   expect(await turning()).toBe('none')
@@ -822,7 +1072,7 @@ try {
   expect(await turning()).toBe('codicon-spin')
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await rm(join(control, 'hold', 'query.execute'))
-  await expect(status()).toContainText('Query completed with errors.')
+  await expect(status()).toContainText(/^Completed with errors · /)
   const entries = await messageLines(page).evaluateAll((items, error) => items.map(item => [item.matches(error) ? 'error' : 'info', item.textContent]), part.errorMessage)
   expect(entries.slice(0, 5)).toEqual([['info', 'Message 1'], ['info', 'Message 2'], ['info', 'Message 3'], ['error', 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.'], ['error', 'Msg 50000, Level 16, State 1, Line 2\nFake error 2.']])
   expect(entries.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
@@ -888,10 +1138,11 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
-  // Script As's segment and then the server and database give way to a long text; the backend status and the indicator
-  // keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
+  // Script As's segment, then the query's facts, give way to a long text; the backend status, the editor's segments (Ln/Col,
+  // INS, EOL, encoding) and the indicator keep their size. Every segment keeps one line (step 17 fits a long server name
+  // into a small window).
   expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
-    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap'])
+    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
@@ -1059,7 +1310,7 @@ try {
   await expect(paneTab(page, 'output')).toHaveCount(0)
   await expect(outputPane(page)).toBeHidden()
   await page.keyboard.press('Control+R')
-  await expect(paneTab(page, 'output')).toBeVisible()
+  await expect(paneTab(page, 'output')).toHaveCount(1)
   await expect(outputPane(page)).toBeVisible()
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
@@ -1175,7 +1426,7 @@ try {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   await queryTabs().nth(1).click()
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
   const connect = page.getByRole('dialog', { name: 'Connect', exact: true })
   await connect.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -1184,8 +1435,8 @@ try {
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')
-  await toolbarButton(page, 'Cancel').click()
-  await expect(status()).toContainText('Query was cancelled.')
+  await queryBarButton(page, 'Cancel').click()
+  await expect(status()).toContainText(/^Cancelled · /)
   await outputTab(/^Results/).click()
   await expect(strip()).toContainText('This result is incomplete')
   // A grid holds only its rows: the strip (a status, here with no Retry) is outside the table structure.
@@ -1238,12 +1489,12 @@ try {
     const fits = bar => { const box = bar.getBoundingClientRect(); return [...bar.querySelectorAll(':scope > *, ' + part.querySegment)].every(child => { const rect = child.getBoundingClientRect(); return rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5 }) }
     const server = document.querySelector(facts.server), database = document.querySelector(facts.database)
     return {
-      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: document.querySelector(facts.rows)?.textContent,
+      fits: fits(document.querySelector(part.statusBar)) && fits(document.querySelector(part.queryStatus)), rows: !!document.querySelector(facts.rows),
       overflow: document.documentElement.scrollWidth > innerWidth || document.documentElement.scrollHeight > innerHeight, cut: server.scrollWidth > server.clientWidth,
       // The server gives way before the database, which stays whole while the server can shrink.
       database: database.scrollWidth <= database.clientWidth
     }
-  }, [part, queryFacts])).toEqual({ fits: true, rows: 'Rows: 10 rows', overflow: false, cut: true, database: true })
+  }, [part, queryFacts])).toEqual({ fits: true, rows: false, overflow: false, cut: true, database: true })
   await page.screenshot({ path: resolve('artifacts', 'results-small-status.png') })
   // Script As requests held in the backend keep Cancel and the start of their text: the editor's segments give way,
   // no segment covers another, and the text keeps a gap from the backend status even when it fills its segment (two
@@ -1301,7 +1552,7 @@ try {
     page.on('pageerror', error => failures.push(error.message))
     await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-    await expect(statusBar(page).getByText(/· Ready/)).toBeVisible({ timeout: 30000 })
+    await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     await connectLive(page, expect)
     await enlargeOutput(page)
     // The session opens with the first run, so the timed one below measures rows, not the login.
@@ -1326,13 +1577,13 @@ try {
     const firstRows = await page.evaluate(() => window.__variaLiveFirst)
     console.log(`Results live: the first rows of a million painted ${Math.round(firstRows)} ms after F5.`)
     expect(firstRows).toBeLessThan(1000)
-    await expect(status()).toContainText('Executing query…')
+    await expect(status()).toContainText(/^Executing · /)
     const rowsRead = async () => Number((await status().textContent()).match(/· ([\d,]+) rows?/)?.[1].replaceAll(',', '') ?? 0)
     await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
-    await expect(status()).toContainText('Executing query…')
+    await expect(status()).toContainText(/^Executing · /)
     await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
-    await toolbarButton(page, 'Cancel').click()
-    await expect(status()).toContainText('Query was cancelled.', { timeout: 30000 })
+    await queryBarButton(page, 'Cancel').click()
+    await expect(status()).toContainText(/^Cancelled · /, { timeout: 30000 })
     await outputTab(/^Results/).click()
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
     await cell(0, 0).click()
@@ -1379,10 +1630,12 @@ try {
     expect(xml.split('<o>').length - 1).toBe(200)
     await page.keyboard.press('Control+W')
     await expect(queryTabs()).toHaveCount(1)
-    // A statement's error is reported in place, between the messages before and after it, and the run ends on Messages.
+    // A statement's error is reported in place, between the messages before and after it; the run keeps its (empty) set
+    // on Results, and the Messages strip opens under it.
     await run(`PRINT 'before';\nSELECT 1/0 AS boom;\nPRINT 'after';`)
-    await expect(status()).toContainText('Query completed with errors.')
-    await expect(outputTab(/^Messages/)).toHaveAttribute('aria-selected', 'true')
+    await expect(status()).toContainText(/^Completed with errors · /)
+    await expect(outputTab(/^Results/)).toHaveAttribute('aria-selected', 'true')
+    await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
     const messages = await messageLines(page).evaluateAll((items, error) => items.map(item => [item.matches(error) ? 'error' : 'info', item.textContent]), part.errorMessage)
     expect(messages.slice(0, 3)).toEqual([['info', 'before'], ['error', 'Msg 8134, Level 16, State 1, Line 2\nDivide by zero error encountered.'], ['info', 'after']])
     expect(messages.at(-1)[1]).toMatch(/^Completion time: \d{4}-\d\d-\d\dT/)
@@ -1426,7 +1679,7 @@ try {
         }
       })
       await page.keyboard.press('F5')
-      await expect(status()).toContainText('Executing query…')
+      await expect(status()).toContainText(/^Executing · /)
       // Close Results for tab 1 from the palette; Enter goes the moment tab 2's last set closes.
       await queryTabs().first().click()
       await page.keyboard.press('F1')

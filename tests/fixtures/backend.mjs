@@ -10,12 +10,19 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+//   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
+//                       certificate does (reason 'certificate')
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
-//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
+//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE; for
+//                       ssisFolders and ssisProjects the SSIS catalog probe's fingerprints change with it, as after a
+//                       deployment elsewhere
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
+//   ssis/fail           ssis.describe answers a retryable TIMEOUT
+//   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
@@ -28,7 +35,17 @@
 // table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
 // an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
 // the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
-// count as protocol violations.
+// count as protocol violations. Object Explorer's `explorer` source runs only while the control directory holds
+// explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
+// jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
+// unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
+// The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
+// a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
+// BLOCKED, as a probe that waited out its lock timeout does), the resources probe opens unavailable as the
+// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
+// a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
+// The SSIS tree's ssis.catalog source samples every 200 ms whatever its interval, its fingerprints counting the extra/ssis*
+// rows.
 // live.subscribe for ssis.operations shows each connection's fake SSIS catalog (`ssisCatalogOf`): eight operations, and a
 // new running execution every fourth sample (none while ssis-quiet is in the control directory); its args filter them as the real source's do (kinds, statuses, names exactly
 // or by prefix, caller, limit), and new args replace the old ones whole. ssis.execute's stopOperation turns a running or
@@ -42,7 +59,7 @@
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
 // commits or rolls back what is open.
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -53,6 +70,7 @@ import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
 import { liveProbes } from '../../src/shared/live/catalog.ts'
+import { pendingProbes } from '../../src/shared/activity/catalog.ts'
 import { openStatuses, operationKindSpecs, operationStatuses, operationTiles, operationTypes } from '../../src/shared/ssis/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
@@ -139,6 +157,11 @@ function request(id, deadline, { method, params, credit }) {
       break
     // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
     case 'error-details':
+      if (method === 'connections.connect' && params.server === 'certificate') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: 'certificate', reason: 'certificate' } } })
+      if (method === 'connections.connect' && params.server === 'crash') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'The backend operation failed.', details: { exception: 'System.DllNotFoundException (0x80131524)' } } })
+      // Out of bounds: a reason main does not know, and an exception summary longer than 512 characters.
+      if (method === 'connections.connect' && params.server === 'reason') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'Failed.', details: { reason: 'firewall' } } })
+      if (method === 'connections.connect' && params.server === 'exception') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'Failed.', details: { exception: 'x'.repeat(513) } } })
       if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
       break
     case 'events':
@@ -182,7 +205,7 @@ function stream(id, credit, { pages = 4, bytes = 40 * 1024 } = {}) {
 }
 
 const syntheticProbes = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
-const opened = probes => ({ type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
+const opened = (probes, source = 'debug.synthetic') => ({ type: 'live.opened', seq: 0, source, probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
 const statusTick = (seq, sample = seq) => ({ type: 'live.tick', seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 0, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: sample }] }] })
 /** Echo-mode live.subscribe: protocol tests of main's credited-EVENT rule. */
 function liveEcho(id, credit = 65_536, params = {}) {
@@ -264,6 +287,10 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
+// With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
+// option's text, whose spaces are collapsed and trimmed, would name another database or none.
+const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
@@ -296,7 +323,16 @@ const explorerRows = {
 // What extra/<folder> adds: a role or table created since the folder was first listed.
 const explorerExtras = {
   serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
-  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true })
+  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true }),
+  ssisFolders: () => explorerObject({ kind: 'ssisFolder', name: 'Sales' }, 'Sales', { hasChildren: true }),
+  ssisProjects: owner => explorerObject({ kind: 'ssisProject', ssisFolder: owner.name, name: 'Nightly' }, 'Nightly', { hasChildren: true, sublabel: '(Deployed 2026-10-22 09:30)' })
+}
+/** The SSIS catalog probe's fingerprints: each view's count 1 and checksum 100, and one more row per extra/ssis* cue. */
+function catalogFingerprints() {
+  const extra = folder => !!controlDirectory && existsSync(join(controlDirectory, 'extra', folder))
+  const views = ['folders', 'projects', 'packages', 'environments', 'variables', 'references', 'parameters', 'properties']
+  const more = { folders: extra('ssisFolders') ? 1 : 0, projects: extra('ssisProjects') ? 1 : 0 }
+  return views.flatMap(view => [{ id: view + 'Count', value: 1 + (more[view] ?? 0) }, { id: view + 'Checksum', value: 100 + 7 * (more[view] ?? 0) }])
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
@@ -385,6 +421,9 @@ function storeResults(id, sets) {
   })
 }
 const info = text => ({ text, kind: 'info' })
+// What a script printed (PRINT, RAISERROR), and SQL Server's other messages (STATISTICS, warnings), as the real backend marks them.
+const print = text => ({ text, kind: 'print' })
+const server = text => ({ text, kind: 'server' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
   database, messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
@@ -494,7 +533,7 @@ async function runDirective(id, params, directive) {
       if (status === 'cancelled') break
     }
     const messages = [
-      ...Array.from({ length: directive.messages }, (_, i) => info(`Message ${i + 1}`)),
+      ...Array.from({ length: directive.messages }, (_, i) => print(`Message ${i + 1}`)),
       ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
     ].slice(0, 1000)
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
@@ -519,9 +558,9 @@ async function runDirective(id, params, directive) {
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
     // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
-    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
+    messages: [server('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), server("Table '#temp'. Scan count 1, logical reads 2."),
       { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
-      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+      print('third batch')], elapsedMs: 3, status: 'completedWithErrors',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
@@ -547,39 +586,81 @@ const fixtures = {
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves, and for ssis.operations. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
-  const ssis = params.source === 'ssis.operations'
-  if ((params.source !== 'debug.synthetic' && !ssis) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (params.probes.some(probe => !(ssis ? [ssisOperationsProbe] : syntheticProbes).includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
+  const operations = params.source === 'ssis.operations'
+  if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis && !operations) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : operations ? probe.probe === ssisOperationsProbe : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {
-    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, source: params.source, initial: credit, available: credit, args: { ...params.args }, paused: false,
+    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
     probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
-    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0,
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0, source: params.source, kept: new Map(),
     // As the real source does when the catalog's database does not exist: its first tick reports it, and the view ends.
-    missing: ssis ? ssisFailures[workbenchConnections.get(params.connectionId)?.server] : undefined
+    missing: operations ? ssisFailures[workbenchConnections.get(params.connectionId)?.server] : undefined
   }
   live.grant = more => { live.available += more; wakeLive(live) }
   live.end = (ended, error) => {
     clearTimeout(live.timer)
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
+    for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...error, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, ssis ? { ...opened([...live.probes.keys()]), source: 'ssis.operations', isolation: 'readUncommitted', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: 1000, maxIntervalMs: 60_000, state: 'ok' })) } : opened([...live.probes.keys()]))
+  if (params.source === 'activity') {
+    const denied = workbenchConnections.get(params.connectionId)?.server === 'no-permission'
+    const states = new Map([...live.probes.keys()].map(probe => [probe, pendingProbes[probe] ? { state: 'unavailable', reason: 'NOT_SUPPORTED', note: pendingProbes[probe] }
+      : denied && liveProbes[probe].permission === 'serverState' ? { state: 'unavailable', reason: 'PERMISSION_DENIED', note: 'The login lacks VIEW SERVER PERFORMANCE STATE.' } : { state: 'ok' }]))
+    for (const [probe, state] of states) if (state.state === 'unavailable') live.probes.get(probe).unavailable = true
+    sendLive(live, { type: 'live.opened', seq: 0, source: 'activity', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: liveProbes[probe.probe].intervalMs.min, maxIntervalMs: liveProbes[probe.probe].intervalMs.max, ...states.get(probe.probe) })) })
+  } else sendLive(live, explorer ? explorerOpened([...live.probes.keys()])
+    : operations ? { ...opened([...live.probes.keys()], params.source), isolation: 'readUncommitted', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: 1000, maxIntervalMs: 60_000, state: 'ok' })) }
+    : opened([...live.probes.keys()], params.source))
   wakeLive(live)
+}
+const explorerOpened = probes => ({ type: 'live.opened', seq: 0, source: 'explorer', probes: probes.map(probe => ({ probe, intervalMs: liveProbes[probe].intervalMs.default, minIntervalMs: liveProbes[probe].intervalMs.min, maxIntervalMs: liveProbes[probe].intervalMs.max, state: 'ok' })) })
+/** explorer-status.json, or undefined while there is none (or it does not parse). */
+function explorerStatus() {
+  if (!controlDirectory) return undefined
+  try { return JSON.parse(readFileSync(join(controlDirectory, 'explorer-status.json'), 'utf8')) } catch { return undefined }
+}
+/** One explorer probe's sample: its table as a new stored revision (two kept per probe), or the Agent count. */
+function explorerSample(live, probe) {
+  const status = explorerStatus() ?? {}
+  if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
+  const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
+  const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
+}
+/** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
+function overviewMetrics(n, first) {
+  const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
+  const wave = Math.sin(n / 3)
+  const values = {
+    cpuPercent: 35 + 20 * wave, schedulerDelay: 4 + wave, waitingTasks: 2_100 + 400 * wave, ioMegabytes: (3 + wave) * 1_048_576, readLatency: 4, writeLatency: 2, batchRequests: 950 + 50 * wave,
+    compilations: 12, recompilations: 1, blockedSessions: blocked ? 2 : 0, longestBlock: blocked ? 41_200 : 0, activeRequests: 12, userSessions: 87, logins: 3, runnablePerScheduler: 0.4,
+    workQueue: 0, grantsPending: 0, grantsOutstanding: 2, pageLifeExpectancy: 5_412, deadlocks: 0, lockWaits: 1
+  }
+  return liveProbes['activity.overview'].series.map(series => first && series.counter !== 'gauge' ? null : values[series.id] ?? null)
 }
 function sendLive(live, value) {
   const body = encodeControl(value)
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => live.args.tickMs ?? probe.intervalMs
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
-  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused)
+  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused && !probe.unavailable)
   if (active.length === 0) return
   const now = Date.now(), next = Math.min(...active.map(probe => probe.dueAt))
   if (next > now) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
@@ -596,10 +677,15 @@ function wakeLive(live) {
     probe.last = now
     probe.resumed = false
     const n = ++probe.samples
-    if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
+    else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
+    else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
+    else if (live.source === 'activity') samples.push(sample)
+    else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === ssisOperationsProbe && live.missing) errors.push({ probe: probe.probe, ...live.missing, retryInMs: 0, terminal: true })
     else if (probe.probe === ssisOperationsProbe) samples.push({ ...sample, ...ssisSample(live, probe, n) })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
+    else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
   }
@@ -634,12 +720,12 @@ const ssisFailures = {
 }
 const ssisColumns = liveProbes[ssisOperationsProbe].tables[0].columns.map(spec => ({ name: spec.name, dataType: spec.dataType, wire: 'text', nullable: true, ...spec.role ? { role: spec.role } : {} }))
 const ssisCatalogs = new Map()
-const ssisTime = date => date.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +00:00')
+const operationTime = date => date.toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +00:00')
 /** A connection's fake catalog: eight operations of every kind, newest last; a running execution, a pending validation. */
 function ssisCatalogOf(connectionId) {
   let catalog = ssisCatalogs.get(connectionId)
   if (catalog) return catalog
-  const at = minutes => ssisTime(new Date(Date.UTC(2026, 9, 27, 9, 0) + minutes * 60_000))
+  const at = minutes => operationTime(new Date(Date.UTC(2026, 9, 27, 9, 0) + minutes * 60_000))
   const operation = (id, type, status, folder, project, name, started, minutes, caller = 'CORP\\etl') => ({ id, type, status, folder, project, package: name, object: project, start: at(started), end: openStatuses.includes(status) ? null : at(started + minutes), caller, stoppedBy: null })
   catalog = { next: 109, samples: 0, operations: [
     operation(101, 101, 7, null, 'Loads', null, 0, 1, 'CORP\\dba'), operation(102, 200, 7, 'Finance', 'Loads', 'Daily.dtsx', 5, 3), operation(103, 200, 4, 'Finance', 'Loads', 'Daily.dtsx', 10, 2),
@@ -662,7 +748,7 @@ function ssisSample(live, probe, n) {
   catalog.samples++
   for (const operation of catalog.operations) if (operation.status === 8 && operation.stopSample < catalog.samples) { operation.status = 3; operation.end = operation.start }
   // ssis-quiet in the control directory stops the arrivals, so a test can click a row that stays put.
-  if (catalog.samples % 4 === 0 && !(controlDirectory && existsSync(join(controlDirectory, 'ssis-quiet')))) catalog.operations.push({ id: catalog.next++, type: 200, status: 2, folder: 'Finance', project: 'Loads', package: 'Hourly.dtsx', object: 'Loads', start: ssisTime(new Date()), end: null, caller: 'CORP\\etl', stoppedBy: null })
+  if (catalog.samples % 4 === 0 && !(controlDirectory && existsSync(join(controlDirectory, 'ssis-quiet')))) catalog.operations.push({ id: catalog.next++, type: 200, status: 2, folder: 'Finance', project: 'Loads', package: 'Hourly.dtsx', object: 'Loads', start: operationTime(new Date()), end: null, caller: 'CORP\\etl', stoppedBy: null })
   const rows = catalog.operations.filter(operation => ssisPasses(live.args, operation)).sort((a, b) => b.id - a.id).slice(0, live.args.limit ?? 1000)
   const tone = status => operationStatuses.find(item => item.code === status)?.tone ?? null
   const text = operation => [String(operation.id), ssisLabel(operationTypes, operation.type), ssisLabel(operationStatuses, operation.status), operation.folder, operation.project, operation.package,
@@ -715,6 +801,53 @@ function liveUpdate(id, params) {
   wakeLive(live)
 }
 
+// The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
+// entry point Daily.dtsx and Child.dtsx) and its environment Test. Times keep the catalog's own offset (+02:00), and a
+// sensitive parameter or variable has no value, as the backend never reads one. ssis/missing makes every object
+// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; ssis/many fills the
+// project's three lists to the 2,048 rows one read returns, with long descriptions, as a truncated answer; hold/ssis.describe
+// holds a read until the file goes or a CANCEL frame ends it (logged to cancels.jsonl).
+const ssisTime = '2026-10-21T14:05:06.1234567+02:00'
+const ssisParameter = (name, fields = {}) => ({ name, dataType: 'String', required: false, sensitive: false, valueType: 'V', valueSet: false, ...fields })
+const ssisModels = {
+  folder: target => ({ view: 'folder', id: 1, name: target.name, description: 'Nightly finance loads', createdBy: 'CONTOSO\\etl', created: ssisTime, projects: 1, environments: 1 }),
+  project: target => ({
+    view: 'project', id: 3, folder: target.ssisFolder, name: target.name, description: 'Loads the ledger', formatVersion: 1, deployedBy: 'CONTOSO\\etl', deployed: ssisTime, created: ssisTime,
+    versionLsn: 42, validationStatus: 'N', packages: [{ name: 'Daily.dtsx', entryPoint: true, version: '1.0.7' }, { name: 'Child.dtsx', entryPoint: false, version: '1.0.2', description: 'Called by Daily' }],
+    parameters: [ssisParameter('Server', { required: true, designDefault: 'localhost', value: 'sql01', valueSet: true }), ssisParameter('Password', { sensitive: true, valueSet: true }),
+      ssisParameter('Port', { dataType: 'Int32', valueType: 'R', valueSet: true, variable: 'Port' })],
+    references: [{ id: 7, type: 'R', environment: 'Test', validationStatus: 'N' }], truncated: false
+  }),
+  package: target => ({
+    view: 'package', id: 11, folder: target.ssisFolder, project: target.ssisProject, name: target.name, formatVersion: 8, version: '1.0.7', versionComments: 'Adds the ledger step',
+    entryPoint: target.name !== 'Child.dtsx', validationStatus: 'N', parameters: [ssisParameter('Rows', { dataType: 'Int64', designDefault: '9000000000' })], truncated: false
+  }),
+  environment: target => ({
+    view: 'environment', id: 5, folder: target.ssisFolder, name: target.name, description: 'Test servers', createdBy: 'CONTOSO\\etl', created: ssisTime,
+    variables: [{ name: 'Port', type: 'Int32', sensitive: false, value: '1433' }, { name: 'Secret', type: 'String', sensitive: true, description: 'Never read' }], truncated: false
+  })
+}
+/** The project at the cap of every list (ssisLimits.rows), each row with a 200-character description or value. */
+const ssisMany = (model, rows = 2048) => ({
+  ...model, truncated: true,
+  packages: Array.from({ length: rows }, (_, index) => ({ name: `Package ${index + 1}.dtsx`, entryPoint: index % 7 === 0, version: `1.0.${index}`, description: `Package ${index + 1} `.padEnd(200, 'x') })),
+  parameters: Array.from({ length: rows }, (_, index) => ssisParameter(`Parameter ${index + 1}`, { valueSet: true, ...index % 5 === 0 ? { sensitive: true } : { value: `Value ${index + 1} `.padEnd(200, 'v') } })),
+  references: Array.from({ length: rows }, (_, index) => ({ id: index + 1, type: index % 2 ? 'A' : 'R', ...index % 2 ? { folder: 'Shared' } : {}, environment: `Environment ${index + 1}`, validationStatus: 'N' }))
+})
+async function ssisDescribe(id, { view, target }) {
+  while (await controlled(join('hold', 'ssis.describe'))) {
+    if (cancelled.delete(id)) {
+      if (controlDirectory) appendFileSync(join(controlDirectory, 'cancels.jsonl'), JSON.stringify({ method: 'ssis.describe' }) + '\n')
+      return fail(id, 'CANCELLED', 'The operation was cancelled.')
+    }
+    await sleep(25)
+  }
+  if (await controlled(join('ssis', 'fail'))) return respond(id, { elapsedMs: 1, error: { code: 'TIMEOUT', message: 'The SSIS Catalog did not answer in time.', retryable: true } })
+  if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
+  const model = ssisModels[view](target)
+  return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
+}
+
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
 async function entraWait(id, method) {
   while (!cancelled.has(id)) await sleep(25)
@@ -733,21 +866,25 @@ async function workbench(id, method, params, credit) {
   }
   // A directive's `hold` and an export's hold apply later, after their first output.
   const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
-  if (!directive?.hold && method !== 'results.export') while (await controlled(join('hold', method))) await sleep(25)
+  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
+      if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
+        return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
+      }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {},
+        ...params.server === 'no-permission' && params.username ? { login: params.username } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }
     case 'connections.databases':
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      return respond(id, workbenchDatabases)
+      return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
@@ -791,7 +928,7 @@ async function workbench(id, method, params, credit) {
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
-    case 'databases.list': return respond(id, workbenchDatabases)
+    case 'databases.list': return respond(id, await databaseRows())
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
     case 'actions.describe':
@@ -817,6 +954,7 @@ async function workbench(id, method, params, credit) {
     case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    case 'ssis.describe': return ssisDescribe(id, params)
     case 'ssis.execute': return respond(id, ssisExecute(params))
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.

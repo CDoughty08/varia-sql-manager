@@ -22,12 +22,12 @@ void Check(bool condition, string name)
     if (!condition) throw new Exception("FAIL: " + name);
     passed++;
 }
-// A focused SQL Server lane: its permission checks are required, never an offline-only or skipped success.
-if (args is ["--activity-actions-live"])
+// Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
-    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SERVER.");
-    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception("--activity-actions-live requires VARIA_TEST_SQL_SCRATCH=1.");
+    if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
+    if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1") throw new Exception(lane + " requires VARIA_TEST_SQL_SCRATCH=1.");
     var focusedUser = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_USER");
     var focusedPassword = string.IsNullOrWhiteSpace(focusedUser) ? null
         : Environment.GetEnvironmentVariable("VARIA_TEST_SQL_PASSWORD") ?? throw new Exception("VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.");
@@ -38,8 +38,16 @@ if (args is ["--activity-actions-live"])
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
-        Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+        if (lane == "--explorer-status-live")
+        {
+            await ExplorerStatusLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused Object Explorer status checks.");
+        }
+        else
+        {
+            await ActivityActionLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json, requirePermissionChecks: true);
+            Console.WriteLine("Passed " + passed + " focused Activity Monitor session action checks.");
+        }
     }
     finally { await focusedService.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(focusedInfo.Id), json), json); }
     return;
@@ -90,6 +98,15 @@ messages.Add("printed later");
 var late = messages.Snapshot();
 Check(late.Count == 1000 + 1 + QueryMessages.MaxLateErrors && late[1000].Text.StartsWith("Messages were truncated") && late.Skip(1001).All(entry => entry.Kind == "error" && entry.Text.Length == 16_384),
     "after the message caps, up to 20 errors are still kept (cut at 16,384 characters), after the truncation note");
+messages = new QueryMessages();
+messages.Add("(1 row affected)");
+messages.Add("printed", MessageKind.Print);
+messages.Add("Warning: Null value is eliminated by an aggregate or other SET operation.", MessageKind.Server);
+messages.Add("Msg 1", MessageKind.Error);
+Check(messages.Snapshot().Select(entry => entry.Kind).SequenceEqual(["info", "print", "server", "error"]), "messages carry their kind: Varia's lines, what the script printed, SQL Server's other messages, errors");
+Check(SqlService.InformationalKind(0) == MessageKind.Print && SqlService.InformationalKind(50000) == MessageKind.Print && SqlService.InformationalKind(50001) == MessageKind.Print
+    && SqlService.InformationalKind(8153) == MessageKind.Server && SqlService.InformationalKind(3612) == MessageKind.Server && SqlService.InformationalKind(15477) == MessageKind.Server,
+    "PRINT (0) and RAISERROR (50000 and user messages) are print; engine warnings, STATISTICS and sp_rename's caution are server");
 var stored = new List<MessageEntry>();
 messages = new QueryMessages(stored.Add);
 messages.Add("printed");
@@ -143,6 +160,7 @@ DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
 ActivityChecks.Run(Check);
+ActivitySourceChecks.Run(Check);
 await ActivityActionChecks.RunAsync(Check, json);
 SsisOperationsChecks.Run(Check);
 using (var offline = new SqlService())
@@ -172,10 +190,13 @@ Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123a
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
     "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
-        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "SSISDB" }.Any(ScratchDatabase.Sweepable),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live and the SSIS checks' _ssis and _ssisref included, and nothing else (never SSISDB)");
+        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "SSISDB" }.Any(ScratchDatabase.Sweepable)
+    && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
+    && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
+        "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
 SsisFixtureChecks.Run(Check);
 Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
 QueryResult Stopped(string status, params long[] rowsRead) => new([.. rowsRead.Select((read, index) => new ResultDescriptor(1, index, 1, 1, "rows", [], read, 1, 1, 0, 0, "complete", null, true))],
@@ -232,6 +253,24 @@ try
         }
     }
     await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+    // Development servers (the local one, CI's container) have self-signed certificates: without Trust server certificate,
+    // connect and Load databases fail with the reason the Connect dialog offers to fix. A server with a trusted certificate
+    // connects instead, and then there is nothing to check.
+    var validated = Live("master") with { TrustServerCertificate = false, Encrypt = "mandatory" };
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try
+        {
+            var opened = await Call<object>(method, validated);
+            if (opened is ConnectionInfo trusted) await Call<object>("connections.disconnect", new ConnectionArgs(trusted.Id));
+            Console.WriteLine(method + ": the server's certificate is trusted here, so the untrusted-certificate check is skipped.");
+        }
+        catch (RequestException error)
+        {
+            Check(error.Code == "SQL_ERROR" && error.Details is { Reason: ErrorDetailsLimits.Certificate, Class: 20, Server.Length: > 0 },
+                method + " answers an untrusted server certificate with the reason certificate and SqlClient's own message: " + error.Code + " " + error.Details?.Number + " " + error.Message);
+        }
+    }
 
     // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
     var signIn = Guid.NewGuid().ToString();
@@ -380,7 +419,12 @@ try
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
     Check(result.Status == "completedWithErrors" && result.CompletedBatches == 2 && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
-    Check(result.Status == "completed" && Texts(result).Contains("expected informational message") && Texts(result).Contains("expected print"), "low severity informational messages do not become errors");
+    Check(result.Status == "completed" && result.Messages.Where(entry => entry.Text is "expected informational message" or "expected print").Count(entry => entry.Kind == "print") == 2,
+        "low severity informational messages do not become errors and are marked as printed by the script (print)");
+    // An aggregate over a NULL warns (8153, severity 10) under the default ANSI_WARNINGS: SQL Server's own message, which must not open the strip.
+    result = await Run("SELECT SUM(x) AS total FROM (VALUES (1), (NULL)) AS v(x);");
+    Check(result.Status == "completed" && result.Messages.Any(entry => entry.Kind == "server" && entry.Text.StartsWith("Warning: Null value is eliminated")) && result.Messages.All(entry => entry.Kind != "print"),
+        "SQL Server's own warnings (8153) are server messages, not print: " + string.Join(" | ", result.Messages.Select(entry => entry.Kind + ":" + entry.Text)));
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
     Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
     result = await Run("SELECT DB_NAME();", database: result.Database);
@@ -421,6 +465,7 @@ try
     await LiveChecks.LiveAsync(Check, service, info, Live("tempdb"), json);
     await LiveDataChecks.RunAsync(Check, service, info, Live, json);
     await LiveTableDataChecks.RunAsync(Check, service, Live, json);
+    await ExplorerStatusLiveChecks.RunAsync(Check, service, info, Live, json);
     await ExecutionLiveChecks.RunAsync(Check, service, info, json);
     await TransactionLiveChecks.RunAsync(Check, service, info, json);
     await LiveResultChecks.RunAsync(Check, service, info, Live("master"), json);
@@ -431,7 +476,9 @@ try
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityLiveChecks.RunAsync(Check, service, info);
+    await ActivitySourceLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json);
+    await SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }

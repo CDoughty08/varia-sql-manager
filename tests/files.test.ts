@@ -352,6 +352,23 @@ describe('file commands', () => {
     // Main would otherwise hand the quit it asked for to the next page after a reload.
     expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
   })
+  it('refuses a window close that would cut work short before asking anything, and tells main the close ended', async () => {
+    const { documents, model, api, files } = fixture()
+    model(documents.active!.id).edit('SELECT dirty')
+    const flush = vi.fn(async () => {})
+    await files.closeWindow(flush, () => 'Create Catalog is running.')
+    expect(api.confirmClose).not.toHaveBeenCalled()
+    expect(flush).not.toHaveBeenCalled()
+    expect(api.closeWindow).not.toHaveBeenCalled()
+    expect(api.closeWindowCancelled).toHaveBeenCalledTimes(1)
+    expect(files.getSnapshot().error).toBe('Create Catalog is running.')
+    // Work that starts while the user answers the questions refuses the close too, before anything is flushed.
+    let running = false
+    api.confirmClose.mockImplementationOnce(async () => { running = true; return { ok: true, value: 'discard' } })
+    await files.closeWindow(flush, () => running ? 'Create Catalog is running.' : undefined)
+    expect(flush).not.toHaveBeenCalled()
+    expect(api.closeWindow).not.toHaveBeenCalled()
+  })
   it('asks once about every open transaction before quitting, after the unsaved queries, and ends each before the window closes', async () => {
     const { documents, model, queries, api, files } = fixture()
     const [first] = documents.getSnapshot().documents
@@ -709,7 +726,7 @@ describe('custom documents (the table designer\'s tab)', () => {
     const base = fixture()
     const state = { revision: 0, refusal: undefined as string | undefined, pending: undefined as ReturnType<typeof deferred<boolean>> | undefined }
     const provider = {
-      kind: 'tableDesigner' as const, revision: () => state.revision, canClose: () => state.refusal, focus: vi.fn(), closed: vi.fn(), follows: () => false,
+      kind: 'tableDesigner' as const, inSaveAll: true, revision: () => state.revision, canClose: () => state.refusal, focus: vi.fn(), closed: vi.fn(), follows: () => false,
       save: vi.fn(async (id: string) => { if (state.pending) return state.pending.promise; base.documents.setDirty(id, false); return true })
     }
     const registration = base.documents.registerProvider(provider)

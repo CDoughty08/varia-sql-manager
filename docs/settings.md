@@ -33,6 +33,7 @@ from Microsoft's documentation, so Varia keeps its own.
 - SQL Server Object Explorer
   - Commands (`objectExplorer.commands`)
   - Scripting (`objectExplorer.scripting`)
+- Activity Monitor (`activityMonitor`)
 - SQL Server Integration Services (`integrationServices`)
 
 A node without a page id is a category: selecting it shows its first page. The search box (Ctrl+E, ⌘E on macOS) matches
@@ -46,6 +47,8 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query's Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release. Not in SSMS. |
+| `environment.layout.panelTabs` | Show panel tabs | Boolean | False |  | All | At once | Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs. Not in SSMS. Not shown in Options. |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
 ### Environment › AutoRecover
@@ -90,6 +93,7 @@ Live views, such as the Activity Monitor: when they pause while hidden, and how 
 | `liveData.pauseWhenHidden` | Pause live views that are hidden | Boolean | True |  | All | At once | Stops a live view's queries on the server while its tab is not the one showing, or the window is minimized or hidden, and starts them again as soon as it shows. Charts show the gap. While it is False, hidden views keep querying at their usual intervals. Not in SSMS. |
 | `liveData.pauseAfterSeconds` | Pause after hidden for | Integer 1–60 seconds | 2 seconds |  | All | At once | How long a live view stays hidden before its queries stop, so switching tabs for a moment loses no samples. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
 | `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| `liveData.explorerStatus` | Show live status in Object Explorer | Boolean | True |  | All | At once | While Object Explorer shows, reads each connected server's database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded. Not in SSMS. |
 | `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
 
 ### Text Editor › General
@@ -106,12 +110,13 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). |
+| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the query window status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). Without that bar the results head shows how long the query ran and when it ended. Greyed while `textEditor.statusBar.queryWindow` is False. |
 | `textEditor.statusBar.showDatabase` | Include database name | Boolean | True |  | All | At once | Include the database name on the status bar. |
 | `textEditor.statusBar.showLogin` | Include login name | Boolean | True |  | All | At once | Include login information on the status bar: the login and session id, `login (SPID)`, of the query's last execution. |
-| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the status bar. |
+| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the query window status bar. Without that bar the results head shows the rows. Greyed while `textEditor.statusBar.queryWindow` is False. |
 | `textEditor.statusBar.showServer` | Include server name | Boolean | True |  | All | At once | Include server name on the status bar, with the server's major and minor version. |
-| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. |
+| `textEditor.statusBar.queryWindow` | Show query window status bar | Boolean | False |  | All | At once | Shows SSMS's status bar in the query window again, below or above the query (Status bar location), with the query's state, server, login, database, time and rows. Without it the window's status bar shows the active query's server, login and database, and the results head how its last execution went, its time and its rows. This option will be removed in a later release. Not in SSMS. |
+| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. Greyed while `textEditor.statusBar.queryWindow` is False. |
 
 ### Text Editor › Transact-SQL › General
 
@@ -147,6 +152,7 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
+| `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -199,12 +205,30 @@ A property grid: True/False lists, values that differ from their default in bold
 | `objectExplorer.scripting.targetEngineType` | Script for database engine type | One of `standalone` (Stand-alone instance) | Stand-alone instance |  | All | At once | The database engine type the script is for. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 | `objectExplorer.scripting.targetServerVersion` | Script for server version | One of `130` (SQL Server 2016), `140` (SQL Server 2017), `150` (SQL Server 2019), `160` (SQL Server 2022), `170` (SQL Server 2025) | SQL Server 2022 |  | All | At once | The SQL Server version the script is for; features it lacks cannot be scripted. Used when Match script settings to source is False. Greyed while `objectExplorer.scripting.matchSourceSettings` is True. |
 
+### Activity Monitor
+
+What a new Activity Monitor starts with, and when its tiles warn. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `activityMonitor.refreshIntervalSeconds` | Refresh interval | One of `1` (1 second), `2` (2 seconds), `3` (3 seconds), `5` (5 seconds), `10` (10 seconds), `15` (15 seconds), `30` (30 seconds), `60` (60 seconds) | 2 seconds |  | All | At once | How often a new Activity Monitor samples the server. Resource waits and file I/O are read every 5 seconds at most, and the header changes an open monitor's interval. Not in SSMS. |
+| `activityMonitor.chartWindowMinutes` | Chart window | One of `1` (1 minute), `5` (5 minutes), `15` (15 minutes), `60` (60 minutes) | 15 minutes |  | All | At once | How much time a new Activity Monitor's tiles and charts show. Charts reach back only as far as Environment › Live Data keeps history. Not in SSMS. |
+| `activityMonitor.primaryPane` | First pane | One of `processes` (Processes), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries) | Processes |  | All | At once | The pane a new Activity Monitor shows first (on the left, or on top in a narrow window). Not in SSMS. |
+| `activityMonitor.secondaryPane` | Second pane | One of `processes` (Processes), `blocking` (Blocking), `waits` (Resource Waits), `fileIo` (Data File I/O), `recentQueries` (Recent Expensive Queries), `activeQueries` (Active Expensive Queries), `none` (None (no split view)) | Resource Waits |  | All | At once | The pane a new Activity Monitor shows beside the first in split view. None opens it with one pane; Split View shows a second one again. Not in SSMS. |
+| `activityMonitor.cpuWarningPercent` | Processor time warning | Integer 50–100 percent | 80 percent |  | All | At once | The % Processor Time tile is outlined as a warning from this much SQL Server CPU, and as an error from 95 %. Not in SSMS. |
+| `activityMonitor.blockedWarningSeconds` | Blocking warning after | Integer 1–3,600 seconds | 5 seconds |  | All | At once | The Blocked Sessions tile is outlined as a warning once a session has waited on another this long. Not in SSMS. |
+| `activityMonitor.blockedErrorSeconds` | Blocking error after | Integer 1–3,600 seconds | 30 seconds |  | All | At once | The Blocked Sessions tile is outlined as an error once a session has waited on another this long. Not in SSMS. |
+| `activityMonitor.fileLatencyWarningMs` | I/O latency warning | Integer 1–10,000 ms | 20 ms |  | All | At once | The Database I/O tile is outlined as a warning when reads or writes take this long on average over the interval. Not in SSMS. |
+| `activityMonitor.fileLatencyErrorMs` | I/O latency error | Integer 1–10,000 ms | 50 ms |  | All | At once | The Database I/O tile is outlined as an error when reads or writes take this long on average over the interval. Not in SSMS. |
+
 ### SQL Server Integration Services
 
 How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `integrationServices.treeLive` | Update the SSIS Catalog in Object Explorer as it changes | Boolean | True |  | All | At once | While a connection's SSISDB node is open in Object Explorer, Varia checks the catalog for changes made elsewhere, such as a deployment or a new folder, project or environment, and updates only the folders that changed, keeping what is expanded and selected. The check is one small query that pauses while Object Explorer is hidden. While it is False, the tree changes only on Refresh (F5) and after Varia's own changes. Not in SSMS. |
+| `integrationServices.treeRefreshSeconds` | Check the catalog for changes every | Integer 10–300 seconds | 30 seconds |  | All | At once | How often an open SSISDB node checks the catalog for changes. Each check reads every catalog folder, project, package, environment, variable, reference and parameter the login may see, so a large catalog on a busy server may want a longer interval. Not in SSMS. Greyed while `integrationServices.treeLive` is False. |
 | `integrationServices.operationsRefreshSeconds` | Update Operations every | Integer 1–60 seconds | 2 seconds |  | All | At once | How often an open Integration Services Operations document reads the catalog for new operations and the open ones' status. It pauses while the document is hidden. A busy catalog on a busy server may want a longer interval. Not in SSMS. |
 | `integrationServices.operationsWindowHours` | Show operations created in the last | Integer 1–8,760 hours | 24 hours |  | All | At once | The window a new Operations document opens on. Its Window filter changes it for that document only. The catalog keeps operations for its own retention period (365 days by default), so a longer window shows nothing older than that. Not in SSMS. |
 | `integrationServices.operationsLimit` | Show at most | Integer 100–10,000 operations | 1,000 operations |  | All | At once | The most operations an Operations document holds: the newest ones of its window that pass its filters, open ones first. Open documents read their window again with the new limit. The tiles count every operation the login may see, whatever this limit and the filters are. Not in SSMS. |
@@ -240,4 +264,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (73 today).
+A patch holds at most one entry per setting (89 today).

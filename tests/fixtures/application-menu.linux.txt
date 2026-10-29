@@ -62,10 +62,14 @@
 {"id":"menu.view","label":"View"}
   {"accelerator":"Ctrl+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Ctrl+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
+  {"id":"workbench.search","label":"Search…","registerAccelerator":false,"type":"normal","click":[["command","workbench.search"]]}
   {"type":"separator"}
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
+  {"type":"separator"}
+  {"id":"activity.open","label":"Activity Monitor","registerAccelerator":false,"type":"normal","click":[["command","activity.open"]]}
+  {"id":"ssis.allOperations","label":"Integration Services Operations","registerAccelerator":false,"type":"normal","click":[["command","ssis.allOperations"]]}
   {"type":"separator"}
   {"id":"view.theme","label":"Theme"}
     {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}
@@ -89,8 +93,6 @@
     {"id":"theme.create","label":"Create Custom Theme…","click":[["createTheme"]]}
     {"id":"theme.openFolder","label":"Open Themes Folder","click":[["openThemesFolder"]]}
     {"id":"theme.reload","label":"Reload Themes","click":[["reloadThemes"]]}
-  {"type":"separator"}
-  {"id":"ssis.allOperations","label":"Integration Services Operations","registerAccelerator":false,"type":"normal","click":[["command","ssis.allOperations"]]}
   {"type":"separator"}
   {"accelerator":"Ctrl+=","id":"view.zoomIn","label":"Zoom In","role":"zoomIn"}
   {"accelerator":"Ctrl+Shift+=","role":"zoomIn","visible":false}
@@ -120,6 +122,7 @@
   {"id":"window.editor","label":"Query Editor","registerAccelerator":false,"type":"normal","click":[["command","window.editor"]]}
   {"id":"window.output","label":"Query Output","registerAccelerator":false,"type":"normal","click":[["command","window.output"]]}
   {"accelerator":"Ctrl+R","id":"view.toggleResultsPane","label":"Show Results Pane","registerAccelerator":false,"type":"checkbox","click":[["command","view.toggleResultsPane"]],"checkedAfterClick":false}
+  {"id":"window.togglePanelTabs","label":"Panel Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","window.togglePanelTabs"]],"checkedAfterClick":false}
   {"type":"separator"}
   {"accelerator":"Ctrl+Tab","id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
   {"accelerator":"Ctrl+Shift+Tab","id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}

@@ -12,7 +12,7 @@ import { LivePill, StaleBadge } from '../kit/LivePill'
 import Tile, { tileName } from '../kit/Tile'
 import { LiveGridPane } from '../live/LiveGridPane'
 import type { LiveSnapshot } from '../live/LiveService'
-import { pillStatus } from '../live/status'
+import { probePillStatus } from '../live/status'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { formatCount } from '../results/status'
 import {
@@ -138,7 +138,7 @@ export default function SsisOperations({ documentId }: { readonly documentId: st
   const isFiltered = filtered(state.filters)
   return <DocumentFrame id={`ssis-operations-${documentId}`} title={operationsTitle} subtitle={operationsPresetSpecs[state.preset].title}
     crumbs={[{ label: state.label }, { label: 'SSISDB', title: 'SSISDB, the Integration Services Catalog' }]}
-    state={<LivePill {...pillStatus(live, operationsProbe, probeSpec.intervalMs.default)} />}
+    state={<LivePill {...probePillStatus(live, operationsProbe, probeSpec.intervalMs.default)} />}
     tools={stale && <StaleBadge updatedAt={probe?.lastSampleAt} stale={stale} />} verbs={verbs} attributes={{ 'data-ssis-operations': documentId }}>
     <div className="ssis-operations">
       <StopConfirm state={state} onAnswer={stop => service.answerStop(documentId, stop)} />

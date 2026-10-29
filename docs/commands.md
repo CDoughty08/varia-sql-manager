@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (153)
+## Commands (184)
 
 ### File
 
@@ -70,7 +70,7 @@ keys it uses are listed below.
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
-| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `activeDocumentIsText` | — |
+| Switch Between Query and Results | `window.switchPane` | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), ⇧F6 (`!activityMonitorFocus`) | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
@@ -83,15 +83,26 @@ keys it uses are listed below.
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
+| Focus Notifications | `notifications.focus` | — | — | — | `hasNotifications` | — |
+| Clear All Notifications | `notifications.clearAll` | — | — | — | `hasNotifications` | — |
+| Dock Left (not in the palette) | `pane.dockLeft` | — | — | — | Always | Panel tab context menu › Dock Left |
+| Dock Right (not in the palette) | `pane.dockRight` | — | — | — | Always | Panel tab context menu › Dock Right |
+| Dock Top (not in the palette) | `pane.dockTop` | — | — | — | Always | Panel tab context menu › Dock Top |
+| Dock Bottom (not in the palette) | `pane.dockBottom` | — | — | — | Always | Panel tab context menu › Dock Bottom |
+| Tab with Object Explorer (not in the palette) | `pane.tabWithExplorer` | — | — | — | Always | Panel tab context menu › Tab with Object Explorer |
+| Tab with Query Editor (not in the palette) | `pane.tabWithEditor` | — | — | — | Always | Panel tab context menu › Tab with Query Editor |
+| Tab with Query Output (not in the palette) | `pane.tabWithOutput` | — | — | — | Always | Panel tab context menu › Tab with Query Output |
 | Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
 | Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
 | Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
+| Toggle Panel Tabs | `window.togglePanelTabs` | — | — | — | Always; checked when `panelTabsVisible` | Window › Panel Tabs; Panel tab context menu › Show Panel Tabs |
+| Search… | `workbench.search` | Ctrl+Q | — | — | Always | View › Search… |
 
 ### Query
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
+| Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
@@ -121,7 +132,9 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Refresh | `explorer.refresh` | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | F5 (`activePanel == 'explorer' && !inputFocus`) | `hasConnection` | Object Explorer context menu › Refresh |
 | Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
+| Filter Loaded Objects | `explorer.filterLoaded` | — | — | — | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
+| Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
@@ -177,6 +190,15 @@ keys it uses are listed below.
 | Properties | `tableDesigner.properties` | F4 (`designerFocus`) | F4 (`designerFocus`) | F4 (`designerFocus`) | `activeDocumentIsDesigner` | Table designer context menu › Properties |
 | Stop | `tableDesigner.stop` | — | — | — | `designerSaving` | — |
 
+### Database Properties
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Apply Changes | `databaseProperties.apply` | — | — | — | `activeDocumentIsProperties && propertiesApplicable` | — |
+| Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
+| Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
+| Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
 ### Integration Services
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
@@ -186,10 +208,34 @@ keys it uses are listed below.
 | All Validations | `ssis.allValidations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Validations |
 | All Operations | `ssis.allOperations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Operations; View › Integration Services Operations |
 | Stop Operation | `ssis.stopOperation` | — | — | — | `backendReady && ssisOperationStoppable` | Integration Services Operations context menu › Stop Operation |
-| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | F5 (`activeDocumentIsSsisOperations && activePanel != 'explorer' && !editorFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
+| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
 | Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
 | Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
 | Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
+| Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Environment Properties | `ssis.environmentProperties` | — | — | — | `backendReady && ssisVerbEnvironmentProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Refresh Properties | `ssis.refreshProperties` | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsis` | — |
+
+### Tools
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Activity Monitor | `activity.open` | — | — | ⌥⌘A | `backendReady && !documentBusy` | View › Activity Monitor; Object Explorer context menu › Activity Monitor |
+
+### Activity Monitor
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pause | `activity.togglePause` | — | — | — | `activeDocumentIsActivityMonitor`; checked when `activityPaused` | — |
+| Refresh Now | `activity.refresh` | F5 (`activityMonitorFocus`) | F5 (`activityMonitorFocus`) | F5 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !activityPaused` | — |
+| Set Refresh Interval… | `activity.setInterval` | — | — | — | `activeDocumentIsActivityMonitor` | — |
+| Set Chart Window… | `activity.setChartWindow` | — | — | — | `activeDocumentIsActivityMonitor` | — |
+| Split View | `activity.toggleSplit` | — | — | — | `activeDocumentIsActivityMonitor`; checked when `activitySplit` | — |
+| Next Panel (not in the palette) | `activity.nextPane` | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
+| Previous Panel (not in the palette) | `activity.previousPane` | Shift+F6 (`activityMonitorFocus`) | Shift+F6 (`activityMonitorFocus`) | ⇧F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
+| Close Activity Monitor | `activity.close` | Shift+Escape (`activityMonitorFocus`) | Shift+Escape (`activityMonitorFocus`) | ⇧⎋ (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !documentBusy` | — |
 
 ### Preferences
 
@@ -324,11 +370,13 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | --- | --- | --- | --- |
 | `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
 | `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
+| `0_palette` | Se**a**rch… | `workbench.search` | Always |
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
+| `2_monitor` | Activity **M**onitor | `activity.open` | Always |
+| `2_monitor` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
-| `3_views` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
 | `4_zoom` | Reset **Z**oom | `view.resetZoom` | Always |
@@ -381,6 +429,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | Query **E**ditor | `window.editor` | Always |
 | `1_panes` | Q**u**ery Output | `window.output` | Always |
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
+| `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
@@ -424,23 +473,29 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
-| `0_connect` | Environmen**t**… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
+| `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
-| `1_operations` | A**l**l Operations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
+| `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
-| `3_filter` | Remo**v**e Filter | `explorer.removeFilter` | `explorerFolderFiltered` |
+| `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 | `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
+| `9_properties` | **P**roperties | `ssis.folderProperties` | `explorerNode == 'ssisFolder' && ssisVerbFolderProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.projectProperties` | `explorerNode == 'ssisProject' && ssisVerbProjectProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.packageProperties` | `explorerNode == 'ssisPackage' && ssisVerbPackageProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.environmentProperties` | `explorerNode == 'ssisEnvironment' && ssisVerbEnvironmentProperties != ''` |
 
 #### Object Explorer context menu › New
 
@@ -588,9 +643,17 @@ Right-click a panel's tab (Object Explorer, Query editor, or Query output), or p
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_move` | Dock **L**eft | `pane.dockLeft` | Always |
+| `0_move` | Dock **R**ight | `pane.dockRight` | Always |
+| `0_move` | Dock **T**op | `pane.dockTop` | Always |
+| `0_move` | Dock **B**ottom | `pane.dockBottom` | Always |
+| `0_tab` | Tab with **O**bject Explorer | `pane.tabWithExplorer` | `pane != 'explorer'` |
+| `0_tab` | Tab with Query **E**ditor | `pane.tabWithEditor` | `pane != 'editor'` |
+| `0_tab` | Tab with Q**u**ery Output | `pane.tabWithOutput` | `pane != 'output'` |
 | `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
 | `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
 | `2_close` | **C**lose | `pane.close` | Always |
+| `3_tabs` | **S**how Panel Tabs | `window.togglePanelTabs` | Always |
 
 #### Text field context menu (`input.context`)
 
@@ -618,7 +681,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (77)
+## Context keys (95)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -637,12 +700,15 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
+| `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
+| `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
-| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer. |
+| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
+| `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
 | `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
 | `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
@@ -652,6 +718,14 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |
 | `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
+| `activeDocumentIsProperties` | boolean | state | The active document is Database Properties. |
+| `propertiesChanged` | boolean | state | The active Database Properties document has changes that are not applied yet. |
+| `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
+| `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
+| `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
+| `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
+| `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
@@ -663,6 +737,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
+| `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 | `editorWhitespace` | boolean | state | View White Space is on in the query editor. |
 | `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
@@ -694,8 +769,13 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbEnvironmentProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Environment Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
 | `scriptingRunning` | boolean | state | A Script As request is running. |
+| `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
@@ -703,7 +783,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
-| `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
+| `pane` | `'explorer'`, `'editor'`, `'output'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output. |
+| `paneFloating` | boolean | target | The panel the menu is for is floating. |
 
 ## Reserved keys
 

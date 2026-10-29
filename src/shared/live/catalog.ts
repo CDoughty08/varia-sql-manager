@@ -3,11 +3,15 @@
 // (src/shared/live/schema.ts), docs/live.md and the backend read it, the backend through liveCatalogJson() embedded as
 // Live/live-catalog.json (a vitest file snapshot keeps that copy in sync). Erasable TypeScript (no enums), so Node's
 // type stripping can load it as well.
+import {
+  activityBands, activityEditions, activityLiveProbes, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, waitCategories
+} from '../activity/catalog.ts'
 import { limits } from '../ipc/wire/protocol.ts'
+import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
-export const liveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count'] as const
+export const liveUnits = ['perSecond', 'percent', 'ms', 'msPerSecond', 'bytesPerSecond', 'count', 'seconds'] as const
 export type LiveUnit = typeof liveUnits[number]
 /** A snapshot table is replaced by each sample (a new stored result, two revisions kept); an append table grows. */
 export type LiveTableMode = 'snapshot' | 'append'
@@ -83,7 +87,8 @@ export interface LiveProbeSpec {
    *  unavailable (NOT_SUPPORTED) and never runs. Absent: everywhere its source runs. */
   readonly gates?: { readonly minMajor: number; readonly editions: readonly number[] }
   /** serverState: the probe reads server DMVs, so it needs VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later) or
-   *  VIEW SERVER STATE (earlier versions, Managed Instance); without it, it opens unavailable (PERMISSION_DENIED). */
+   *  VIEW SERVER STATE (earlier versions, Managed Instance); without it, it opens unavailable (PERMISSION_DENIED), or, when
+   *  the source could not ask as it opened, stops at its first tick with that error. */
   readonly permission?: 'serverState'
 }
 export interface LiveSourceSpec {
@@ -106,6 +111,8 @@ const toneColumn: LiveColumnSpec = { id: 'tone', name: 'tone', dataType: 'nvarch
 /** The types debug.synthetic.wide's columns cycle through. */
 const wideTypes = ['nvarchar', 'bigint', 'datetime2', 'float', 'bit', 'int']
 const anyInterval = { default: 1000, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
+/** SQL Server on a box (Personal, Standard, Enterprise, Express) and Managed Instance. */
+const boxAndManaged = [1, 2, 3, 4, 8]
 /** A probe's statement budget and load guard when its entry names none. */
 export const defaultBudgetMs = { min: limits.live.budgetMs.min, max: 5000 } as const
 export const defaultDutyCycle = 0.25
@@ -116,11 +123,11 @@ export const defaultBatchRows = 5000
 /** The Operations window's settle window: its ids, like an append table's, are assigned before their rows commit. */
 const operationsSettle = defaultSettle
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'ssis.operations'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
-  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', 'activity.overview',
-  'ssis.operations.list'
+  'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -130,13 +137,66 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
     description: 'Generated values for protocol, renderer and smoke tests. It runs no SQL, so any connection id is accepted; a disconnect of that id still ends it.'
   },
   activity: {
-    id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: ['activity.overview'],
-    description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW).'
+    id: 'activity', label: 'Activity Monitor', scope: 'server', testOnly: false, probes: activityLiveProbes,
+    description: 'SQL Server\'s own activity, read from server DMVs on the connection\'s " - Activity Monitor" pool (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its probes, tables, columns and series come from the Activity Monitor\'s catalogue (docs/activity-monitor.md). Each probe runs several statements (Activity/ActivitySql.cs), and one the login may not run fails alone, naming what it feeds. Args: one filter per table (Processes\' view chip and toggles, the filter box, column value filters, Hide benign waits) and the Details flyout\'s session (focusSession).'
+  },
+  explorer: {
+    id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'],
+    description: 'The states Object Explorer shows as chips on its nodes (docs/object-explorer.md, Live status): one view per connected server and login while Object Explorer shows, on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master on box servers and Managed Instance, so it never holds the database a connection opened in. It never reloads the tree.'
+  },
+  'ssis.catalog': {
+    id: 'ssis.catalog', label: 'SSIS Catalog', scope: 'ssisdb', testOnly: false, probes: ['ssis.catalogProbe'],
+    description: 'The SSIS Catalog\'s views, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Object Explorer holds one per connection while an SSISDB node is open. A catalog that no longer exists ends it (CATALOG_MISSING).'
   },
   'ssis.operations': {
     id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
     description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
   }
+}
+
+type ActivityLiveProbe = typeof activityLiveProbes[number]
+/** What each Activity Monitor probe is, for docs/live.md. */
+const activityDescriptions: { readonly [P in ActivityLiveProbe]: string } = {
+  'activity.overview': 'The server at a glance, in seven statements: SQL Server\'s CPU (its schedulers\' non-preemptive time) and scheduler delay, waiting tasks (wait time less signal wait of every type that is not benign), database I/O and its latency (moved only by databases read in both samples, so one dropped or closed takes only its own counts with it), batch requests, compilations and re-compilations, blocked sessions and the longest block, active requests, user sessions and logins, runnable tasks per scheduler and the work queue, memory grants, page life expectancy, deadlocks and lock waits. Rates use the server\'s own clock (ms_ticks), and a restart starts them again; a statement the login may not run leaves only its own series null.',
+  'activity.sessions': 'Processes (one row per session, its MARS requests folded), the blocking chains as rows (built in the backend from task waits, each session once) and Active Expensive Queries, from one sample. Rates are per session and per request between samples, keyed by login time and each request\'s id and start time, so a reused id never gives a rate across two sessions and a MARS session\'s requests never stand in for each other. Varia\'s own sessions are marked, and system sessions and Varia\'s pools are hidden unless the filter shows them. Without server state, Processes shows only the monitor\'s own session and the other two tables report PERMISSION_DENIED without running SQL. Its two series follow the Details flyout\'s session (focusSession).',
+  'activity.resources': 'Resource Waits (by category and by type) and Data File I/O, declared now so the frame shapes are fixed.'
+}
+
+/** The Activity Monitor's probes as live entries, built from its catalogue (src/shared/activity/catalog.ts), so the two never
+ *  disagree. A metrics probe's series go through the backend's delta engine by their kind; a snapshot probe works out its
+ *  series from per-row baselines itself, so they arrive as gauges. */
+function activityLiveEntries(): { readonly [P in ActivityLiveProbe]: LiveProbeSpec } {
+  const editions = Object.values(activityEditions).filter(edition => edition.available).flatMap(edition => [...edition.editions])
+  const entry = (id: ActivityLiveProbe): LiveProbeSpec => {
+    const spec = probeSpecs[id]
+    const series = probeSeries(id).map((seriesId): LiveSeriesSpec => {
+      const category = waitCategories.find(item => 'wait.' + item.id === seriesId)
+      if (category) return { id: seriesId, unit: 'msPerSecond', label: category.label + ' waits', counter: 'gauge' }
+      const known = seriesSpecs[seriesId]
+      return { id: seriesId, unit: known.liveUnit, label: known.label, counter: spec.kind === 'metrics' ? known.kind : 'gauge' }
+    })
+    const tables = spec.tables.map((table): LiveTableSpec => {
+      const table$ = tableSpecs[table]
+      return {
+        id: table, mode: 'snapshot', columns: table$.columns.map(item => ({ id: liveColumnId(table, item.id), name: item.caption, dataType: liveColumnTypes[item.type] })),
+        key: table$.key.map(item => liveColumnId(table, item)), rowCap: table$.rowCap,
+        ...table$.departedLinger ? { departed: true } : {},
+        ...table$.facetColumns?.length ? { facets: table$.facetColumns.map(item => liveColumnId(table, item)) } : {}
+      }
+    })
+    const pending = pendingProbes[id]
+    return {
+      id, source: 'activity', label: spec.title, description: activityDescriptions[id] + (pending ? ' ' + pending : ''),
+      intervalMs: { default: spec.defaultIntervalMs, min: spec.minIntervalMs, max: spec.maxIntervalMs },
+      budgetMs: { min: limits.live.budgetMs.min, max: spec.budgetMs }, maxDutyCycle: spec.maxDutyCycle, gates: { minMajor: activityBands.min, editions },
+      ...spec.minGapMs ? { minGapMs: spec.minGapMs } : {},
+      // Without server state the sessions probe still shows the monitor's own session; the others need it.
+      ...id === 'activity.sessions' ? { status: Object.keys(activityStatuses) } : { permission: 'serverState' as const },
+      ...series.length ? { series } : {},
+      ...tables.length ? { tables, filterMode: spec.filterMode } : {}
+    }
+  }
+  return { 'activity.overview': entry('activity.overview'), 'activity.sessions': entry('activity.sessions'), 'activity.resources': entry('activity.resources') }
 }
 
 export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
@@ -176,18 +236,34 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
       columns: [column('rowId', 'int'), ...Array.from({ length: 22 }, (_, index) => column('c' + (index + 1), wideTypes[index % wideTypes.length]))]
     }]
   },
-  'activity.overview': {
-    id: 'activity.overview', source: 'activity', label: 'Overview', intervalMs: { default: 2000, min: 1000, max: limits.live.intervalMs.max },
-    description: 'The server at a glance, in one DMV query: SQL Server\'s CPU (its schedulers\' non-preemptive time), runnable tasks, batch requests, compilations and re-compilations per second, and user sessions. Rates use the server\'s own clock (ms_ticks), and a restart starts them again.',
-    maxDutyCycle: 0.2, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] }, permission: 'serverState',
-    series: [
-      { id: 'cpuPercent', unit: 'percent', label: 'SQL Server CPU (non-preemptive)', counter: 'cpuPercent' },
-      { id: 'runnableTasks', unit: 'count', label: 'Runnable tasks', counter: 'gauge' },
-      { id: 'batchRequests', unit: 'perSecond', label: 'Batch requests/sec', counter: 'rate' },
-      { id: 'compilations', unit: 'perSecond', label: 'SQL compilations/sec', counter: 'rate' },
-      { id: 'recompilations', unit: 'perSecond', label: 'SQL re-compilations/sec', counter: 'rate' },
-      { id: 'userSessions', unit: 'count', label: 'User sessions', counter: 'gauge' }
-    ]
+  ...activityLiveEntries(),
+  'explorer.databases': {
+    id: 'explorer.databases', source: 'explorer', label: 'Database states', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: boxAndManaged },
+    description: 'The databases that are not plainly online and open to everyone, from sys.databases: their state (sys.databases.state), user access (0 multi, 1 single, 2 restricted), read-only and standby flags. Needs no server permission; a login sees the databases sys.databases shows it.',
+    tables: [{
+      id: 'databases', mode: 'snapshot', key: ['name'], rowCap: 1000,
+      columns: [column('name', 'sysname'), column('state', 'tinyint'), column('userAccess', 'tinyint'), column('readOnly', 'bit'), column('standby', 'bit')]
+    }]
+  },
+  'explorer.progress': {
+    id: 'explorer.progress', source: 'explorer', label: 'Restore and recovery progress', intervalMs: { default: 5000, min: 2000, max: 300_000 }, gates: { minMajor: 13, editions: boxAndManaged }, permission: 'serverState',
+    description: 'How far each running RESTORE DATABASE or RESTORE LOG, and each database recovery (DB STARTUP), has come (sys.dm_exec_requests.percent_complete, whole percent). A recovery is its request\'s own database; a restore runs in its session\'s database, so the database it restores is the one its request holds an exclusive database lock on (sys.dm_tran_locks, which each read scans whole: read once per RESTORE request, never while none runs).',
+    tables: [{ id: 'progress', mode: 'snapshot', key: ['name'], rowCap: 1000, columns: [column('name', 'sysname'), column('command', 'nvarchar'), column('percent', 'int')] }]
+  },
+  'explorer.agent': {
+    id: 'explorer.agent', source: 'explorer', label: 'Running Agent jobs', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [1, 2, 3, 8] },
+    description: 'How many SQL Server Agent jobs are running: msdb.dbo.sysjobactivity rows of the Agent\'s current session (the newest in msdb.dbo.syssessions) that started and have not stopped, as Job Activity Monitor counts them. A login msdb refuses gets PERMISSION_DENIED as a value.',
+    series: [{ id: 'runningJobs', unit: 'count', label: 'Running jobs', counter: 'gauge' }]
+  },
+  'explorer.availability': {
+    id: 'explorer.availability', source: 'explorer', label: 'Availability group health', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [2, 3] }, permission: 'serverState',
+    description: 'Each availability group\'s synchronization health (0 not healthy, 1 partially healthy, 2 healthy) and this replica\'s role (0 resolving, 1 primary, 2 secondary), from sys.dm_hadr_availability_group_states and sys.dm_hadr_availability_replica_states. A server without Always On has no rows.',
+    tables: [{ id: 'groups', mode: 'snapshot', key: ['name'], rowCap: 100, columns: [column('name', 'sysname'), column('health', 'tinyint'), column('role', 'tinyint')] }]
+  },
+  'ssis.catalogProbe': {
+    id: 'ssis.catalogProbe', source: 'ssis.catalog', label: 'Catalog changes', intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 },
+    description: 'A fingerprint of each catalog view the SSIS tree and its documents show, in one query: its row count and a checksum of the columns they show (catalogFingerprints in src/shared/ssis/catalog.ts), over the rows row-level security lets the login see; catalog properties only for a sysadmin or ssis_admin, the only ones who may read them. Object Explorer reloads only what changed, keeping expansion and selection.',
+    status: catalogFingerprintStatus
   },
   'ssis.operations.list': {
     id: 'ssis.operations.list', source: 'ssis.operations', label: 'Operations', intervalMs: { default: 2000, min: 1000, max: 60_000 }, budgetMs: { min: 500, max: 10_000 },

@@ -8,7 +8,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { gridPart, gridTones, liveGrid, liveGridFrame, liveGridNewRows, liveGridOverlay, liveGridSelector, liveGridStrip, statusBar } from './fixtures/ui.mjs'
+import { gridPart, gridTones, liveGrid, liveGridFrame, liveGridNewRows, liveGridOverlay, liveGridSelector, liveGridStrip, backendReady } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-grid-profile-'))
@@ -45,7 +45,7 @@ const active = () => page.evaluate(({ grid, cell: cellPart, tones }) => {
 }, parts)
 
 try {
-  await expect(statusBar(page)).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
+  await expect(backendReady(page, /\.NET 10\./)).toHaveText('Ready', { timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 
   step = 'tones'

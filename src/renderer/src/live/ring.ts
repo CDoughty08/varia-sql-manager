@@ -125,3 +125,36 @@ export class MetricRing {
     return (this.headValue - this.lengthValue + index + this.capacityValue) % this.capacityValue
   }
 }
+
+/** What a chart reads from a ring: a MetricRing, or a view of one (scaledRing). */
+export type RingReader = Pick<MetricRing, 'revision' | 'capacity' | 'series' | 'length' | 'lastTime' | 'time' | 'value' | 'flags' | 'indexAt' | 'range' | 'minMax'>
+
+const scaledViews = new WeakMap<MetricRing, Map<number, RingReader>>()
+/**
+ * A ring whose values read multiplied by `factor` (positive), for a series sent in one unit and shown in another: wait
+ * milliseconds per second as waiting tasks (× 0.001). Times, flags and revisions are the ring's own, so a chart redraws as
+ * the ring changes. One view per ring and factor, so a chart sees the same object every frame.
+ */
+export function scaledRing(ring: MetricRing, factor: number): RingReader {
+  if (factor === 1 || !(factor > 0) || !Number.isFinite(factor)) return ring
+  let views = scaledViews.get(ring)
+  if (!views) { views = new Map(); scaledViews.set(ring, views) }
+  let view = views.get(factor)
+  if (!view) {
+    view = {
+      get revision() { return ring.revision },
+      get capacity() { return ring.capacity },
+      get series() { return ring.series },
+      get length() { return ring.length },
+      get lastTime() { return ring.lastTime },
+      time: index => ring.time(index),
+      value: (index, series) => ring.value(index, series) * factor,
+      flags: index => ring.flags(index),
+      indexAt: time => ring.indexAt(time),
+      range: (from, to) => ring.range(from, to),
+      minMax: (series, first, count) => { const [min, max] = ring.minMax(series, first, count); return [min * factor, max * factor] }
+    }
+    views.set(factor, view)
+  }
+  return view
+}

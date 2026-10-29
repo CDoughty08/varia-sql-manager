@@ -1,13 +1,14 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import type { IconId } from '../icons.ts'
+import { ssisCommandEntries } from '../ssis/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Integration Services' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -86,6 +87,7 @@ const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
 const noBookmarks = 'No bookmarks are set.'
 const noDocumentBookmarks = 'This query has no bookmarks.'
+const openMonitor = 'Open the Activity Monitor first (Tools: Activity Monitor).'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -208,7 +210,7 @@ export const commandCatalog = {
   // SSMS's F6: between the query editor and its results (the grid that last had focus, else the first, else Messages).
   'window.switchPane': {
     title: 'Switch Between Query and Results', category: 'View', icon: 'output', keywords: ['results', 'editor', 'focus'], precondition: 'activeDocumentIsText', unavailableHint: openFirst,
-    keybindings: [{ key: 'f6' }, { key: 'shift+f6' }]
+    keybindings: [{ key: 'f6', when: '!activityMonitorFocus' }, { key: 'shift+f6', when: '!activityMonitorFocus' }]
   },
   'layout.save': {
     title: 'Save Layout…', category: 'View', icon: 'layout',
@@ -227,7 +229,8 @@ export const commandCatalog = {
     // A disconnected query connects first (the Connect dialog), as in SSMS; a lost connection needs Reconnect.
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected || (backendReady && !activeConnectionLost))',
     unavailableHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.',
-    keybindings: [{ key: 'f5', when: 'editorFocus' }, { key: 'mod+enter', when: 'editorFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus' }],
+    // The query's bar shows F5 on Execute, so its keys work there too, as in SSMS's SQL Editor toolbar.
+    keybindings: [{ key: 'f5', when: 'editorFocus || queryBarFocus' }, { key: 'mod+enter', when: 'editorFocus || queryBarFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 1, mnemonic: 'x' }, { menu: 'editor.context', group: '2_execute', order: 1, mnemonic: 'x' }]
   },
   'query.cancel': {
@@ -304,9 +307,21 @@ export const commandCatalog = {
     title: 'Filter Settings…', category: 'Object Explorer', icon: 'filter', keywords: ['filter', 'narrow', 'search'], precondition: 'hasConnection', unavailableHint: 'Select a folder that can be filtered.',
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' }]
   },
+  // Narrows the tree to rows already loaded, by name; it asks the server for nothing (Filter Settings does).
+  'explorer.filterLoaded': {
+    title: 'Filter Loaded Objects', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick'], precondition: 'hasConnection', unavailableHint: noServer
+  },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',
-    menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'v', when: 'explorerFolderFiltered' }]
+    // 'l', not 'v': the menu's mnemonics are checked across every placement at once, and Activity Monitor's 't' leaves
+    // Environment… only its 'v' (tests/command-catalog.test.ts).
+    menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'l', when: 'explorerFolderFiltered' }]
+  },
+  // SSMS: right-click Integration Services Catalogs › Create Catalog… (S9a). The dialog says why a server cannot have one.
+  'explorer.createCatalog': {
+    title: 'Create Catalog…', category: 'Object Explorer', icon: 'database', keywords: ['ssis', 'ssisdb', 'integration', 'catalog', 'create'],
+    precondition: "backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'", unavailableHint: 'Select Integration Services Catalogs in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 't', when: "explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost" }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
@@ -317,6 +332,8 @@ export const commandCatalog = {
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
+  // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
+  ...propertiesCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
@@ -325,6 +342,9 @@ export const commandCatalog = {
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),
+  // The SSIS Catalog's verbs on its tree nodes (Properties) and the properties documents' Refresh: generated from
+  // src/shared/ssis/catalog.ts. Each verb acts on its menu's node, else the selection.
+  ...ssisCommandEntries(),
   // The palette's way in: a quick pick of the enabled verbs and destinations for the selected node.
   'explorer.scriptAs': {
     title: 'Script As…', category: 'Object Explorer', icon: 'file-code', keywords: ['script', 'create', 'alter', 'drop', 'select', 'insert', 'update', 'delete', 'execute'],
@@ -472,6 +492,50 @@ export const commandCatalog = {
     keybindings: [{ key: 'mod+k mod+s', native: true, bridge: true }],
     menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 2, mnemonic: 's' }, { menu: 'editor.context', group: '0_snippets', order: 2, mnemonic: 's' }]
   },
+  // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the
+  // palette. SSMS's Ctrl+Alt+A is AltGr on Windows and Linux layouts (reservedReason), so only macOS has its key, ⌥⌘A.
+  'activity.open': {
+    title: 'Activity Monitor', category: 'Tools', icon: 'pulse', keywords: ['activity', 'monitor', 'processes', 'sessions', 'blocking', 'waits', 'performance'],
+    precondition: 'backendReady && !documentBusy', unavailableHint: 'Wait for the backend to start and for the open document task to finish.', keybindings: [{ mac: 'alt+mod+a' }],
+    menus: [
+      // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
+      { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
+      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
+  },
+  // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.
+  'activity.togglePause': {
+    title: 'Pause', category: 'Activity Monitor', icon: 'debug-pause', keywords: ['resume', 'stop', 'live'], toggled: 'activityPaused',
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.refresh': {
+    title: 'Refresh Now', category: 'Activity Monitor', icon: 'refresh', keywords: ['sample', 'update'], precondition: 'activeDocumentIsActivityMonitor && !activityPaused',
+    unavailableHint: 'Open the Activity Monitor and resume it first.', keybindings: [{ key: 'f5', when: 'activityMonitorFocus' }]
+  },
+  'activity.setInterval': {
+    title: 'Set Refresh Interval…', category: 'Activity Monitor', icon: 'watch', keywords: ['interval', 'seconds', 'sample'], precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.setChartWindow': {
+    title: 'Set Chart Window…', category: 'Activity Monitor', icon: 'graph-line', keywords: ['chart', 'history', 'minutes', 'window'], precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.toggleSplit': {
+    title: 'Split View', category: 'Activity Monitor', icon: 'split-horizontal', keywords: ['pane', 'split', 'two'], toggled: 'activitySplit',
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  // SSMS's F6 and Shift+F6: the tiles, the charts and each pane in turn.
+  'activity.nextPane': {
+    title: 'Next Panel', category: 'Activity Monitor', palette: false, precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor,
+    keybindings: [{ key: 'f6', when: 'activityMonitorFocus' }]
+  },
+  'activity.previousPane': {
+    title: 'Previous Panel', category: 'Activity Monitor', palette: false, precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor,
+    keybindings: [{ key: 'shift+f6', when: 'activityMonitorFocus' }]
+  },
+  // SSMS's Shift+Esc.
+  'activity.close': {
+    title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,
+    keybindings: [{ key: 'shift+escape', when: 'activityMonitorFocus' }]
+  },
   // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) come from themeMenuModel and keep those ids.
   'preferences.colorTheme': {
     title: 'Color Theme…', category: 'Preferences', icon: 'symbol-color', keywords: ['dark', 'light', 'appearance'],
@@ -501,6 +565,15 @@ export const commandCatalog = {
   'view.toggleFullScreen': {
     title: 'Toggle Full Screen', category: 'View', icon: 'screen-full', role: 'togglefullscreen', keybindings: [{ win: 'f11', linux: 'f11', mac: 'ctrl+meta+f', native: true }],
     menus: [{ menu: 'view', group: '4_zoom', order: 4, title: 'Full Screen', mnemonic: 'f' }]
+  },
+  // Toasts never take focus by themselves: this moves it to the newest, where Tab reaches its buttons and Escape dismisses it.
+  'notifications.focus': {
+    title: 'Focus Notifications', category: 'View', icon: 'bell', keywords: ['toast', 'notification', 'message'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
+  },
+  'notifications.clearAll': {
+    title: 'Clear All Notifications', category: 'View', icon: 'clear-all', keywords: ['toast', 'notification', 'dismiss'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
   },
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
   'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
@@ -540,10 +613,29 @@ export const commandCatalog = {
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
-  // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
+  // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are
+  // not in the palette. The Dock and Tab with items replace the panel header's old "Move…" list.
+  'pane.dockLeft': { title: 'Dock Left', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 1, mnemonic: 'l' }] },
+  'pane.dockRight': { title: 'Dock Right', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 2, mnemonic: 'r' }] },
+  'pane.dockTop': { title: 'Dock Top', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 3, mnemonic: 't' }] },
+  'pane.dockBottom': { title: 'Dock Bottom', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 4, mnemonic: 'b' }] },
+  'pane.tabWithExplorer': { title: 'Tab with Object Explorer', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 1, mnemonic: 'o', when: "pane != 'explorer'" }] },
+  'pane.tabWithEditor': { title: 'Tab with Query Editor', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 2, mnemonic: 'e', when: "pane != 'editor'" }] },
+  'pane.tabWithOutput': { title: 'Tab with Query Output', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'output'" }] },
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },
-  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] }
+  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] },
+  // A panel alone in its dock group hides its tab, as VS Code's single views do; this shows those tabs again for dragging.
+  'window.togglePanelTabs': {
+    title: 'Toggle Panel Tabs', category: 'View', icon: 'layout', keywords: ['panel', 'tab', 'header', 'dock', 'drag'], toggled: 'panelTabsVisible',
+    menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
+  },
+  // The header's search box: open queries, commands, and the Object Explorer nodes already loaded. SSMS 22's search box
+  // (the Visual Studio shell's) is Ctrl+Q; Linux and macOS keep that key for quitting.
+  'workbench.search': {
+    title: 'Search…', category: 'View', icon: 'search', keywords: ['find', 'objects', 'tables', 'goto', 'launch'],
+    keybindings: [{ win: 'ctrl+q' }], menus: [{ menu: 'view', group: '0_palette', order: 3, mnemonic: 'a' }]
+  }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

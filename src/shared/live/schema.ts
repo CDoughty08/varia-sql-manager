@@ -7,6 +7,7 @@ import { z } from 'zod'
 import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
+import { activityLiveArgsSchema } from '../activity/schema'
 import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
@@ -37,8 +38,15 @@ export const liveArgsSchemas = {
     lateEvery: z.number().int().min(1).max(1000).optional(),
     start: liveStartSchema.optional()
   }).strict(),
-  // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
-  activity: z.never(),
+  // The Activity Monitor: one filter per table (its own schema, which the backend checks again: Activity/ActivityFilter.cs),
+  // and the session whose CPU and reads the sessions probe's two series follow (the Details flyout; 0 follows none). An
+  // update replaces the filters of the tables it names and keeps the others; a table without one shows the catalogue's
+  // defaults (system sessions, Varia's pools and benign waits hidden).
+  activity: activityLiveArgsSchema,
+  // Object Explorer's status chips take no args.
+  explorer: z.never(),
+  // The catalog probe fingerprints all of the catalog the login may see: no args.
+  'ssis.catalog': z.never(),
   // The Operations document's filters. Each args replaces the last whole (an absent member is no filter), and new args read
   // the window again.
   'ssis.operations': ssisOperationsArgsSchema

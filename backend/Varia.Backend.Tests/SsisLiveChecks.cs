@@ -5,8 +5,9 @@ using System.Text.Json;
 namespace Varia.Backend.Tests;
 
 /// <summary>Live SSIS catalog checks (D-ssis 12.2, 12.3; PR S0). With VARIA_TEST_SSIS=1: the drift check, which reads the real
-/// SSISDB's shape and fails when it differs from tests/fixtures/ssisdb/manifest.json, and, with VARIA_TEST_SQL_SCRATCH=1 too,
-/// the same check against the Integration Services feature's own catalog backup restored as a marked VariaScratch_…_ssisref
+/// SSISDB's shape and fails when it differs from tests/fixtures/ssisdb/manifest.json, and the SSIS tree's catalog probe on it
+/// (read only); and, with VARIA_TEST_SQL_SCRATCH=1 too, the drift check against the Integration Services feature's own catalog
+/// backup restored as a marked VariaScratch_…_ssisref
 /// database (found from the engine's service path, so it runs before anyone has created the catalog). Neither creates,
 /// changes or drops SSISDB. VARIA_UPDATE_SSIS_MANIFEST=1 rewrites the server band's manifest entry instead, from SSISDB when
 /// it exists, otherwise from the backup. With VARIA_TEST_SQL_SCRATCH=1: the fake catalog in a marked VariaScratch_…_ssis
@@ -54,9 +55,14 @@ internal static class SsisLiveChecks
                 Console.WriteLine("SSISDB: schema version " + real.SchemaVersion + ", build " + real.SchemaBuild + ", compatibility level " + real.Database.CompatibilityLevel
                     + ", RCSI " + (real.Database.ReadCommittedSnapshot ? "on" : "off") + ", collation " + real.Database.Collation + ".");
                 if (update) written = real;
-                else Drift(check, manifest, real, "the real SSISDB");
-                // S3: the Operations source against the real catalog (it only reads).
-                if (!update) await SsisOperationsLiveChecks.RealAsync(check, service, info, json, text => Sql(text));
+                else
+                {
+                    Drift(check, manifest, real, "the real SSISDB");
+                    // S2: the SSIS tree's live catalog probe against the real catalog, read only.
+                    await SsisTreeLiveChecks.RealAsync(check, service, info, json, Sql);
+                    // S3: the Operations source against the real catalog (it only reads).
+                    await SsisOperationsLiveChecks.RealAsync(check, service, info, json, text => Sql(text));
+                }
             }
             else Console.WriteLine("SSISDB does not exist on this server: the real catalog's drift check is skipped. It runs with VARIA_TEST_SSIS=1 once the catalog exists, created with Varia's Create Catalog (PR S9a).");
         }
@@ -100,6 +106,8 @@ internal static class SsisLiveChecks
         await SsisCatalogLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S-A: ssis.execute (Stop Operation), against the same fake catalog.
         await SsisActionLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
+        // S2: the SSIS tree's live catalog probe, against the same fake catalog.
+        await SsisTreeLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S3: the ssis.operations live source (the Operations document), against the same fake catalog.
         await SsisOperationsLiveChecks.RunAsync(check, service, info, json, scratch.Ssis, Sql, live, scratch);
     }

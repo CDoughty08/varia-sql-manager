@@ -3,17 +3,19 @@ import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { kindScope } from '../src/shared/explorer/refs'
 import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
-  catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
+  catalogDatabase, catalogProbeRetryMs, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
   parameterObjectTypes, permissionTypes, securableTypes, ssisActions, ssisActionVerbs, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits,
-  stoppableOperationTypes, systemParameters
+  stoppableOperationTypes, systemParameters, createCatalog, catalogBackupFile,
+  isSsisDocumentKind, ssisCommandEntries, ssisDocumentKinds, ssisDocumentName, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs, ssisVerbSpecs, validationStatuses
 } from '../src/shared/ssis/catalog'
+import { commandDescriptor } from '../src/shared/commands/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
 import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
-import { methodPolicies } from '../src/shared/ipc/methods'
+import { createCatalogDrainMs, methodPolicies } from '../src/shared/ipc/methods'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
 const docsPath = join('docs', 'integration-services.md')
@@ -53,20 +55,53 @@ describe('SSIS catalogue', () => {
     for (const source of Object.values(ssisFeatureSources)) expect(source).toMatch(/^catalog\.[a-z_]+(\.[a-z_]+)?$/)
     expect(catalogDatabase).toBe('SSISDB')
   })
+  it('gives each verb one command, on Object Explorer\'s menu for its own kind only, and each document its own view', () => {
+    expect(ssisVerbs).toEqual(['folderProperties', 'projectProperties', 'packageProperties', 'environmentProperties'])
+    const entries = ssisCommandEntries()
+    expect(Object.keys(entries)).toEqual([...ssisVerbs.map(verb => ssisVerbSpecs[verb].command), 'ssis.refreshProperties'])
+    for (const verb of ssisVerbs) {
+      const spec = ssisVerbSpecs[verb], key = ssisVerbContextKey(verb), kind = spec.kinds[0]
+      expect(spec, verb).toMatchObject({ class: 'document', writes: false, document: kind, menuTitle: 'Properties', group: '9_properties', mnemonic: 'p' })
+      expect(commandDescriptor(spec.command), verb).toEqual(entries[spec.command])
+      expect(entries[spec.command]).toMatchObject({ category: 'Integration Services', precondition: `backendReady && ${key} == 'enabled'`, menus: [{ menu: 'explorer.context', title: 'Properties', when: `explorerNode == '${kind}' && ${key} != ''` }] })
+      expect(key).toBe(`ssisVerb${verb[0].toUpperCase()}${verb.slice(1)}`)
+      // Only its own kind offers it.
+      for (const other of [...nodeKinds, 'folder' as const]) expect(ssisVerbMenuState(other)[verb], `${verb} on ${other}`).toBe(other === kind ? 'enabled' : '')
+    }
+    expect(ssisVerbContextValues(ssisVerbMenuState('ssisProject'))).toEqual({ ssisVerbFolderProperties: '', ssisVerbProjectProperties: 'enabled', ssisVerbPackageProperties: '', ssisVerbEnvironmentProperties: '' })
+    for (const kind of ssisDocumentKinds) {
+      expect(describeTargets[ssisDocumentSpecs[kind].view], kind).toBe(kind)
+      expect(ssisDocumentSpecs[kind].sections[0], kind).toEqual({ id: 'general', title: 'General' })
+      expect(unique(ssisDocumentSpecs[kind].sections.map(section => section.id)), kind).toBe(true)
+      expect(isSsisDocumentKind(kind)).toBe(true)
+    }
+    expect([isSsisDocumentKind('ssisCatalog'), isSsisDocumentKind('tableDesigner'), isSsisDocumentKind(undefined)]).toEqual([false, false, false])
+    expect(ssisDocumentName('ssisPackage', 'Daily.dtsx')).toBe('Package Properties - Daily.dtsx')
+    expect(validationStatuses).toEqual([{ code: 'N', label: 'Not validated' }])
+  })
   it('keeps error codes retryable only where a retry can help', () => {
     expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'NOT_RUNNING', 'CANCELLED', 'SQL_ERROR'])
     expect(ssisErrorCodes).toContain('CATALOG_MISSING')
     // Stop Operation on an ended operation, or on a created one nobody started (it never runs), is information, and a SQL Server
     // login cannot fix itself by retrying.
     expect(ssisErrorRetryable).toMatchObject({ WINDOWS_AUTH_REQUIRED: false, ALREADY_FINAL: false, NOT_STARTED: false })
+    // Create Catalog's refusals need the user to change something first: the existing catalog, or the CLR agreement.
+    expect(ssisErrorRetryable).toMatchObject({ CATALOG_EXISTS: false, CLR_REQUIRED: false })
   })
   it('declares each ssis.execute verb with its steps, procedures and gates, Stop Operation first', () => {
-    expect(ssisActionVerbs).toEqual(['stopOperation'])
-    expect(ssisActions.stopOperation).toEqual({ title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true })
+    expect(ssisActionVerbs).toEqual(['stopOperation', 'createCatalog'])
+    expect(ssisActions.stopOperation).toEqual({ title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true, scope: 'catalog' })
+    // Create Catalog runs in master and calls none of the catalog's procedures (they do not exist yet); a sysadmin SQL Server
+    // login may run it, as in SSMS.
+    expect(ssisActions.createCatalog).toEqual({
+      title: 'Create Catalog', procedures: [], revision: false, windowsAuthOnBox: false, scope: 'server',
+      steps: ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+    })
     for (const verb of ssisActionVerbs) {
       const spec = ssisActions[verb]
       expect(spec.steps.length, verb).toBeGreaterThan(0)
       for (const name of spec.procedures) expect(name, verb).toMatch(/^[a-z_]+$/)
+      if (spec.scope === 'catalog') expect(spec.procedures.length, verb).toBe(spec.steps.length)
     }
     // Executions and validations, by the code table's own types.
     expect([...stoppableOperationTypes]).toEqual([200, 300, 301])
@@ -84,8 +119,21 @@ describe('SSIS catalogue', () => {
   it('keeps the write path\'s limits: one write per connection, two in all, no deadline, and a sensitive frame', () => {
     expect(ssisLimits).toMatchObject({ writePerConnection: 1, writeTotal: 2, registeredWrites: 64, preflightLockTimeoutMs: 10_000, preflightMs: 25_000, stopGraceMs: 10_000 })
     // A write waits for locks as SSMS does, so only Stop ends it; later verbs carry sensitive values, so the frame is zeroed once written.
-    expect(methodPolicies['ssis.execute']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    const { drainMs, ...policy } = methodPolicies['ssis.execute']
+    expect(policy).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    // A closing generation runs on while Create Catalog finishes or undoes itself (createDrainMs in the backend); Stop Operation needs no drain.
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'createCatalog', password: 'x', enableClr: true, startupProcedure: false } })).toBe(createCatalogDrainMs)
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'stopOperation', operationId: 1 } })).toBe(0)
+    expect(createCatalogDrainMs).toBeGreaterThan(ssisLimits.createDrainMs)
     expect(ssisLimits.registeredWrites).toBeLessThanOrEqual(ssisLimits.registered)
+  })
+  it('finds the catalog backup by version, as Integration Services names it, and bounds Create Catalog inputs', () => {
+    // SSMS 22's Catalog.Create names SSISDBBackup.bak for every version (docs/integration-services.md 14.12); SSISDB.bak is no installed file.
+    expect([13, 14, 15, 16, 17, 18].map(catalogBackupFile)).toEqual(Array(6).fill('SSISDBBackup.bak'))
+    expect(createCatalog.assemblyFile).toBe('Microsoft.SqlServer.IntegrationServices.Server.dll')
+    expect(ssisLimits).toMatchObject({ catalogPassword: 128, serverPath: 1024 })
+    // The dialog's read is a read: no secret, a describe's deadline.
+    expect(methodPolicies['ssis.catalogSetup']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 45_000 })
   })
   it('loads in plain Node 24, as the other catalogues do', () => {
     const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'ssis', name))
@@ -136,5 +184,20 @@ describe('generated SSIS files', () => {
     for (const feature of ssisFeatures) expect(docs, feature).toContain(`| \`${feature}\` |`)
     for (const key of Object.keys(ssisLimits)) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain('| Packages | `ssisPackages` | Package (`ssisPackages`) | Name |')
+    expect(docs).toContain(`opens again after ${catalogProbeRetryMs.first / 1000} s, doubling to ${catalogProbeRetryMs.max / 1000} s`)
+  })
+  it('takes the live tree\'s interval from the probe\'s catalogue entry, as the settings do', async () => {
+    vi.resetModules()
+    vi.doMock('../src/shared/live/catalog.ts', async importOriginal => {
+      const original = await importOriginal<typeof import('../src/shared/live/catalog.ts')>()
+      return { ...original, liveProbes: { ...original.liveProbes, 'ssis.catalogProbe': { ...original.liveProbes['ssis.catalogProbe'], intervalMs: { default: 45_000, min: 15_000, max: 600_000 } } } }
+    })
+    try {
+      const { renderSsisDocs: render } = await import('../src/shared/ssis/docs')
+      expect(render()).toContain('every 45 s by default (Tools › Options › SQL Server Integration Services; 15 to 600 s, or off)')
+    } finally {
+      vi.doUnmock('../src/shared/live/catalog.ts')
+      vi.resetModules()
+    }
   })
 })

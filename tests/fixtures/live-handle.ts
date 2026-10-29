@@ -38,6 +38,7 @@ export function fakeLiveHandle(spec: LiveSpec, owner: LiveOwner): FakeLiveHandle
     ring: () => undefined,
     table: (probe, index = 0) => handle.tables.get(`${probe}:${index}`),
     onTick: listener => { ticks.add(listener); return { dispose: () => { ticks.delete(listener) } } },
+    onRings: () => ({ dispose: () => {} }),
     dispose: () => { handle.disposed = true }
   }
   return handle

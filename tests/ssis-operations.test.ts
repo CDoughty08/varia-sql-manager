@@ -13,7 +13,7 @@ import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import SsisOperations from '../src/renderer/src/ssis/SsisOperations'
 import type { LiveGrid, LiveGridSnapshot } from '../src/renderer/src/live/LiveGrid'
 import type { LiveSnapshot } from '../src/renderer/src/live/LiveService'
-import { pillStatus } from '../src/renderer/src/live/status'
+import { probePillStatus } from '../src/renderer/src/live/status'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import {
   filtered, operationsArgs, operationsText, stopNotice, tilePressed, toggleKind, toggleStatus, toggleTile, withText, type SsisOperationsFilters
@@ -410,11 +410,11 @@ describe('live pill status', () => {
   const snapshot = (patch: Partial<LiveSnapshot>): LiveSnapshot => ({ status: 'live', connectionId: 'c', probes: { 'ssis.operations.list': { state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 2000, series: [] } as never }, ...patch })
   it('maps a view\'s snapshot to the kit\'s states', () => {
     const probe = 'ssis.operations.list', fallback = liveProbes[probe].intervalMs.default
-    expect(pillStatus(snapshot({}), probe, fallback)).toEqual({ state: 'live', intervalMs: 2000 })
-    expect(pillStatus(snapshot({ probes: { [probe]: { state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 4000 } as never } }), probe, fallback)).toEqual({ state: 'slowed', intervalMs: 2000, effectiveMs: 4000 })
-    expect(pillStatus(snapshot({ status: 'paused', pausedBy: 'hidden' }), probe, fallback)).toEqual({ state: 'paused', intervalMs: 2000, pausedBy: 'hidden' })
-    expect(pillStatus(snapshot({ status: 'ended', ended: { ended: 'failed', ticks: 0, elapsedMs: 1 } }), probe, fallback)).toEqual({ state: 'ended', intervalMs: 2000, ended: 'failed' })
-    expect(pillStatus({ status: 'connecting', connectionId: 'c', probes: {} }, probe, fallback)).toEqual({ state: 'connecting', intervalMs: 2000 })
-    expect(pillStatus(snapshot({ status: 'dormant' }), probe, fallback).state).toBe('dormant')
+    expect(probePillStatus(snapshot({}), probe, fallback)).toEqual({ state: 'live', intervalMs: 2000 })
+    expect(probePillStatus(snapshot({ probes: { [probe]: { state: 'fresh', intervalMs: 2000, effectiveIntervalMs: 4000 } as never } }), probe, fallback)).toEqual({ state: 'slowed', intervalMs: 2000, effectiveMs: 4000 })
+    expect(probePillStatus(snapshot({ status: 'paused', pausedBy: 'hidden' }), probe, fallback)).toEqual({ state: 'paused', intervalMs: 2000, pausedBy: 'hidden' })
+    expect(probePillStatus(snapshot({ status: 'ended', ended: { ended: 'failed', ticks: 0, elapsedMs: 1 } }), probe, fallback)).toEqual({ state: 'ended', intervalMs: 2000, ended: 'failed' })
+    expect(probePillStatus({ status: 'connecting', connectionId: 'c', probes: {} }, probe, fallback)).toEqual({ state: 'connecting', intervalMs: 2000 })
+    expect(probePillStatus(snapshot({ status: 'dormant' }), probe, fallback).state).toBe('dormant')
   })
 })

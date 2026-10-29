@@ -1,8 +1,9 @@
 // Renders docs/object-explorer.md from the catalogue; tests/explorer-catalog.test.ts keeps the file in sync.
 import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
-  subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
+  statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
+import { statusChipDocs } from './status.ts'
 import { glyphSizes } from '../theme/metrics.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -28,6 +29,7 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   typeAheadMs: 'Type-ahead buffer reset, in ms',
   typeAheadMax: 'Type-ahead buffer length',
   rowHeight: 'Row height, in px',
+  serverRowHeight: 'Height of a server row, in px',
   indent: 'Indentation per level, in px',
   overscan: 'Rows rendered beyond each edge of the viewport',
   deleteSlice: 'Nodes removed per task when a subtree is dropped',
@@ -36,7 +38,8 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   sublabel: 'Characters in a sublabel',
   detail: 'Characters in tooltip details',
   message: 'Characters in an error message',
-  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128'
+  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128',
+  quickFilter: 'Characters in the Filter loaded objects box'
 }
 
 const lists = (id: FolderId) => {
@@ -154,6 +157,26 @@ export function renderExplorerDocs(): string {
     'Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.',
     '',
     table(['Status', 'Badge'], Object.entries(statusBadges).map(([status, badge]) => [code(status), code(badge)])),
+    '',
+    '## Live status',
+    '',
+    'While Object Explorer shows (and Environment › Live Data › Show live status in Object Explorer is on), each connected',
+    'server has one background live view of the `explorer` source ([docs/live.md](live.md)) per login, shared by every',
+    'connection to that server with that login, on one session of its own in master (so it never holds the database a',
+    'connection opened in), paused while the pane or the window is hidden. Its samples become chips at the end of the rows',
+    'below; they never reload the tree. While chips show, a database row\'s state comes from them rather than its sublabel',
+    '(the state when the list loaded), and its tooltip says when the two differ. A probe that fails, is unavailable (no',
+    'permission, or an edition without the feature) or has no sample yet shows nothing, and the row shows its sublabel again;',
+    'so does a database past the 1,000 the probe lists, by name. A running-tone chip turns its glyph only while a restore or',
+    'recovery reports progress. Refresh (F5) samples the view at once and opens again one that ended (a sign-in that',
+    'failed). A window runs at most 8 such views and gives their slots to views the user opens, when the window\'s 16 are',
+    'taken or the backend refuses one at its 8 a server ([docs/ipc.md](ipc.md#live-subscriptions)), so a server can be',
+    'without chips until a slot frees. The chips are the only part of a row\'s end that gives way: the environment tag, item',
+    'count and connection dot keep their size, and the label gives up the row\'s empty space first.',
+    '',
+    table(['Kind', 'Probes'], (Object.keys(statusChipKinds) as (keyof typeof statusChipKinds)[]).map(kind => [code(kind), codes(statusChipKinds[kind])])),
+    '',
+    table(['Node', 'Chip', 'Tone', 'When'], statusChipDocs.map(doc => [doc.kind, doc.chip, doc.tone, doc.when])),
     '',
     '## Limits',
     '',

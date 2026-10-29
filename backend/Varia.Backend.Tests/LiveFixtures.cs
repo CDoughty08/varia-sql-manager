@@ -161,3 +161,18 @@ internal sealed class HangingHost(string connectionId) : ILiveHost
         await Task.Delay(Timeout.Infinite, token);
     }
 }
+
+/// <summary>A live host whose one connection id opens as <see cref="Open"/> says: each connection unpooled, its Database the one
+/// asked for (empty for the login's own), and never reaching a SQL Server.</summary>
+internal sealed class ScriptedOpenHost(string connectionId) : ILiveHost
+{
+    public Func<SqlConnection, CancellationToken, Task> Open { get; set; } = (_, _) => Task.CompletedTask;
+    public bool TestHooks => false;
+    public bool IsConnected(string id) => id == connectionId;
+    public string? ServerOf(string id) => id == connectionId ? "server:S" : null;
+    public ResultStore Store { get; } = new(1L << 20, 1L << 19);
+    public ServerProfile? Profile(string id) => id == connectionId ? new(16, null, 3, null, false, true, false) : null;
+    public SqlConnection PoolConnection(string id, string? database, string suffix) =>
+        new(new SqlConnectionStringBuilder { DataSource = "varia-fixture.invalid", IntegratedSecurity = true, Pooling = false, InitialCatalog = database ?? "" }.ConnectionString);
+    public Task OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+}

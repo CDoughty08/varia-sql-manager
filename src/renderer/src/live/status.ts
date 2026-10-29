@@ -1,7 +1,7 @@
 // What a live view's pill and stale badge say (the states kit draws them): from a LiveHandle's snapshot and the time, so
 // "Updated 12 s ago" moves on with a ticker while nothing new arrives. It never claims more than the snapshot shows.
 import type { LiveProbeId } from '../../../shared/live/catalog'
-import type { LiveStatus as PillStatus } from '../kit/format'
+import type { LiveStatus as KitLiveStatus } from '../kit/format'
 import type { LiveProbeSnapshot, LiveSnapshot } from './LiveService'
 
 export type LiveTone = 'connecting' | 'live' | 'slowed' | 'stale' | 'paused' | 'lost' | 'ended'
@@ -66,10 +66,51 @@ export function liveIndicator(snapshot: LiveSnapshot, now: number, shown?: reado
 }
 
 /**
+ * The states kit's pill for a view (kit/LivePill): the view's status, `slowed` while the backend runs a shown probe
+ * slower than asked (the load guard or a back-off), the interval of the shown probes that run, who paused it and how it
+ * ended. Paused and unavailable probes are left out, so a monitor whose panes are hidden still reads by its tiles' pace;
+ * a running view none of whose probes can run (every one unavailable) has no pill, since nothing is live.
+ */
+export function pillStatus(snapshot: LiveSnapshot, shown?: readonly LiveProbeId[]): KitLiveStatus | undefined {
+  const probes: LiveProbeSnapshot[] = shown ? shown.flatMap(probe => snapshot.probes[probe] ? [snapshot.probes[probe]] : []) : Object.values(snapshot.probes)
+  const running = probes.filter(probe => probe.state !== 'paused' && probe.state !== 'unavailable')
+  const pace = running.length ? running : probes
+  const intervalMs = pace.length ? Math.min(...pace.map(probe => probe.intervalMs)) : 0
+  const slowed = running.filter(probe => probe.effectiveIntervalMs > probe.intervalMs)
+  switch (snapshot.status) {
+    case 'connecting': return { state: 'connecting', intervalMs }
+    case 'paused': return { state: 'paused', intervalMs, ...snapshot.pausedBy ? { pausedBy: snapshot.pausedBy } : {} }
+    case 'dormant': return { state: 'dormant', intervalMs }
+    case 'lost': return { state: 'lost', intervalMs }
+    case 'ended': return { state: 'ended', intervalMs, ...snapshot.ended ? { ended: snapshot.ended.ended } : {} }
+    case 'live': break
+  }
+  if (!running.length) return undefined
+  if (slowed.length) {
+    const worst = slowed.reduce((most, probe) => probe.effectiveIntervalMs / probe.intervalMs > most.effectiveIntervalMs / most.intervalMs ? probe : most)
+    return { state: 'slowed', intervalMs: worst.intervalMs, effectiveMs: worst.effectiveIntervalMs }
+  }
+  return { state: 'live', intervalMs }
+}
+
+/** The newest sample of the shown probes that run (the "Updated 3 s ago" time), and since when one of them has been out
+ *  of date, for the states kit's StaleBadge. A retry time is left out: the snapshot does not say when the error came, so
+ *  a countdown from it would not move. */
+export function freshness(snapshot: LiveSnapshot, now: number, shown?: readonly LiveProbeId[]): { readonly updatedAt?: number; readonly stale?: { readonly since: number } } {
+  const probes = (shown ? shown.flatMap(probe => snapshot.probes[probe] ? [snapshot.probes[probe]] : []) : Object.values(snapshot.probes)).filter(probe => probe.state !== 'paused' && probe.state !== 'unavailable')
+  const times = probes.flatMap(probe => probe.lastSampleAt === undefined ? [] : [probe.lastSampleAt])
+  const updatedAt = times.length ? Math.max(...times) : undefined
+  // A view that is not running reads its probes paused, so only a running one can be late.
+  const late = probes.filter(probe => probe.state === 'stale' || probe.state === 'failing')
+  if (!late.length) return updatedAt === undefined ? {} : { updatedAt }
+  return { ...updatedAt === undefined ? {} : { updatedAt }, stale: { since: Math.min(...late.map(probe => probe.lastSampleAt ?? now)) } }
+}
+
+/**
  * The states kit's LivePill for one probe of a view: the view's status, slowed while the server stretched the interval, who
  * paused it, and why it ended. A probe the view does not run reads as the view does, at the catalogue's default.
  */
-export function pillStatus(snapshot: LiveSnapshot, probe: LiveProbeId, defaultMs: number): PillStatus {
+export function probePillStatus(snapshot: LiveSnapshot, probe: LiveProbeId, defaultMs: number): KitLiveStatus {
   const entry = snapshot.probes[probe]
   const intervalMs = entry?.intervalMs ?? defaultMs
   const ended = snapshot.ended?.ended

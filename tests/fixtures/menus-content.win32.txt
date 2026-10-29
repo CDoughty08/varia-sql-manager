@@ -63,10 +63,14 @@ Edit
 View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
+  Se&arch…  Ctrl+Q  ++++
   ---
   &Save Layout…  ++++
   &Load Layout…  ++++
   &Reset Layout  ++++
+  ---
+  Activity &Monitor  +++-
+  I&ntegration Services Operations  -+++
   ---
   T&heme >
     &Color Theme…  ++++
@@ -85,8 +89,6 @@ View
     Create Custom &Theme…  ++++
     &Open Themes Folder  ++++
     &Reload Themes  ++++
-  ---
-  I&ntegration Services Operations  -+++
   ---
   Zoom &In  Ctrl+=  ++++
   Zoom &Out  Ctrl+-  ++++
@@ -115,6 +117,7 @@ Window
   Query &Editor  ++++
   Q&uery Output  ++++
   S&how Results Pane  Ctrl+R [x]  ++++
+  Panel &Tabs [ ]  ++++
   ---
   &Next Query  Ctrl+Tab  ----
   &Previous Query  Ctrl+Shift+Tab  ----

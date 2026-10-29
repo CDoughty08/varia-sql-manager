@@ -1,5 +1,5 @@
-import { useTicker } from '../core/useTicker'
 import Icon from '../Icon'
+import { useTicker } from '../core/useTicker'
 import { liveIcon, liveLabel, staleLabel, updatedLabel, type LiveStatus } from './format'
 
 /**

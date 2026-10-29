@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import type { spawn } from 'node:child_process'
@@ -7,12 +8,14 @@ import { BackendConnection, type ConnectionDeps, type Loss } from '../src/main/b
 import { BackendError, sentences } from '../src/main/backend/errors'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../src/shared/ipc/wire/msgpack'
-import { backendMethods, deadlineFor } from '../src/shared/ipc/methods'
-import { cancelReasons } from '../src/shared/ipc/wire/protocol'
+import { backendMethods, createCatalogDrainMs, deadlineFor } from '../src/shared/ipc/methods'
+import { cancelReasons, errorReasons, limits as wire } from '../src/shared/ipc/wire/protocol'
+import { ssisLimits } from '../src/shared/ssis/catalog'
 import { connectionRequestLimits, RendererRequests } from '../src/main/backend/renderer-requests'
 import { fakeSpawn, manualClock, settle } from './fixtures/fake-process'
 
 const connections: BackendConnection[] = []
+const stopGraceMs = wire.timers.stopGraceMs
 function fake(mode: string, deps: ConnectionDeps = {}, argument?: string): BackendConnection {
   const args = ['--disable-warning=ExperimentalWarning', resolve('tests/fixtures/backend.mjs'), mode, ...(argument === undefined ? [] : [argument])]
   const connection = new BackendConnection({ command: process.execPath, args, cwd: process.cwd(), packaged: false }, 1, deps)
@@ -103,7 +106,17 @@ describe('BackendConnection malformed input', () => {
     const failed = await failure(connect('sql.contoso.com'))
     expect(failed).toMatchObject({ code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: { number: 0, state: 0, class: 11, server: 'sql.contoso.com' } })
     expect(await failure(connect('long'))).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
+    expect(await failure(connect('certificate'))).toMatchObject({ code: 'SQL_ERROR', details: { number: -2146893019, class: 20, server: 'certificate', reason: 'certificate' } })
+    expect(await failure(connect('crash'))).toMatchObject({ code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' } })
+    for (const server of ['reason', 'exception']) expect(await failure(connect(server)), server).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
     expect(connection.lost).toBeUndefined()
+  })
+  it('bounds error details as the backend does', () => {
+    // ErrorDetailsLimits and ConnectionFailures.MaxServerLength in C#, which cut what they send to these lengths.
+    const contracts = readFileSync(resolve('backend/Varia.Backend/Contracts.cs'), 'utf8'), failures = readFileSync(resolve('backend/Varia.Backend/ConnectionFailures.cs'), 'utf8')
+    expect(Number(/MaxExceptionLength = (\d+);/.exec(contracts)?.[1])).toBe(wire.errorDetails.exception)
+    expect(Number(/MaxServerLength = (\d+);/.exec(failures)?.[1])).toBe(wire.errorDetails.server)
+    expect(/Certificate = "(\w+)";/.exec(contracts)?.[1]).toBe(errorReasons[0])
   })
   it('passes query events to their request and contains an undecodable one', async () => {
     const global: unknown[] = []
@@ -181,6 +194,36 @@ describe('BackendConnection lifetime', () => {
     await connection.close(2000, new BackendError('BACKEND_LOST', sentences.reloaded))
     expect(await pending).toMatchObject({ code: 'BACKEND_LOST', message: sentences.reloaded })
     expect(exited(connection.pid!)).toBe(true)
+  })
+  it('lets a closing generation that runs Create Catalog finish it before the kill, and kills others after the usual grace', async () => {
+    const { spawn, backends } = fakeSpawn(backend => { backend.answer = false; backend.exitOnEnd = false })
+    const { clock, advance } = manualClock()
+    const execute = (action: Record<string, unknown>) => ({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), action })
+    const run = async (action: Record<string, unknown>) => {
+      const connection = new BackendConnection({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, 1, { spawn, clock })
+      connections.push(connection)
+      await connection.ready
+      const params = execute(action) as never
+      void connection.send('ssis.execute', params, deadlineFor('ssis.execute', params)).done.catch(() => {})
+      await settle()
+      let closed = false
+      void connection.close().then(() => { closed = true })
+      return { backend: backends.at(-1)!, closed: () => closed }
+    }
+    expect(deadlineFor('ssis.execute', execute({ verb: 'createCatalog', password: 'x', enableClr: true, startupProcedure: false }) as never)).toEqual({ deadlineMs: 0, backstopMs: 0 })
+    // The backend waits up to ssisLimits.createDrainMs for a Create Catalog past its restore; main waits longer.
+    expect(createCatalogDrainMs).toBeGreaterThanOrEqual(ssisLimits.createDrainMs + 2 * stopGraceMs)
+    const creating = await run({ verb: 'createCatalog', password: 'x', enableClr: true, startupProcedure: false })
+    expect(creating.backend.requests.map(request => request.method)).toEqual(['ssis.execute'])
+    await advance(stopGraceMs + 1000)
+    expect(creating.backend.signals).toEqual([])
+    await advance(createCatalogDrainMs - stopGraceMs - 1000)
+    expect(creating.backend.signals).toEqual(['SIGKILL'])
+    await settle()
+    expect(creating.closed()).toBe(true)
+    const stopping = await run({ verb: 'stopOperation', operationId: 42 })
+    await advance(stopGraceMs)
+    expect(stopping.backend.signals).toEqual(['SIGKILL'])
   })
 })
 

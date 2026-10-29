@@ -2,7 +2,7 @@ import { spawn as spawnProcess, type ChildProcessWithoutNullStreams } from 'node
 import { z } from 'zod'
 import { FrameKind, FrameParser, ProtocolError, encodeFrame, type ParsedFrame } from '../../shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../../shared/ipc/wire/msgpack'
-import { PROTOCOL_VERSION, cancelReasons, errorCodes, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
+import { PROTOCOL_VERSION, cancelReasons, errorCodes, errorReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import { backendMethods, methodPolicies } from '../../shared/ipc/methods'
 import type { BackendMethod } from '../../shared/contracts'
 import { BackendError, failureMessage, sentences } from './errors'
@@ -86,8 +86,12 @@ const helloSchema = z.object({
   methods: z.array(z.string().max(64)).max(256)
 })
 export type BackendHello = z.infer<typeof helloSchema>
-// A failed connection's details (docs/ipc.md): SQL Server's error number, state and class, and the server that answered.
-const errorDetailsSchema = z.object({ number: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(), state: z.number().int().min(0).max(255).optional(), class: z.number().int().min(0).max(255).optional(), server: z.string().max(256).optional() }).strict()
+// A failed connection's details (docs/ipc.md): SQL Server's error number, state and class, the server that answered, and
+// the reason "certificate"; or BACKEND_ERROR's exception types.
+export const errorDetailsSchema = z.object({
+  number: z.number().int().min(-2_147_483_648).max(2_147_483_647).optional(), state: z.number().int().min(0).max(255).optional(), class: z.number().int().min(0).max(255).optional(),
+  server: z.string().max(wire.errorDetails.server).optional(), reason: z.enum(errorReasons).optional(), exception: z.string().max(wire.errorDetails.exception).optional()
+}).strict()
 const errorSchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), details: errorDetailsSchema.optional() }).strict()
 const goAwaySchema = z.object({ code: z.string().max(64), message: z.string().max(wire.messages.errorCharacters), versions: z.tuple([z.number().int(), z.number().int()]).optional() }).strict()
 const knownCodes: ReadonlySet<string> = new Set(errorCodes)
@@ -95,6 +99,8 @@ const knownCodes: ReadonlySet<string> = new Set(errorCodes)
 interface Pending {
   readonly id: number
   readonly method: BackendMethod
+  /** methodPolicies' drainMs for this request (0 = none). */
+  readonly drainMs: number
   readonly resolve: (value: unknown) => void
   readonly reject: (error: BackendError) => void
   readonly stream?: StreamSink
@@ -258,7 +264,8 @@ export class BackendConnection {
     let resolve!: (value: unknown) => void
     let reject!: (error: BackendError) => void
     const done = new Promise<unknown>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
-    const pending: Pending = { id, method, resolve, reject, stream: creditedEvents ? undefined : o.stream, onEvent: o.onEvent, creditedEvents, initialCredit: credit ?? 0, granted: credit ?? 0, received: 0, seq: 0 }
+    const drainMs = (policy.drainMs as ((value: unknown) => number) | undefined)?.(params) ?? 0
+    const pending: Pending = { id, method, drainMs, resolve, reject, stream: creditedEvents ? undefined : o.stream, onEvent: o.onEvent, creditedEvents, initialCredit: credit ?? 0, granted: credit ?? 0, received: 0, seq: 0 }
     this.pending.set(id, pending)
     const backstopMs = o.backstopMs ?? 0
     if (backstopMs > 0) pending.timer = this.clock.setTimeout(() => this.backstop(pending, backstopMs), backstopMs)
@@ -285,14 +292,15 @@ export class BackendConnection {
 
   /** Ends this generation on purpose: pending requests fail with `error` (by default BACKEND_LOST, as for any loss),
    *  stdin closes so the backend can end its sessions, and the process is killed if it has not exited within the grace
-   *  period. */
+   *  period, or within the longest drain of a pending request (a Create Catalog, which the backend finishes or undoes first). */
   async close(graceMs: number = wire.timers.stopGraceMs, error?: BackendError): Promise<void> {
+    const drainMs = this.loss ? 0 : Math.max(0, ...[...this.pending.values()].map(request => request.drainMs))
     this.lose({ reason: 'closed', detail: 'closed by main' }, error)
     if (!this.child.stdin.destroyed) this.child.stdin.end()
-    const timeout = () => new Promise<'timeout'>(resolve => this.clock.setTimeout(() => resolve('timeout'), graceMs))
-    if (await Promise.race([this.exited, timeout()]) === 'timeout') {
+    const timeout = (ms: number) => new Promise<'timeout'>(resolve => this.clock.setTimeout(() => resolve('timeout'), ms))
+    if (await Promise.race([this.exited, timeout(Math.max(graceMs, drainMs))]) === 'timeout') {
       this.kill()
-      await Promise.race([this.exited, timeout()])
+      await Promise.race([this.exited, timeout(graceMs)])
     }
   }
 

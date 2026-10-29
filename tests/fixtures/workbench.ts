@@ -11,6 +11,7 @@ import type { Timers } from '../../src/renderer/src/core/timers'
 import { ConnectionService } from '../../src/renderer/src/services/connections'
 import { BackendStateService } from '../../src/renderer/src/services/backend'
 import { EditorOptionsService } from '../../src/renderer/src/services/editor-options'
+import { ShellOptionsService } from '../../src/renderer/src/services/shell-options'
 import { settingsDocumentOptions } from '../../src/renderer/src/services/documents'
 import { FileService } from '../../src/renderer/src/services/files'
 import { RecentFilesService } from '../../src/renderer/src/services/recent-files'
@@ -46,13 +47,22 @@ import { scriptingContribution } from '../../src/renderer/src/contributions/scri
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
+import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
+import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
+import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
+import { activityContribution } from '../../src/renderer/src/contributions/activity'
+import { documentOwner } from '../../src/renderer/src/live/LiveService'
+import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
+import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
+import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -211,8 +221,6 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     copyResults: vi.fn<VariaApi['copyResults']>(async () => ({ ok: true, value: { rows: 0, bytes: 0, truncatedCells: 0, partial: false } })),
     saveResults: vi.fn<VariaApi['saveResults']>(async () => ({ ok: true, value: null })),
     cancelResultsJob: vi.fn<VariaApi['cancelResultsJob']>(async () => ({ ok: true, value: { cancelled: true } })),
-    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], elapsedMs: 1 } })),
-    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async () => ({ ok: true, value: { cancelled: 0 } })),
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(() => () => {}),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: [] })),
@@ -251,6 +259,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
+    catalogSetupSsis: vi.fn<VariaApi['catalogSetupSsis']>(async () => ({ ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: false,
+      backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', message: 'Restore the catalog database' }], elapsedMs: 1 } })),
+    // No catalog unless a test says otherwise.
+    describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
+    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
@@ -263,7 +278,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // Seeded values apply at once, as if main had answered before the workbench was created.
   const settings = new SettingsService(api, { ...defaultSettings, ...options.settings })
   settings.subscribe(() => documents.refreshOptions())
-  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const bookmarks = new BookmarkService(documents, events), editorDialogs = new EditorDialogs()
   // Monaco's command and keybinding registries, for the editor chords the bridge registers.
   const monaco = { editor: { registerCommand: vi.fn<BridgeMonaco['editor']['registerCommand']>(() => ({ dispose: vi.fn() })), addKeybindingRules: vi.fn<BridgeMonaco['editor']['addKeybindingRules']>(() => ({ dispose: vi.fn() })) } }
@@ -290,10 +305,17 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections })
+  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  // Activity Monitors subscribe through a stand-in for LiveService that records each view.
+  const liveViews = fakeLiveViews()
+  const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
   const live = fakeLive()
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
+  const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const context = new ContextKeyService({
     platform,
     documents,
@@ -303,6 +325,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     editorOptions,
     inputMode,
     panes,
+    shell: shellOptions,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
@@ -311,6 +334,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    properties: properties.context,
+    notifications,
+    activity: activity.context,
     ssis: operations.context,
     activeElement
   })
@@ -322,7 +348,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
     disconnect: vi.fn(async () => {}), reveal: vi.fn(), manageLayouts: vi.fn(), resetLayout: vi.fn(), flushLayout: vi.fn(async () => {}), showConnect: vi.fn(), reconnect: vi.fn(), editEnvironment: vi.fn(), closePane: vi.fn(),
-    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn()
+    paneLocation: vi.fn<ShellHost['paneLocation']>(() => 'grid'), floatPane: vi.fn(), dockPane: vi.fn(), dockPaneAt: vi.fn(), tabPaneWith: vi.fn()
   }
   const history = new CommandHistory(options.storage ?? memoryStorage())
   // tests/theme-picker.test.ts drives a real ThemeService; here the theme commands only need somewhere to go.
@@ -343,6 +369,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     inputMode,
@@ -364,7 +391,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers,
+    ssisProperties,
+    properties,
+    notifications,
+    activity,
     operations
   }
   const contributions = [
@@ -386,7 +418,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
-    settingsContribution(workbench)
+    activityContribution(workbench),
+    settingsContribution(workbench),
+    notificationsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -414,11 +448,17 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting.dispose()
     actions.dispose()
     dialogs.dispose()
+    ssisCatalog.dispose()
     designers.dispose()
+    ssisProperties.dispose()
+    activity.dispose()
+    properties.dispose()
     operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
+    shellOptions.dispose()
     settings.dispose()
+    notifications.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -428,6 +468,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     connections,
     backend,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     monaco,
@@ -441,10 +482,16 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers,
+    ssisProperties,
+    properties,
+    activity,
+    liveViews,
     operations,
     live,
     focusEditor,
+    notifications,
     queries,
     files,
     recentFiles,

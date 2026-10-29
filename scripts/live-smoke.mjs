@@ -3,11 +3,14 @@
 // 3 s and its frames stop; showing it resumes the view with a gap in its history; switching tabs pauses the tab's view;
 // closing the owner tab ends its view; a killed backend reports the view lost, and Reconnect brings it back on the new
 // connection. Smoke windows keep background throttling off, so the page is always visible to itself: the test hook
-// stands in for minimizing.
+// stands in for minimizing. Last, Object Explorer's status chips: the fake backend's explorer source, steered by
+// explorer-status.json in the control directory, puts state chips on a server and a database row, which follow a change
+// on the next samples without reloading the tree; the view pauses with a hidden window, and F5 samples it at once.
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeDocumentName, backendBanner, documentTab, documentTabs, queryStatus, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
+import { activeDocumentName, backendBanner, backendReady, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-profile-'))
@@ -27,6 +30,8 @@ const frames = id => live('frames', id)
 const snapshot = id => live('snapshot', id)
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const liveCalls = async method => (await calls()).filter(call => call.method === method)
+/** The synthetic views' subscriptions: every connection also asks for Object Explorer's status (refused until the last step). */
+const syntheticSubscribes = async () => (await liveCalls('live.subscribe')).filter(call => call.params.source === 'debug.synthetic')
 const backendState = () => app.evaluate(() => globalThis.__variaTest.state())
 const sleep = ms => new Promise(done => setTimeout(done, ms))
 const queryTabs = () => documentTabs(page).getByRole('tab')
@@ -37,21 +42,28 @@ async function stays(id, ms = 600) {
   await sleep(ms)
   expect((await frames(id)).ticks).toBe(before)
 }
-async function connect(password = 'live-smoke-password') {
+async function connect(password = 'live-smoke-password', server = 'live-server', environment = undefined) {
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   if (!await dialog.isVisible()) await toolbarButton(page, 'Connect').click()
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
-  await dialog.getByLabel('Server Name', { exact: true }).fill('live-server')
+  await dialog.getByLabel('Server Name', { exact: true }).fill(server)
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  if (environment) {
+    // Environment sits in Custom Properties, which starts collapsed.
+    const custom = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+    if (await custom.getAttribute('aria-expanded') !== 'true') await custom.click()
+    await expect(custom).toHaveAttribute('aria-expanded', 'true')
+    await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
+  }
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
 }
 
 try {
-  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await connect()
   await expect(queryStatus(page)).toContainText('live-server')
   // Background throttling is off in smoke runs, so the hidden window counts as visible: only the hook can hide it.
@@ -64,7 +76,7 @@ try {
   expect(first).toMatchObject({ status: 'live', subscriptionId: id })
   expect(Object.values(first.probes).map(probe => probe.state)).toEqual(['fresh', 'fresh', 'fresh'])
   // The tab's own connection, and each frame acknowledged in turn: seq goes up one at a time, and the stream keeps going.
-  const subscribed = await liveCalls('live.subscribe')
+  const subscribed = await syntheticSubscribes()
   expect(subscribed).toHaveLength(1)
   expect(subscribed[0].params).toMatchObject({ subscriptionId: id, source: 'debug.synthetic', args: { tickMs: 50, rows: 5 } })
   const counted = await frames(id)
@@ -137,13 +149,75 @@ try {
   const back = await snapshot(id)
   expect(back.connectionId).not.toBe(first.connectionId)
   expect(back.subscriptionId).not.toBe(id)
-  const resubscribed = await liveCalls('live.subscribe')
+  const resubscribed = await syntheticSubscribes()
   expect(resubscribed.at(-1)).toMatchObject({ generation: lostGeneration + 1, params: { connectionId: back.connectionId, subscriptionId: back.subscriptionId } })
   await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics')).length).toBeGreaterThan(history)
   console.log('Backend loss passed: the view reported lost, kept its history, and Reconnect resubscribed on the new connection.')
 
   await live('dispose', id)
   await expect.poll(() => page.evaluate(() => window.__variaResults.liveStreams)).toBe(0)
+
+  step = 'explorer status'
+  // A database restoring with a single user, two Agent jobs and a healthy group, as the fake backend's explorer source reads them.
+  const cue = join(control, 'explorer-status.json')
+  await writeFile(cue, JSON.stringify({ databases: [['AppData', 1, 1, 0, 0]], progress: [['AppData', 'RESTORE DATABASE', 42]], jobs: 2, groups: [['AG1', 2, 1]] }))
+  // A Production connection, so its PROD tag shares the server row with the chips.
+  await connect('live-smoke-password', 'status-server', 'Production')
+  const statusServer = await explorerRow(page, 'status-server')
+  await expect(statusChips(statusServer)).toHaveText(['2 jobs running', 'AG1 healthy'])
+  await expect(statusServer).toHaveAttribute('aria-label', /, SQL Server Agent: 2 jobs running, Availability groups: AG1 healthy, Production environment$/)
+  const explorerSubscribe = (await liveCalls('live.subscribe')).filter(call => call.params.source === 'explorer').at(-1)
+  expect(explorerSubscribe.params.probes.map(probe => probe.probe)).toEqual(['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'])
+  await expandExplorerPath(page, 'status-server', 'Databases')
+  const appData = await explorerRow(page, 'status-server', 'Databases', 'AppData')
+  await expect(statusChips(appData)).toHaveText(['RESTORING 42 %', 'SINGLE USER'])
+  // The chips say the state: no listing sublabel, and the row name says it in words, dimmed as unavailable.
+  await expect(appData).toHaveAttribute('aria-label', 'AppData (Restoring 42 %, Single user), unavailable')
+  await expect(explorerSublabel(appData)).toHaveCount(0)
+  await expect(appData).toHaveAttribute('title', /Its state changed since Databases loaded\. Refresh Databases to update it\./)
+  // A pane narrower than 30em shows only each row's first chip, rather than every chip cut to a letter or two. At the
+  // default pane width the chip that shows is whole (RESTORING 42 % keeps its percentage), and the server's PROD tag keeps
+  // its word whole beside the chips: the label gives up the row's empty space first, and the chips give way, not the tag.
+  const narrow = await statusServer.evaluate(row => row.getBoundingClientRect().width < 30 * parseFloat(getComputedStyle(row).fontSize))
+  await expect(statusChips(statusServer).first()).toBeVisible()
+  await expect(statusChips(statusServer).nth(1)).toBeVisible({ visible: !narrow })
+  await expect(statusChips(appData).nth(1)).toBeVisible({ visible: !narrow })
+  await explorerTree(page).screenshot({ path: resolve('artifacts', 'explorer-status.png') })
+  // Each part of the server row, for a failure's message: its width, and whether its text is cut.
+  const parts = [part.explorerLabel, part.explorerSublabel, part.explorerEnd, part.explorerChips, part.statusPillValue, part.statusPillLabel, part.explorerDot].join(', ')
+  const layout = await statusServer.evaluate((row, parts) => [...row.querySelectorAll(parts)].map(element => `${element.className} ${Math.round(element.getBoundingClientRect().width)}${element.scrollWidth > element.clientWidth ? ' cut' : ''}`).join(', ')
+    + ` (row ${Math.round(row.getBoundingClientRect().width)} px)`, parts)
+  // Whether an element's text is whole and it ends inside the box that clips it.
+  const shown = (locator, clip) => locator.evaluate((element, clip) => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= element.closest(clip).getBoundingClientRect().right + 0.5, clip)
+  // The database row has room: RESTORING 42 % is whole. The server row is short of it (its name, the chips, PROD, the
+  // active query's glyph and the dot): the jobs chip's word gives way, its count does not, and PROD stays whole.
+  await expect(statusChips(appData).first()).toHaveText('RESTORING 42 %')
+  expect([await shown(statusChips(appData).first().locator(part.statusPillLabel), part.explorerChips), await shown(statusChips(appData).first().locator(part.statusPillValue), part.explorerChips)], layout).toEqual([true, true])
+  await expect(statusChips(statusServer).first().locator(part.statusPillValue)).toHaveText('2')
+  expect(await shown(statusChips(statusServer).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
+  const prod = environmentPill(statusServer, 'explorer')
+  await expect(prod).toHaveText('PROD')
+  expect([await shown(prod.locator(part.statusPillLabel), part.explorerRow), await shown(statusServer.locator(part.explorerDot), part.explorerRow), await shown(explorerLabel(statusServer), part.explorerRow)], layout).toEqual([true, true, true])
+  console.log('Object Explorer status chips at the default pane width: ' + layout)
+  // The server changes: the next samples move the chips, and the tree is not listed again.
+  const listings = (await calls()).filter(call => call.method === 'explorer.children').length
+  await writeFile(cue, JSON.stringify({ databases: [['AppData', 0, 0, 1, 0]], jobs: 0, groups: [['AG1', 1, 2]] }))
+  await expect(statusChips(appData)).toHaveText(['READ-ONLY'])
+  await expect(appData).toHaveAttribute('aria-label', 'AppData (Read-only)')
+  await expect(statusChips(statusServer)).toHaveText(['AG1 partially healthy'])
+  expect((await calls()).filter(call => call.method === 'explorer.children').length).toBe(listings)
+  const explorerUpdates = async () => (await liveCalls('live.update')).filter(call => call.params.subscriptionId === explorerSubscribe.params.subscriptionId).map(call => call.params)
+  // Hidden, the view pauses as every live view does; shown, it resumes.
+  await live('setPageHidden', true)
+  await expect.poll(explorerUpdates, { timeout: 5000 }).toContainEqual(expect.objectContaining({ paused: true }))
+  await live('setPageHidden', false)
+  await expect.poll(async () => (await explorerUpdates()).at(-1)).toMatchObject({ paused: false })
+  // F5 on the server reloads its rows and samples its status at once.
+  await explorerLabel(statusServer).click()
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await explorerUpdates()).at(-1)).toMatchObject({ refresh: true })
+  await expect(statusChips(statusServer)).toHaveText(['AG1 partially healthy'])
+  console.log('Object Explorer status passed: chips on the server and a database row from the explorer source, following a change without a tree reload, paused while hidden, and sampled by F5.')
   expect(failures).toEqual([])
   console.log('Live views passed.')
 } finally {

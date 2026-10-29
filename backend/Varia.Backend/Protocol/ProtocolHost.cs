@@ -20,6 +20,9 @@ internal interface IRequestDispatcher : IDisposable
     (long GlobalBytes, long QueryBytes) ResultBudget { get; }
     Task<object> DispatchAsync(string method, JsonElement parameters, JsonSerializerOptions json, RequestContext? context);
     void CancelAll();
+    /// <summary>On shutdown, after CancelAll: waits, within the dispatcher's own bound, for work that must not end half done
+    /// (SqlService: a Create Catalog past its restore, which then finishes or removes what it created).</summary>
+    void DrainCommitted() { }
 }
 
 internal sealed record HostOptions
@@ -301,7 +304,9 @@ internal sealed class ProtocolHost
             _ when Find<SqlException>(error) is { } sql => Error("SQL_ERROR", sql.Message),
             // SMO wraps server failures (permissions, missing objects) in its own exception types.
             _ when error.GetType().Namespace?.StartsWith("Microsoft.SqlServer.Management", StringComparison.Ordinal) == true => Error("SMO_ERROR", error.GetBaseException().Message),
-            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.")
+            // The sentence hides the cause (such as a native library that cannot load from a long install path), so the details
+            // name the exception's types for Copy details; never its message.
+            _ => Error("BACKEND_ERROR", "The backend operation failed. Verify the connection and object permissions.", new(null, null, null, null, Exception: ErrorDetailsLimits.Summary(error)))
         };
     }
 
@@ -330,7 +335,8 @@ internal sealed class ProtocolHost
         if (details is not null)
         {
             writer.WriteString("details");
-            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1));
+            writer.WriteMapHeader((details.Number is null ? 0 : 1) + (details.State is null ? 0 : 1) + (details.Class is null ? 0 : 1) + (details.Server is null ? 0 : 1)
+                + (details.Reason is null ? 0 : 1) + (details.Exception is null ? 0 : 1));
             if (details.Number is { } number) { writer.WriteString("number"); writer.WriteInt64(number); }
             if (details.State is { } state) { writer.WriteString("state"); writer.WriteInt64(state); }
             if (details.Class is { } level) { writer.WriteString("class"); writer.WriteInt64(level); }
@@ -338,6 +344,12 @@ internal sealed class ProtocolHost
             {
                 writer.WriteString("server");
                 writer.WriteString(server.Length > ConnectionFailures.MaxServerLength ? server[..ConnectionFailures.MaxServerLength] : server);
+            }
+            if (details.Reason is { } reason) { writer.WriteString("reason"); writer.WriteString(reason); }
+            if (details.Exception is { } exception)
+            {
+                writer.WriteString("exception");
+                writer.WriteString(exception.Length > ErrorDetailsLimits.MaxExceptionLength ? exception[..ErrorDetailsLimits.MaxExceptionLength] : exception);
             }
         }
         return buffer.WrittenSpan.ToArray();
@@ -412,14 +424,16 @@ internal sealed class ProtocolHost
         return Terminate(exit);
     }
 
-    /// <summary>stdin ended: main closed the pipe or exited. Cancel everything, give work a moment to stop, and end
-    /// every session (open transactions roll back when their connections close).</summary>
+    /// <summary>stdin ended: main closed the pipe or exited. Cancel everything, give work a moment to stop, wait (bounded) for work
+    /// that must not end half done, and end every session (open transactions roll back when their connections close).</summary>
     private int Shutdown()
     {
         if (Volatile.Read(ref exitCode) >= 0) return exitCode;
         foreach (var context in contexts.Values) context.Cancel(CancelReason.Shutdown);
         try { dispatcher?.CancelAll(); } catch (Exception) { /* Best effort while exiting. */ }
         try { Task.WaitAll([.. work.Keys], options.DrainTimeout); } catch (AggregateException) { }
+        // Main gives a generation with such work a longer grace (methodPolicies' drainMs) before it kills the process.
+        try { dispatcher?.DrainCommitted(); } catch (Exception) { /* Best effort while exiting. */ }
         // Closing a session can wait on the network; main may already be gone, so never let that keep the process alive.
         var disposed = Task.Run(() => dispatcher?.Dispose());
         try { disposed.Wait(options.DrainTimeout); } catch (AggregateException) { /* Best effort while exiting. */ }

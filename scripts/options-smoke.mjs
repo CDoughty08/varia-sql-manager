@@ -2,8 +2,8 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
+import { backendReady, editorText as editorTextOf, optionsDescription, optionsForm, optionsHeading, optionsNotes, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
-import { editorText as editorTextOf, optionsDescription, optionsForm, optionsHeading, optionsNotes, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 // Tools › Options over the fake backend (tests/fixtures/backend.mjs, workbench mode), which records each request in
 // calls.jsonl: the page tree, search, form and property-grid pages, what OK saves to settings.json and what the
@@ -27,7 +27,7 @@ async function launch(fresh = false) {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -98,8 +98,16 @@ try {
   for (const name of ['Text Editor', 'Transact-SQL', 'Query Execution', 'Query Results', 'SQL Server Object Explorer']) await node(name).click(fast)
   expect(await treeNames()).toEqual([
     'Environment', '  General', '  AutoRecover', '  Documents', '  Fonts and Colors', '  Keyboard', '  Live Data', 'Text Editor', '  General', '  Editor Tab and Status Bar', '  Transact-SQL', '    General', '    Tabs', 'Query Execution', '  SQL Server', '    General', '    Advanced',
-    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting'
+    'Query Results', '  SQL Server', '    Results to Grid', 'SQL Server Object Explorer', '  Commands', '  Scripting', 'Activity Monitor',
+    'SQL Server Integration Services'
   ])
+  await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
+  // The SSIS page (S2) is a page of its own at the top level: the tree probe's switch, and its interval, which follows it.
+  await node('SQL Server Integration Services').click(fast)
+  await expect(heading()).toHaveText('SQL Server Integration Services')
+  await expect(field('Update the SSIS Catalog in Object Explorer as it changes')).toBeChecked()
+  await expect(field('Check the catalog for changes every')).toHaveValue('30')
+  await node('Commands').click(fast)
   await expect(heading()).toHaveText('SQL Server Object Explorer › Commands')
   // The tree's keys: Up and Down show the page they reach, Left goes to the parent, Home to the first node.
   await node('Scripting').focus()

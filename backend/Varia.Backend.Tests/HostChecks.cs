@@ -40,6 +40,23 @@ internal static class HostChecks
                 && failure.GetProperty("details").GetProperty("number").GetInt32() == 18456 && failure.GetProperty("details").GetProperty("class").GetInt32() == 14
                 && failure.GetProperty("details").GetProperty("server").GetString()!.Length == ConnectionFailures.MaxServerLength,
                 "an error with details carries its number, state, class and server (cut at 256 characters) after the code and message");
+            host.Request(91, "test.certificate", new { });
+            var certificate = host.Next(FrameKind.Response) is { } certificateFrame ? Body(certificateFrame).GetProperty("error").GetProperty("details") : default;
+            check(certificate.ValueKind == JsonValueKind.Object && certificate.EnumerateObject().Select(member => member.Name).SequenceEqual(["number", "state", "class", "server", "reason"])
+                && certificate.GetProperty("reason").GetString() == "certificate", "a certificate failure's details end with the reason certificate");
+            host.Request(92, "test.crash", new { });
+            var crashed = host.Next(FrameKind.Response);
+            var crash = crashed is null ? default : Body(crashed.Value).GetProperty("error");
+            var crashText = crash.ValueKind == JsonValueKind.Object ? crash.GetRawText() : "";
+            check(crashed?.Header.Id == 92 && crash.GetProperty("code").GetString() == "BACKEND_ERROR"
+                && crash.GetProperty("message").GetString() == "The backend operation failed. Verify the connection and object permissions."
+                && crash.GetProperty("details").EnumerateObject().Select(member => member.Name).SequenceEqual(["exception"])
+                && crash.GetProperty("details").GetProperty("exception").GetString() == "System.InvalidOperationException (0x80131509) > System.TypeInitializationException (0x80131534) > System.DllNotFoundException (0x80131524)"
+                && !crashText.Contains("marker") && !crashText.Contains("secret"),
+                "an unexpected failure answers BACKEND_ERROR with its exception types and HRESULTs for Copy details, never their messages: " + crashText);
+            var deep = new Exception("1", new Exception("2", new Exception("3", new Exception("4", new Exception("5")))));
+            var summary = ErrorDetailsLimits.Summary(deep);
+            check(summary == string.Join(" > ", Enumerable.Repeat("System.Exception (0x80131500)", 4)), "the exception summary names at most four exceptions, from the outer one inwards");
 
             host.Request(2, "test.wait", new { });
             Thread.Sleep(50);
@@ -185,9 +202,13 @@ internal static class HostChecks
 
             host.Request(20, "test.wait", new { });
             Thread.Sleep(100);
+            host.Dispatcher.DrainFor = TimeSpan.FromMilliseconds(400);
+            var closing = Stopwatch.StartNew();
             host.CloseInput();
-            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && host.Dispatcher.Disposed,
-                "stdin EOF cancels everything, disposes the service and exits 0");
+            check(host.Exited.Wait(5000) && host.Exits.TryPeek(out var code) && code == 0 && host.Dispatcher.CancelAllCalls == 1 && host.Dispatcher.Disposed
+                && host.Dispatcher.DrainCalls == 1 && !host.Dispatcher.DisposedBeforeDrain && closing.ElapsedMilliseconds >= 400,
+                "stdin EOF cancels everything, waits for the work that must not end half done (a Create Catalog past its restore), then disposes the service and exits 0 ("
+                + closing.ElapsedMilliseconds + " ms)");
         }
 
         using (var host = new HostHarness(new HostOptions { MaxInFlight = 2, MetadataSlots = 1, MetadataWait = TimeSpan.FromMilliseconds(200) }))
@@ -424,7 +445,7 @@ internal sealed class StubDispatcher : IRequestDispatcher
     public int Unsent;
     public bool Disposed;
     public bool Created;
-    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.settle", "test.settleSsis", "test.secret"];
+    public IReadOnlyList<string> Methods { get; } = ["test.echo", "test.slow", "test.wait", "test.stream", "test.events", "test.unsent", "test.failure", "test.certificate", "test.crash", "test.settle", "test.settleSsis", "test.secret"];
     public RequestLane LaneOf(string method) => method switch { "test.slow" => RequestLane.Metadata, "test.stream" => RequestLane.Results, "test.settle" => RequestLane.Actions, "test.settleSsis" => RequestLane.Ssis, _ => RequestLane.Control };
     public bool AnswersStop(string method) => method is "test.settle" or "test.settleSsis";
     public readonly ConcurrentQueue<string> AskedSensitive = new();
@@ -470,6 +491,11 @@ internal sealed class StubDispatcher : IRequestDispatcher
                 context.SendEvent(new { Type = "resultSet.opened", Descriptor = new string('d', 5 * 1024 * 1024) }, false);
                 return new { Sent = 5 };
             case "test.failure": throw new RequestException("SQL_ERROR", "Login failed for user 'reader'.", new ErrorDetails(18456, 1, 14, new string('s', 300)));
+            case "test.certificate": throw new RequestException("SQL_ERROR", "The certificate chain was issued by an authority that is not trusted.",
+                new ErrorDetails(unchecked((int)0x80090325), 0, 20, "localhost", ErrorDetailsLimits.Certificate));
+            // An unexpected failure whose messages hold what must never leave the backend (a path, a name, a password).
+            case "test.crash": throw new InvalidOperationException("crash-message-marker Password=secret", new TypeInitializationException("Interop+Sni",
+                new DllNotFoundException(@"C:\deep\path-marker\Microsoft.Data.SqlClient.SNI.dll: The filename or extension is too long.")));
             case "test.unsent":
                 context!.Unsent = () => Interlocked.Increment(ref Unsent);
                 return new { Text = new string('x', ProtocolLimits.ResponseBody) };
@@ -478,6 +504,16 @@ internal sealed class StubDispatcher : IRequestDispatcher
     }
 
     public void CancelAll() => Interlocked.Increment(ref CancelAllCalls);
+    /// <summary>How long DrainCommitted holds shutdown, as a Create Catalog finishing its removal would.</summary>
+    public TimeSpan DrainFor;
+    public int DrainCalls;
+    public bool DisposedBeforeDrain;
+    public void DrainCommitted()
+    {
+        if (Disposed) DisposedBeforeDrain = true;
+        Thread.Sleep(DrainFor);
+        Interlocked.Increment(ref DrainCalls);
+    }
     public void Dispose() => Disposed = true;
 }
 
@@ -501,6 +537,7 @@ internal sealed class HeldSummary(SqlService service, ManualResetEventSlim taken
     }
 
     public void CancelAll() => service.CancelAll();
+    public void DrainCommitted() => service.DrainCommitted();
     public void Dispose() => service.Dispose();
 }
 

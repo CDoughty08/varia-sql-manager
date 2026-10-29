@@ -4,13 +4,17 @@ import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { activityLiveProbes, activitySource, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, type ActivityTable } from '../src/shared/activity/catalog'
 import { limits } from '../src/shared/ipc/wire/protocol'
 import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveTones, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
+import { catalogFingerprints } from '../src/shared/ssis/catalog'
 
 const L = limits.live
 const catalogId = /^[a-z][A-Za-z0-9]{0,31}$/
+// Series travel as positions, never ids, so an id may name its family (wait.lock, focus.cpuRate).
+const seriesId = /^(?=.{1,32}$)[a-z][A-Za-z0-9]*(\.[a-z][A-Za-z0-9]*)?$/
 
 describe('live catalogue', () => {
   it('names every source and probe once, and each probe belongs to exactly one source', () => {
@@ -32,7 +36,7 @@ describe('live catalogue', () => {
       const { min, max } = probe.intervalMs
       expect(min <= probe.intervalMs.default && probe.intervalMs.default <= max && min >= L.intervalMs.min && max <= L.intervalMs.max, id).toBe(true)
       expect((probe.series ?? []).length, id).toBeLessThanOrEqual(L.series)
-      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(catalogId); expect(liveUnits).toContain(series.unit); expect(liveCounters).toContain(series.counter) }
+      for (const series of probe.series ?? []) { expect(series.id, id).toMatch(seriesId); expect(liveUnits).toContain(series.unit); expect(liveCounters).toContain(series.counter) }
       // The scheduler's own settings: a budget the statement gates and LOCK_TIMEOUT fit in, a duty cycle that can trip, a refresh gap.
       const budget = probe.budgetMs ?? defaultBudgetMs
       expect(budget.min >= L.budgetMs.min && budget.min <= budget.max && budget.max <= L.budgetMs.max, id).toBe(true)
@@ -111,7 +115,17 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'ssis.operations'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations'])
+    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
+    // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
+    // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
+    expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'] })
+    expect(liveProbes['explorer.databases']).toMatchObject({ intervalMs: { default: 5000, min: 2000 }, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
+    expect(liveProbes['explorer.databases'].permission).toBeUndefined()
+    expect(liveProbes['explorer.progress']).toMatchObject({ permission: 'serverState', tables: [{ id: 'progress', key: ['name'] }] })
+    expect(liveProbes['explorer.agent']).toMatchObject({ gates: { editions: [1, 2, 3, 8] }, series: [{ id: 'runningJobs', counter: 'gauge' }] })
+    expect(liveProbes['explorer.agent'].permission).toBeUndefined()
+    expect(liveProbes['explorer.availability']).toMatchObject({ permission: 'serverState', gates: { editions: [2, 3] }, tables: [{ id: 'groups', key: ['name'] }] })
     // SSIS Operations: the catalog's own pool and prologue, 2 s by default (owner decision 12), settable from 1 to 60 s, one
     // snapshot table keyed by operation id whose selected row lingers, its tone column last.
     expect(liveSources['ssis.operations']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.operations.list'] })
@@ -121,9 +135,55 @@ describe('live catalogue', () => {
     expect(operations.tables).toHaveLength(1)
     expect(operations.tables![0]).toMatchObject({ id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true })
     expect(operations.tables![0].columns.at(-1)).toMatchObject({ id: 'tone', role: 'tone' })
-    expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview'] })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
+  })
+  it('builds the Activity Monitor\'s probes from its own catalogue: tables, columns in order, keys, facets, series and gates', () => {
+    expect(activityLiveProbes).toEqual(['activity.overview', 'activity.sessions', 'activity.resources'])
+    for (const id of activityLiveProbes) {
+      const live = liveProbes[id], spec = probeSpecs[id]
+      expect(live, id).toMatchObject({ source: activitySource, label: spec.title, intervalMs: { default: spec.defaultIntervalMs, min: spec.minIntervalMs, max: spec.maxIntervalMs },
+        budgetMs: { max: spec.budgetMs }, maxDutyCycle: spec.maxDutyCycle, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
+      expect(live.filterMode, id).toBe(spec.filterMode)
+      expect(live.minGapMs, id).toBe(spec.minGapMs)
+      expect((live.series ?? []).map(series => series.id), id).toEqual(probeSeries(id))
+      // A metrics probe's series go through the delta engine by kind; a snapshot probe sends what it worked out itself.
+      for (const series of live.series ?? []) expect(series.counter, `${id} ${series.id}`).toBe(spec.kind === 'metrics' ? seriesSpecs[series.id]!.kind : 'gauge')
+      expect((live.tables ?? []).map(table => table.id), id).toEqual(spec.tables)
+      for (const table of live.tables ?? []) {
+        const source = tableSpecs[table.id as ActivityTable]
+        expect(table.columns.map(column => [column.id, column.name, column.dataType]), table.id).toEqual(source.columns.map(column => [liveColumnId(table.id as ActivityTable, column.id), column.caption, liveColumnTypes[column.type]]))
+        expect(table.key, table.id).toEqual(source.key.map(column => liveColumnId(table.id as ActivityTable, column)))
+        expect(table.facets ?? [], table.id).toEqual((source.facetColumns ?? []).map(column => liveColumnId(table.id as ActivityTable, column)))
+        expect(table.departed ?? false, table.id).toBe(source.departedLinger ?? false)
+        expect(table.rowCap, table.id).toBe(source.rowCap)
+        // Names are what Copy with Headers and Save write, so they are the captions, unique within a table.
+        expect(new Set(table.columns.map(column => column.name)).size, table.id).toBe(table.columns.length)
+      }
+    }
+    // A probe's first table keeps the catalogue's ids, so Processes sorts by sessionId; the others are prefixed.
+    expect([liveColumnId('sessions', 'login'), liveColumnId('blocking', 'sessionId'), liveColumnId('activeQueries', 'cpuMs'), liveColumnId('waitCategories', 'waitRate'), liveColumnId('waitTypes', 'waitRate'), liveColumnId('files', 'file')])
+      .toEqual(['login', 'chainSessionId', 'activeCpuMs', 'waitRate', 'typeWaitRate', 'ioFile'])
+    // Without server state, only the sessions probe runs (the monitor's own session); it reports what the login may do.
+    expect([liveProbes['activity.overview'].permission, liveProbes['activity.sessions'].permission, liveProbes['activity.resources'].permission]).toEqual(['serverState', undefined, 'serverState'])
+    expect(liveProbes['activity.sessions'].status).toEqual(Object.keys(activityStatuses))
+    expect(liveProbes['activity.resources'].description).toContain(pendingProbes['activity.resources'])
+    // The opened frame carries a pending probe's note.
+    for (const note of Object.values(pendingProbes)) expect(note.length).toBeLessThanOrEqual(L.noteCharacters)
+    expect(liveProbes['activity.overview'].series?.find(series => series.id === 'pageLifeExpectancy')).toMatchObject({ unit: 'seconds', counter: 'gauge' })
+  })
+  it('fingerprints the SSIS Catalog for the tree every 30 s, on its own pool and with no args', () => {
+    // Owner decision 12: the tree probe runs every 30 s; D-ssis 7.3 bounds it at 10 s to 300 s. SSISDB's budget is 10 s.
+    expect(liveSources['ssis.catalog']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.catalogProbe'] })
+    expect(liveProbes['ssis.catalogProbe']).toMatchObject({ intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 } })
+    const probe = liveProbes['ssis.catalogProbe']
+    expect(probe.series ?? []).toEqual([])
+    expect(probe.tables ?? []).toEqual([])
+    expect(probe.permission).toBeUndefined()
+    // Two status values per fingerprint, exactly what the status limit allows, so another view needs another probe.
+    expect(probe.status).toEqual(catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum']))
+    expect(probe.status).toHaveLength(L.statuses)
+    expect(liveArgsSchemas['ssis.catalog'].safeParse({}).success).toBe(false)
   })
   it('stays erasable TypeScript that plain Node loads, as the fake backend does', () => {
     const file = join('src', 'shared', 'live', 'catalog.ts')

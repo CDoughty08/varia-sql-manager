@@ -8,6 +8,8 @@ import type { QuickInputMessage, QuickInputRow, QuickInputView } from './QuickIn
 import { quickInputKeyAction, resultStatus } from './view-model'
 
 const rowHeight = 24, visibleRows = 12, overscan = 6, windowedAbove = 100
+/** The widget's distance from the window's sides (its CSS width leaves 20 px each side) and from an anchor's bottom. */
+const windowMargin = 20, anchorGap = 4
 // Each message gets its own text node, so the live region announces a hint again when the same row is accepted again.
 const messageKeys = new WeakMap<QuickInputMessage, number>()
 let messageCount = 0
@@ -48,6 +50,7 @@ function Widget({ view }: { view: QuickInputView }) {
   const pressed = useRef<number | undefined>(undefined)
   const [scrollTop, setScrollTop] = useState(0)
   const [status, setStatus] = useState('')
+  const [placement, setPlacement] = useState<{ readonly left: number; readonly top: number }>()
   const { rows, activeIndex } = view
 
   // The input is uncontrolled: the service writes it only to open a picker or switch mode, never while composing.
@@ -72,6 +75,20 @@ function Widget({ view }: { view: QuickInputView }) {
     }
     setScrollTop(element.scrollTop)
   }, [activeIndex, rows])
+  // Opened from the header's search box, the widget drops down from it, centred on it and kept inside the window.
+  useLayoutEffect(() => {
+    const { anchor } = view, element = root.current
+    if (!anchor || !element) { setPlacement(undefined); return }
+    const place = () => {
+      const box = anchor.getBoundingClientRect(), width = element.offsetWidth
+      const left = Math.min(Math.max(windowMargin, (box.left + box.right - width) / 2), window.innerWidth - width - windowMargin)
+      // Whole pixels keep its text and icons sharp.
+      setPlacement({ left: Math.round(Math.max(0, left)), top: Math.round(box.bottom + anchorGap) })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [view.anchor])
   const statusText = resultStatus(view)
   useEffect(() => {
     const timer = setTimeout(() => setStatus(statusText), 300)
@@ -118,7 +135,7 @@ function Widget({ view }: { view: QuickInputView }) {
     </div>
   })
 
-  return <div ref={root} className="quick-input" role="dialog" aria-label={view.title ?? view.ariaLabel}
+  return <div ref={root} className="quick-input" role="dialog" aria-label={view.title ?? view.ariaLabel} style={placement ? { left: placement.left, right: 'auto', top: placement.top, margin: 0 } : undefined}
     // Clicks inside the widget keep focus in the input (rows accept on click); the input itself still places the caret.
     onMouseDown={event => { if (event.target !== input.current) event.preventDefault() }}>
     {view.title && <div className="quick-input-title">{view.title}</div>}

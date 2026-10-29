@@ -4,6 +4,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Varia.Backend.Ssis;
 
 namespace Varia.Backend.Tests;
 
@@ -159,8 +160,8 @@ internal static partial class SsisManifest
     }
 
     /// <summary>Where the Integration Services feature keeps its catalog backup, from the engine's service command line in
-    /// sys.dm_server_services: the shared folder above MSSQL&lt;n&gt;.&lt;instance&gt;, then &lt;major&gt;0\DTS\Binn. SQL Server 2025
-    /// names it SSISDBBackup.bak; earlier versions SSISDB.bak. Null when the line is not a Windows install's.</summary>
+    /// sys.dm_server_services: the shared folder above MSSQL&lt;n&gt;.&lt;instance&gt;, then &lt;major&gt;0\DTS\Binn\SSISDBBackup.bak, the
+    /// name SSMS 22's Catalog.Create uses for every version. Null when the line is not a Windows install's.</summary>
     public static string? BackupPath(string? serviceCommandLine, int major)
     {
         if (string.IsNullOrWhiteSpace(serviceCommandLine)) return null;
@@ -170,7 +171,7 @@ internal static partial class SsisManifest
         var instance = Array.FindLastIndex(parts, part => part.StartsWith("MSSQL", StringComparison.OrdinalIgnoreCase) && part.Contains('.'));
         if (instance < 1 || !executable.EndsWith("\\sqlservr.exe", StringComparison.OrdinalIgnoreCase)) return null;
         var root = string.Join("\\", parts[..instance]);
-        return root + "\\" + (major * 10).ToString(CultureInfo.InvariantCulture) + "\\DTS\\Binn\\" + (major >= 17 ? "SSISDBBackup.bak" : "SSISDB.bak");
+        return root + "\\" + (major * 10).ToString(CultureInfo.InvariantCulture) + "\\DTS\\Binn\\" + SsisCatalog.Current.BackupFile(major);
     }
 
     /// <summary>Every way <paramref name="actual"/> differs from <paramref name="expected"/>. For the fake catalog only the views
