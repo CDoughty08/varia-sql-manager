@@ -4,17 +4,19 @@ import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } fr
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
-import type { ErrorCode } from './ipc/wire/protocol'
+import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
+import type { SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
 import type { RecentFile } from './files/recent'
 import type { RecoveredDocument, RecoveryEntry, RecoveryWrite } from './files/recovery'
 import type { LiveEnd, LiveSubscribeParams, LiveUpdateParams, LiveUpdateResult } from './live/schema'
+import type { ActivityDetailsRequest, ActivityDetailsResult, ActivityKillRequest, ActivityKillResult } from './activity/schema.ts'
 
 export interface AdvancedConnectionOptions {
   commandTimeout: number
@@ -105,7 +107,8 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector'
+  /** `tone`: a live table's row tone (src/shared/live/catalog.ts), hidden by the grid and left out of Copy and Save. */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'tone'
   maxLength?: number
   precision?: number
   scale?: number
@@ -134,8 +137,13 @@ export interface ResultDescriptor {
   truncated?: TruncationReason
   incomplete: boolean
 }
-/** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
-export interface MessageEntry { text: string; kind: 'info' | 'error' }
+/**
+ * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); what the script
+ * printed (PRINT, RAISERROR with severity 10 or less) is `print`, which opens the Messages strip under the results; SQL
+ * Server's other informational messages (warnings such as 8153, SET STATISTICS output, DBCC) are `server`, which show in the
+ * strip without opening it; Varia's own lines (row counts, notes) are `info`.
+ */
+export interface MessageEntry { text: string; kind: 'info' | 'server' | 'print' | 'error' }
 export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */
@@ -219,7 +227,8 @@ export interface ExplorerNode {
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
-export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA'] as const
+// NOT_SUPPORTED: the server cannot have what the folder lists (the SSIS Catalog on SQL Server on Linux); the row says why.
+export const explorerErrorCodes = ['PERMISSION_DENIED', 'NO_DB_ACCESS', 'DATABASE_UNAVAILABLE', 'NOT_FOUND', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'SQL_ERROR', 'AUTH_KERBEROS', 'AUTH_UNSUPPORTED', 'AUTH_ENTRA', 'NOT_SUPPORTED'] as const
 export type ExplorerErrorCode = typeof explorerErrorCodes[number]
 /** A catalog failure, returned as a value so the tree can branch on its code; `refreshParent` means the node itself is gone. */
 export interface ExplorerError { readonly code: ExplorerErrorCode; readonly message: string; readonly retryable: boolean; readonly action?: 'retry' | 'refreshParent' }
@@ -263,6 +272,15 @@ export interface RpcMethods {
   'actions.script': { params: ActionRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
   'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
+  'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
+  /** Changes the SSIS Catalog (Stop Operation) on its own unpooled connection after a preflight; never re-sent, and only Stop
+   *  (varia:ssis-cancel) ends a lock wait. Sensitive: its frame is zeroed once written. */
+  'ssis.execute': { params: SsisExecuteRequest; result: SsisExecuteResult }
+  /** One session's Details flyout, read on the Activity Monitor's pool under the live gates; closing it cancels the read (varia:activity-cancel). */
+  'activity.details': { params: ActivityDetailsRequest; result: ActivityDetailsResult }
+  /** Kill Process: each session's identity is checked and KILL runs in one guarded batch on the object actions' own connection; never re-sent. */
+  'activity.kill': { params: ActivityKillRequest; result: ActivityKillResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** Methods the renderer reaches only through the results port (validated by portRequestSchema, never by invoke). */
@@ -293,9 +311,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
-/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
- *  server that answered (at most 256 characters). Never the connection string or the password. */
-export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
+ *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
+ *  trusted. `exception` comes only with BACKEND_ERROR: the unexpected exception's types and HRESULTs (at most 512
+ *  characters), for Copy details. Never the connection string, the password, or an exception's message. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string; reason?: ErrorReason; exception?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
  *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }
@@ -395,6 +415,20 @@ export interface VariaApi {
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
+  describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
+  /** Runs an SSIS Catalog action (Stop Operation). Refusals and failures come back as `result.error` with the steps that ran. */
+  executeSsis(params: SsisExecuteRequest): Promise<ApiResult<SsisExecuteResult>>
+  /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
+   *  answers `CANCELLED`. */
+  cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** Reads an Activity Monitor session's details (the flyout). Failures the user can act on come back as `result.error`. */
+  activityDetails(params: ActivityDetailsRequest): Promise<ApiResult<ActivityDetailsResult>>
+  /** Kills sessions (1–64) after checking each one's identity; every session gets an outcome or is reported untried. */
+  activityKill(params: ActivityKillRequest): Promise<ApiResult<ActivityKillResult>>
+  /** Cancels Details reads by their `requestId`s (1–16); `cancelled` counts those still running. A read cancelled this
+   *  way answers `CANCELLED`. */
+  cancelActivity(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Tools › Options as main stored it, complete; `warning` reports a file that was reset or salvaged (once). */
   getSettings(): Promise<ApiResult<SettingsLoad>>
   /** Changes settings: known keys only, `null` resets one. Main validates strictly and resolves to the new state. */

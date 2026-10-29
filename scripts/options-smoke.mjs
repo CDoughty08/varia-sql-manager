@@ -2,7 +2,8 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { editorText as editorTextOf, optionsDescription, optionsForm, optionsHeading, optionsNotes, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { backendReady, editorText as editorTextOf, optionsDescription, optionsForm, optionsHeading, optionsNotes, toolbarButton, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { resizeContent } from './fixtures/window-resize.mjs'
 
 // Tools › Options over the fake backend (tests/fixtures/backend.mjs, workbench mode), which records each request in
 // calls.jsonl: the page tree, search, form and property-grid pages, what OK saves to settings.json and what the
@@ -26,7 +27,7 @@ async function launch(fresh = false) {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -237,7 +238,7 @@ try {
   console.log('Options checks: OK names the bounds of an out-of-range value and focuses it; Cancel discards a draft across pages.')
 
   // 10. At 1024×768 the dialog fits; screenshots in Dark and Light (the window keeps this size from here on).
-  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setContentSize(1024, 768) })
+  await resizeContent(application, page, 1024, 768)
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   await openOptions()
   await node('SQL Server Object Explorer').click(fast)

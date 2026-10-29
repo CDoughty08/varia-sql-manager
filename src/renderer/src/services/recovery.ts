@@ -106,8 +106,8 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   }
   private async keep(tabId: string): Promise<void> {
     const { documents } = this.options, document = documents.get(tabId), model = documents.getModel(tabId)
-    // A table designer has no model: AutoRecover keeps text only.
-    if (!document?.dirty || !model || (document.kind !== undefined && isCustomKind(document.kind))) return
+    // A table designer, Database Properties or an Activity Monitor has no model: AutoRecover keeps text only.
+    if (!document?.dirty || !model || isCustomKind(document.kind)) return
     const version = model.getAlternativeVersionId(), current = this.kept.get(tabId)
     if (current?.version === version) return
     // Kept before the write, so a save or close meanwhile deletes the copy after it is written.

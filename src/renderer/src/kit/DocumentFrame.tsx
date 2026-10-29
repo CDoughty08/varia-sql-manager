@@ -114,6 +114,17 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
   }, [current])
   const keyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    if (event.key === 'Tab') {
+      // Tab goes into the section the list shows, as SSMS's page list tabs into its page: every section is in one column,
+      // so the browser's stops after the column's own would start at the first section, scrolling away from the one
+      // chosen. A section with nothing to focus leaves Tab to the browser, which stops at the column (PageDown pages it).
+      const target = firstTabbable(nav.current?.ownerDocument.getElementById(sectionDomId(id, current)))
+      if (!target) return
+      event.preventDefault()
+      event.stopPropagation()
+      target.focus()
+      return
+    }
     const from = (event.target as HTMLElement).closest<HTMLElement>('[data-section]')?.dataset.section ?? current
     const next = sectionKey(event.key, sections.map(section => section.id), from)
     if (next === undefined) return
@@ -135,6 +146,16 @@ export function SectionNav({ id, sections, current, onChoose }: NavProps) {
 }
 
 const sectionDomId = (id: string, section: string) => `${id}-section-${section}`
+const tabbableSelector = 'button, input, select, textarea, a[href], [tabindex], [contenteditable="true"]'
+/** The first element Tab would stop at inside `root`: enabled, in the tab order, and rendered. */
+function firstTabbable(root: HTMLElement | null | undefined): HTMLElement | undefined {
+  for (const element of root?.querySelectorAll<HTMLElement>(tabbableSelector) ?? []) {
+    if (element.tabIndex < 0 || (element as HTMLButtonElement).disabled || (element instanceof HTMLInputElement && element.type === 'hidden')) continue
+    if (element.closest('[inert]') || element.getClientRects().length === 0) continue
+    return element
+  }
+  return undefined
+}
 
 /**
  * A section of the content: its heading (a disclosure button when it collapses), what sits beside it, and its body. A
@@ -160,9 +181,13 @@ export function FrameSectionView({ id, section, collapsed, onToggle }: { readonl
 export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
   readonly verbs?: readonly HeaderVerb[]
   readonly facts?: readonly Fact[]
+  /** What the document says about its last action, between the header and the content: an InlineError, a notice. */
+  readonly banner?: ReactNode
   /** Sections with a list beside them; without them the frame shows `children` under the header. */
   readonly sections?: readonly FrameSection[]
   readonly children?: ReactNode
+  /** What the content column ends with, pinned to its bottom edge over the rows: a property sheet's FieldHintStrip. */
+  readonly hint?: ReactNode
   /** The document's frame state (its service keeps it); needed with sections or a Script drawer. */
   readonly frame?: FrameState
   readonly onFrame?: (next: FrameState) => void
@@ -178,12 +203,13 @@ export interface DocumentFrameViewProps extends Omit<HeaderProps, 'verbs'> {
  * service, and every change goes back through `onFrame`.
  */
 export function DocumentFrameView(props: DocumentFrameViewProps) {
-  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], sections, children, frame, onFrame, script, attributes } = props
+  const { id, title, crumbs, subtitle, state, tools, verbs, facts = [], banner, sections, children, hint, frame, onFrame, script, attributes } = props
   const change = onFrame ?? (() => {})
   return <div className="document-frame" role="region" aria-labelledby={`${id}-title`} data-document-frame={id} {...attributes}>
     <DocumentHeader id={id} title={title} crumbs={crumbs} subtitle={subtitle} state={state} tools={tools} verbs={verbs} />
     {facts.length > 0 && <FactLine facts={facts} />}
-    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} /> : <div className="document-content">{children}</div>}
+    {banner && <div className="document-banner">{banner}</div>}
+    {sections && frame ? <SectionedBody id={id} title={title} sections={sections} frame={frame} onFrame={change} hint={hint} /> : <div className="document-content">{children}{hint}</div>}
     {script && frame && <ScriptDrawer id={id} open={frame.scriptOpen} size={frame.scriptSize} {...script}
       onToggle={() => change(setScriptOpen(frame, !frame.scriptOpen))} onResize={size => change(resizeScript(frame, size))} />}
   </div>
@@ -194,7 +220,7 @@ export function DocumentFrameView(props: DocumentFrameViewProps) {
  * section in view, checked once a frame. Near the end, where the last sections cannot reach the top, the one chosen
  * stays marked (`spySection`).
  */
-function SectionedBody({ id, title, sections, frame, onFrame }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void }) {
+function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly id: string; readonly title: string; readonly sections: readonly FrameSection[]; readonly frame: FrameState; readonly onFrame: (next: FrameState) => void; readonly hint?: ReactNode }) {
   const content = useRef<HTMLDivElement>(null)
   // The latest frame and handler for the scroll callback, which runs a frame after the render that set it up.
   const latest = useRef({ frame, onFrame, sections })
@@ -240,6 +266,7 @@ function SectionedBody({ id, title, sections, frame, onFrame }: { readonly id: s
         only go from heading to heading. */}
     <div className="document-content document-sections" ref={content} onScroll={scrolled} role="region" aria-label={`${title} sections`} tabIndex={0}>
       {sections.map(section => <FrameSectionView key={section.id} id={id} section={section} collapsed={frame.collapsed.includes(section.id)} onToggle={() => onFrame(toggleSection(frame, section.id))} />)}
+      {hint}
     </div>
   </div>
 }

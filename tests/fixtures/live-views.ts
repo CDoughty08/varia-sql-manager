@@ -15,12 +15,15 @@ export function fakeLiveViews() {
   const views: FakeLiveView[] = []
   const open = (spec: LiveSpec, owner: LiveOwner): LiveHandle => {
     const snapshot: LiveSnapshot = { status: 'connecting', probes: {}, connectionId: spec.connectionId }
+    // Each probe's options as opened and patched since, as LiveService's probeOptions reports them.
+    const options = new Map<LiveProbeId, LiveProbeOptions>(spec.probes.map(({ probe, ...rest }) => [probe, { ...rest }]))
     const view: FakeLiveView = {
       spec: structuredClone(spec), owner, calls: [], disposed: false,
       handle: {
         id: crypto.randomUUID(), source: spec.source, ownerKey: owner.key,
         getSnapshot: () => snapshot, subscribe: () => () => {},
-        setProbe: (probe, patch) => { view.calls.push({ method: 'setProbe', probe, patch: { ...patch } }) },
+        setProbe: (probe, patch) => { view.calls.push({ method: 'setProbe', probe, patch: { ...patch } }); if (options.has(probe)) options.set(probe, { ...options.get(probe), ...patch }) },
+        probeOptions: probe => options.get(probe),
         setArgs: () => {},
         setUserPaused: paused => { view.calls.push({ method: 'setUserPaused', paused }) },
         refresh: () => { view.calls.push({ method: 'refresh' }) },

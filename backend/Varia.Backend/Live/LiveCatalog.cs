@@ -7,7 +7,13 @@ internal sealed record LiveIntervalJson(int Default, int Min, int Max);
 internal sealed record LiveIntervalBoundsJson(int Min, int Max);
 /// <summary>Counter is how Live/LiveDeltas.cs turns raw values into samples: gauge, rate, msPerSecond, ratio or cpuPercent.</summary>
 internal sealed record LiveSeriesJson(string Id, string Unit, string Label, string Counter = "gauge");
-internal sealed record LiveColumnJson(string Id, string Name, string DataType);
+/// <summary>Role tone marks the row's tone column (the table's last): stored with that role, so the grid hides it and Copy and Save
+/// leave it out.</summary>
+internal sealed record LiveColumnJson(string Id, string Name, string DataType, string? Role = null)
+{
+    /// <summary>Whether a sort or filter may name the column, and a filter's text match it: every column but the tone.</summary>
+    public static bool IsData(LiveColumnJson column) => column.Role != "tone";
+}
 /// <summary>Settle: an append id counts as settled once first seen at least Ticks ticks and Ms milliseconds ago.</summary>
 internal sealed record LiveSettleJson(int Ticks, int Ms);
 /// <summary>Mode is snapshot (replaced by each sample) or append (grows); Key names the columns that identify a row (an append

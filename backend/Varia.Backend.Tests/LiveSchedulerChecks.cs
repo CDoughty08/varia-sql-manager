@@ -59,21 +59,41 @@ internal static class LiveSchedulerChecks
         var queries = LiveSql.All(catalog).ToList();
         var problems = queries.SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue)).Select(problem => query.Probe + " band " + query.Band + ": " + problem))
             .Concat(LiveSql.Lint(LiveSql.UncommittedPrologue + LiveSql.Session).Select(problem => "session: " + problem)).ToList();
-        check(problems.Count == 0, "every one-batch SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
+        // The one-batch probes are Object Explorer's status probes; the Activity Monitor's run several statements each (ActivityReader).
+        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id)).ToList();
+        check(oneBatch.Count == 4 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
+            "every one-batch SQL probe's text passes the live lint at every band, with the session probe (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
         // theirs to read (the clock names the monitor's session, and Active Expensive Queries leaves it out).
         var activity = ActivitySql.Renders().SelectMany(render => ActivityCatalog.Current.LiveProbes.SelectMany(probe => ActivitySql.Statements(probe, render)))
             .Append(ActivitySql.Capabilities).Distinct()
             .SelectMany(statement => LiveSql.Lint(LiveSql.UncommittedPrologue + statement.Text.Replace("@@SPID", "@spid", StringComparison.Ordinal)).Select(problem => statement.Probe + " " + statement.Id + ": " + problem)).ToList();
-        check(activity.Count == 0 && queries.Count == 0 && LiveSql.For(ActivityReader.OverviewProbe, LiveSql.MaxBand) is null,
+        check(activity.Count == 0 && ActivityCatalog.Current.LiveProbes.All(probe => LiveSql.For(probe, LiveSql.MaxBand) is null),
             "the Activity Monitor's statements pass the live lint too (no comments, every TOP ordered at its own level, no remote reads), and no second overview query exists in LiveSql: " + string.Join("; ", activity.Take(5)));
         // Every series of a SQL probe comes from a column its query returns, and the clock columns are among them.
         var unmapped = queries.SelectMany(query => catalog.Probes[query.Probe].Series.Where(series => query.Series.FirstOrDefault(entry => entry.Series == series.Id) is not { } mapping
             || !query.Columns.Contains(mapping.Column) || mapping.Base is { } baseColumn && !query.Columns.Contains(baseColumn)
             || series.Counter is "ratio" or "cpuPercent" && mapping.Base is null).Select(series => query.Probe + "." + series.Id)).ToList();
-        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks))
-            && LiveSql.For("debug.synthetic.metrics", 17) is null,
-            "every series maps to a column of its probe's one row (ratios and CPU with a base), and the clock columns are there: " + string.Join(", ", unmapped));
+        // A rate needs the server's clock; a probe of gauges alone (Object Explorer's Agent count) reads none.
+        static bool Clocked(LiveQuery query, LiveProbeJson spec) => query.MsTicks is null && query.StartTicks is null
+            ? spec.Series.All(series => series.Counter == "gauge")
+            : query.Columns.Contains(query.MsTicks) && query.Columns.Contains(query.StartTicks);
+        check(unmapped.Count == 0 && queries.All(query => query.Columns.Distinct(StringComparer.Ordinal).Count() == query.Columns.Length && Clocked(query, catalog.Probes[query.Probe]))
+            && !Clocked(new LiveQuery(ActivityReader.OverviewProbe, LiveSql.MaxBand, "SELECT 1;", ["cpu_ms", "schedulers"], null, null, []), catalog.Probes[ActivityReader.OverviewProbe])
+            && LiveSql.For(LiveSql.DatabasesProbe, 12) is null && LiveSql.For(LiveSql.AgentProbe, 12) is null && LiveSql.For("debug.synthetic.metrics", 17) is null,
+            "every series maps to a column of its probe's one row (ratios and CPU with a base), a probe with rates has the clock columns, and no query exists below 2016: " + string.Join(", ", unmapped));
+        // Object Explorer's status probes read one table each (the Agent count a metrics row), fit their catalogue entries,
+        // and look up a restore's database lock only for RESTORE requests: a database recovering at startup is its request's
+        // own, and only the RESTORE branch, whose outer rows are RESTORE requests alone, reads the lock DMV, once per request.
+        var statusProblems = new[] { LiveSql.DatabasesProbe, LiveSql.ProgressProbe, LiveSql.AgentProbe, LiveSql.AvailabilityProbe }
+            .SelectMany(probe => LiveSql.For(probe, LiveSql.MaxBand) is { } query ? query.Problems(catalog.Probes[probe]).Select(problem => probe + ": " + problem) : [probe + ": no query"]).ToList();
+        var progress = LiveSql.For(LiveSql.ProgressProbe, LiveSql.MaxBand)!.Body.Split("UNION ALL\n");
+        check(statusProblems.Count == 0 && LiveSql.For(LiveSql.AgentProbe, LiveSql.MaxBand) is { Columns: ["running_jobs"], Tables.Length: 0 } && progress.Length == 2
+            && progress[0].EndsWith("FROM sys.dm_exec_requests AS r\nJOIN sys.databases AS d ON d.database_id = r.database_id\nWHERE r.command = N'DB STARTUP'\n", StringComparison.Ordinal)
+            && progress[1].Contains("FROM sys.dm_exec_requests AS r\nCROSS APPLY (SELECT TOP (1) l.resource_database_id FROM sys.dm_tran_locks AS l\n    WHERE l.request_session_id = r.session_id AND l.resource_type = N'DATABASE' AND l.request_mode = N'X'\n"
+                + "    ORDER BY l.resource_database_id) AS t\nJOIN sys.databases AS d ON d.database_id = t.resource_database_id\nWHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG')\nORDER BY name;", StringComparison.Ordinal)
+            && !progress[0].Contains("dm_tran_locks", StringComparison.Ordinal) && progress[1].Split("dm_tran_locks").Length == 2,
+            "Object Explorer's status probes fit their catalogue entries; a recovery's progress is its request's own database, and a restore's the database its RESTORE request holds exclusively, the lock DMV read only in the RESTORE branch: " + string.Join("; ", statusProblems));
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {
@@ -130,10 +150,12 @@ internal static class LiveSchedulerChecks
             "server DMVs read uncommitted; SSISDB reads committed only with READ_COMMITTED_SNAPSHOT on; both wait 1 s for a lock and lose any deadlock");
         ServerProfile Profile(int major, int edition) => new(major, null, edition, null, false, true, false);
         check(LiveConnections.Pool("server") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb") == ("SSISDB", " - Integration Services")
+            && LiveConnections.Pool("server", "explorer", Profile(17, 3)) == ("master", " - Activity Monitor") && LiveConnections.Pool("server", "explorer", Profile(12, 8)) == ("master", " - Activity Monitor")
+            && LiveConnections.Pool("server", "explorer", Profile(12, 5)) == (null, " - Activity Monitor") && LiveConnections.Pool("server", "activity", Profile(17, 3)) == (null, " - Activity Monitor")
             && LiveConnections.Band(Profile(16, 3)) == 16 && LiveConnections.Band(Profile(12, 8)) == LiveSql.MaxBand && LiveConnections.Band(Profile(18, 3)) == LiveSql.MaxBand
             && LiveConnections.Band(Profile(12, 3)) == 12 && LiveConnections.ServerStatePermission(Profile(16, 2)) == "VIEW SERVER PERFORMANCE STATE"
             && LiveConnections.ServerStatePermission(Profile(15, 2)) == "VIEW SERVER STATE" && LiveConnections.ServerStatePermission(Profile(12, 8)) == "VIEW SERVER STATE",
-            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one; Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
+            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one, Object Explorer's status in master on box servers and Managed Instance (not on Azure SQL Database); Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
     }
 
     private static LiveRawSample Raw(long? ms, long? start, double?[] values, double?[]? bases = null) => new(ms, start, values, bases ?? new double?[values.Length]);

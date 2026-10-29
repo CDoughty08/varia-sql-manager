@@ -21,12 +21,15 @@ export const portBusy = (error: unknown): boolean => (error as { code?: unknown 
  * rows were still arriving is read again (at most 10 a second) while it is in view. After 2 idle frames the tiles a view
  * above and below are read, and the worker prefetches pages 2 views either way. A failed read marks its tile until Retry.
  * A read refused while main's results port is full is tried again shortly, not marked. The active cell's tile is read
- * even when the cell is scrolled out of view, so its label has its text.
+ * even when the cell is scrolled out of view, so its label has its text. A live table's row tone (a hidden last column,
+ * `tone`) is read with the rows it colours: each row tile of the frame also reads the tile column that holds it.
  */
 export class GridData {
   readonly counters: TileCounters = { hits: 0, misses: 0 }
   private readonly handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>
   private readonly columns: number
+  /** The hidden tone column (the result's last), or -1; tiles end at it rather than at `columns`. */
+  private readonly tone: number
   private readonly clientInflight: () => number
   private readonly changed: () => void
   private readonly timers: Timers
@@ -44,9 +47,10 @@ export class GridData {
   private prefetched = ''
   private disposed = false
 
-  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
+  constructor(o: { handle: Pick<ResultHandle, 'getWindow' | 'peekWindow' | 'prefetch'>; columns: number; tone?: number; clientInflight: () => number; changed: () => void; timers?: Timers; now?: () => number }) {
     this.handle = o.handle
     this.columns = o.columns
+    this.tone = o.tone ?? -1
     this.clientInflight = o.clientInflight
     this.changed = o.changed
     this.timers = o.timers ?? browserTimers
@@ -56,8 +60,10 @@ export class GridData {
   /** The tile's window, if the cache has it (and now as its most recently used). */
   peek(key: number): RowWindow | undefined {
     const colStart = tileColumnOf(key) * g.tileColumns
-    return this.handle.peekWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: Math.min(colStart + g.tileColumns, this.columns), maxCellChars: g.maxCellChars, display: true })
+    return this.handle.peekWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, display: true })
   }
+  /** The tile holding a row's tone, or undefined when the result has no tone column. */
+  toneTile(row: number): number | undefined { return this.tone < 0 ? undefined : tileKey(Math.floor(row / g.tileRows), Math.floor(this.tone / g.tileColumns)) }
   /** The first failed read's message, while any tile has failed. */
   get error(): string | undefined { return this.errors.values().next().value }
   get reading(): number { return this.inflight.size }
@@ -76,7 +82,7 @@ export class GridData {
    */
   ensure(range: VisibleRange, rows: number, rowDelta: number, visibleRows: number, active?: { readonly row: number; readonly column: number }): boolean {
     if (this.disposed) return false
-    const plan = planTiles(range, rows, this.columns)
+    const plan = this.plan(range, rows)
     if (active && active.row >= 0 && active.row < rows && active.column >= 0 && active.column < this.columns) {
       const key = tileKey(Math.floor(active.row / g.tileRows), Math.floor(active.column / g.tileColumns))
       if (!plan.includes(key)) plan.push(key)
@@ -132,6 +138,18 @@ export class GridData {
     return false
   }
 
+  /** The tiles a range shows, centre first, with the tile that holds each row tile's tone. */
+  plan(range: VisibleRange, rows: number): number[] {
+    const plan = planTiles(range, rows, this.columns)
+    if (this.tone >= 0) for (const key of [...plan]) { const tone = this.toneTile(tileRowOf(key) * g.tileRows)!; if (!plan.includes(tone)) plan.push(tone) }
+    return plan
+  }
+  /** Reads a tile into the client's window cache as a frame would, outside this grid's own reads (a live swap's prepare). */
+  fetch(key: number, signal?: AbortSignal): Promise<RowWindow> {
+    const colStart = tileColumnOf(key) * g.tileColumns
+    return this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, { colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal })
+  }
+
   dispose(): void {
     this.disposed = true
     for (const tile of this.inflight.values()) tile.controller.abort()
@@ -139,6 +157,9 @@ export class GridData {
     if (this.timer !== undefined) this.timers.clearTimeout(this.timer)
     this.timer = undefined
   }
+
+  /** A tile's end: its 32 columns, the shown ones, and the tone column when it is in the tile. */
+  private colEnd(colStart: number): number { return Math.min(colStart + g.tileColumns, this.tone >= 0 ? this.tone + 1 : this.columns) }
 
   private capacity(): boolean { return this.inflight.size < g.fetchesPerGrid && this.clientInflight() < g.fetchesPerClient }
 
@@ -158,7 +179,7 @@ export class GridData {
     const colStart = tileColumnOf(key) * g.tileColumns
     this.inflight.set(key, tile)
     this.handle.getWindow(tileRowOf(key) * g.tileRows, g.tileRows, {
-      colStart, colEnd: Math.min(colStart + g.tileColumns, this.columns), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal: controller.signal
+      colStart, colEnd: this.colEnd(colStart), maxCellChars: g.maxCellChars, textBudget: g.textBudget, display: true, signal: controller.signal
     }).then(() => {
       if (this.inflight.get(key) === tile) this.inflight.delete(key)
       this.retried.delete(key)

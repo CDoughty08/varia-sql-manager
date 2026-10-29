@@ -29,7 +29,7 @@ icon.foreground #a3a9b5 #4d5461|widget.shadow #00000085 #10182824|widget.border 
 sash.hoverBorder #8f9cff #4453d0|scrollbarSlider.background #9298a466 #5c637066|scrollbarSlider.hoverBackground #9298a48c #5c63708c
 scrollbarSlider.activeBackground #9298a4b3 #5c6370b3|titleBar.activeBackground #111317 #f7f8fa|titleBar.activeForeground #9298a4 #5c6370
 titleBar.inactiveBackground #111317 #f7f8fa|titleBar.inactiveForeground #9298a4 #5c6370|titleBar.border #262a31 #e3e6eb
-titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|menubar.selectionBackground #30343e #d6dae0
+titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #a3a9b5 #4d5461|commandCenter.activeBackground #30343e #d6dae0|commandCenter.border #6b728673 #878e9b73|menubar.selectionBackground #30343e #d6dae0
 menubar.selectionForeground #f5f6f8 #0a0c10|menubar.selectionBorder #8f9cff00 #4453d000|menu.background #1d2026 #ffffff
 menu.foreground #d9dce3 #1c1f26|menu.selectionBackground #30343e #d6dae0|menu.selectionForeground #f5f6f8 #0a0c10
 menu.selectionBorder #8f9cff00 #4453d000|menu.separatorBackground #30343c #dcdfe5|menu.border #6b7286 #d4d8df|toolbar.background #111317 #f7f8fa
@@ -43,10 +43,12 @@ sideBarTitle.foreground #a3a9b5 #4d5461|sideBarSectionHeader.border #1f2228 #ece
 list.activeSelectionBackground #29314f #d9e0fb|list.activeSelectionForeground #d9dce3 #1c1f26|list.inactiveSelectionBackground #21273b #e7ebfc
 list.inactiveSelectionForeground #d9dce3 #1c1f26|list.focusOutline #8f9cff #4453d0|list.highlightForeground #8f9cff #4453d0
 list.focusHighlightForeground #d9dce3 #1c1f26|list.filterMatchBackground #8f9cff33 #4453d033|tree.indentGuidesStroke #1f2228 #eceef2
-objectExplorer.activeConnectionBackground #232842 #dde1f9|objectExplorer.headingForeground #d9dce3 #1c1f26
+objectExplorer.activeConnectionBackground #111317 #f7f8fa|objectExplorer.activeConnectionForeground #8f9cff #4453d0
+objectExplorer.headingForeground #d9dce3 #1c1f26
 objectExplorer.sublabelForeground #bcc1cb #3a404b|objectExplorer.countForeground #9298a4 #5c6370|objectExplorer.chevronForeground #7f8694 #6b7280
 objectExplorer.folderIconForeground #bfa878 #7d6532|objectExplorer.objectIconForeground #a3a9b5 #4d5461
-objectExplorer.actionForeground #a3a9b5 #4d5461|editorGroupHeader.tabsBackground #111317 #f7f8fa|tab.activeBackground #16181d #ffffff
+objectExplorer.actionForeground #a3a9b5 #4d5461|objectExplorer.connectedIndicator #74d19c #146f3b
+objectExplorer.connectionErrorIndicator #f39a9a #b42229|objectExplorer.disconnectedIndicator #9298a4 #5c6370|editorGroupHeader.tabsBackground #111317 #f7f8fa|tab.activeBackground #16181d #ffffff
 tab.inactiveBackground #111317 #f7f8fa|tab.unfocusedActiveBackground #16181d #ffffff|tab.unfocusedInactiveBackground #111317 #f7f8fa
 tab.activeForeground #f5f6f8 #0a0c10|tab.inactiveForeground #9298a4 #5c6370|tab.unfocusedActiveForeground #a3a9b5 #4d5461
 tab.unfocusedInactiveForeground #9298a4 #5c6370|tab.border #262a31 #e3e6eb|tab.activeBorderTop #8f9cff #4453d0|editorGroup.border #262a31 #e3e6eb
@@ -69,7 +71,10 @@ panel.background #16181d #ffffff|panel.border #262a31 #e3e6eb|panelTitle.backgro
 panelTitle.inactiveForeground #9298a4 #5c6370|panelTitle.activeBorder #8f9cff #4453d0|badge.background #30343e #d6dae0
 badge.foreground #bcc1cb #3a404b|resultsGrid.background #16181d #ffffff|resultsGrid.foreground #d9dce3 #1c1f26
 resultsGrid.headerBackground #16181d #ffffff|resultsGrid.headerForeground #a3a9b5 #4d5461|resultsGrid.headerDescriptionForeground #9298a4 #5c6370
-resultsGrid.gridlines #1f2228 #eceef2|resultsGrid.alternateRowBackground #d9dce305 #1c1f2605|resultsGrid.rowNumberForeground #9298a4 #5c6370
+resultsGrid.gridlines #1f2228 #eceef2|resultsGrid.alternateRowBackground #d9dce305 #1c1f2605|resultsGrid.rowErrorBackground #f39a9a1f #b422291f
+resultsGrid.rowErrorForeground #d9dce3 #1c1f26|resultsGrid.rowWarningBackground #e4bb6a1f #8758001f|resultsGrid.rowWarningForeground #d9dce3 #1c1f26
+resultsGrid.rowRunningBackground #8f9cff1a #4453d01a|resultsGrid.rowRunningForeground #d9dce3 #1c1f26|resultsGrid.rowMutedBackground #16181d #ffffff
+resultsGrid.rowMutedForeground #a3a9b5 #4d5461|resultsGrid.rowNumberForeground #9298a4 #5c6370
 resultsGrid.nullForeground #9298a4 #5c6370|resultsGrid.nullBackground #d9dce300 #1c1f2600|resultsGrid.truncationForeground #e4bb6a #875800
 resultsGrid.selectionBackground #29314f #d9e0fb|resultsGrid.selectionForeground #d9dce3 #1c1f26
 resultsGrid.inactiveSelectionBackground #21273b #e7ebfc|resultsGrid.activeCellBorder #8f9cff #4453d0|resultsGrid.hoverBackground #262a32 #dfe2e7
@@ -128,10 +133,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 242 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 258 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(242)
-    expect(new Set(colorKeys).size).toBe(242)
+    expect(colorKeys).toHaveLength(258)
+    expect(new Set(colorKeys).size).toBe(258)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -146,7 +151,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(242)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(258)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -248,7 +253,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(242)
+      expect(Object.keys(theme.colors)).toHaveLength(258)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

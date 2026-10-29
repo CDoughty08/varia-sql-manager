@@ -13,12 +13,12 @@ export interface QueryDocument {
    *  lost); its next execution says so before its own messages. */
   readonly sessionNotice?: SessionNotice
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
-   *  designer and an Activity Monitor have no text at all. */
+   *  designer, Database Properties and an Activity Monitor have no text at all. */
   readonly kind?: Exclude<WorkbenchDocumentKind, 'sql'>
 }
-/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer
- *  or an Activity Monitor, which live only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'activityMonitor'
+/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
+ *  Database Properties or an Activity Monitor, which live only in the renderer. */
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | 'activityMonitor'
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -30,10 +30,11 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-/** A document whose content is text in the editor (a query or a value), as opposed to a table designer or an Activity Monitor. */
-export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && !isCustomKind(documentKind(document))
+const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', 'activityMonitor'])
 /** A kind whose provider owns its content (DocumentService.registerProvider): no text, no model, nothing AutoRecover keeps. */
-export const isCustomKind = (kind: WorkbenchDocumentKind): kind is CustomDocumentKind => kind === 'tableDesigner' || kind === 'activityMonitor'
+export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
+/** A document whose content is text in the editor (a query or a value), as opposed to a table designer, Database Properties or an Activity Monitor. */
+export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && !isCustomKind(documentKind(document))
 /**
  * Each kind's editor language, tab icon, the sentence that names it (the tab icon's name, the query context bar,
  * banners), what its value is called, and the file name a value of that kind gets when its column has none.
@@ -44,6 +45,7 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, { readonly languag
   json: { language: 'json', icon: 'json', label: 'JSON document', value: 'JSON', blankName: 'JSON' },
   sqlplan: { language: 'xml', icon: 'execution-plan', label: 'Execution plan', value: 'execution plan', blankName: 'PLAN' },
   tableDesigner: { language: '', icon: 'table', label: 'Table Designer', value: 'table', blankName: 'Table Designer' },
+  databaseProperties: { language: '', icon: 'settings-gear', label: 'Database Properties', value: 'database properties', blankName: 'Database Properties' },
   activityMonitor: { language: '', icon: 'pulse', label: 'Activity Monitor', value: 'activity monitor', blankName: 'Activity Monitor' }
 }
 

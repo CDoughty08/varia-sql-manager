@@ -131,15 +131,15 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 242 keys are listed in [`tokens.md`](tokens.md#color-keys-242) by area: title bar and menus, buttons and inputs,
+The 258 keys are listed in [`tokens.md`](tokens.md#color-keys-258) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
-dialogs, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
+dialogs, notifications, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
 (`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,
 `charts.yellow` and `charts.purple` in that order (the `chart1` to `chart5` slots), `charts.gray` for a stacked chart's
 "Other". `charts.red` is a status color for marks such as a failed execution, never a series' color. Series colors are checked at 3:1 and chart text at
 4.5:1 against the editor, panel, widget and tile backgrounds. Under Windows High Contrast and other forced colors, charts
 use the system colors and tell series apart by their dashes. Keys marked (VS Code) mean the same as in VS Code; the rest are Varia's own. Some keys
-are reserved for upcoming features (notifications, the new Object Explorer and results grid): they resolve now and take
+are reserved for upcoming features (the new Object Explorer and results grid): they resolve now and take
 effect when those features ship.
 
 A key that is not in the registry is ignored with a warning. Near misses get a "did you mean" suggestion, and a pasted

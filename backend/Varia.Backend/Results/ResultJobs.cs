@@ -83,7 +83,7 @@ internal sealed class ResultJobs(ResultStore store)
         {
             var available = set.RowsAvailable;
             var partial = set.IsOpen;
-            var plans = args.Parts.Select(part => Resolve(part, set.Columns.Count, available)).ToList();
+            var plans = args.Parts.Select(part => Resolve(part, set.Columns, available)).ToList();
             var eolBytes = args.Eol == "crlf" ? 2 : 1;
             var estimate = Estimate(set, plans, args.Headers, eolBytes);
             if (estimate > args.MaxBytes)
@@ -131,7 +131,7 @@ internal sealed class ResultJobs(ResultStore store)
             var output = new ChunkedBuffer();
             var writer = new ResultTextWriter(output, TextOptions.Export(format.Value, args.Headers, args.NullText), set.Columns);
             var progress = new Progress(context, set.RowsAvailable);
-            int[] all = [.. Enumerable.Range(0, set.Columns.Count)];
+            int[] all = [.. Enumerable.Range(0, set.Columns.Count).Where(column => !ResultTextWriter.Hidden(set.Columns[column]))];
             // A file the user chose to replace keeps its permissions: a private (0600) results file must not come back
             // readable by others. A symbolic link there is replaced, not followed; the file it points to may only narrow
             // the new file's default permissions.
@@ -254,8 +254,8 @@ internal sealed class ResultJobs(ResultStore store)
     }
 
     /// <summary>Validates a part (1 to 64 ascending, disjoint ranges of each kind) and clamps its rows to the rows stored
-    /// now: open-ended blocks end at the last available row.</summary>
-    private static Plan Resolve(CopyPartArgs part, int columnCount, long available)
+    /// now: open-ended blocks end at the last available row. Hidden columns (a live table's row tone) are left out.</summary>
+    private static Plan Resolve(CopyPartArgs part, IReadOnlyList<ResultColumn> columnList, long available)
     {
         static bool Valid<T>(T[][]? ranges, long max) where T : struct, IConvertible
         {
@@ -271,9 +271,9 @@ internal sealed class ResultJobs(ResultStore store)
             }
             return true;
         }
-        if (!Valid(part.Rows, MaxSafeInteger) || !Valid(part.Columns, columnCount - 1)) throw new RequestException("INVALID_PARAMS", "The copy request is invalid.");
+        if (!Valid(part.Rows, MaxSafeInteger) || !Valid(part.Columns, columnList.Count - 1)) throw new RequestException("INVALID_PARAMS", "The copy request is invalid.");
         var rows = part.Rows.Where(range => range[0] < available).Select(range => (range[0], Math.Min(range[1], available - 1))).ToList();
-        var columns = part.Columns.SelectMany(range => Enumerable.Range(range[0], range[1] - range[0] + 1)).ToArray();
+        var columns = part.Columns.SelectMany(range => Enumerable.Range(range[0], range[1] - range[0] + 1)).Where(column => !ResultTextWriter.Hidden(columnList[column])).ToArray();
         return new Plan(rows, columns);
     }
 
@@ -281,7 +281,7 @@ internal sealed class ResultJobs(ResultStore store)
     internal static long EstimateCopy(ResultSetBuffer set, CopyPartArgs[] parts, bool headers, bool crlf)
     {
         var available = set.RowsAvailable;
-        return Estimate(set, [.. parts.Select(part => Resolve(part, set.Columns.Count, available))], headers, crlf ? 2 : 1);
+        return Estimate(set, [.. parts.Select(part => Resolve(part, set.Columns, available))], headers, crlf ? 2 : 1);
     }
 
     private static long Estimate(ResultSetBuffer set, List<Plan> plans, bool headers, int eolBytes)

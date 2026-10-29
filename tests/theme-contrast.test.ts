@@ -41,6 +41,13 @@ describe('built-in theme contrast', () => {
     }
     expect(contrastExemptions['charts.lines']).toBeDefined()
   })
+  it('leaves the active query\'s server row untinted, as a tint near the selection and hover fills read as one of them', () => {
+    // Its glyph (objectExplorer.activeConnectionForeground, paired above on every row state) marks it instead.
+    for (const type of types) {
+      const theme = resolveBuiltin(type)
+      expect(backgroundOf(theme, ['sideBar.background', 'objectExplorer.activeConnectionBackground']), type).toEqual(backgroundOf(theme, ['sideBar.background']))
+    }
+  })
   it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
     // Fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object Explorer's
@@ -53,9 +60,19 @@ describe('built-in theme contrast', () => {
       for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
     }
   })
+  it('checks everything a toast draws over its own background, which a theme can set apart', () => {
+    const toast = (foreground: string, ...background: string[]) => ({ foreground, background: ['notifications.background', ...background] })
+    const expected = [
+      ...['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'].map(key => ({ ...toast(key), minimum: 4.5 })),
+      { ...toast('button.secondaryHoverForeground', 'button.secondaryHoverBackground'), minimum: 4.5 },
+      ...['button.border', 'focusBorder', 'notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'].map(key => ({ ...toast(key), minimum: 3 }))
+    ]
+    for (const pair of expected) expect(contrastPairs).toContainEqual(pair)
+  })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
-    const foregrounds = colorKeys.filter(key => /[Ff]oreground$/.test(key))
+    // Indicators (status dots and rings) are glyphs: they need a pair as text colors do.
+    const foregrounds = colorKeys.filter(key => /(?:[Ff]oreground|Indicator)$/.test(key))
     const missing = [...foregrounds.filter(key => !checked.has(key) && !contrastExemptions[key]), ...sqlScopes.filter(scope => !checked.has('syntax:' + scope))]
     expect(missing).toEqual([])
     for (const [key, reason] of Object.entries(contrastExemptions)) {

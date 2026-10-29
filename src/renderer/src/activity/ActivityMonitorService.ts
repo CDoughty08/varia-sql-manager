@@ -83,6 +83,8 @@ export function probeSettings(state: MonitorState): { probe: LiveProbeId; interv
 export class ActivityMonitorService extends SnapshotStore<ActivityMonitorSnapshot> implements CustomDocumentProvider, Disposable {
   readonly kind = 'activityMonitor' as const
   readonly saves = false
+  /** Nothing to save, so Save All has nothing of it to save either. */
+  readonly inSaveAll = false
   private readonly handles = new Map<string, LiveHandle>()
   /** Each monitor's tile tones as last shown, so a view remounted by a tab switch never repeats a crossing already said. */
   private readonly tones = new Map<string, readonly (TileTone | undefined)[]>()

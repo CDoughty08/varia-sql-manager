@@ -62,12 +62,19 @@ internal static class LiveDataChecks
         foreach (var query in LiveSql.All(LiveCatalog.Current).Where(query => query.Band == band))
         {
             var result = await Execute(query.Text(LiveSql.UncommittedPrologue));
-            var columns = result.ResultSets is [{ } set] ? set.Columns.Select(column => (column.Name, Numeric(column.DataType))).ToList() : [];
-            if (result.Status != "completed" || !query.Returns(columns))
-                shapes.Add(query.Probe + " " + result.Status + ": " + string.Join(", ", result.ResultSets.SelectMany(item => item.Columns).Select(column => column.Name + " " + column.DataType)));
+            // A metrics row first (when the probe has series), then one result set per table, each with its table's columns
+            // by name and type (sysname reads as nvarchar, as the sampler's own check allows).
+            var spec = LiveCatalog.Current.Probes[query.Probe];
+            var metrics = query.Columns.Length > 0 ? 1 : 0;
+            var sets = result.ResultSets;
+            var fits = result.Status == "completed" && sets.Count == metrics + query.Tables.Length
+                && (metrics == 0 || query.Returns([.. sets[0].Columns.Select(column => (column.Name, Numeric(column.DataType)))]))
+                && query.Tables.Select((read, at) => (Table: spec.Tables[read.Table], Set: sets[metrics + at])).All(pair => pair.Set.Columns.Count == pair.Table.Columns.Count
+                    && pair.Set.Columns.Select((column, index) => column.Name == pair.Table.Columns[index].Name && LiveCells.Matches(pair.Table.Columns[index].DataType, column.DataType.Split('(')[0])).All(match => match));
+            if (!fits) shapes.Add(query.Probe + " " + result.Status + ": " + string.Join(", ", result.ResultSets.SelectMany(item => item.Columns).Select(column => column.Name + " " + column.DataType)));
         }
         check(band is >= LiveSql.MinBand and <= LiveSql.MaxBand && shapes.Count == 0,
-            "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric: " + string.Join("; ", shapes));
+            "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric, and its tables' columns by name and type: " + string.Join("; ", shapes));
 
         // Rates on the server's clock: a baseline with gauges only, then every series, the second within about a second
         // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server).

@@ -63,12 +63,13 @@ Edit
 View
   &Command Palette…  Ctrl+Shift+P  ++++
   &Go to Query…  Ctrl+P  ++++
+  Se&arch…  Ctrl+Q  ++++
   ---
   &Save Layout…  ++++
   &Load Layout…  ++++
   &Reset Layout  ++++
   ---
-  &Activity Monitor  +++-
+  Activity &Monitor  +++-
   ---
   T&heme >
     &Color Theme…  ++++
@@ -115,6 +116,7 @@ Window
   Query &Editor  ++++
   Q&uery Output  ++++
   S&how Results Pane  Ctrl+R [x]  ++++
+  Panel &Tabs [ ]  ++++
   ---
   &Next Query  Ctrl+Tab  ----
   &Previous Query  Ctrl+Shift+Tab  ----

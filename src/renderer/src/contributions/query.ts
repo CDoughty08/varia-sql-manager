@@ -6,13 +6,16 @@ import { isQueryDocument } from '../documents'
 
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 
-/** One server picker row per live connection; `running` disables servers with a query in progress. */
-export function serverItems(connections: readonly ConnectionInfo[], running?: (id: string) => boolean): QuickPickItem[] {
-  return connections.map(connection => ({
-    id: connection.id, label: connection.displayName || connection.server, icon: 'server',
-    description: connection.displayName ? `${connection.server} · ${connection.serverVersion}` : connection.serverVersion,
-    ...running?.(connection.id) ? { disabled: true, disabledHint: 'A query is running on this server.' } : {}
-  }))
+/** One server picker row per connection; `busy` says why one cannot be chosen now (a query running on it), which greys it with that hint. */
+export function serverItems(connections: readonly ConnectionInfo[], busy?: (id: string) => string | undefined): QuickPickItem[] {
+  return connections.map(connection => {
+    const hint = busy?.(connection.id)
+    return {
+      id: connection.id, label: connection.displayName || connection.server, icon: 'server',
+      description: connection.displayName ? `${connection.server} · ${connection.serverVersion}` : connection.serverVersion,
+      ...hint ? { disabled: true, disabledHint: hint } : {}
+    }
+  })
 }
 const databaseGroups = ['system databases', 'databases', 'database snapshots'] as const
 /**

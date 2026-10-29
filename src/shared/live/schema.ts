@@ -8,7 +8,7 @@ import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
 import { activityLiveArgsSchema } from '../activity/schema'
-import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveSourceSpec } from './catalog'
+import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
 
@@ -41,11 +41,15 @@ export const liveArgsSchemas = {
   // and the session whose CPU and reads the sessions probe's two series follow (the Details flyout; 0 follows none). An
   // update replaces the filters of the tables it names and keeps the others; a table without one shows the catalogue's
   // defaults (system sessions, Varia's pools and benign waits hidden).
-  activity: activityLiveArgsSchema
+  activity: activityLiveArgsSchema,
+  // Object Explorer's status chips take no args.
+  explorer: z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 
-export interface LiveSort { column: string; descending: boolean }
+/** A sort key by catalogue column id; `table` (a snapshot table's index) limits it to that table, else it sorts every
+ *  snapshot table that has the column. */
+export interface LiveSort { column: string; descending: boolean; table?: number }
 export interface LiveFilter { text: string; columns?: string[] }
 export interface LiveProbeSettings { probe: LiveProbeId; intervalMs: number; paused?: boolean; sort?: LiveSort[]; view?: string; filter?: LiveFilter }
 /** Settings an update may drop, since an absent member keeps its setting: back to the source's order, all rows, no filter. */
@@ -61,8 +65,9 @@ export interface LiveSubscribeParams {
   resume?: string
 }
 /** The rows to follow across revisions of one keyed snapshot table: each key is the key columns' cell texts joined with
- *  U+001F, as the worker reads them. */
-export interface LiveTrack { probe: LiveProbeId; table: number; seq: number; keys: string[] }
+ *  U+001F, as the worker reads them. `linger`: how many of the first keys stay one revision when they leave (a table
+ *  that keeps departed rows); all of them by default. */
+export interface LiveTrack { probe: LiveProbeId; table: number; seq: number; keys: string[]; linger?: number }
 /** `source` repeats the subscription's, so its probes and args are checked here; main and the backend check it matches. */
 export interface LiveUpdateParams {
   subscriptionId: string
@@ -174,9 +179,11 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
   const allSources = Object.keys(catalog.sources)
   const requestSource = idEnum(allSources.filter(id => o.test || !catalog.sources[id].testOnly))
   const probeId = idEnum(Object.keys(catalog.probes))
-  const columnsOf = (spec: LiveProbeSpec, mode?: 'snapshot' | 'append') => new Set((spec.tables ?? []).filter(table => mode === undefined || table.mode === mode).flatMap(table => table.columns.map(column => column.id)))
+  // A row's tone column is never data: no sort or filter names it, and a filter's text never matches it.
+  const dataColumns = (columns: LiveTableSpec['columns']) => columns.filter(column => column.role !== 'tone')
+  const columnsOf = (spec: LiveProbeSpec, mode?: 'snapshot' | 'append') => new Set((spec.tables ?? []).filter(table => mode === undefined || table.mode === mode).flatMap(table => dataColumns(table.columns).map(column => column.id)))
 
-  const sortSchema = z.array(z.object({ column: catalogId, descending: z.boolean() }).strict()).min(1).max(L.sortColumns)
+  const sortSchema = z.array(z.object({ column: catalogId, descending: z.boolean(), table: tableIndex.optional() }).strict()).min(1).max(L.sortColumns)
   const filterSchema = z.object({ text: z.string().min(1).max(L.filterCharacters), columns: z.array(catalogId).min(1).max(L.filterColumns).optional() }).strict()
   const probeSettings = z.object({
     probe: probeId,
@@ -194,8 +201,9 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     const spec = catalog.probes[settings.probe]
     if (spec.source !== source) ctx.addIssue({ code: 'custom', message: 'The probe belongs to another source.', path: [...path, 'probe'] })
     const sortable = columnsOf(spec, 'snapshot')
-    const sorted = settings.sort?.map(key => key.column) ?? []
-    if (sorted.some(column => !sortable.has(column)) || new Set(sorted).size !== sorted.length) ctx.addIssue({ code: 'custom', message: 'Sort names a column the probe does not sort by.', path: [...path, 'sort'] })
+    const sorted = settings.sort ?? [], table = (index: number) => spec.tables?.[index]
+    const unsortable = (key: LiveSort) => key.table === undefined ? !sortable.has(key.column) : table(key.table)?.mode !== 'snapshot' || !dataColumns(table(key.table)!.columns).some(column => column.id === key.column)
+    if (sorted.some(unsortable) || new Set(sorted.map(key => (key.table ?? '') + '/' + key.column)).size !== sorted.length) ctx.addIssue({ code: 'custom', message: 'Sort names a column the probe does not sort by.', path: [...path, 'sort'] })
     if (settings.view !== undefined && !(spec.views ?? []).includes(settings.view)) ctx.addIssue({ code: 'custom', message: 'Unknown view.', path: [...path, 'view'] })
     if (settings.filter !== undefined) {
       const filterable = columnsOf(spec)
@@ -225,7 +233,8 @@ export function buildLiveSchemas(catalog: LiveCatalogShape, o: { test: boolean }
     checkArgs(value.args, value.source, ctx)
   })
 
-  const trackSchema = z.object({ probe: probeId, table: tableIndex, seq: u31, keys: z.array(z.string().max(L.keyCharacters)).max(L.trackedKeys) }).strict()
+  const trackSchema = z.object({ probe: probeId, table: tableIndex, seq: u31, keys: z.array(z.string().max(L.keyCharacters)).max(L.trackedKeys), linger: z.number().int().min(0).max(L.trackedKeys).optional() }).strict()
+    .refine(track => (track.linger ?? 0) <= track.keys.length, { message: 'A track list lingers at most its own keys.', path: ['linger'] })
   const update = z.object({
     subscriptionId: z.uuid(),
     source: requestSource,

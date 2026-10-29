@@ -12,7 +12,7 @@ describe('grid lint', () => {
   it('finds the grid and results sources', () => {
     expect(files).toEqual(expect.arrayContaining(['src/renderer/src/grid/GridView.ts', 'src/renderer/src/results/OutputPane.tsx', 'src/renderer/src/results/MessagesView.tsx',
       'src/renderer/src/designer/DesignerGrid.tsx', 'src/renderer/src/designer/TableDesigner.tsx', 'src/renderer/src/designer/TableDesignerService.ts',
-      'src/renderer/src/live/ChartView.ts', 'src/renderer/src/live/LiveChart.tsx', 'src/renderer/src/live/LiveService.ts']))
+      'src/renderer/src/live/ChartView.ts', 'src/renderer/src/live/LiveChart.tsx', 'src/renderer/src/live/LiveService.ts', 'src/renderer/src/live/LiveGrid.ts', 'src/renderer/src/live/LiveGridPane.tsx']))
   })
   it('writes no HTML from the grid or the results views', () => {
     const offenders = files.flatMap(file => readFileSync(file, 'utf8').split('\n').map((line, index) => [file, index + 1, line] as const)).filter(([, , line]) => sinks.test(line))

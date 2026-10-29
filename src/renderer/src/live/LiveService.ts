@@ -22,6 +22,10 @@ const MiB = 1024 * 1024
 export const liveServiceLimits = {
   /** Open handles in a window: main runs at most this many live streams on the results port. */
   handles: limits.live.portStreams,
+  /** Background views (Object Explorer's status chips, one per server and login) holding a slot at once. They take only
+   *  slots no other view wants: they give theirs up to a view that opens when every slot of the window is taken, or that
+   *  the backend refuses (BUSY) at its caps of 8 a server and 32 a backend, and wait when the backend refuses them. */
+  background: 8,
   /** Hidden views that keep their status probes running (a source's `hidden: 'statusOnly'`). */
   statusOnly: 4,
   /** A status-only view samples at most this often: the catalogue's hidden interval, which docs/live.md states. */
@@ -30,7 +34,10 @@ export const liveServiceLimits = {
   ringBytes: 32 * MiB,
   settingsDebounceMs: 150,
   /** An update refused for now (too many requests, busy, timed out) is sent again after 1 s, doubling to 30 s. */
-  retryMs: { first: 1000, max: 30_000 }
+  retryMs: { first: 1000, max: 30_000 },
+  /** Track lists kept per table for the samples that answer them: well above what one sample can span (a list per row
+   *  of a held arrow key, one update in flight at a time, samples of at most 5 s). */
+  trackHistory: 64
 } as const
 
 /** What a live view belongs to: its visibility pauses the view, and its end ends it. */
@@ -62,6 +69,10 @@ export interface LiveSpec {
   /** Hidden, keep the probes without tables running at 30 s or slower instead of pausing, where the source allows it
    *  (an SSIS execution this window started, so its end is still seen). At most 4 such views a window; others pause. */
   whileHidden?: 'statusOnly'
+  /** A background view: it runs only in a slot nobody else wants (at most liveServiceLimits.background of them), waits
+   *  for one when none is free or the backend refuses it (BUSY), and gives its slot up, newest first, to a view that opens
+   *  when every slot is taken, or that the backend refuses on the same server. */
+  background?: true
   /** Opens paused by the user, as setUserPaused(true) would, but before it subscribes: every probe goes paused, so no
    *  sample runs until setUserPaused(false). A view that pauses after open could sample first. */
   paused?: boolean
@@ -87,6 +98,8 @@ export interface LiveSnapshot {
   readonly pausedBy?: 'hidden' | 'user'
   /** Hidden, but its probes without tables keep running (LiveSpec.whileHidden). */
   readonly hiddenMode?: 'statusOnly'
+  /** A background view waiting for a free slot (status dormant): it runs nothing until one frees. */
+  readonly waiting?: true
   readonly probes: Readonly<Record<string, LiveProbeSnapshot>>
   readonly connectionId: string
   /** The running subscription's id: a new one each time the view subscribes again. */
@@ -107,7 +120,14 @@ export interface LiveTable {
   readonly revision?: number
   readonly segment?: number
   readonly diff?: { readonly added: number; readonly removed: number; readonly changed: number }
-  readonly tracked?: { readonly seq: number; readonly rows: readonly number[] }
+  /** Where each tracked key went (-1: gone), in the order of the track list with this seq; `keys` is that list when the
+   *  view still knows it (every list since the newest one answered), so a grid can map its rows without asking again. */
+  readonly tracked?: { readonly seq: number; readonly rows: readonly number[]; readonly keys?: readonly string[] }
+  /** Rows of this revision that left the source and stay one revision because they were tracked (LiveGrid mutes them). */
+  readonly departed?: readonly number[]
+  /** Append: the segment this one rolled on from, and whether the table started again (a new filter or args). */
+  readonly rolledFrom?: number
+  readonly restarted?: boolean
 }
 export interface AppliedTick { readonly subscriptionId: string; readonly tick: LiveTick }
 export interface LiveFrames { readonly events: number; readonly ticks: number; readonly lastSeq: number; readonly updates: number; readonly lastPatch?: LivePatch; readonly subscriptions: number }
@@ -127,8 +147,11 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   setUserPaused(paused: boolean): void
   /** Refresh now: every running probe samples at once (a dormant view subscribes again). */
   refresh(): void
-  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F). */
-  track(probe: LiveProbeId, keys: readonly string[], table?: number): void
+  /** A probe's settings as the view wants them (what setProbe last set), read only; undefined for a probe it does not run. */
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined
+  /** Follows rows of a keyed snapshot table across revisions (each key: the key columns' cell texts joined with U+001F).
+   *  `linger`: how many of the first keys (the selected rows) stay one revision when they leave; all of them by default. */
+  track(probe: LiveProbeId, keys: readonly string[], table?: number, linger?: number): void
   /** A metrics probe's history, for charts; read only. */
   ring(probe: LiveProbeId): MetricRing | undefined
   table(probe: LiveProbeId, index?: number): LiveTable | undefined
@@ -169,7 +192,7 @@ export function documentPage(target: Pick<Document, 'visibilityState' | 'addEven
 
 const tooMany = 'Too many live views are open in this window. Close one and retry.'
 const invalidSpec = 'This live view names probes its source does not have.'
-const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending)
+export const sameSort = (left?: readonly LiveSort[], right?: readonly LiveSort[]) => (left?.length ?? 0) === (right?.length ?? 0) && (left ?? []).every((key, at) => key.column === right![at].column && key.descending === right![at].descending && key.table === right![at].table)
 const sameFilter = (left?: LiveFilter, right?: LiveFilter) => left === right || (!!left && !!right && left.text === right.text && (left.columns ?? []).join('\u001f') === (right.columns ?? []).join('\u001f') && !!left.columns === !!right.columns)
 const lostCodes: ReadonlySet<ErrorCode> = new Set(['BACKEND_LOST', 'RESULT_UNAVAILABLE', 'BACKEND_UNAVAILABLE'])
 /** Errors of an update to a stream that is ending: its end reports what happened. Updates wait for live.opened, so a
@@ -241,6 +264,9 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     /** Coalesces snapshot notifications: an animation frame in the app. */
     schedule?: (callback: () => void) => void
     catalog?: LiveCatalog
+    /** The server a connection reaches, as the user typed it: a view the backend refuses at its per-server cap takes a
+     *  background view's slot on that server. Without it, only one on the same connection. */
+    serverOf?: (connectionId: string) => string | undefined
   }) {
     super({ handles: [] })
     this.timers = o.timers ?? browserTimers
@@ -283,15 +309,52 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     const source = this.catalog.sources[spec.source]
     const valid = !!source && spec.probes.length >= 1 && spec.probes.length <= limits.live.probes && new Set(spec.probes.map(probe => probe.probe)).size === spec.probes.length &&
       spec.probes.every(probe => this.catalog.probes[probe.probe]?.source === spec.source)
-    const failure = this.disposed ? { code: 'PORT_CLOSED' as const, message: 'The workbench closed.' } : !valid ? { code: 'INVALID_PARAMS' as const, message: invalidSpec }
-      : this.handles.size >= liveServiceLimits.handles ? { code: 'TOO_MANY_REQUESTS' as const, message: tooMany } : undefined
+    let failure: { code: ErrorCode; message: string } | undefined = this.disposed ? { code: 'PORT_CLOSED', message: 'The workbench closed.' } : !valid ? { code: 'INVALID_PARAMS', message: invalidSpec } : undefined
+    // Every slot taken: a background view waits for one, and any other view takes the newest background view's slot once
+    // that view's stream has ended (main counts a stream until its end arrives).
+    let wait = false, yielded = false, after: StreamRecord | undefined
+    if (!failure && spec.background) wait = this.holding() >= liveServiceLimits.handles || this.holding(true) >= liveServiceLimits.background
+    else if (!failure && this.holding() >= liveServiceLimits.handles) {
+      // An ended background view is not taken over: its owner disposes it, which frees its slot.
+      const victim = [...this.handles.values()].reverse().find(handle => handle.background && handle.holdsSlot() && handle.status !== 'ended' && handle.status !== 'lost')
+      if (victim) { after = victim.yieldSlot(); yielded = true } else failure = { code: 'TOO_MANY_REQUESTS', message: tooMany }
+    }
     const handle = new Handle(this, spec, owner, failure)
     if (failure) return handle
     this.handles.set(handle.id, handle)
-    handle.start()
+    if (wait) handle.queue()
+    else if (yielded) handle.startAfter(after)
+    else handle.start()
     this.changed()
     this.rebalance()
     return handle
+  }
+
+  /** Open views that hold a slot (all but background views waiting for one); with `background`, background views only. */
+  private holding(background = false): number {
+    let count = 0
+    for (const handle of this.handles.values()) if (handle.holdsSlot() && (!background || handle.background)) count++
+    return count
+  }
+
+  /** A view closed: the oldest background view waiting for a slot takes it, once the closed view's stream has ended. */
+  private slotFreed(after: StreamRecord | undefined): void {
+    for (const handle of [...this.handles.values()]) {
+      if (this.holding() >= liveServiceLimits.handles || this.holding(true) >= liveServiceLimits.background) return
+      if (!handle.background || handle.holdsSlot()) continue
+      if (handle.claimSlot(after)) after = undefined
+    }
+  }
+
+  /** The backend refused `requester` (BUSY) at its caps: the newest running background view on the same server gives its
+   *  slot up. Returns the stream whose end the requester waits for (undefined when it has ended), or false when no
+   *  background view runs there, since one on another server would free nothing the server's cap counts. */
+  yieldOnServer(requester: Handle): StreamRecord | undefined | false {
+    const serverOf = this.o.serverOf, server = serverOf?.(requester.connectionId)
+    const same = (handle: Handle) => server !== undefined ? serverOf?.(handle.connectionId) === server : handle.connectionId === requester.connectionId
+    // A dormant view holds no subscription the backend counts.
+    const victim = [...this.handles.values()].reverse().find(handle => handle !== requester && handle.background && handle.holdsSlot() && (handle.status === 'connecting' || handle.status === 'live' || handle.status === 'paused') && same(handle))
+    return victim ? victim.yieldSlot() : false
   }
 
   /** Open views of a source, as they are: it never subscribes, so a badge or summary that reads it starts no sampling of
@@ -354,6 +417,7 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
   removed(handle: Handle): void {
     if (this.handles.get(handle.id) !== handle) return
     this.handles.delete(handle.id)
+    if (!this.disposed) this.slotFreed(handle.pendingEnd())
     this.changed()
     this.rebalance()
   }
@@ -389,9 +453,17 @@ class Handle implements LiveHandle {
   private readonly runtime = new Map<LiveProbeId, ProbeRuntime>()
   private readonly rings = new Map<LiveProbeId, MetricRing>()
   private readonly tables = new Map<LiveProbeId, Map<number, LiveTable>>()
-  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
+  private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number; linger?: number }>()
+  /** The track lists sent per table since the newest one a sample answered, by seq: a sample names the list it answers by
+   *  seq alone, and while one sample runs the grid may send many (each active row of a held Down arrow). */
+  private readonly trackHistory = new Map<string, { seq: number; keys: readonly string[] }[]>()
   private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
+  readonly background: boolean
+  /** A background view without a slot: dormant until LiveService gives it one. */
+  private waiting = false
+  /** This view, refused BUSY, already took a background view's slot: a second refusal ends it. Cleared once it opens. */
+  private busyRetried = false
   private snapshot: LiveSnapshot
   private stream: StreamRecord | undefined
   /** The last subscription this view stopped: the next one waits for its end (see restart). */
@@ -432,6 +504,7 @@ class Handle implements LiveHandle {
     this.connectionId = spec.connectionId
     this.args = spec.args
     this.whileHidden = spec.whileHidden
+    this.background = !!spec.background
     this.userPaused = !!spec.paused
     for (const probe of spec.probes) {
       const catalogue = service.catalog.probes[probe.probe]
@@ -518,6 +591,55 @@ class Handle implements LiveHandle {
     })
   }
 
+  /** Subscribes once `after` (the stream whose slot this view takes) has ended. */
+  startAfter(after: StreamRecord | undefined): void {
+    if (after) this.previous = after
+    this.restart()
+  }
+
+  holdsSlot(): boolean { return !this.waiting }
+  /** The stream this view stopped whose end has not arrived: whoever takes its slot waits for it. */
+  pendingEnd(): StreamRecord | undefined { return this.previous && !this.previous.settled ? this.previous : undefined }
+
+  /** A background view opened with no slot free: dormant, running nothing, until LiveService gives it one. */
+  queue(): void {
+    this.waiting = true
+    this.status = 'dormant'
+    this.changed()
+  }
+
+  /** The backend refused this background view (BUSY at its caps): it waits, running nothing, until a view closes. */
+  private waitForSlot(): void {
+    this.waiting = true
+    this.status = 'dormant'
+    this.clearTimer('staleTimer')
+    this.leaveStatusOnly()
+    this.changed()
+  }
+
+  /** Another view needs this background view's slot: it stops (its history stays) and waits for one. Returns the stream
+   *  whose end the other view waits for. */
+  yieldSlot(): StreamRecord | undefined {
+    this.stop()
+    this.waiting = true
+    this.status = 'dormant'
+    this.clearTimer('staleTimer')
+    this.leaveStatusOnly()
+    this.changed()
+    return this.pendingEnd()
+  }
+
+  /** A slot came free: subscribe again once `after` has ended, or, while hidden, stay dormant until shown. */
+  claimSlot(after: StreamRecord | undefined): boolean {
+    // A waiting view whose owner lost its connection has ended: it takes no slot.
+    if (this.disposed || !this.waiting || this.status !== 'dormant') return false
+    this.waiting = false
+    if (after) this.previous = after
+    if (this.hidden) this.changed()
+    else this.restart()
+    return true
+  }
+
   /** Ends the running subscription, if any, without reporting its end: the view moves on (dormant, or a new
    *  subscription). Its results are released by the backend; the view's tables then read released. */
   private stop(): void {
@@ -543,6 +665,7 @@ class Handle implements LiveHandle {
 
   private applyOpened(record: StreamRecord, event: LiveOpenedEvent): void {
     record.opened = true
+    this.busyRetried = false
     this.spid = event.spid
     const now = this.service.now()
     let rings = false
@@ -579,8 +702,19 @@ class Handle implements LiveHandle {
         for (const retired of entry.retired ?? []) record.results.delete(retired)
         record.results.set(entry.descriptor.resultId, { generation: entry.descriptor.generation, resultId: entry.descriptor.resultId })
       }
-      for (const entry of sample.tables ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision, ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: entry.tracked } : {} })
-      for (const entry of sample.append ?? []) this.setTable(sample.probe, { probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment })
+      for (const entry of sample.tables ?? []) {
+        const keys = entry.tracked && this.answered(sample.probe + '/' + entry.table, entry.tracked.seq)
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'snapshot', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), revision: entry.revision,
+          ...entry.diff ? { diff: entry.diff } : {}, ...entry.tracked ? { tracked: { ...entry.tracked, ...keys ? { keys } : {} } } : {}, ...entry.departed ? { departed: entry.departed } : {}
+        })
+      }
+      for (const entry of sample.append ?? []) {
+        this.setTable(sample.probe, {
+          probe: sample.probe, index: entry.table, mode: 'append', descriptor: entry.descriptor, handle: this.service.client.open(entry.descriptor), segment: entry.segment,
+          ...entry.rolledFrom !== undefined ? { rolledFrom: entry.rolledFrom } : {}, ...entry.restarted ? { restarted: true } : {}
+        })
+      }
     }
     for (const error of tick.errors ?? []) {
       const runtime = this.runtime.get(error.probe)
@@ -603,6 +737,18 @@ class Handle implements LiveHandle {
     this.stream = undefined
     this.clearTimer('retryTimer')
     this.updateError = false
+    // The backend refused the subscription at its caps (8 a server, 32 a backend). A background view waits for a slot
+    // rather than end; another view takes a background view's slot on the same server, once.
+    if (!result.ok && result.code === 'BUSY' && !record.opened) {
+      if (this.background) { this.waitForSlot(); return }
+      const after = this.busyRetried ? false : this.service.yieldOnServer(this)
+      if (after !== false) {
+        this.busyRetried = true
+        this.previous = after
+        this.restart()
+        return
+      }
+    }
     if (result.ok) {
       const end = result.value
       if (end.resume !== undefined) this.resume = end.resume
@@ -663,8 +809,9 @@ class Handle implements LiveHandle {
     this.clearTimer('dormantTimer')
     this.hiddenPaused = false
     this.leaveStatusOnly()
-    // Back in view: a dormant view subscribes again (its history continues, with a gap); a paused one resumes at once.
-    if (this.status === 'dormant') this.restart()
+    // Back in view: a dormant view subscribes again (its history continues, with a gap); a paused one resumes at once. A
+    // background view waiting for a slot stays dormant until it gets one.
+    if (this.status === 'dormant') { if (!this.waiting) this.restart() }
     else this.resumeRunning()
   }
 
@@ -829,7 +976,8 @@ class Handle implements LiveHandle {
         const wanted = this.desired()
         const patch = this.patchFor(record.sent, wanted)
         const tracks = [...this.tracks].filter(([key, track]) => record.tracked.get(key) !== track.seq).slice(0, limits.live.probes)
-        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys] })) } : patch
+        const update: LivePatch | undefined = tracks.length ? { ...patch, track: tracks.map(([, track]) => ({ probe: track.probe, table: track.table, seq: track.seq, keys: [...track.keys], ...track.linger !== undefined ? { linger: track.linger } : {} })) } : patch
+        for (const [key, track] of tracks) this.remember(key, track.seq, track.keys)
         if (!update) {
           // The view came back to what the backend runs: a refusal no longer matters.
           if (record.refused) this.accepted(record)
@@ -931,7 +1079,7 @@ class Handle implements LiveHandle {
   }
 
   refresh(): void {
-    if (this.disposed) return
+    if (this.disposed || this.waiting) return
     if (this.status === 'dormant') { this.restart(); return }
     const record = this.stream
     if (!record || this.pausedNow()) return
@@ -946,11 +1094,39 @@ class Handle implements LiveHandle {
     })
   }
 
-  track(probe: LiveProbeId, keys: readonly string[], table = 0): void {
+  probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined {
+    const settings = this.settings.get(probe)
+    return settings && { ...settings, ...settings.sort ? { sort: settings.sort.map(key => ({ ...key })) } : {} }
+  }
+
+  track(probe: LiveProbeId, keys: readonly string[], table = 0, linger?: number): void {
     if (this.disposed || !this.settings.has(probe)) return
-    const list = keys.filter(key => key.length <= limits.live.keyCharacters).slice(0, limits.live.trackedKeys)
-    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq })
+    // A key too long to send is left out, and so is its place among the lingering ones.
+    const fits = (key: string) => key.length <= limits.live.keyCharacters
+    const list = keys.filter(fits).slice(0, limits.live.trackedKeys)
+    const lingering = linger === undefined ? undefined : Math.min(list.length, keys.slice(0, Math.max(0, linger)).filter(fits).length)
+    this.tracks.set(probe + '/' + table, { probe, table, keys: list, seq: ++this.trackSeq, ...lingering !== undefined ? { linger: lingering } : {} })
     this.queueSync()
+  }
+
+  /** Keeps a track list as it is sent, for the samples that answer it by seq: every list since the newest answered one
+   *  (answered), at most liveServiceLimits.trackHistory per table. */
+  private remember(key: string, seq: number, keys: readonly string[]): void {
+    const history = this.trackHistory.get(key) ?? []
+    // A list sent again (after a refusal) is the same list.
+    if (history.at(-1)?.seq === seq) return
+    history.push({ seq, keys })
+    if (history.length > liveServiceLimits.trackHistory) history.shift()
+    this.trackHistory.set(key, history)
+  }
+  /** The keys of the list a sample answers. The backend accepts lists in seq order and answers the one it held when the
+   *  sample came due, so once a sample answers a seq, no later sample answers an older one: those lists go. */
+  private answered(key: string, seq: number): readonly string[] | undefined {
+    const history = this.trackHistory.get(key)
+    const index = history?.findIndex(item => item.seq === seq) ?? -1
+    if (!history || index < 0) return undefined
+    history.splice(0, index)
+    return history[0].keys
   }
 
   ring(probe: LiveProbeId): MetricRing | undefined { return this.rings.get(probe) }
@@ -1054,10 +1230,10 @@ class Handle implements LiveHandle {
       }
     }
     // A pause the backend has not taken back (a refused resume) is nobody's wish: it reads Paused, with the error.
-    const pausedBy = this.status === 'dormant' ? (this.userPaused ? 'user' : 'hidden')
+    const pausedBy = this.status === 'dormant' ? (this.userPaused ? 'user' : this.waiting ? undefined : 'hidden')
       : this.status === 'paused' ? (this.userPaused ? 'user' : this.hiddenPaused ? 'hidden' : undefined) : undefined
     return {
-      status: this.status, ...pausedBy ? { pausedBy } : {}, ...this.statusOnly && !this.userPaused && this.stream ? { hiddenMode: 'statusOnly' as const } : {}, probes, connectionId: this.connectionId,
+      status: this.status, ...pausedBy ? { pausedBy } : {}, ...this.statusOnly && !this.userPaused && this.stream ? { hiddenMode: 'statusOnly' as const } : {}, ...this.waiting ? { waiting: true as const } : {}, probes, connectionId: this.connectionId,
       ...this.stream ? { subscriptionId: this.stream.subscriptionId } : {}, ...this.spid !== undefined && this.stream ? { spid: this.spid } : {},
       ...this.ended ? { ended: this.ended } : {}, ...this.error ? { error: this.error } : {}
     }

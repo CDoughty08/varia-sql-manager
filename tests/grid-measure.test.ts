@@ -1,10 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import type { ResultColumn } from '../src/shared/contracts'
-import { displayColumns, fitWidth, initialWidth, measureCharWidth, typeHintChars } from '../src/renderer/src/grid/measure'
+import { displayColumns, fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from '../src/renderer/src/grid/measure'
 
 const column = (dataType: string, extra: Partial<ResultColumn> = {}) => ({ dataType, ...extra })
 
 describe('column measuring', () => {
+  it('writes each column\'s SQL type as its header shows it', () => {
+    expect(sqlTypeLabel(column('int'))).toBe('int')
+    expect(sqlTypeLabel(column('nvarchar', { maxLength: 50 }))).toBe('nvarchar(50)')
+    expect(sqlTypeLabel(column('VARCHAR'))).toBe('varchar(max)')
+    expect(sqlTypeLabel(column('varbinary', { maxLength: 16 }))).toBe('varbinary(16)')
+    expect(sqlTypeLabel(column('char', { maxLength: 1 }))).toBe('char(1)')
+    expect(sqlTypeLabel(column('decimal', { precision: 18, scale: 2 }))).toBe('decimal(18,2)')
+    expect(sqlTypeLabel(column('numeric', { precision: 10 }))).toBe('numeric(10,0)')
+    expect(sqlTypeLabel(column('decimal'))).toBe('decimal')
+    expect(sqlTypeLabel(column('datetimeoffset', { scale: 7 }))).toBe('datetimeoffset(7)')
+    expect(sqlTypeLabel(column('time', { scale: 0 }))).toBe('time(0)')
+    expect(sqlTypeLabel(column('datetime2'))).toBe('datetime2')
+    expect(sqlTypeLabel(column('xml'))).toBe('xml')
+    expect(sqlTypeLabel(column('hierarchyid'))).toBe('hierarchyid')
+  })
   it('estimates characters from the declared type, as SSMS displays each type', () => {
     const hints = Object.fromEntries([
       'bit', 'tinyint', 'smallint', 'int', 'bigint', 'money', 'smallmoney', 'real', 'float', 'date', 'datetime', 'smalldatetime', 'uniqueidentifier'

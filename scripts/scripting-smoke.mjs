@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -28,7 +28,7 @@ async function launch() {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -143,7 +143,7 @@ const activeTabInView = () => page.evaluate(documentTabs => {
 }, part.documentTabs)
 /** Opens Script Table as › CREATE To on dbo.Orders by mouse, with Clipboard under the pointer. */
 async function openNestedScriptMenu() {
-  await (await explorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
+  await (await revealExplorerRow(page, ...ordersPath)).click({ button: 'right', force: true })
   await explorerMenu().getByRole('menuitem', { name: 'Script Table as', exact: true }).click(fast)
   await menuNamed('Script Table as').getByRole('menuitem', { name: 'CREATE To', exact: true }).click(fast)
   await menuNamed('CREATE To').getByRole('menuitem', { name: 'Clipboard', exact: true }).hover(fast)
@@ -297,7 +297,13 @@ try {
   console.log('Scripting checks: Script View as, Script Stored Procedure as with EXECUTE and without SELECT, and Modify opening ALTER.')
 
   // 7. The palette's Script As… lists only what the selection can be scripted with, by verb; SELECT to Clipboard runs.
-  await explorerLabel(await explorerRow(page, ...ordersPath)).click()
+  // Returning from the procedure can leave Orders outside the rendered window on a short display. Exercise that
+  // state on every display before revealing the table again.
+  const treeFlex = await explorerTree(page).evaluate(tree => { const previous = tree.style.flex; tree.style.flex = '0 0 66px'; tree.scrollTop = tree.scrollHeight; tree.dispatchEvent(new Event('scroll')); return previous })
+  try {
+    await expect(orders).toHaveCount(0)
+    await explorerLabel(await revealExplorerRow(page, ...ordersPath)).click()
+  } finally { await explorerTree(page).evaluate((tree, flex) => { tree.style.flex = flex }, treeFlex) }
   await expect(explorerTree(page)).toBeFocused()
   await page.keyboard.press('F1')
   await page.keyboard.insertText('script as')

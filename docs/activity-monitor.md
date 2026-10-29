@@ -585,11 +585,56 @@ VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later), named by the version 
 probe checks it; a Managed Instance is asked for VIEW SERVER STATE even where it has the newer permission. Without it
 the monitor still opens, shows the login's own
 session, and offers the GRANT statement to copy (never runs it). File names need VIEW ANY DEFINITION; without it Data
-File I/O shows ids. Kill Process needs ALTER ANY CONNECTION (sysadmin or processadmin).
+File I/O shows ids. Kill Process needs ALTER ANY CONNECTION (sysadmin or processadmin), and server state to see the
+session it checks (below).
 
-Kill Process runs on the object actions' own connection, so `sp_who2` shows the kill as a session of the program
-name plus " - Object Actions": unpooled, never retried, and checking the session's login time and host process id
-first, so a session id SQL Server has reused is never killed.
+## Session actions
+
+Details and Kill Process act on a row of Processes, Blocking or Active Expensive Queries. Both name the session by its id
+and its login time (`2026-10-22T06:50:12.347`: server local time, as `sys.dm_exec_sessions` has it, within `datetime`'s
+range), because SQL Server reuses session ids.
+
+**Details** (`activity.details`) reads the session on the monitor's pool (" - Activity Monitor", READ UNCOMMITTED,
+LOCK_TIMEOUT 1000) under the live gates, within 10 s in all: a lock wait answers BLOCKED and the budget TIMEOUT, as
+values; when the live views hold every gate for the whole budget it answers BUSY. It checks visibility and identity in `sys.dm_exec_sessions` alone before joining other DMVs. When no session has the id it answers `ended` (also when the login cannot see other
+sessions), and when another session has it (its login time differs) `changed`, reading nothing more. The richer session read checks the identity again, and every later section reads only while the id still has that login time, so an id reused meanwhile reads nothing rather than another session's rows. Every other section
+is a statement of its own, so a permission or a lock that stops one leaves the rest. The flyout shows each text's first
+65,536 characters; asked for one text by name (`statement`, `batch`, `inputBuffer`), Details returns only that
+text, whole up to 1,000,000 characters, for Open in Query Editor. Closing the flyout cancels the read (an attention
+ends it in SQL Server).
+
+| Section | Id | Reads |
+| --- | --- | --- |
+| Identity and Now | `session` | sys.dm_exec_sessions with sys.dm_exec_connections and its requests (a blocked one, else the lowest, gives the request columns; CPU and reads add them all) |
+| Current statement | `statement` | sys.dm_exec_sql_text of that request, cut at its statement offsets |
+| Batch | `batch` | sys.dm_exec_sql_text of that request, whole |
+| Last batch | `inputBuffer` | sys.dm_exec_input_buffer: the event type, its parameter count and its text |
+| Session waits | `waits` | sys.dm_exec_session_wait_stats, the 20 largest by wait time |
+| Transactions | `transactions` | sys.dm_tran_session_transactions with sys.dm_tran_active_transactions and sys.dm_tran_database_transactions, one row per transaction and database |
+| tempdb usage | `tempdb` | sys.dm_db_session_space_usage and sys.dm_db_task_space_usage: pages its objects and its work hold now |
+| Locks | `locks` | sys.dm_tran_locks grouped by resource type, database, mode and status; only when asked (Load locks), as it is costly |
+
+**Kill Process** (`activity.kill`, up to 64 sessions) runs on the object actions' own connection, so `sp_who2` shows the
+kill as a session of the connection's program name plus " - Object Actions": unpooled, never retried, with LOCK_TIMEOUT
+10000. For each session in order, one batch checks that the id is not its own session's, that the session exists, is a
+user session, still has the login time and host process id the row showed, and is not one of this window's pool
+sessions (those of every connection in the window, whatever Application Name each set); only then does it run KILL,
+built on the server from the session id (an int parameter), never from text. One Kill runs at a time per connection and
+two in the window; another waits up to 5 seconds, then answers BUSY. A request has 25 s in all; sessions not tried by then
+are left alone and the answer says so. Rollback progress needs
+no polling: Processes shows "rolling back n %" from the session's own request. Kill's checks need server state to see
+the session too: without it every other session answers `ended`, and nothing is killed.
+
+| Outcome | Meaning |
+| --- | --- |
+| `killed` | SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Processes shows its progress. |
+| `ended` | No session has that id any more. Nothing was killed. |
+| `changed` | The id now belongs to another session (its login time or host process id differs). Nothing was killed. |
+| `own` | The session Kill itself runs on. Nothing was killed. |
+| `system` | A SQL Server system session: only user sessions can be killed. Nothing was killed. |
+| `varia` | One of this window's own pool sessions (Object Explorer, Scripting, Object Actions, Activity Monitor or Integration Services). Nothing was killed. |
+| `denied` | The login lacks ALTER ANY CONNECTION (sysadmin or processadmin). Nothing was killed. |
+| `failed` | Another error, which the message gives; when the connection broke during KILL, whether the session ended is unknown. |
 
 ## Differences from SSMS
 
@@ -647,9 +692,17 @@ first, so a session id SQL Server has reused is never killed.
 | `columnFilterValues` | 50 | Values chosen in one column filter |
 | `columnFilterChars` | 256 | Characters of a chosen value |
 | `columnsPerProjection` | 64 | Columns a pane asks for |
-| `detailsChars` | 1,000,000 | Characters of each text in Details (statement, batch, input buffer) |
+| `detailsChars` | 1,000,000 | Characters of a text Details returns whole when asked for it (Open in Query Editor) |
+| `detailsPreviewChars` | 65,536 | Characters of each text (statement, batch, last batch) in the Details flyout |
 | `detailsWaits` | 20 | Session waits in Details |
-| `detailsTransactions` | 50 | Transactions in Details |
+| `detailsTransactions` | 50 | Transaction rows (one per transaction and database) in Details |
 | `detailsLocks` | 1,000 | Grouped lock rows in Details |
+| `detailsBudgetMs` | 10,000 | Milliseconds a Details read may take, gate wait and connect included, before it answers TIMEOUT |
+| `detailsRunning` | 32 | Details reads main tracks for cancellation at once |
 | `killSessions` | 64 | Sessions one Kill Process request may end |
+| `killBudgetMs` | 25,000 | Milliseconds a Kill Process request may take; past it, sessions not yet tried are left alone and reported so |
+| `killMessageChars` | 2,000 | Characters of a Kill outcome's message |
+| `cancelIds` | 16 | Details reads one cancel may name |
+| `cancelTombstones` | 64 | Cancelled Details ids main remembers, so a read cancelled before it was sent is refused |
+| `cancelTombstoneMs` | 60,000 | Milliseconds main remembers them |
 | `sessionId` | 32,767 | The largest session id |

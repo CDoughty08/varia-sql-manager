@@ -40,7 +40,7 @@ describe('menu resolution', () => {
     const [undo] = edit
     expect(undo).toEqual({ kind: 'command', key: 'edit.undo', id: 'edit.undo', title: 'Undo', mnemonic: 0, icon: 'discard', keybinding: { parts: ['Ctrl+Z'], text: 'Ctrl+Z', aria: 'Control+Z' }, enabled: true })
     expect(submenu('edit.advanced').find(item => item.key === 'edit.commentLines')).toMatchObject({ keybinding: { text: 'Ctrl+K Ctrl+C' } })
-    const windowMenu = ['&Object Explorer', 'Query &Editor', 'Q&uery Output', 'S&how Results Pane', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
+    const windowMenu = ['&Object Explorer', 'Query &Editor', 'Q&uery Output', 'S&how Results Pane', 'Panel &Tabs', '-', '&Next Query', '&Previous Query', 'C&lose All Documents', '-', '&Save Window Layout…', 'Lo&ad Window Layout…', '&Reset Window Layout']
     expect(marked(resolveMenu('window', options({ platform: 'linux' })))).toEqual(windowMenu)
     // macOS's Minimize and Zoom are bare Electron roles: only its native menu shows them.
     expect(marked(resolveMenu('window', options({ platform: 'darwin' })))).toEqual(windowMenu)

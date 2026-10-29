@@ -5,7 +5,7 @@ import { gridLimits } from '../src/renderer/src/grid/constants'
 import { explorerLimits } from '../src/shared/explorer/catalog'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import {
-  defaultDensity, densities, densityUse, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending,
+  defaultDensity, densities, densityUse, glyphSizes, glyphUse, minimumFontSize, motion, radii, reducedMotion, renderMetricDocs, shadows, spaceScale, typeScale, typeScalePending, windowControls,
   type DensityMetrics, type GlyphSizeName, type TypeStepName
 } from '../src/shared/theme/metrics'
 import { cssRules, stylesheetRules, type CssRule } from './fixtures/css-rules'
@@ -69,6 +69,8 @@ describe('metric tokens', () => {
     expect(ascending(Object.values(shadows).map(shadow => shadow.blur))).toBe(true)
     expect([motion.fast.ms, motion.base.ms]).toEqual([80, 120])
     expect(defaultDensity).toBe('compact')
+    // The native controls are centred in the header of each density.
+    expect([windowControls(), windowControls('comfortable')]).toEqual([{ overlayHeight: 40, trafficLights: { x: 12, y: 12 } }, { overlayHeight: 44, trafficLights: { x: 12, y: 14 } }])
     for (const [name, value] of Object.entries(densities.compact)) expect(densities.comfortable[name as keyof typeof densities.compact], name).toBeGreaterThanOrEqual(value)
   })
   it('sizes all text from the type scale, so nothing is under 11 px, and icons from the glyph sizes', () => {
@@ -189,8 +191,9 @@ describe('metric tokens', () => {
       for (const selector of densityUse[name]) expect(all.filter(entry => entry.selector === selector && /^(?:min-|max-)?height$/.test(entry.property)).map(({ value }) => value), selector).toEqual([token])
     }
     expect(all.find(entry => entry.selector === '.icon-button' && entry.property === 'width')?.value).toBe('var(--varia-control)')
-    // The tree places its rows by explorerLimits.rowHeight, so the two must agree.
+    // The tree places its rows by explorerLimits.rowHeight, so the two must agree, and servers by serverRowHeight.
     expect(explorerLimits.rowHeight).toBe(densities[defaultDensity].row)
+    expect(all.filter(entry => entry.selector === '.explorer-row.server' && /height$/.test(entry.property)).map(({ value }) => value)).toEqual([`${explorerLimits.serverRowHeight}px`])
   })
   it('starts the query editor at the body text size, so its text keeps the rhythm of the UI', () => {
     expect(defaultSettings['environment.fonts.editorFontSize']).toBe(typeScale.md.size)

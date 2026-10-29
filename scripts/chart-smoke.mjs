@@ -10,7 +10,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { chartLegend, chartSwatchLines, chartTableRegion, chartTooltip, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, chartLegend, chartSwatchLines, chartTableRegion, chartTooltip, part, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'chart-profile-'))
@@ -49,7 +49,11 @@ async function connect() {
 }
 
 try {
-  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
+  // Smoke runs never show the window, and a hidden window draws about once a second: the crosshair's tooltip would then
+  // show up to a second after its key, when the sample it names no longer reads as "now". Show it, without focus.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].showInactive())
+  await expect.poll(() => page.evaluate(() => document.visibilityState)).toBe('visible')
   await connect()
   const id = await live('subscribeSynthetic', { tickMs: 100 })
   await expect.poll(async () => (await live('ring', id, 'debug.synthetic.metrics'))?.length ?? 0).toBeGreaterThanOrEqual(5)

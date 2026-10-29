@@ -65,14 +65,20 @@ internal static class DatabasePropertiesChecks
             ("changes on a rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", Changes: Options(("autoClose", "true")))),
             ("changes on a delete", new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), null, false, false, Options(("autoClose", "true")))),
             ("a new name on properties", Properties(Options(("autoClose", "true"))) with { NewName = "x" }), ("delete history on properties", Properties(Options(("autoClose", "true"))) with { DeleteHistory = false }),
+            ("database id 0", Properties(Options(("autoClose", "true"))) with { Identity = new(0, "2026-01-02T03:04:05.000") }),
+            ("a create date without milliseconds", Properties(Options(("autoClose", "true"))) with { Identity = new(7, "2026-01-02T03:04:05") }),
+            ("a create date before a line break", Properties(Options(("autoClose", "true"))) with { Identity = new(7, "2026-01-02T03:04:05.000\n") }),
+            ("an identity on a rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), "B", Identity: new(7, "2026-01-02T03:04:05.000"))),
+            ("an identity on a delete", new ActionArgs("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "AppData"), null, false, false, Identity: new(7, "2026-01-02T03:04:05.000"))),
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for Database Properties: " + string.Join(", ", accepted));
         check(Refused(Properties(Options(("autoClose", "true")), new ObjectRefDto("database", Name: "master"))) == "accepted"
             && Refused(Properties(new(Owner: ActionChecks.Long("q]'); DROP TABLE dbo.Canary; --")))) == "accepted" && Refused(Properties(new(Owner: " "))) == "accepted"
             && Refused(Properties(Options(("readOnly", "true")), close: true)) == "accepted" && Refused(Properties(new(Scoped: new() { ["maxDopForSecondary"] = "PRIMARY" }))) == "accepted"
-            && Refused(Properties(Options(("collation", "Latin1_General_100_CI_AS_SC_UTF8")))) == "accepted" && Refused(Properties(Options(("targetRecoveryTime", "2147483647")))) == "accepted",
-            "Properties accepts system databases, hostile and single-space owners verbatim, closeConnections with an exclusive change, PRIMARY, collations and the range's bounds");
+            && Refused(Properties(Options(("collation", "Latin1_General_100_CI_AS_SC_UTF8")))) == "accepted" && Refused(Properties(Options(("targetRecoveryTime", "2147483647")))) == "accepted"
+            && Refused(Properties(Options(("autoClose", "true"))) with { Identity = new(int.MaxValue, "2026-01-02T03:04:05.000") }) == "accepted",
+            "Properties accepts system databases, hostile and single-space owners verbatim, closeConnections with an exclusive change, PRIMARY, collations, the range's bounds and the database read");
         string DescribeRefused(string dialog, ObjectRefDto target)
         {
             try { service.Validate(new ActionDescribeArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), dialog, target)); return "accepted"; }
