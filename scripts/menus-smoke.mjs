@@ -732,7 +732,7 @@ try {
   // A server: its own items, and New Query on its connection with focus in the new query.
   const serverA = await row('server-a')
   await serverA.click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'New Query', 'Copy Name', 'Refresh'])
+  expect(await labels()).toEqual(['Connect…', 'Disconnect', 'Environment…', 'New Query', 'Copy Name', 'Refresh'])
   await expect(serverA).toHaveAttribute('data-menu-target', '')
   await expect(serverA).toHaveAttribute('aria-selected', 'true')
   const before = await tabs().count()
@@ -807,17 +807,21 @@ try {
   await expect.poll(() => readFile(scriptFile, 'utf8').catch(() => null)).toBe(createScript)
   expect(await application.evaluate(() => globalThis.variaSaveDialogs)).toEqual(['Save Grid Results', 'Save SQL query'])
   await expect(toolbarButton(page, 'Open')).toBeEnabled()
-  // Refresh on Tables reloads that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings) and
+  // Refresh on Tables reconciles that folder only. Tables can be filtered (explorer-smoke.mjs covers Filter Settings) and
   // offers New › Table… (table-designer-smoke.mjs).
-  const tables = await row(...ordersPath.slice(0, -1)), stale = await (await row(...ordersPath)).getAttribute('id')
+  const tables = await row(...ordersPath.slice(0, -1)), kept = await (await row(...ordersPath)).getAttribute('id')
+  await mkdir(join(control, 'extra'), { recursive: true })
+  await writeFile(join(control, 'extra', 'tables'), '')
   const listed = { tables: await loads('tables'), databases: await loads('databases') }
   await tables.click({ button: 'right', force: true })
   expect(await labels()).toEqual(['New', 'Filter Settings…', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
   await expect.poll(() => loads('tables')).toBe(listed.tables + 1)
   expect(await loads('databases')).toBe(listed.databases)
-  // The old rows stay until the folder's first page replaces them.
-  await expect.poll(async () => (await row(...ordersPath)).getAttribute('id')).not.toBe(stale)
+  // A table created meanwhile appears, and dbo.Orders keeps its row.
+  await row(...ordersPath.slice(0, -1), 'dbo.Shipments')
+  expect(await (await row(...ordersPath)).getAttribute('id')).toBe(kept)
+  await rm(join(control, 'extra', 'tables'))
   // The keyboard: Shift+F10 opens the selected table's menu below its row with its first item active; so does the
   // context-menu key. Focus stays on the tree, which names the row as its active descendant.
   const table = await row(...ordersPath)
@@ -1191,7 +1195,7 @@ try {
   // Only the open menu's token counts: a choice from the table's older menu does not run on the server's.
   await (await explorerRow(page, 'server-a')).click({ button: 'right' })
   await expect.poll(async () => (await popups()).length).toBe(4)
-  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', '---', 'New Query', '---', 'Copy Name', '---', 'Refresh'])
+  expect((await popups())[3].items).toEqual(['Connect…', 'Disconnect', 'Environment…', '---', 'New Query', '---', 'Copy Name', '---', 'Refresh'])
   const queriesBefore = await tabs().count()
   await application.evaluate(() => { globalThis.variaPopups[2].menu.getMenuItemById('explorer.copyName').click() })
   await pick('explorer.newQuery')
@@ -1295,7 +1299,7 @@ try {
     await expect(liveServer).toBeVisible({ timeout: 30000 })
     const liveName = await explorerLabel(liveServer).textContent(), wait = { timeout: 30000 }
     await expandExplorerPath(page, liveName, 'Databases', 'System Databases', wait)
-    const master = await explorerRow(page, liveName, 'Databases', 'System Databases', 'master', wait)
+    const master = await explorerRow(page, liveName, 'Databases', 'System Databases', 'master', wait), masterRow = await master.getAttribute('id')
     const liveTabs = await tabs().count()
     await master.click({ button: 'right' })
     await menu('Object Explorer').getByRole('menuitem', { name: 'New Query', exact: true }).click(fast)
@@ -1307,12 +1311,14 @@ try {
     await expect(gridCell(anyResultGrid(page), 0, 0).first()).toHaveText('master', { timeout: 30000 })
     await liveServer.click({ button: 'right' })
     await menu('Object Explorer').getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
-    // The server's folders come back as new rows, collapsed, as in SSMS.
-    await expect.poll(async () => (await explorerRow(page, liveName, 'Databases', wait)).getAttribute('aria-expanded'), wait).toBe('false')
+    // The server reconciles in place: what was expanded stays expanded and reloads, and master keeps its row.
+    await expect.poll(async () => (await explorerRow(page, liveName, 'Databases', wait)).getAttribute('aria-expanded'), wait).toBe('true')
+    await expect(await explorerRow(page, liveName, 'Databases', 'System Databases', wait)).toHaveAttribute('aria-expanded', 'true')
     await expect(explorerTree(page).locator(`${part.explorerProgressRow}, ${part.explorerErrorRow}`)).toHaveCount(0, wait)
+    expect(await (await explorerRow(page, liveName, 'Databases', 'System Databases', 'master', wait)).getAttribute('id')).toBe(masterRow)
     // Monaco's empty live regions are alerts too; these are the workbench's error messages.
     await expect(banner(page).or(page.locator(part.explorerError)).or(errorMessages(page))).toHaveCount(0)
-    console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes with its folders collapsed.')
+    console.log('Menus checks: a real server\'s master database opens a query on master from its menu, and the server refreshes in place, keeping what is expanded.')
   } else console.log('Menus checks: the live server step was skipped (VARIA_TEST_SQL_SERVER is not set).')
 
   expect(failures).toEqual([])

@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree', toasts = 'notifications'
+const tree = 'the Object Explorer tree'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -28,7 +28,7 @@ const groups = {
     'errorForeground': ['V', '$error', 'Error text.', 'css monaco'],
     'warningForeground': ['X', '$warning', 'Warning text, and the results head\'s icon for a run that completed with errors or was cancelled.', 'css'],
     'successForeground': ['X', '$success', 'Success text, such as the Execute button and confirmations.', 'css'],
-    'infoForeground': ['X', '$info', 'Information text.', '', { reserved: toasts }],
+    'infoForeground': ['X', '$info', 'Information text.', ''],
     'focusBorder': ['V', '$focus', 'Focus ring around the focused control.', 'css monaco'],
     'icon.foreground': ['V', '$icon', 'Default glyph color.', 'css monaco'],
     'widget.shadow': ['V', '$shadow', 'Shadow of dialogs, floating dock groups, and editor widgets.', 'css monaco'],
@@ -113,7 +113,7 @@ const groups = {
     'tab.inactiveBackground': ['V', '@editorGroupHeader.tabsBackground', 'Hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveBackground': ['V', '$canvas', 'Visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveBackground': ['V', '@tab.inactiveBackground', 'Hidden tabs of an unfocused dock group.', 'css'],
-    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group.', 'css'],
+    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group, and the title in the header of a document.', 'css'],
     'tab.inactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveForeground': ['V', '$textTertiary', 'Label of the visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of an unfocused dock group.', 'css'],
@@ -142,8 +142,8 @@ const groups = {
     'documentTabs.closeForeground': ['X', '$textMuted', 'Close buttons of query tabs.', 'css'],
     'documentTabs.iconForeground': ['X', '$textTertiary', 'SQL badge of query tabs.', 'css'],
     'documentTabs.modifiedIndicator': ['X', '$textMuted', 'Dot that marks a query with unsaved changes.', 'css'],
-    'breadcrumb.foreground': ['V', '$textMuted', 'The bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
-    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Unused since the query status bar replaced the query context line; themes that set it stay valid.', '']
+    'breadcrumb.foreground': ['V', '$textMuted', 'The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
+    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'The chevrons between the steps of the location in a document header.', 'css']
   },
   'Editor, widgets, and empty states': {
     'editor.background': ['V', '$canvas', 'Editor and application background; also the native window background.', 'css monaco native', { opaqueOver: 'base' }],
@@ -166,7 +166,7 @@ const groups = {
     'editorWidget.border': ['V', pair('$controlBorder', '$borderStrong'), 'Border of dialogs and editor widgets.', 'css monaco'],
     'emptyState.foreground': ['X', '$textMuted', 'Text of empty views (no query, no results, empty dock).', 'css'],
     'emptyState.titleForeground': ['X', '$textTertiary', 'Heading of empty views.', 'css'],
-    'emptyState.iconForeground': ['X', '$iconMuted/60', 'Decorative glyph of empty views.', '', { reserved: 'the empty views of the output pane and documents' }]
+    'emptyState.iconForeground': ['X', '$iconMuted/60', 'Decorative glyph of empty views.', 'css']
   },
   'Output panel and results grid': {
     'panel.background': ['V', '$panel', 'Output panel.', 'css'],
@@ -229,12 +229,12 @@ const groups = {
     'dialog.labelForeground': ['X', '$textSecondary', 'Field labels in dialogs.', 'css'],
     'dialog.descriptionForeground': ['X', '$textTertiary', 'Secondary text in dialogs.', 'css'],
     'settings.headerForeground': ['V', '$textStrong', 'Section headings in dialogs.', 'css'],
-    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts.', '', { reserved: toasts }],
-    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', '', { reserved: toasts }],
-    'notifications.border': ['V', '@widget.border', 'Notification border.', '', { reserved: toasts }],
-    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', '', { reserved: toasts }],
-    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', '', { reserved: toasts }],
-    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', '', { reserved: toasts }],
+    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts, above the status bar at the bottom right.', 'css'],
+    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', 'css'],
+    'notifications.border': ['V', '@widget.border', 'Notification border.', 'css'],
+    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', 'css'],
+    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', 'css'],
+    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', 'css'],
     'quickInput.background': ['V', '@editorWidget.background', 'Command palette and pickers (quick input).', 'css'],
     'quickInput.foreground': ['V', '@editorWidget.foreground', 'Command palette text.', 'css'],
     'quickInputTitle.background': ['V', '$raised', 'Title row of pickers that have one.', 'css'],
@@ -242,6 +242,35 @@ const groups = {
     'quickInputList.focusForeground': ['V', '@list.activeSelectionForeground', 'Text of the active command palette row.', 'css'],
     'pickerGroup.foreground': ['V', '$textAccent', 'Command palette group labels, such as "recently used".', 'css'],
     'pickerGroup.border': ['V', '$separator', 'Line above each command palette group.', 'css']
+  },
+  'Status pills, chips, live views, and tiles': {
+    'statusPill.runningBackground': ['X', '$accentSurface', 'Status pills and tags of work in progress, such as a running execution or a restoring database.', 'css'],
+    'statusPill.runningForeground': ['X', '$textAccent', 'Text and glyph of running pills.', 'css'],
+    'statusPill.successBackground': ['X', '$success/14', 'Status pills of a good outcome, such as a succeeded execution or a healthy availability group.', 'css'],
+    'statusPill.successForeground': ['X', '$successText', 'Text and glyph of success pills.', 'css'],
+    'statusPill.warningBackground': ['X', '$warning/14', 'Status pills that need attention, such as a stopping execution or a read-only database.', 'css'],
+    'statusPill.warningForeground': ['X', '$warningSurfaceText', 'Text and glyph of warning pills.', 'css'],
+    'statusPill.criticalBackground': ['X', '$error/14', 'Status pills of a failure or a state at risk, and the Production environment tag.', 'css'],
+    'statusPill.criticalForeground': ['X', '$errorSurfaceText', 'Text and glyph of critical pills and the Production tag.', 'css'],
+    'statusPill.infoBackground': ['X', '$info/14', 'Status pills and tags that inform without alarming, such as a Staging environment.', 'css'],
+    'statusPill.infoForeground': ['X', '$textAccent', 'Text and glyph of information pills.', 'css'],
+    'statusPill.neutralBackground': ['X', '$active', 'Status pills and tags without a state color, such as a canceled execution or a Test environment.', 'css'],
+    'statusPill.neutralForeground': ['X', '$textSecondary', 'Text and glyph of neutral pills.', 'css'],
+    'chip.background': ['X', '$text/0', 'Filter chips (toggle buttons such as All, Active, Blocked) while off; transparent by default.', 'css'],
+    'chip.foreground': ['X', '$textSecondary', 'Label of a filter chip while off.', 'css'],
+    'chip.border': ['X', '$controlBorder/45', 'Outline of a filter chip while off.', 'css'],
+    'chip.activeBackground': ['X', '$selection', 'A filter chip while on.', 'css'],
+    'chip.activeForeground': ['X', '$textAccent', 'Label and check mark of a filter chip while on.', 'css'],
+    'chip.activeBorder': ['X', '$accent', 'Outline of a filter chip while on; with the fill and the check mark, it shows the chip is on.', 'css'],
+    'live.indicator': ['X', '$success', 'Dot of a live view that is collecting; it pulses unless the system asks for reduced motion.', 'css'],
+    'live.pausedForeground': ['X', '$textMuted', 'Text and glyph of a live view that is not collecting: starting, paused, stopped or ended.', 'css'],
+    'live.staleForeground': ['X', '$warningSurfaceText', 'Text and glyph of live data that is out of date, as in "Stale since 22:44:03".', 'css'],
+    'live.staleBackground': ['X', '$warning/14', 'Badge behind out-of-date live data.', 'css'],
+    'tile.background': ['X', '$panel', 'Metric tiles of live documents.', 'css'],
+    'tile.border': ['X', '$border', 'Outline of a metric tile.', 'css'],
+    'tile.warningBorder': ['X', '$warning', 'Outline of a tile whose value crossed its warning threshold.', 'css'],
+    'tile.criticalBorder': ['X', '$error', 'Outline of a tile whose value crossed its critical threshold.', 'css'],
+    'skeleton.background': ['X', '$active', 'Placeholder bars shown while a first load takes longer than 300 ms.', 'css']
   },
   'Connection colors': {
     'connection.red': ['X', '$red', 'Red connection color.', 'script'],

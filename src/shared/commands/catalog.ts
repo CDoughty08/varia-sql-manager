@@ -1,12 +1,12 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import type { IconId } from '../icons.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -226,7 +226,8 @@ export const commandCatalog = {
     // A disconnected query connects first (the Connect dialog), as in SSMS; a lost connection needs Reconnect.
     precondition: 'activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected || (backendReady && !activeConnectionLost))',
     unavailableHint: 'Open a query, wait for its running query to finish, and reconnect a lost connection.',
-    keybindings: [{ key: 'f5', when: 'editorFocus' }, { key: 'mod+enter', when: 'editorFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus' }],
+    // The query's bar shows F5 on Execute, so its keys work there too, as in SSMS's SQL Editor toolbar.
+    keybindings: [{ key: 'f5', when: 'editorFocus || queryBarFocus' }, { key: 'mod+enter', when: 'editorFocus || queryBarFocus' }, { win: 'ctrl+e', linux: 'ctrl+e', when: 'editorFocus || queryBarFocus' }],
     menus: [{ menu: 'query', group: '1_execute', order: 1, mnemonic: 'x' }, { menu: 'editor.context', group: '2_execute', order: 1, mnemonic: 'x' }]
   },
   'query.cancel': {
@@ -262,6 +263,16 @@ export const commandCatalog = {
     menus: [
       { menu: 'file', group: '0_connect', order: 2, mnemonic: 'd' },
       { menu: 'explorer.context', group: '0_connect', order: 2, title: 'Disconnect', mnemonic: 'd', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
+  },
+  // Not in SSMS: labels a connected server Production, Staging, Test, Development or a custom label, saved with its entry.
+  // A server node's menu labels that server; elsewhere, the active query's server or one the user picks.
+  'connection.environment': {
+    title: 'Set Connection Environment…', category: 'Connection', icon: 'tag', keywords: ['environment', 'production', 'prod', 'staging', 'test', 'development', 'label', 'tag'],
+    precondition: 'hasConnection && !documentBusy', unavailableHint: noServer,
+    menus: [
+      { menu: 'query.connection', group: '2_change', order: 2, title: 'Environment…' },
+      { menu: 'explorer.context', group: '0_connect', order: 5, title: 'Environment…', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
   // A lost server's menu reconnects that server; elsewhere, the active query's lost connection or one the user picks.
@@ -306,6 +317,8 @@ export const commandCatalog = {
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
+  // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
+  ...propertiesCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
@@ -487,6 +500,15 @@ export const commandCatalog = {
   'view.toggleFullScreen': {
     title: 'Toggle Full Screen', category: 'View', icon: 'screen-full', role: 'togglefullscreen', keybindings: [{ win: 'f11', linux: 'f11', mac: 'ctrl+meta+f', native: true }],
     menus: [{ menu: 'view', group: '4_zoom', order: 4, title: 'Full Screen', mnemonic: 'f' }]
+  },
+  // Toasts never take focus by themselves: this moves it to the newest, where Tab reaches its buttons and Escape dismisses it.
+  'notifications.focus': {
+    title: 'Focus Notifications', category: 'View', icon: 'bell', keywords: ['toast', 'notification', 'message'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
+  },
+  'notifications.clearAll': {
+    title: 'Clear All Notifications', category: 'View', icon: 'clear-all', keywords: ['toast', 'notification', 'dismiss'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
   },
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
   'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },

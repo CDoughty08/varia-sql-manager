@@ -2,42 +2,45 @@
 // requests are validated with portRequestSchema; backend payloads main forwards are validated with the schemas below.
 import { z } from 'zod'
 import type { BackendStatus, QueryEvent, ResultsCloseResult, ResultsReadResult } from '../contracts'
+import { liveSubscribeParamsSchema, liveUpdateParamsSchema, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../live/schema'
+import { backendDescriptorSchema } from './descriptors'
 import { limits, type ErrorCode } from './wire/protocol'
+
+export { backendDescriptorSchema }
 
 const u31 = z.number().int().min(1).max(2 ** 31 - 1)
 const u32 = z.number().int().min(1).max(0xffffffff)
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const generation = u31
 
-/** Worker → main. `rid` names the request in the worker; every request ends with one `end` message. */
-export const portRequestSchema = z.discriminatedUnion('t', [
+/** The port schema around a set of live schemas (buildLiveSchemas): the shipped ones, or a test catalogue's. */
+export const buildPortRequestSchema = (live: { subscribe: z.ZodType<LiveSubscribeParams>; update: z.ZodType<LiveUpdateParams> }) => z.discriminatedUnion('t', [
   z.object({ t: z.literal('read'), rid: u31, generation, resultId: u32, firstRow: count, maxRows: z.number().int().min(1).max(65_536), credit: z.number().int().min(limits.credit.min).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('credit'), rid: u31, bytes: z.number().int().min(1).max(limits.credit.max) }).strict(),
   z.object({ t: z.literal('cancel'), rid: u31 }).strict(),
-  z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict()
+  z.object({ t: z.literal('close'), rid: u31, generation, resultIds: z.array(u32).min(1).max(1024) }).strict(),
+  // Live subscriptions (docs/ipc.md): a stream acknowledged with `credit`, ended with `cancel`, changed with liveUpdate.
+  z.object({ t: z.literal('live'), rid: u31, generation, params: live.subscribe }).strict(),
+  z.object({ t: z.literal('liveUpdate'), rid: u31, generation, params: live.update }).strict()
 ])
+/** Worker → main. `rid` names the request in the worker; every request ends with one `end` message. */
+export const portRequestSchema = buildPortRequestSchema({ subscribe: liveSubscribeParamsSchema, update: liveUpdateParamsSchema })
+/** The same for unpackaged smoke runs: live requests may also name test-only sources (debug.synthetic). */
+export const testPortRequestSchema = buildPortRequestSchema({ subscribe: testLiveSubscribeParamsSchema, update: testLiveUpdateParamsSchema })
 export type PortRequest = z.infer<typeof portRequestSchema>
 
-/** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. */
+/** Main → worker. Page bodies are exact-size ArrayBuffers, never decoded by main. A live event carries the EVENT body's
+ *  length, which the worker grants back once the page has applied it. */
 export type PortMessage =
   | { t: 'backend'; generation: number; status: BackendStatus }
   | { t: 'page'; rid: number; seq: number; body: ArrayBuffer }
-  | { t: 'end'; rid: number; ok: true; result: ResultsReadResult | ResultsCloseResult }
+  | { t: 'end'; rid: number; ok: true; result: PortEndResult }
   | { t: 'end'; rid: number; ok: false; code: ErrorCode; message: string }
   | { t: 'query'; queryId: string; event: QueryEvent }
   | { t: 'memory'; usedBytes: number; globalBytes: number; generation: number; seq: number }
+  | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
+export type PortEndResult = ResultsReadResult | ResultsCloseResult | LiveEnd | LiveUpdateResult
 
-const columnSchema = z.object({
-  name: z.string().max(512), dataType: z.string().max(256), wire: z.enum(['text', 'binary']), role: z.enum(['xml', 'json', 'plan', 'udt', 'vector']).optional(),
-  maxLength: count.optional(), precision: count.optional(), scale: count.optional(), nullable: z.boolean()
-}).strict()
-const truncationSchema = z.enum(['rowLimit', 'queryBudget', 'globalBudget', 'systemMemory'])
-/** A descriptor as the backend sends it, before main adds the generation. */
-export const backendDescriptorSchema = z.object({
-  resultId: u32, index: z.number().int().min(0).max(limits.maxResultSets.max), batchNumber: count, iteration: count, kind: z.enum(['rows', 'executionPlan']),
-  columns: z.array(columnSchema).min(1).max(limits.page.maxColumns), rowsRead: count, rowsStored: count, rowsAvailable: count, bytesStored: count, truncatedCells: count,
-  state: z.enum(['open', 'complete', 'released']), truncated: truncationSchema.optional(), incomplete: z.boolean()
-}).strict()
 const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [

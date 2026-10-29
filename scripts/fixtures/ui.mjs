@@ -12,6 +12,7 @@
 export const part = {
   menubar: '[role="menubar"][aria-label="Application menu"]',
   toolbar: '[role="toolbar"][aria-label="Standard"]',
+  queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
@@ -54,6 +55,22 @@ export const part = {
   jobProgress: '.job-strip:not(.job-notice)',
   jobNotice: '.job-notice',
   outputEmpty: '.output-empty',
+  // The states kit's empty view (src/renderer/src/kit/EmptyState.tsx) and the surfaces that place one.
+  emptyState: '.empty-state',
+  emptyStateIcon: '.empty-state-icon',
+  emptyStateTitle: '.empty-state-title',
+  emptyStateDetail: '.empty-state-detail',
+  /** The filled action of an empty view; a view has at most one. */
+  primaryAction: 'button.primary',
+  explorerEmpty: '.explorer-empty',
+  workspaceEmpty: '.workspace-empty',
+  dockEmpty: '.dock-empty',
+  /** Object Explorer's fault view (an InlineError) and the outcome line of its Copy details. */
+  explorerFault: '.explorer-fault',
+  inlineErrorStatus: '.inline-error-status',
+  /** An InlineError's sentence (the live region) and the note read with it. */
+  inlineErrorMessage: '.inline-error-message',
+  inlineErrorNote: '.inline-error-note',
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
@@ -81,6 +98,9 @@ export const part = {
   // Menus and the quick input
   menu: '.menu',
   menuLayer: '.menu-layer',
+  // Toasts (src/renderer/src/kit/Toasts.tsx): the layer holds the stack and the two live regions that announce them.
+  toastLayer: '.toast-layer',
+  toastMessage: '.toast-message',
   menuMnemonic: '.menu-mnemonic',
   menuKeybinding: '.menu-keybinding',
   quickInput: '.quick-input',
@@ -89,10 +109,36 @@ export const part = {
   quickInputHighlight: '.quick-input-hl',
   quickInputGroup: '.quick-input-group',
   quickInputEmpty: '.quick-input-empty',
+  // Connection environment labels (src/renderer/src/EnvironmentTag.tsx): the kit's tag, in a wrapper that bounds it per
+  // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
+  environmentTag: '.environment-tag',
+  statusPill: '.status-pill',
+  statusPillLabel: '.status-pill-label',
+  /** The spans that hold the tag with its visually hidden prefix: the query bar's, the classic query status bar's, and the window status bar's. */
+  queryEnvironment: '.query-bar-environment',
+  queryStatusEnvironment: '.query-status-environment',
+  statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
-  /** An object dialog's page list (Database Properties). */
-  dialogPages: '.object-dialog-pages',
+  /** The Connect dialog's failure: its InlineError and the Error details under it. */
+  connectFailure: '.connect-failure',
+  // Connect v2's layout, for the probes that measure it: the two panes, the form's own scroll, and at its bottom the
+  // outcome (busy, notices, the failure) above the footer with Connect.
+  connectPanes: '.connect-panes',
+  connectSourcesPane: '.connect-sources-pane',
+  connectFormPane: '.connect-form-pane',
+  connectFormScroll: '.connect-form-scroll',
+  connectActions: '.connect-actions',
+  connectOutcome: '.connect-outcome',
+  connectionFooter: '.connection-footer',
+  /** The saved connections' list, one of its rows (the entry with its star and ×), and a connection's colour dot. */
+  connectionSources: '.connection-sources',
+  connectionListRow: '.connection-list-row',
+  connectionSwatch: '.connection-swatch',
+  visuallyHidden: '.visually-hidden',
+  /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
+  connectionScroll: '.connection-scroll',
+  environmentPreview: '.environment-preview',
   optionsNote: '.options-note',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',
@@ -102,6 +148,16 @@ export const part = {
   modalBackdrop: '.modal-backdrop',
   // Table designer and the editor
   tableDesigner: '.table-designer',
+  // The document frame
+  documentHeader: '.document-header',
+  documentSubtitle: '.document-subtitle',
+  /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
+  statusPill: '.status-pill',
+  documentBanner: '.document-banner',
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  propertyField: '.property-field',
+  propertyFact: '.property-fact',
+  fieldHint: '.field-hint',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -111,7 +167,16 @@ export const part = {
   activeDockingGuideCell: '.docking-guide-cell.active',
   dockingPreview: '.docking-preview',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
-  dockShell: '.varia-dock'
+  dockShell: '.varia-dock',
+  // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
+  // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
+  menu: '.menu',
+  explorerTreeBox: '.explorer-tree',
+  explorerRow: '.explorer-row',
+  explorerServerRow: '.explorer-row.server',
+  activeDocumentTab: '.query-tab.active',
+  dialogPages: '.object-dialog-pages',
+  titleBarMenus: '.title-bar-menus'
 }
 
 /** The query status facts by key (QueryStatusSegment's keys), each in its own segment. */
@@ -160,11 +225,16 @@ export const titleBar = page => page.locator(part.titleBar)
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
- * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All, the server and
- * database pickers, Execute and Cancel; with the classic toolbar on, the same names as text buttons plus Layouts.
+ * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All; with the classic
+ * toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and database lists.
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
+export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
+export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
+export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
+/** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
 export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
 export const banner = page => page.locator(part.banner)
@@ -252,6 +322,17 @@ export const outputStatus = page => outputPane(page).locator(part.outputStatus)
 export const jobProgress = page => outputPane(page).locator(part.jobProgress)
 export const jobNotice = page => outputPane(page).locator(part.jobNotice)
 export const outputEmpty = page => outputPane(page).locator(part.outputEmpty)
+/** A surface's empty view, matched only when it is the states kit's (so a hand-made one fails), and its parts. */
+export const emptyState = surface => matching(surface, part.emptyState)
+export const explorerEmpty = page => page.locator(part.explorerEmpty)
+export const workspaceEmpty = page => page.locator(part.workspaceEmpty)
+export const dockEmpty = page => page.locator(part.dockEmpty)
+export const emptyStateIcon = view => view.locator(part.emptyStateIcon)
+export const emptyStateTitle = view => view.locator(part.emptyStateTitle)
+export const emptyStateDetail = view => view.locator(part.emptyStateDetail)
+export const primaryAction = view => view.locator(part.primaryAction)
+export const explorerFault = page => page.locator(part.explorerFault)
+export const copyOutcome = view => view.locator(part.inlineErrorStatus)
 export const messages = page => page.getByRole('log', { name: 'Messages', exact: true })
 /** Each message and tail line; an error's differs only in its colour. */
 export const messageLines = page => messages(page).locator('pre')
@@ -284,8 +365,16 @@ export const renameBox = page => explorerTree(page).getByRole('textbox', { name:
 // Dialogs
 
 /** The Connect dialog's Error details expander under a failed connect, or under the database note (Load databases). */
-export const connectErrorDetails = dialog => dialog.locator('[role="alert"] + details')
+export const connectErrorDetails = dialog => dialog.locator(`${part.connectFailure} > details`)
 export const databaseErrorDetails = dialog => dialog.locator('[role="status"] + details')
+/** The Connect dialog's failure box, and its sentence and note (the note is read with the sentence and lines up with it). */
+export const connectFailure = dialog => dialog.locator(part.connectFailure)
+export const connectFailureSentence = dialog => connectFailure(dialog).locator(part.inlineErrorMessage)
+export const connectFailureNote = dialog => connectFailure(dialog).locator(part.inlineErrorNote)
+/** The outcome line of the Connect failure's Copy details. */
+export const connectFailureCopyStatus = dialog => connectFailure(dialog).locator(part.inlineErrorStatus)
+/** What shows at Connect while it works or after it: busy, notices and the failure. */
+export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 /** An object dialog's Connection and Progress boxes (Delete Object, Database Properties). */
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
@@ -297,6 +386,59 @@ export const optionsForm = dialog => dialog.locator(part.optionsForm)
 export const optionsDescription = dialog => dialog.locator(part.optionsDescription)
 /** Saved connections in the Connect dialog's history, by the text they show. */
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
+/** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
+export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
+
+// Toasts
+
+/** The toast stack (a region named Notifications) and its toasts, each a group named by its severity. */
+export const toastStack = page => page.getByRole('region', { name: 'Notifications', exact: true })
+export const toasts = page => toastStack(page).getByRole('group')
+export const toastMessage = toast => toast.locator(part.toastMessage)
+/** The live region that reads toasts politely (info and warning), or at once (errors) with `assertive`. */
+export const toastAnnouncer = (page, assertive = false) => page.locator(`${part.toastLayer} > [role="${assertive ? 'alert' : 'status'}"]`)
+
+// Document frames (src/renderer/src/kit/DocumentFrame.tsx): Activity Monitor, SSIS documents, properties as documents
+
+/** A document's frame, a region named by its title. */
+export const documentFrame = (page, title) => page.getByRole('region', named(title))
+/** The header row, for its height (it has no role of its own inside the frame's region). */
+export const documentHeader = frame => frame.locator(part.documentHeader)
+export const documentCrumbs = frame => frame.getByRole('navigation', { name: 'Location', exact: true }).getByRole('listitem')
+export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
+/** A section's item in the list by the section's id (its name says when the section needs attention). */
+export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
+export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')
+/** The one item the list's tab stop is on. */
+export const sectionTabStop = frame => sectionList(frame).locator('[tabindex="0"]')
+/** The scrolling column of sections, a tab stop named after the document. */
+export const sectionColumn = (frame, title) => frame.getByRole('region', named(title + ' sections'))
+/** A section in the column, a group named by its heading (not a landmark). */
+export const frameSection = (frame, title) => frame.getByRole('group', named(title))
+/** A collapsible section's heading button. */
+export const sectionToggle = section => section.getByRole('heading', { level: 2 }).getByRole('button')
+export const scriptDrawer = frame => frame.getByRole('region', { name: 'Script', exact: true })
+export const scriptToggle = frame => scriptDrawer(frame).getByRole('button', { name: 'Script', exact: true })
+export const scriptSplitter = frame => frame.getByRole('separator', { name: 'Resize Script', exact: true })
+/** The drawer's ways out (Open in Query Window, Save Script As…, Copy), by name, or all of them. */
+export const scriptActions = (frame, name) => scriptDrawer(frame).getByRole('group', { name: 'Script', exact: true }).getByRole('button', name === undefined ? {} : named(name))
+export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
+export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
+/** Muted words after the title ("Database Properties"). */
+export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
+/** The header's state pill ("Normal", "Restoring, Standby"). */
+export const documentState = frame => documentHeader(frame).locator(part.statusPill)
+/** The line under the header for what the document's last action said. */
+export const documentBanner = frame => frame.locator(part.documentBanner)
+/** A verb in the header, whose group is named "<title> actions". */
+export const documentVerb = (frame, title, name) => frame.getByRole('group', named(title + ' actions')).getByRole('button', named(name))
+/** A property sheet's row (label, control, notes), by its control's label. */
+export const propertyRow = (frame, label) => frame.locator(part.propertyField).filter({ has: frame.page().getByLabel(label, { exact: true }) })
+const exactly = text => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+/** A read-only fact's value, by its label. */
+export const propertyFact = (frame, label) => frame.locator(part.propertyFact).filter({ has: frame.page().getByRole('term').filter({ hasText: exactly(label) }) }).getByRole('definition')
+/** The strip under a property sheet's sections that shows the hovered or focused row's whole description. */
+export const fieldHint = frame => frame.locator(part.fieldHint)
 
 // Menus and the quick input
 

@@ -4,6 +4,7 @@
 // made outside, drops, and AutoRecover across a renderer crash, a reload and a killed app. Native dialogs are stubbed in main, as
 // electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
+import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -288,13 +289,13 @@ try {
   await expect(queryFact(page, 'database')).toHaveText('Database: master')
   await expect(queryFact(page, 'time')).toHaveCount(0)
   await expect(queryFact(page, 'rows')).toHaveCount(0)
-  const order = () => page.getByRole('main').evaluate((main, part) => [...main.children].map(child => child.matches(part.queryStatus) ? 'bar' : child.matches(part.editorPane) ? 'editor' : 'tabs'), part)
-  expect(await order()).toEqual(['tabs', 'editor'])
+  const order = () => page.getByRole('main').evaluate((main, part) => [...main.children].map(child => child.matches(part.queryStatus) ? 'bar' : child.matches(part.editorPane) ? 'editor' : child.matches(part.queryBar) ? 'query bar' : 'tabs'), part)
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor'])
   expect(await queryBar().evaluate((bar, status) => !!bar.parentElement?.matches(status), part.statusBar)).toBe(true)
   await statusBar(page).screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': true }))).toMatchObject({ ok: true })
   await expect(queryBar()).toHaveAttribute('data-location', 'bottom')
-  expect(await order()).toEqual(['tabs', 'editor', 'bar'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor', 'bar'])
   await expect(queryBar().locator(part.queryStatusText)).toHaveText('Query executed successfully.')
   // The results head's icon for the same outcome.
   await expect(queryBar().locator(part.queryState).locator('[data-icon="pass"]')).toHaveCount(1)
@@ -302,15 +303,15 @@ try {
   await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.location': 'top', 'textEditor.statusBar.showRowCount': false, 'textEditor.statusBar.showLogin': false }))).toMatchObject({ ok: true })
   await expect(queryBar()).toHaveAttribute('data-location', 'top')
-  expect(await order()).toEqual(['tabs', 'bar', 'editor'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'bar', 'editor'])
   await expect(queryBar().locator(part.querySegment)).toHaveCount(3)
   await expect(queryFact(page, 'rows')).toHaveCount(0)
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.location': null, 'textEditor.statusBar.showRowCount': null, 'textEditor.statusBar.showLogin': null }))).toMatchObject({ ok: true })
   await expect(queryBar().locator(part.querySegment)).toHaveCount(5)
-  expect(await order()).toEqual(['tabs', 'editor', 'bar'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor', 'bar'])
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status.png') })
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': null }))).toMatchObject({ ok: true })
-  expect(await order()).toEqual(['tabs', 'editor'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor'])
   await expect(queryFact(page, 'rows')).toHaveCount(0)
   await expect(queryFact(page, 'database')).toHaveText('Database: master')
   console.log('Files checks: the status bar shows the query\'s connection facts, and Options bring back the query window status bar, move it and switch segments off.')
@@ -486,7 +487,7 @@ try {
   expect(await keptWith('SELECT 15 AS recovered')).toBe(1)
   await prompts()
   await queue('answers', 0)
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+  await crashRenderer(application)
   await expect.poll(prompts, { timeout: 15000 }).toEqual([{
     title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', buttons: ['Reload', 'Close'],
     detail: 'Queries saved by AutoRecover can be recovered after reloading; changes from the last 5 minutes may be lost. Connections were closed and uncommitted transactions were rolled back.'

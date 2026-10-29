@@ -145,6 +145,7 @@ export function suggestedName(baseName: string, index: number): string {
  */
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
+  private readonly events: EventBus
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
@@ -182,6 +183,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }) {
     super({})
     this.client = o.client
+    this.events = o.events
     this.api = o.api
     this.documents = o.documents
     this.frame = o.frame ?? (callback => { requestAnimationFrame(() => callback()) })
@@ -405,7 +407,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (result.ok) {
       if (!result.value) return undefined
       const { rows, truncatedCells, fileName } = result.value
-      this.notify(running.tabId, `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`)
+      const text = `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`
+      this.notify(running.tabId, text)
+      // Also when the tab has closed meanwhile (the save outlives it), which leaves no toolbar to say so.
+      this.events.emit({ type: 'results.saved', tabId: running.tabId, text })
       return undefined
     }
     if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }

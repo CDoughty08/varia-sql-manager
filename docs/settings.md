@@ -16,6 +16,7 @@ from Microsoft's documentation, so Varia keeps its own.
   - Documents (`environment.documents`)
   - Fonts and Colors (`environment.fontsAndColors`)
   - Keyboard (`environment.keyboard`)
+  - Live Data (`environment.liveData`)
 - Text Editor
   - General (`textEditor.general`)
   - Editor Tab and Status Bar (`textEditor.editorTabAndStatusBar`)
@@ -44,7 +45,7 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the Server and Database boxes. The header then keeps only the menus and the search box. This option will be removed in a later release. Not in SSMS. |
+| `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query's Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release. Not in SSMS. |
 | `environment.layout.panelTabs` | Show panel tabs | Boolean | False |  | All | At once | Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs. Not in SSMS. Not shown in Options. |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
@@ -80,6 +81,17 @@ Colors come from the color theme (View › Theme).
 Shortcuts follow SSMS's defaults and cannot be changed yet. The command palette (F1) shows each command's shortcut.
 
 _No settings yet._
+
+### Environment › Live Data
+
+Live views, such as the Activity Monitor: when they pause while hidden, and how much chart history they keep. Not in SSMS.
+
+| Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `liveData.pauseWhenHidden` | Pause live views that are hidden | Boolean | True |  | All | At once | Stops a live view's queries on the server while its tab is not the one showing, or the window is minimized or hidden, and starts them again as soon as it shows. Charts show the gap. While it is False, hidden views keep querying at their usual intervals. Not in SSMS. |
+| `liveData.pauseAfterSeconds` | Pause after hidden for | Integer 1–60 seconds | 2 seconds |  | All | At once | How long a live view stays hidden before its queries stop, so switching tabs for a moment loses no samples. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| `liveData.stopAfterHiddenMinutes` | Stop after hidden for | Integer 1–60 minutes | 5 minutes |  | All | At once | How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept. Not in SSMS. Greyed while `liveData.pauseWhenHidden` is False. |
+| `liveData.historyMinutes` | Keep chart history for | Integer 5–120 minutes | 60 minutes |  | All | At once | How far back each live view's charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads. Not in SSMS. |
 
 ### Text Editor › General
 
@@ -220,4 +232,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (73 today).

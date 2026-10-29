@@ -1,8 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
+import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { QueryTab } from '../src/renderer/src/documents'
+import type { LiveConnection } from '../src/renderer/src/services/connections'
+import { workbenchFixture } from './fixtures/workbench'
 
 const settings = defaultSettings
 const connection = { server: 'sql01', serverVersion: '16.00.4135', productVersion: '16.0.4135.4' }
@@ -85,5 +93,26 @@ describe('the query status bar', () => {
   it('uses codicons of the icon registry', () => {
     // The spinner spins with codicon-modifier-spin, which only the codicon font's glyphs take.
     for (const icon of ['plug', 'debug-disconnect', 'loading', 'pass', 'warning', 'error', 'debug-stop', 'watch', 'lock']) expect(iconSpec(icon)?.source, icon).toBe('codicon')
+  })
+})
+
+describe('the query status facts\' environment tag', () => {
+  const cleanups: (() => void)[] = []
+  afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+  /** The facts for a query on a Production connection, as the window's status bar segment and as the query window bar. */
+  function render(variant: 'segment' | 'bar') {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    const workbench = { ...fixture, theme } as unknown as Workbench
+    const tab: QueryTab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'c1')
+    const connection: LiveConnection = { id: 'c1', server: 'sql01', database: 'master', serverVersion: '16.00.4135', generation: 1, options: { server: 'sql01', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Production' } }
+    return renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, connection, variant }) }))
+  }
+  it('leads the server in the query window bar, and is left out of the window\'s status bar segment, which shows it after the backend\'s state', () => {
+    expect(render('bar')).toContain('query-status-environment')
+    expect(render('bar')).toContain('PROD')
+    expect(render('segment')).not.toContain('query-status-environment')
+    expect(render('segment')).not.toContain('PROD')
   })
 })

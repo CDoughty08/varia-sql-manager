@@ -68,9 +68,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide
     viewRef.current = view
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
-    // offsets: the frame this asks for writes them back. It relies on GridView's offsetsDropped: without it, this frame
-    // would take the dropped offsets for a scroll to the top.
-    const unsubscribe = panes.subscribe(() => view.invalidate())
+    // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
+    const unsubscribe = panes.subscribe(() => view.panesChanged())
     return () => {
       unsubscribe()
       registration.dispose()

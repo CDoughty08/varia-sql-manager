@@ -30,6 +30,8 @@ export type WorkbenchEvent =
   | { type: 'query.connectRequested'; tabId: string }
   /** The query's SQL session ended (closed, or found lost), and its open transaction with it. */
   | { type: 'session.ended'; tabId: string }
+  /** Save Results As wrote its file; `text` is the sentence the tab's toolbar shows, such as "Saved 400 rows to w1.csv." */
+  | { type: 'results.saved'; tabId: string; text: string }
   /** Object Explorer reloaded a server, a databases folder, or another node of the connection. */
   | { type: 'explorer.refreshed'; connectionId: string; scope: 'server' | 'databases' | 'other' }
 export interface ExternalStore<T> { getSnapshot(): T; subscribe(listener: () => void): () => void }

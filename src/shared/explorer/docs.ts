@@ -35,7 +35,8 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   label: 'Characters in a node label',
   sublabel: 'Characters in a sublabel',
   detail: 'Characters in tooltip details',
-  message: 'Characters in an error message'
+  message: 'Characters in an error message',
+  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128'
 }
 
 const lists = (id: FolderId) => {
@@ -64,15 +65,20 @@ function folderRows(owner: 'server' | 'database', parent?: FolderId, path = ''):
 const folderTable = (owner: 'server' | 'database') => table(['Folder', 'Id', 'Since', 'Cloud editions', 'Lists (query)', 'Filters'], folderRows(owner))
 
 const folderLabels = (ids: readonly FolderId[]) => ids.map(id => folderSpecs[id].label).join(', ')
+/** A kind's static folders, then the rows it lists itself (`KindSpec.list`). */
+const childLabels = (spec: KindSpec, folders: readonly FolderId[]) => {
+  const rows = spec.list ? `${(spec.rows ?? []).map(kind => kindSpecs[kind].title).join(', ')} rows (${code(spec.list)})` : undefined
+  return [folderLabels(folders), rows].filter(Boolean).join(', then ')
+}
 function childRows(spec: KindSpec): string[][] {
-  if (!spec.folders.length && !spec.subtypeFolders) return []
+  if (!spec.folders.length && !spec.subtypeFolders && !spec.list) return []
   const special = Object.keys(spec.subtypeFolders ?? {}) as NodeSubtype[]
   const history = spec.historyLookup ?? []
   const others = (spec.subtypes ?? []).filter(subtype => !special.includes(subtype) && !history.includes(subtype))
-  const rows = [[code(spec.kind), others.length ? `none, ${codes(others)}` : 'any', folderLabels(spec.folders)]]
-  if (history.length) rows.push([code(spec.kind), codes(history), `Its history table first, then ${folderLabels(spec.folders)}`])
+  const rows = [[code(spec.kind), others.length ? `none, ${codes(others)}` : 'any', childLabels(spec, spec.folders)]]
+  if (history.length) rows.push([code(spec.kind), codes(history), `Its history table first, then ${childLabels(spec, spec.folders)}`])
   const groups = new Map<string, NodeSubtype[]>()
-  for (const subtype of special) { const key = folderLabels(spec.subtypeFolders![subtype]!); groups.set(key, [...groups.get(key) ?? [], subtype]) }
+  for (const subtype of special) { const key = childLabels(spec, spec.subtypeFolders![subtype]!); groups.set(key, [...groups.get(key) ?? [], subtype]) }
   for (const [labels, subtypes] of groups) rows.push([code(spec.kind), codes(subtypes), labels])
   return rows
 }
@@ -113,7 +119,8 @@ export function renderExplorerDocs(): string {
     '',
     '## Object children',
     '',
-    'Child folders list their rows by name, except Columns and Parameters, which keep the object\'s order. Every other kind is a leaf.',
+    'Child folders list their rows by name, except Columns and Parameters, which keep the object\'s order, and an SSIS project\'s Packages,',
+    'which list in deployment order (`package_id`: a package name can be longer than a sysname cursor key). Every other kind is a leaf.',
     '',
     table(['Kind', 'Subtypes', 'Children'], nodeKinds.filter(kind => kind !== 'server' && kind !== 'database').flatMap(kind => childRows(kindSpecs[kind]))),
     '',
@@ -133,9 +140,11 @@ export function renderExplorerDocs(): string {
     '',
     'A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry',
     'names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,',
-    'used verbatim (never trimmed), without U+0000.',
+    `used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to ${explorerLimits.maxName}, if it`,
+    'owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).',
+    'SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.',
     '',
-    table(['Scope', 'Requires', 'Forbids', 'Kinds'], kindScopes.map(scope => [code(scope), fields(scopeFields[scope].required), fields(scopeFields[scope].forbidden), codes(kindsOfScope(scope))])),
+    table(['Scope', 'Requires', 'Forbids', 'Kinds'], kindScopes.map(scope => [code(scope), fields(scopeFields[scope].required), fields(scopeFields[scope].forbidden), fields(kindsOfScope(scope))])),
     '',
     table(['Child kind', 'Parent kinds'], childKinds.map((kind: NodeKind) => [code(kind), codes(childParentKinds(kind))])),
     '',

@@ -18,6 +18,8 @@ export interface ShellHost {
   showConnect(): void
   /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
   reconnect(connectionId: string): void
+  /** Opens the Connection Environment dialog for a connected server. */
+  editEnvironment(connectionId: string): void
   /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
   closePane(pane: PaneId): void
   paneLocation(pane: PaneId): PaneLocation
@@ -51,6 +53,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
   documents.boundEditor?.trigger('menu', command, null)
 }
 
+const runningOnServer = 'A query is running on this server.'
 const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
@@ -71,6 +74,8 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     if (!node) return undefined
     return node.kind === 'server' && node.lost && connections.get(node.connectionId)?.lost ? node : null
   }
+  /** Why a server cannot be disconnected now: a query running on it, or a document's DDL (an Apply, a Save) that a disconnect would cut short. */
+  const disconnectRefusal = (id: string) => queries.isConnectionRunning(id) ? runningOnServer : documents.connectionBusy(id)
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
@@ -102,13 +107,27 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
     commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !disconnectRefusal(node.connectionId)) },
       run: args => {
         const node = explorerNodeOf(args)
         if (node?.kind === 'server') return host.disconnect(node.connectionId)
         quickInput.show({
           ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
-          items: serverItems(connections.live(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
+          items: serverItems(connections.live(), disconnectRefusal), onDidAccept: item => host.disconnect(item.id)
+        })
+      }
+    }),
+    // A server node's menu labels that server; otherwise the active query's server, else the user picks a connected one.
+    commands.register('connection.environment', {
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId)) },
+      run: args => {
+        const node = explorerNodeOf(args)
+        if (node?.kind === 'server') return host.editEnvironment(node.connectionId)
+        const active = documents.active?.connectionId
+        if (active && connections.isLive(active)) return host.editEnvironment(active)
+        quickInput.show({
+          ariaLabel: 'Set Connection Environment', placeholder: 'Select a server to label', noun: 'servers',
+          items: serverItems(connections.live()), onDidAccept: item => host.editEnvironment(item.id)
         })
       }
     }),

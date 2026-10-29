@@ -210,7 +210,7 @@ describe('default keybindings', () => {
   it('pick the first one-chord rule as the primary, native or not', () => {
     expect(primaryRule('edit.redo', 'win32')).toMatchObject({ chords: ['ctrl+y'], native: true })
     expect(primaryRule('edit.redo', 'darwin')).toMatchObject({ chords: ['shift+meta+z'], native: true })
-    expect(primaryRule('query.execute', 'linux')).toMatchObject({ chords: ['f5'], whenSource: 'editorFocus', native: false })
+    expect(primaryRule('query.execute', 'linux')).toMatchObject({ chords: ['f5'], whenSource: 'editorFocus || queryBarFocus', native: false })
     expect(primaryRule('file.saveAs', 'darwin')?.chords).toEqual(['shift+meta+s'])
     expect(primaryRule('window.explorer', 'win32')?.chords).toEqual(['f8'])
     expect(primaryRule('file.close', 'linux')?.chords).toEqual(['ctrl+w'])
@@ -257,6 +257,12 @@ describe('default keybindings', () => {
       expect(commandFor(f5, platform, { editorFocus: true })).toBe('query.execute')
       expect(commandFor(enter, platform, { editorFocus: true, inputFocus: true })).toBe('query.execute')
       expect(commandFor(f5, platform, { activePanel: 'output' })).toBeUndefined()
+      // The query's bar shows F5 on Execute: its keys run the query from the bar's buttons and lists too.
+      for (const focus of [{ activePanel: 'editor', queryBarFocus: true }, { activePanel: 'editor', queryBarFocus: true, inputFocus: true }] as const) {
+        expect(commandFor(f5, platform, focus)).toBe('query.execute')
+        expect(commandFor(enter, platform, focus)).toBe('query.execute')
+      }
+      expect(commandFor(f5, platform, { activePanel: 'editor' })).toBeUndefined()
       expect(commandFor(enter, platform, {})).toBeUndefined()
     }
     expect(commandFor(event('n', 'KeyN', { ctrlKey: true, altKey: true }), 'win32')).toBeUndefined()

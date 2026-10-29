@@ -1,7 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
 import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
 
 await mkdir('artifacts', { recursive: true })
@@ -105,11 +105,16 @@ try {
   const paint = locator => locator.evaluate(element => { const style = getComputedStyle(element); return [style.backgroundColor, style.color] })
   await searchBox(page).hover()
   expect(await paint(searchBox(page))).toEqual([await colorOf('commandCenter.activeBackground'), await colorOf('commandCenter.foreground')])
-  const execute = toolbarButton(page, 'Execute')
+  const execute = queryBarButton(page, 'Execute')
   await expect(execute).toBeEnabled()
   await execute.hover()
   expect(await paint(execute)).toEqual([await colorOf('button.hoverBackground'), await colorOf('button.foreground')])
   await page.mouse.move(0, 500)
+  // The query bar's lists have the pill's opaque fill and the input text colour: Chromium draws an open list's options on
+  // the list's background, and a transparent one left Dark's light text on white.
+  const listsPainted = async () => [await paint(queryServer(page)), await paint(queryDatabase(page))]
+  const inputPaint = async () => [await colorOf('input.background'), await colorOf('input.foreground')]
+  expect(await listsPainted()).toEqual([await inputPaint(), await inputPaint()])
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
@@ -253,6 +258,7 @@ try {
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(68, 83, 208)'])
   await expect.poll(bracketColors).toEqual(['rgb(122, 92, 0)', 'rgb(131, 56, 180)'])
   expect(await statusBarEdge()).toBe('1px solid rgb(227, 230, 235)')
+  expect(await listsPainted()).toEqual([await inputPaint(), await inputPaint()])
   await page.screenshot({ path: resolve('artifacts', 'theme-light.png') })
   console.log('Theme checks: switching to Light updates CSS, Monaco, Dockview, native chrome, and the preference without a reload.')
 

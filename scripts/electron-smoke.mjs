@@ -2,7 +2,11 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
+  queryStatus, resultGrid, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -11,6 +15,7 @@ const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
+await mkdir(join(control, 'extra'))
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -165,9 +170,34 @@ try {
   // One header row: the Standard toolbar and the search box share it with the menus, and take clicks rather than drags.
   expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
   expect(titleBar.height).toBe(40)
+  // The header keeps the file commands; each query has its own bar under the tab strip, with Execute (the filled button)
+  // and Cancel, then its server and database lists in the connection pill.
+  expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All'])
+  await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
+  await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
+  await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()
+  expect(await page.evaluate(part => {
+    const bar = document.querySelector(part.queryBar), box = bar.getBoundingClientRect()
+    return { below: box.top >= document.querySelector(part.documentTabs).getBoundingClientRect().bottom - 0.5, above: box.bottom <= document.querySelector(part.editorPane).getBoundingClientRect().top + 0.5,
+      height: box.height, stops: [...bar.querySelectorAll('button, select')].filter(control => control.tabIndex === 0).length, primary: [...bar.querySelectorAll(part.primaryAction)].map(button => button.getAttribute('aria-label')) }
+  }, part)).toEqual({ below: true, above: true, height: 36, stops: 1, primary: ['Execute'] })
+  // One tab stop: the arrow keys move between the enabled controls (Cancel waits for a running query) and leave the
+  // server list's value alone.
+  await queryServer(page).focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(queryBarButton(page, 'Execute')).toBeFocused()
+  await page.keyboard.press('ArrowRight')
+  await expect(queryServer(page)).toBeFocused()
+  await expect(queryServer(page)).toHaveValue('')
+  expect(await queryBar(page).evaluate(bar => [...bar.querySelectorAll('button, select')].map(control => control.tabIndex))).toEqual([-1, -1, 0, -1])
   // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toBeVisible()
+  // Its Server and Database lists are the active query's again, and query tabs show no bar of their own.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(toolbar(page).getByLabel('Query server', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('Query server', { exact: true })).toHaveCount(1)
+  await expect(toolbarButton(page, /Execute/)).toBeVisible()
   expect(await page.evaluate(part => {
     const header = document.querySelector(part.titleBar), toolbar = document.querySelector(part.toolbar)
     return [header.contains(toolbar), toolbar.getBoundingClientRect().top >= header.getBoundingClientRect().bottom - 0.5, document.querySelectorAll(part.toolbar).length]
@@ -175,6 +205,7 @@ try {
   expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': null }))).toMatchObject({ ok: true })
   await expect(toolbarButton(page, 'Layouts')).toHaveCount(0)
   await expect(toolbarButton(page, 'New query')).toBeVisible()
+  await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
   // The renderer draws the title-bar menus: no native popup or menu-focus channel is left to call.
   expect(await page.evaluate(() => ({ showMenu: typeof window.varia.showMenu, onMenuFocus: typeof window.varia.onMenuFocus }))).toEqual({ showMenu: 'undefined', onMenuFocus: 'undefined' })
   const editorText = () => editorTextOf(page)
@@ -354,6 +385,13 @@ try {
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  // The empty workspace is the states kit's empty state: a title, a glyph, and one filled action.
+  const emptyWorkspace = emptyState(workspaceEmpty(page))
+  await expect(emptyStateTitle(emptyWorkspace)).toHaveText('No open queries')
+  await expect(emptyStateIcon(emptyWorkspace)).toHaveAttribute('data-icon', 'file-code')
+  await expect(emptyWorkspace.getByRole('button', { name: 'Open SQL file', exact: true })).toBeVisible()
+  await expect(primaryAction(emptyWorkspace)).toHaveText(['New query'])
+  await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()
@@ -368,10 +406,34 @@ try {
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(await explorerRow(page, server)).toBeVisible()
   }
+  // The servers also list databases whose names differ only in their spaces.
+  await writeFile(join(control, 'spaced-databases'), '')
   await connect('server-a')
   const tabA = await activeDocument(page).getAttribute('aria-label')
   const idA = await queryServer(page).inputValue()
   await queryDatabase(page).selectOption('AppData')
+  // Home and End move along the query bar from a list as from a button, and never pick a server or database.
+  await queryDatabase(page).focus()
+  await page.keyboard.press('End')
+  await expect(queryDatabase(page)).toBeFocused()
+  await page.keyboard.press('Home')
+  await expect(queryBarButton(page, /Execute/)).toBeFocused()
+  await queryServer(page).focus()
+  await page.keyboard.press('Home')
+  await expect(queryBarButton(page, /Execute/)).toBeFocused()
+  await queryServer(page).focus()
+  await page.keyboard.press('End')
+  await expect(queryDatabase(page)).toBeFocused()
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  // Each database is its exact name, spaces and all: an option's own text would turn "Sales  2024" into "Sales 2024".
+  for (const name of ['Sales  2024', ' lead', 'tab\there', 'AppData']) {
+    const index = await queryDatabase(page).evaluate((list, name) => [...list.options].findIndex(option => option.textContent === name), name)
+    expect(index, JSON.stringify(name)).toBeGreaterThan(0)
+    await queryDatabase(page).selectOption({ index })
+    await expect(queryDatabase(page)).toHaveValue(name)
+    await expect(queryDatabase(page)).toHaveAttribute('title', `Database: ${name}`)
+  }
   await typeSql('SELECT 1;')
   await connect('server-b')
   const tabB = await activeDocument(page).getAttribute('aria-label')
@@ -379,18 +441,24 @@ try {
   expect(idA).not.toBe(idB)
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(2)
   await typeSql('SELECT 2;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-b')
   await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
   await expect(queryServer(page)).toHaveValue(idA)
   await expect(queryDatabase(page)).toHaveValue('AppData')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
   await expect(anyResultGrid(page)).toContainText('AppData')
   const executed = (await executions()).map(call => call.params)
   expect(executed.map(call => [call.connectionId, call.database])).toEqual([[idB, 'master'], [idA, 'AppData']])
   expect(executed.every(call => !!call.sessionId && call.startLine === 1)).toBe(true)
   expect(executed.every(call => call.timeoutSeconds === 0)).toBe(true)
+  // F5, which Execute shows, runs the query from the query bar too.
+  await queryDatabase(page).focus()
+  await page.keyboard.press('F5')
+  await expect.poll(async () => (await executions()).length).toBe(executed.length + 1)
+  expect((await executions()).at(-1).params).toMatchObject({ connectionId: idA, database: 'AppData', sql: 'SELECT 1;' })
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   // Selection line offsets and both editor shortcuts use the same query command.
   await typeSql('-- heading\nSELECT 10;\nSELECT 20;')
   await page.keyboard.press('Control+Home')
@@ -402,7 +470,7 @@ try {
   await page.keyboard.press('F5')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql).toBe('SELECT 20;')
   expect((await executions()).at(-1).params.startLine).toBe(3)
-  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   await page.keyboard.press('Control+Home')
   await page.keyboard.press('Control+Enter')
   await expect.poll(async () => (await executions()).at(-1)?.params.sql.replaceAll('\r\n', '\n')).toBe('-- heading\nSELECT 10;\nSELECT 20;')
@@ -422,7 +490,7 @@ try {
   await expect(queryServer(page)).toBeEnabled()
   await queryDatabase(page).selectOption('AppData')
   await typeSql('BATCH_STATS_FIXTURE')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(messages(page)).toContainText('logical reads 2')
   await expect(messages(page)).toContainText('CPU time = 1 ms')
   // A run with errors stays on Results, with the Messages strip open under them: its error inline in red in SSMS's
@@ -434,20 +502,37 @@ try {
   await expect(outputStatus(page)).toContainText('3/3 batches')
   await outputView(page, /^Results/).click()
   await expect(anyResultGrid(page)).toContainText('42')
+  // Choosing a server from the keyboard keeps focus on the list while the query's session ends, though every control of
+  // the bar is locked until then.
+  const closesNow = await sessionCloses()
+  await writeFile(join(control, 'hold', 'query.session.close'), '')
+  await queryServer(page).focus()
+  await page.keyboard.press('ArrowDown')
+  await expect.poll(sessionCloses).toBe(closesNow + 1)
+  await expect(queryServer(page)).toBeDisabled()
+  await rm(join(control, 'hold', 'query.session.close'))
+  await expect(queryServer(page)).toHaveValue(idB)
+  await expect(queryServer(page)).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(queryServer(page)).toHaveValue(idA)
+  await expect(queryServer(page)).toBeEnabled()
+  await expect(queryServer(page)).toBeFocused()
+  await queryDatabase(page).selectOption('AppData')
   // A plan's XML is a grid cell's text, never markup.
   await typeSql('XML_PLAN_FIXTURE')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(resultGrid(page, 1)).toContainText('<ShowPlanXML>')
   await expect(page.locator('ShowPlanXML')).toHaveCount(0)
   await typeSql('SELECT 1;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
 
   // Object Explorer: one keyboard tree over both servers. Connecting expanded each server without loading below its
   // folders; folders load when expanded, keep their rows when collapsed, and fail on their own.
   const tree = explorerTree(page)
   const loads = async () => (await calls()).filter(call => call.method === 'explorer.children').map(call => [call.params.connectionId === idA ? 'a' : 'b', call.params.node.type === 'folder' ? call.params.node.folder : call.params.node.object.kind])
   expect(await loads()).toEqual([['a', 'server'], ['b', 'server']])
-  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]'])
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]',
+    '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]'])
   // The keyboard: one tab stop whose active descendant is the selected row; arrows, Home and End move, Right and Left
   // expand and step in and out, Enter toggles, Numpad minus and plus collapse and expand, and typing selects by name.
   const selectedLabel = () => tree.evaluate((element, label) => element.querySelector('#' + CSS.escape(element.getAttribute('aria-activedescendant') ?? ''))?.querySelector(label)?.textContent ?? null, part.explorerLabel)
@@ -468,8 +553,27 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('End')
-  await expect.poll(selectedLabel).toBe('Server Objects')
-  await expect(await explorerRow(page, 'server-b', 'Server Objects')).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(selectedLabel).toBe('Integration Services Catalogs')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-selected', 'true')
+  // The SSIS Catalog (S1b): the catalog lists its folders directly, a folder its Projects and Environments, a project its
+  // Packages; every SSIS ref crosses main's schemas with its folder and project.
+  for (const path of [['Integration Services Catalogs'], ['Integration Services Catalogs', 'SSISDB'], ['Integration Services Catalogs', 'SSISDB', 'Finance'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects'], ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages']]) {
+    const row = await explorerRow(page, 'server-b', ...path)
+    await row.click()
+    await page.keyboard.press('ArrowRight')
+    await expect(row).toHaveAttribute('aria-expanded', 'true')
+  }
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Environments')).toBeVisible()
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Daily.dtsx')).toBeVisible()
+  const child = await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Child.dtsx')
+  await expect(child.locator('.codicon-symbol-file')).toHaveCount(1)
+  const packagesLoad = (await calls()).find(call => call.method === 'explorer.children' && call.params.node.type === 'folder' && call.params.node.folder === 'ssisPackages')
+  expect(packagesLoad?.params.node.owner).toEqual({ kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' })
+  await (await explorerRow(page, 'server-b', 'Integration Services Catalogs')).click()
+  await page.keyboard.press('ArrowLeft')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('Home')
   await page.keyboard.press('NumpadSubtract')
   await expect(await explorerRow(page, 'server-a')).toHaveAttribute('aria-expanded', 'false')
@@ -529,13 +633,16 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
   await expect(denied).toHaveCount(0)
-  // F5 refreshes the selected folder only; its old rows stay until the new ones replace them.
-  const stale = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  // F5 reconciles the selected folder only: a role created meanwhile appears, and the rows still there keep theirs.
+  const kept = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  await writeFile(join(control, 'extra', 'serverRoles'), '')
   await (await explorerRow(page, 'server-a', 'Security', 'Server Roles')).click()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await loads()).filter(([, node]) => node === 'serverRoles').length).toBe(2)
-  await expect.poll(async () => (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).not.toBe(stale)
+  await expect(await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'VariaAuditors')).toBeVisible()
+  expect(await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).toBe(kept)
   expect((await loads()).filter(([, node]) => node === 'logins')).toHaveLength(1)
+  await rm(join(control, 'extra', 'serverRoles'))
   // The other server's tree loads through its own connection.
   await toggle('server-a', 'Security')
   await toggle('server-b', 'Security')
@@ -547,25 +654,27 @@ try {
 
   // Independent running state and cancellation for queries on two servers.
   await typeSql('WAIT_FOR_CANCEL')
-  await toolbarButton(page, /Execute/).click()
-  await expect(toolbarButton(page, 'Cancel')).toBeEnabled()
+  await queryBarButton(page, /Execute/).click()
+  await expect(queryBarButton(page, 'Cancel')).toBeEnabled()
+  // A click on the bar's buttons leaves the keyboard in the query, as SSMS's toolbar does.
+  expect(await page.evaluate(() => !!document.activeElement?.closest('.monaco-editor'))).toBe(true)
   await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
   await typeSql('WAIT_FOR_CANCEL')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(executingMark(documentTabs(page))).toHaveCount(2)
   // Running is a spinner, unlike the unsaved dot, and the status bar takes its executing tint for the active query.
   await expect(executingMark(documentTabs(page)).first()).toHaveAttribute('data-icon', 'loading')
   await expect(page.getByRole('contentinfo', { name: 'Status bar', exact: true })).toHaveAttribute('data-state', 'executing')
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(1)
   await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(0)
   // Tabs are whole pixels wide, so each tab's kind icon starts on a whole pixel, as the first one's does.
   const iconOffsets = await documentTabs(page).evaluate((strip, icon) => [...strip.querySelectorAll(icon)].map(glyph => glyph.getBoundingClientRect().left % 1), part.tabIcon)
   expect([iconOffsets.length > 1, iconOffsets.every(offset => offset === 0)]).toEqual([true, true])
   await typeSql('SELECT 1;')
-  await toolbarButton(page, /Execute/).click()
+  await queryBarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
   await activeDocument(page).focus()
   await page.keyboard.press('Space')
@@ -578,7 +687,7 @@ try {
   await documentTabs(page).getByRole('tab', { name: tabB, exact: true }).click()
   await expect(queryServer(page)).toHaveValue('')
   // A disconnected query's Execute connects it first.
-  await expect(toolbarButton(page, /Execute/)).toBeEnabled()
+  await expect(queryBarButton(page, /Execute/)).toBeEnabled()
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(part => {

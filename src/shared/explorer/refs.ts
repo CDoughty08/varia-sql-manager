@@ -18,6 +18,10 @@ export interface ObjectRef {
   readonly name?: string
   /** child scopes. */
   readonly parent?: ParentRef
+  /** ssisFolderObject and ssisProjectObject scopes: the SSIS Catalog folder the object is in. */
+  readonly ssisFolder?: string
+  /** ssisProjectObject scope: the SSIS project the package is in. */
+  readonly ssisProject?: string
 }
 /** A node: an object, or a folder below its nearest object (the server, a database, or a table, view, type or module). */
 export type ExplorerNodeRef =
@@ -57,12 +61,17 @@ export interface ExplorerCancelParams { readonly requestIds: readonly string[] }
 
 export const kindScope = (kind: NodeKind): KindScope => kindSpecs[kind].scope
 
-/** A node's identity within the tree: case-sensitive, and distinct for any two refs, whatever characters names hold. */
+/**
+ * A node's identity within the tree: case-sensitive, and distinct for any two refs, whatever characters names hold. The SSIS
+ * fields are appended only when a ref has one, so every other kind keeps the key it always had
+ * (tests/fixtures/explorer/ref-keys.json).
+ */
 export function refKey(connectionId: string, ref: ExplorerNodeRef): string {
   const object = ref.type === 'object' ? ref.object : ref.owner
-  const { parent } = object
-  return JSON.stringify([connectionId, ref.type, object.kind, object.database ?? null, object.schema ?? null, object.name ?? null,
-    parent?.kind ?? null, parent?.schema ?? null, parent?.name ?? null, ref.type === 'folder' ? ref.folder : null])
+  const { parent, ssisFolder, ssisProject } = object
+  const key = [connectionId, ref.type, object.kind, object.database ?? null, object.schema ?? null, object.name ?? null,
+    parent?.kind ?? null, parent?.schema ?? null, parent?.name ?? null, ref.type === 'folder' ? ref.folder : null]
+  return JSON.stringify(ssisFolder === undefined && ssisProject === undefined ? key : [...key, ssisFolder ?? null, ssisProject ?? null])
 }
 
 /** What dragging the node into a query or Copy Name inserts: `[name]`, `[schema].[name]`, a parameter's `@name`, or nothing. */

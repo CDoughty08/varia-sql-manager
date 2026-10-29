@@ -4,8 +4,9 @@ using Microsoft.Data.SqlClient;
 
 namespace Varia.Backend.Explorer;
 
-/// <summary>Where a statement runs: on the server's connection, or in one database (EXEC [db].sys.sp_executesql).</summary>
-internal enum QueryScope { Server, Database }
+/// <summary>Where a statement runs: on the server's connection, in one database (EXEC [db].sys.sp_executesql), or on the SSIS
+/// read pool, whose connections are in the SSIS Catalog's database (D-ssis 3.2), so no wrapper is needed on any engine.</summary>
+internal enum QueryScope { Server, Database, Ssis }
 
 /// <summary>What a row's mapping knows about the request: the database it reads, and for child folders the parent object.</summary>
 internal sealed record RowContext(ExplorerCatalog Catalog, ExplorerProfile Profile, string? Database, ObjectRefDto Owner, object? Prelude = null);
@@ -17,6 +18,7 @@ internal sealed class Row(SqlDataReader reader, RowContext context, int keys)
     public RowContext Context => context;
     public string Key(int index) => reader.GetString(index);
     public int Ordinal => Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+    public long Id => Convert.ToInt64(reader.GetValue(0), CultureInfo.InvariantCulture);
     public bool Null(int index) => reader.IsDBNull(keys + index);
     /// <summary>A name or text, verbatim (identifiers may end in spaces).</summary>
     public string? S(int index) => Null(index) ? null : Convert.ToString(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
@@ -26,6 +28,8 @@ internal sealed class Row(SqlDataReader reader, RowContext context, int keys)
     public int? N(int index) => Null(index) ? null : Convert.ToInt32(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
     public bool B(int index) => !Null(index) && Convert.ToBoolean(reader.GetValue(keys + index), CultureInfo.InvariantCulture);
     public DateTime? D(int index) => Null(index) ? null : reader.GetDateTime(keys + index);
+    /// <summary>A datetimeoffset, as the SSIS Catalog stores its times (never converted to datetime, which drops the offset).</summary>
+    public DateTimeOffset? T(int index) => Null(index) ? null : reader.GetDateTimeOffset(keys + index);
     /// <summary>A candidate key's row passes the folder's predicate (the last column of a candidate listing).</summary>
     public bool Listed => reader.GetBoolean(reader.FieldCount - 1);
 }
@@ -47,6 +51,11 @@ internal sealed class ExplorerQuery
     public Keyset Keyset { get; init; } = Keyset.Name;
     /// <summary>A child folder: the statement first resolves the parent object by (schema, name).</summary>
     public bool ChildFolder { get; init; }
+    /// <summary>Resolves the owner first, as a child folder's parent lookup does: it selects whether the owner exists and returns
+    /// when it does not, so a listing below a deleted SSIS folder or project answers NOT_FOUND.</summary>
+    public Func<SqlRender, string>? OwnerLookup { get; init; }
+    /// <summary>The value an empty first page answers instead (the SSIS Catalog on Linux, which cannot exist there).</summary>
+    public Func<RowContext, ExplorerError?>? WhenEmpty { get; init; }
     public required Func<SqlRender, string> From { get; init; }
     public Func<SqlRender, string>? Where { get; init; }
     public required string[] Keys { get; init; }
@@ -70,6 +79,7 @@ internal sealed class ExplorerQuery
     {
         var text = new StringBuilder();
         if (ChildFolder) text.Append(CatalogSql.ParentLookup(render.ParentKind ?? throw new InvalidOperationException("A child folder needs its parent kind.")));
+        if (OwnerLookup is not null) text.Append(OwnerLookup(render));
         if (Prelude is not null) text.Append(Prelude(render));
         var from = From(render);
         var where = Where?.Invoke(render);
@@ -79,6 +89,7 @@ internal sealed class ExplorerQuery
         {
             Keyset.Name => "(@k1 IS NULL OR " + Keys[0] + " > @k1)",
             Keyset.SchemaName => "(@k1 IS NULL OR " + Keys[0] + " > @k1 OR (" + Keys[0] + " = @k1 AND " + Keys[1] + " > @k2))",
+            Keyset.Id => "(@kb IS NULL OR " + Keys[0] + " > @kb)",
             _ => Keys[0] + " > ISNULL(@kn, 0)"
         };
         string Conditions(params string?[] parts)
@@ -109,6 +120,7 @@ internal sealed class ExplorerQuery
     {
         Keyset.Name => new(row.Key(0), null, null),
         Keyset.SchemaName => new(row.Key(0), row.Key(1), null),
+        Keyset.Id => new(null, null, null, row.Id),
         _ => new(null, null, row.Ordinal)
     };
 }
@@ -454,8 +466,61 @@ internal static class ExplorerQueries
         ChildList("statistics", _ => "sys.stats AS st", "st.name", _ => "st.auto_created, st.user_created",
             row => Node(row.Context, Child(row.Context, "statistic", row.Key(0)), row.Key(0), null, null, row.B(0) ? "Auto-created" : row.B(1) ? "User-created" : null),
             "st.object_id = @object_id"),
-        ParametersQuery()
+        ParametersQuery(),
+
+        SsisCatalogs(),
+        SsisList("ssisFolders", "[catalog].[folders] AS f", "f.name", "f.description, f.created_time", null, null,
+            row => Node(row.Context, new ObjectRefDto("ssisFolder", Name: row.Key(0)), row.Key(0), detail: row.S(0), created: row.T(1)?.DateTime)),
+        SsisList("ssisProjects", "[catalog].[projects] AS p", "p.name", "p.last_deployed_time, p.description, p.deployed_by_name", "p.folder_id = @owner_id", FolderOwner,
+            row => Node(row.Context, new ObjectRefDto("ssisProject", Name: row.Key(0), SsisFolder: row.Context.Owner.Name), row.Key(0), sublabel: ExplorerLabels.Deployed(row.T(0)),
+                detail: ExplorerLabels.Join([row.S(1), row.S(2) is { } by ? "Deployed by " + by : null]))),
+        SsisList("ssisEnvironments", "[catalog].[environments] AS e", "e.name",
+            "(SELECT COUNT_BIG(*) FROM [catalog].[environment_variables] AS v WHERE v.environment_id = e.environment_id), e.description, e.created_time", "e.folder_id = @owner_id", FolderOwner,
+            row => Node(row.Context, new ObjectRefDto("ssisEnvironment", Name: row.Key(0), SsisFolder: row.Context.Owner.Name), row.Key(0), sublabel: ExplorerLabels.Variables(row.I(0)),
+                detail: row.S(1), created: row.T(2)?.DateTime)),
+        // Package names can be longer than a sysname cursor key (nvarchar(260)), so packages page by package_id: deployment order.
+        new ExplorerQuery
+        {
+            Id = "ssisPackages", Scope = QueryScope.Ssis, Keyset = Keyset.Id, OwnerLookup = ProjectOwner, From = _ => "[catalog].[packages] AS pk", Where = _ => "pk.project_id = @owner_id",
+            Keys = ["pk.package_id"], Select = _ => "pk.name, pk.entry_point, pk.description", Filter = new(Name: "pk.name"),
+            Map = row => Node(row.Context, new ObjectRefDto("ssisPackage", Name: row.S(0), SsisFolder: row.Context.Owner.SsisFolder, SsisProject: row.Context.Owner.Name), row.S(0)!,
+                row.B(1) ? "entryPoint" : "child", detail: ExplorerLabels.Join([row.B(1) ? null : "Not an entry point", row.S(2)]))
+        }
     }.ToDictionary(query => query.Id, StringComparer.Ordinal);
+
+    // --- SSIS Catalog (D-ssis 3.2) ---------------------------------------------------------------------------------------
+
+    /// <summary>The catalog's database, if this server has one: the parameter is SSISDB (or the checks' fake catalog). On
+    /// Linux no catalog can exist, and Azure SQL Database lists other databases only to a connection in master.</summary>
+    private static ExplorerQuery SsisCatalogs() => new()
+    {
+        Id = "ssisCatalogs", Scope = QueryScope.Server, ChecksAccess = true, From = _ => "sys.databases AS d", Where = _ => "d.name = @ssis_catalog", Keys = ["d.name"],
+        Select = _ => "d.state, d.user_access, d.is_read_only, d.is_in_standby, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0))",
+        Map = row =>
+        {
+            var (sublabel, status, hasChildren) = ExplorerLabels.Database(row.I(0), row.I(1), row.B(2), row.B(3), row.B(4));
+            return Node(row.Context, new ObjectRefDto("ssisCatalog", Name: row.Key(0)), row.Key(0), null, sublabel, status: status, hasChildren: hasChildren);
+        },
+        WhenEmpty = context => context.Profile.Linux ? ExplorerErrors.Create("NOT_SUPPORTED", "Integration Services Catalogs", null, 0, "The SSIS Catalog isn't supported on SQL Server on Linux.")
+            : context.Profile.Cloud ? ExplorerErrors.Create("NOT_SUPPORTED", "Integration Services Catalogs", null, 0,
+                "No SSIS Catalog is visible. On Azure SQL Database, connect with Database set to SSISDB or master to see it.")
+            : null
+    };
+
+    private static ExplorerQuery SsisList(string id, string from, string key, string select, string? where, Func<SqlRender, string>? owner, Func<Row, ExplorerNode> map) => new()
+    {
+        Id = id, Scope = QueryScope.Ssis, OwnerLookup = owner, From = _ => from, Where = where is null ? null : _ => where, Keys = [key], Select = _ => select, Filter = new(Name: key), Map = map
+    };
+
+    private const string OwnerFound = "SELECT CONVERT(bit, CASE WHEN @owner_id IS NULL THEN 0 ELSE 1 END);\nIF @owner_id IS NULL RETURN;\n";
+    /// <summary>A folder's projects and environments: the folder by its name (@object_name).</summary>
+    private static string FolderOwner(SqlRender _) => "DECLARE @owner_id bigint;\nSELECT @owner_id = f.folder_id FROM [catalog].[folders] AS f WHERE f.name = @object_name;\n" + OwnerFound;
+    /// <summary>A project's packages: the project by its folder (@ssis_folder) and name (@object_name).</summary>
+    private static string ProjectOwner(SqlRender _) => "DECLARE @owner_id bigint;\nSELECT @owner_id = p.project_id FROM [catalog].[projects] AS p JOIN [catalog].[folders] AS f ON f.folder_id = p.folder_id "
+        + "WHERE f.name = @ssis_folder AND p.name = @object_name;\n" + OwnerFound;
+
+    /// <summary>The SSIS Catalog's database state and user access (server scope), after its pool could not open it: no row when it does not exist.</summary>
+    public const string SsisCatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @ssis_catalog;";
 
     private static ExplorerQuery Functions(string id, string types, string[] filters) => SchemaList(id, "sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id", "o",
         "o.type IN (" + types + ") AND o.is_ms_shipped = 0", "o.type, o.create_date, own.name",

@@ -48,6 +48,8 @@ await import(${JSON.stringify(core)})`
     expect(main).toContain("const testSeams = process.env.VARIA_SMOKE_TEST === '1' && !app.isPackaged")
     expect(main.match(/installTestHooks\(|VARIA_BACKEND_LIVENESS_MS|--varia-test-mode|VARIA_TEST_SAFE_STORAGE|testCipher\(/g)).toHaveLength(5)
     expect(main).toContain('if (testSeams) testHooks = installTestHooks(backend, results)')
+    // Test-only live sources (debug.synthetic) pass main's port schema only in unpackaged smoke runs.
+    expect(main).toContain('createChannel: () => new MessageChannelMain(), testSources: testSeams })')
     expect(main).toContain('const livenessMs = testSeams ? Number(process.env.VARIA_BACKEND_LIVENESS_MS) : NaN')
     expect(main).toContain("...(testSeams ? ['--varia-test-mode'] : [])")
     // Remember password's reversible test cipher, for smoke runs on machines without a keyring.

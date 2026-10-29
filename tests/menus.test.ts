@@ -41,7 +41,7 @@ describe('menu model', () => {
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
-      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
+      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection', 'connection.environment'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
       expect(outline('tools', platform)).toEqual(['preferences.options'])
     }
@@ -194,7 +194,7 @@ describe('mnemonics', () => {
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
-    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.reconnect',
+    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
       'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
     expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput', 'pane.float', 'pane.dock', 'pane.close', 'window.togglePanelTabs'])
@@ -328,8 +328,12 @@ describe('menu state', () => {
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
       'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // Toasts are reached from the palette, as in VS Code.
+      'notifications.focus', 'notifications.clearAll',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
-      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop']
+      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
+      // The Database Properties document's header verbs.
+      'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)

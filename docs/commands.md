@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (152)
+## Commands (159)
 
 ### File
 
@@ -83,6 +83,8 @@ keys it uses are listed below.
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
+| Focus Notifications | `notifications.focus` | — | — | — | `hasNotifications` | — |
+| Clear All Notifications | `notifications.clearAll` | — | — | — | `hasNotifications` | — |
 | Dock Left (not in the palette) | `pane.dockLeft` | — | — | — | Always | Panel tab context menu › Dock Left |
 | Dock Right (not in the palette) | `pane.dockRight` | — | — | — | Always | Panel tab context menu › Dock Right |
 | Dock Top (not in the palette) | `pane.dockTop` | — | — | — | Always | Panel tab context menu › Dock Top |
@@ -100,7 +102,7 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
-| Execute | `query.execute` | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), Ctrl+Enter (`editorFocus`), Ctrl+E (`editorFocus`) | F5 (`editorFocus`), ⌘↩ (`editorFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
+| Execute | `query.execute` | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), Ctrl+Enter (`editorFocus \|\| queryBarFocus`), Ctrl+E (`editorFocus \|\| queryBarFocus`) | F5 (`editorFocus \|\| queryBarFocus`), ⌘↩ (`editorFocus \|\| queryBarFocus`) | `activeDocumentIsQuery && !queryRunning && !documentBusy && (activeDocumentConnected \|\| (backendReady && !activeConnectionLost))` | Query › Execute; Editor context menu › Execute |
 | Cancel Executing Query | `query.cancel` | Alt+Pause | Alt+Pause | — | `queryRunning` | Query › Cancel Executing Query; Editor context menu › Cancel Executing Query |
 | Change Connection… | `query.changeConnection` | — | — | — | `hasActiveDocument && activeDocumentIsQuery && !queryRunning && !documentBusy` | Query › Connection › Change Connection… |
 | Disconnect | `query.disconnect` | — | — | — | `activeDocumentIsQuery && activeDocumentConnected && !queryRunning && !documentBusy` | Query › Connection › Disconnect |
@@ -119,6 +121,7 @@ keys it uses are listed below.
 | --- | --- | --- | --- | --- | --- | --- |
 | Connect to Server… | `connection.connect` | — | — | — | `backendReady` | File › Connect to Server…; Query › Connection › Connect…; Object Explorer context menu › Connect… |
 | Disconnect from Server… | `connection.disconnect` | — | — | — | `hasConnection && !documentBusy` | File › Disconnect from Server…; Object Explorer context menu › Disconnect |
+| Set Connection Environment… | `connection.environment` | — | — | — | `hasConnection && !documentBusy` | Query › Connection › Environment…; Object Explorer context menu › Environment… |
 | Reconnect… | `connection.reconnect` | — | — | — | `hasLostConnection && backendReady` | File › Reconnect…; Query › Connection › Reconnect…; Object Explorer context menu › Reconnect… |
 | Remove Lost Connection… | `connection.removeLost` | — | — | — | `hasLostConnection && !documentBusy` | Object Explorer context menu › Remove |
 | Restart SQL Backend… | `backend.restart` | — | — | — | Always | — |
@@ -184,6 +187,15 @@ keys it uses are listed below.
 | Generate Change Script… | `tableDesigner.generateChangeScript` | — | — | — | `activeDocumentIsDesigner && designerEditable && backendReady` | Table designer context menu › Generate Change Script… |
 | Properties | `tableDesigner.properties` | F4 (`designerFocus`) | F4 (`designerFocus`) | F4 (`designerFocus`) | `activeDocumentIsDesigner` | Table designer context menu › Properties |
 | Stop | `tableDesigner.stop` | — | — | — | `designerSaving` | — |
+
+### Database Properties
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Apply Changes | `databaseProperties.apply` | — | — | — | `activeDocumentIsProperties && propertiesApplicable` | — |
+| Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
+| Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
+| Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
 
 ### Preferences
 
@@ -359,6 +371,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_connect` | Disconnect **A**ll Queries | `query.disconnectAll` | Always |
 | `1_connect` | **R**econnect… | `connection.reconnect` | Always |
 | `2_change` | C**h**ange Connection… | `query.changeConnection` | Always |
+| `2_change` | **E**nvironment… | `connection.environment` | Always |
 
 #### Tools (Alt+T)
 
@@ -418,6 +431,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
+| `0_connect` | Environmen**t**… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
@@ -603,7 +617,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (74)
+## Context keys (81)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -622,16 +636,22 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activePanel` | `'explorer'`, `'editor'`, `'output'`, `''` | focus | The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none. |
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
+| `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
-| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer. |
+| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer or Database Properties. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |
 | `designerPrimaryKeyRemovable` | boolean | state | Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key. |
+| `activeDocumentIsProperties` | boolean | state | The active document is Database Properties. |
+| `propertiesChanged` | boolean | state | The active Database Properties document has changes that are not applied yet. |
+| `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
+| `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
+| `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |
@@ -654,8 +674,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasRecentFiles` | boolean | state | File › Recent Files lists at least one file. |
 | `hasRecoveryFiles` | boolean | state | AutoRecover kept queries that an earlier run or an earlier workbench did not save, and they were neither recovered nor discarded. |
 | `explorerHasSelection` | boolean | state | A node is selected in Object Explorer (a loading, error, or progress row is not a node). |
-| `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
-| `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |
+| `explorerSelectionKind` | `''`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'` | state | The kind of the selected Object Explorer node: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or '' for none. Keep it out of keybinding `when` clauses. |
+| `explorerSelectionFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | state | The selected Object Explorer folder's id from `src/shared/explorer/catalog.ts`, or '' when the selection is not a folder. Keep it out of keybinding `when` clauses. |
 | `explorerSelectionFilterable` | boolean | state | The selected Object Explorer node is a folder that Filter Settings can filter. |
 | `explorerSelectionFiltered` | boolean | state | The selected Object Explorer folder has a filter. |
 | `explorerSelectionInsertable` | boolean | state | The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder. |
@@ -677,11 +697,12 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
 | `scriptingRunning` | boolean | state | A Script As request is running. |
-| `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
+| `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
+| `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
-| `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
+| `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `pane` | `'explorer'`, `'editor'`, `'output'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output. |

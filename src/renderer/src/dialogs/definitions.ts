@@ -1,8 +1,10 @@
 // The object dialogs' behaviour, one definition per dialog: the model its describe answers, the draft a dialog starts
 // from, the action OK sends (and the Script button scripts), SSMS's confirmations before it, and what happens after OK
-// succeeds. ObjectDialogService runs them; ObjectDialog.tsx renders their pages (`dialogPages`). It is the plug-in point
-// for later dialogs (Login Properties, Backup and Restore): a dialog id and pages in src/shared/actions/catalog.ts, a
-// describe in the backend, a definition here, and its pages there. No React here, so the service and its tests stay in Node.
+// succeeds. ObjectDialogService runs the modal ones and ObjectDialog.tsx renders their pages (`dialogPages`);
+// DatabasePropertiesService runs Database Properties, a document (src/renderer/src/properties). It is the plug-in point
+// for later dialogs (Login Properties, Backup and Restore): a dialog id, its surface and pages in
+// src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
+// so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
 import type { ActionDescribeResult, ActionError, ActionRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'

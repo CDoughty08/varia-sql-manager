@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { connectionCancelSchema, requestSchemas, resultsCopyRequestSchema, resultsSaveRequestSchema, validateRequest } from '../src/main/validation'
 import { connectContext } from '../src/main/connection-requests'
@@ -216,6 +217,15 @@ describe('IPC validation', () => {
     expect(deadlineFor('connections.databases', options).deadlineMs).toBe(225_000)
     expect(deadlineFor('connections.databases', { ...options, authentication: 'sql' }).deadlineMs).toBe(45_000)
     expect(methodPolicies['connections.databases']).toMatchObject({ lane: 'metadata', sensitive: true })
+  })
+  it('zeroes the same requests in the backend as in main (SqlService.SensitiveMethods), so a secret is never left in only one side\'s frame', () => {
+    const source = readFileSync('backend/Varia.Backend/SqlService.cs', 'utf8')
+    const match = /internal static readonly string\[\] SensitiveMethods = \[([^\]]*)\];/.exec(source)
+    if (!match) throw new Error('SqlService.SensitiveMethods not found')
+    const backend = [...match[1].matchAll(/"([^"]+)"/g)].map(item => item[1])
+    const main = Object.entries(methodPolicies).filter(([, policy]) => (policy as { sensitive?: boolean }).sensitive).map(([method]) => method)
+    expect(backend.sort()).toEqual(main.sort())
+    expect(main).toContain('ssis.execute')
   })
   it('takes the Connect dialog\'s context, with the request id Stop uses, only for connect and Load databases', () => {
     const requestId = crypto.randomUUID()

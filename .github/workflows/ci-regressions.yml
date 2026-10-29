@@ -1,0 +1,200 @@
+name: CI regressions
+
+# Manual entry points only: this workflow adds no automatic CI runs.
+on:
+  workflow_call:
+    inputs:
+      suite:
+        description: dialogs, results, tail, or all for Electron; activity for live SQL
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Electron suite, or activity for live SQL checks
+        type: choice
+        options: [dialogs, results, tail, all, activity]
+        default: all
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  electron:
+    name: ${{ matrix.os }} (${{ inputs.suite }})
+    if: inputs.suite != 'activity'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Validate suite
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+        run: |
+          case "$SUITE" in
+            dialogs|results|tail|all|activity) ;;
+            *) echo '::error::Choose dialogs, results, tail, all, or activity.'; exit 1 ;;
+          esac
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - run: npm ci
+      - name: Type check, offline .NET checks, vitest, production build
+        id: check
+        run: npm run check
+      - name: Prepare the Electron sandbox and display
+        id: display
+        if: runner.os == 'Linux'
+        # Match the main CI job's sandbox and virtual display configuration.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
+      - name: Dialog, renderer watchdog, and session prompt regressions
+        id: dialogs
+        if: inputs.suite == 'dialogs' || inputs.suite == 'all'
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/dialog-lifecycle-smoke.mjs
+          else
+            node scripts/dialog-lifecycle-smoke.mjs
+          fi
+      - name: Results grid smoke test
+        id: results
+        if: (success() || failure()) && steps.check.outcome == 'success' && (runner.os != 'Linux' || steps.display.outcome == 'success') && (inputs.suite == 'results' || inputs.suite == 'all')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a -s "-screen 0 1600x1000x24" node scripts/results-smoke.mjs
+          else
+            node scripts/results-smoke.mjs
+          fi
+      - name: Results grid smoke test on a 1024x768 display
+        id: results-small
+        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success' && runner.os == 'Linux' && (inputs.suite == 'results' || inputs.suite == 'all')
+        timeout-minutes: 8
+        run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
+      - name: Options, Files, Editor, and Table Designer smoke tests
+        id: tail
+        if: (success() || failure()) && steps.check.outcome == 'success' && (runner.os != 'Linux' || steps.display.outcome == 'success') && (inputs.suite == 'tail' || inputs.suite == 'all')
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          for suite in options-resize options files editor table-designer; do
+            if [ "$RUNNER_OS" = Linux ]; then
+              xvfb-run -a -s "-screen 0 1600x1000x24" node "scripts/$suite-smoke.mjs"
+            else
+              node "scripts/$suite-smoke.mjs"
+            fi
+          done
+      - name: Upload regression screenshots and diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regressions-${{ matrix.os }}-${{ inputs.suite }}
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Summarize regression checks
+        if: always()
+        shell: bash
+        env:
+          SUITE: ${{ inputs.suite }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          DIALOGS_OUTCOME: ${{ steps.dialogs.outcome }}
+          RESULTS_OUTCOME: ${{ steps.results.outcome }}
+          SMALL_OUTCOME: ${{ steps.results-small.outcome }}
+          TAIL_OUTCOME: ${{ steps.tail.outcome }}
+        run: |
+          {
+            printf '## Electron regressions (%s, %s)\n\n' "$RUNNER_OS" "$SUITE"
+            printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
+            printf '| Check | Result |\n| --- | --- |\n'
+            printf '| Build and offline checks | %s |\n' "$CHECK_OUTCOME"
+            printf '| Dialogs, renderer watchdog, and session prompts | %s |\n' "$DIALOGS_OUTCOME"
+            printf '| Results grid | %s |\n' "$RESULTS_OUTCOME"
+            printf '| Results grid at 1024x768 | %s |\n' "$SMALL_OUTCOME"
+            printf '| Options, Files, Editor, and Table Designer | %s |\n' "$TAIL_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  activity:
+    name: Activity actions (SQL Server 2022)
+    if: inputs.suite == 'activity'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      sql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          # Disposable test server, with the same credentials and health check as the full CI job.
+          MSSQL_SA_PASSWORD: 'Varia_Dev_Pw1!'
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P $MSSQL_SA_PASSWORD -Q 'SELECT 1' -b -o /dev/null"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 20s
+    env:
+      VARIA_TEST_SQL_SERVER: localhost
+      VARIA_TEST_SQL_USER: sa
+      VARIA_TEST_SQL_PASSWORD: 'Varia_Dev_Pw1!'
+      VARIA_TEST_SQL_SCRATCH: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: backend/Varia.Backend/packages.lock.json
+      - name: Activity Monitor Details and Kill live checks
+        id: activity
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          dotnet run --project backend/Varia.Backend.Tests/Varia.Backend.Tests.csproj --configuration Release -- --activity-actions-live 2>&1 | tee artifacts/activity-actions-live.log
+      - name: Upload activity diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: activity-actions-sql2022
+          path: artifacts/activity-actions-live.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Summarize activity checks
+        if: always()
+        env:
+          ACTIVITY_OUTCOME: ${{ steps.activity.outcome }}
+        run: |
+          {
+            printf '## Activity Monitor actions (SQL Server 2022)\n\n'
+            printf 'Commit: `%s`\n\n' "$GITHUB_SHA"
+            printf '| Check | Result |\n| --- | --- |\n'
+            printf '| Details and Kill live checks | %s |\n' "$ACTIVITY_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"

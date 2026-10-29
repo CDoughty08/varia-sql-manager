@@ -10,7 +10,12 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, backendReady, documentTabs, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, planList, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
+  jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, messagesStrip, outputAnnouncer, outputEmpty, outputPane, outputStatus,
+  outputToolbar, outputView, paneTab, part, planList, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, resultToggle, statusBar,
+  statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -793,6 +798,82 @@ try {
   await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
   expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  // The saves above ended in view and showed no toast. One that ends while its query is in the background says so in a
+  // toast with Show results, which Focus Notifications reaches from the keyboard.
+  const toast = toasts(page)
+  await expect(toast).toHaveCount(0)
+  await run('-- varia-fake: sets=W1*5000')
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await page.keyboard.press('Control+N')
+  await expect(queryTabs()).toHaveCount(2)
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(toast).toHaveAttribute('data-severity', 'info')
+  // Focused, it says its severity and then its sentence.
+  await expect(toast).toHaveAccessibleName('Information')
+  await expect(toast).toHaveAccessibleDescription('Saved 5,000 rows to background.csv.')
+  await expect(toastMessage(toast)).toHaveText('Saved 5,000 rows to background.csv.')
+  await expect(toastAnnouncer(page)).toHaveText('Saved 5,000 rows to background.csv.')
+  // Above the status bar, inside the window, and not focused: a toast never takes focus by itself.
+  const [toastBox, statusBox] = [await toast.boundingBox(), await statusBar(page).boundingBox()]
+  expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(statusBox.y)
+  expect(toastBox.x + toastBox.width).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth))
+  await expect(toast).not.toBeFocused()
+  // Drawn over the dock (and, below, over a grid): what is laid out there must also be what the pointer reaches.
+  const onTop = () => toast.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return [[0.5, 0.5], [0.05, 0.1], [0.95, 0.9]].map(([x, y]) => element.contains(document.elementFromPoint(box.left + box.width * x, box.top + box.height * y)))
+  })
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast.png') })
+  const focusNotifications = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('focus notifications')
+    await expect(quickInputActive(page)).toContainText('View: Focus Notifications')
+    await page.keyboard.press('Enter')
+    await expect(toast).toBeFocused()
+  }
+  // The focused toast takes the theme's focus ring, as its buttons do; Tab reaches Show results, and Escape there
+  // dismisses the toast and gives focus back to the query it came from.
+  await textbox().focus()
+  await focusNotifications()
+  expect(await toast.evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineColor] }))
+    .toEqual(['solid', '2px', await tokenColor('focusBorder')])
+  await page.keyboard.press('Tab')
+  await expect(toast.getByRole('button', { name: 'Show results', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(toast).toHaveCount(0)
+  await expect(textbox()).toBeFocused()
+  // The dismissed toast's sentence leaves the live region, so the same sentence again (below) changes it and is read.
+  const politeRegion = toastAnnouncer(page)
+  await expect(politeRegion).toHaveText('')
+  // Again, held while the second query shows a grid where the toast appears, and this time Show results, clicked with
+  // the pointer (which waits until nothing covers it), goes back to the first.
+  await run('-- varia-fake: sets=W1*5000')
+  await queryTabs().first().click()
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await queryTabs().nth(1).click()
+  await expect(cell(0, 0)).toBeVisible()
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(politeRegion).toHaveText('Saved 5,000 rows to background.csv.')
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast-grid.png') })
+  await toast.getByRole('button', { name: 'Show results', exact: true }).click({ timeout: 5000 })
+  await expect(toast).toHaveCount(0)
+  await expect(queryTabs().first()).toHaveAttribute('aria-selected', 'true')
+  expect((await readFile(join(saveDir, 'background.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
+  await queryTabs().nth(1).click()
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
   // Back to the default (null resets), so the copies below have no header line.
   expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': null }))).ok).toBe(true)
   // Close Results (from the palette) frees the results and their windows; Messages stay.
@@ -802,6 +883,11 @@ try {
   await expect(quickInputActive(page)).toContainText('Query: Close Results')
   await page.keyboard.press('Enter')
   await expect(outputEmpty(page)).toHaveText('Results were closed to free memory. Execute the query again to see them.')
+  // A line only, centred by the states kit's empty state, with nothing to click.
+  await expect(emptyStateDetail(emptyState(outputEmpty(page)))).toHaveCount(1)
+  await expect(emptyState(outputEmpty(page))).toHaveCSS('justify-content', 'center')
+  await expect(emptyStateTitle(outputEmpty(page))).toHaveCount(0)
+  await expect(outputEmpty(page).getByRole('button')).toHaveCount(0)
   await expect(page.locator('[data-result-grid]')).toHaveCount(0)
   // Run from the editor, it leaves focus there.
   await expect(textbox()).toBeFocused()
@@ -851,10 +937,14 @@ try {
   await expect(kindIcon(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
   await expect(activeDocument(page)).toHaveAccessibleName(forXmlName)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
-  await expect(server()).toBeDisabled()
-  await expect(server()).toHaveValue('')
-  await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
+  // A value has no server and never executes: it has no query bar.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(server()).toHaveCount(0)
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
+  await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
+  // Varia's own table icon, as in Object Explorer.
+  await expect(emptyStateIcon(outputEmpty(page))).toHaveAttribute('data-icon', 'table')
+  await expect(emptyState(outputEmpty(page))).toHaveCSS('justify-content', 'center')
   const forXmlText = '<objects>\n  <o>\n    <name>Orders</name>\n    <object_id>1</object_id>\n  </o>\n  <o>\n    <name>Customers</name>\n    <object_id>2</object_id>\n  </o>\n</objects>'
   expect(await editorText()).toBe(forXmlText)
   await page.keyboard.press('F5')
@@ -908,6 +998,24 @@ try {
   // 40 px in, where a zoomed-out window's bar still is) selects nothing and opens nothing; the same press on the plan
   // cell under it selects the cell and opens the plan.
   const overlayStyle = await page.addStyleTag({ content: `[data-result-grid] ${gridPart.scroller} { max-width: 520px; max-height: 80px } [data-result-grid] ${gridPart.scroller}::-webkit-scrollbar { width: 0; height: 0 }` })
+  // Scroll a numeric cell into view and press it in the same task, before a scroll event or frame can update the grid.
+  // The previous offset would put this point over the XML column: the press must select the numeric cell, opening no tab.
+  const firstColumnWidth = await cell(0, 0).evaluate(element => element.getBoundingClientRect().width)
+  await scroller().evaluate((element, width) => { element.scrollLeft = width }, firstColumnWidth)
+  await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
+  expect(await scroller().evaluate(element => element.scrollLeft)).toBeGreaterThan(0)
+  await grid().evaluate((root, { parts, selector }) => {
+    root.querySelector(parts.scroller).scrollLeft = 0
+    const target = root.querySelector(selector), box = target.getBoundingClientRect()
+    const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: box.left + box.width / 2, clientY: box.top + box.height / 2, button: 0, detail: 1 }
+    const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true }
+    target.dispatchEvent(new PointerEvent('pointerdown', { ...init, ...pointer, buttons: 1 }))
+    target.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 }))
+    target.dispatchEvent(new PointerEvent('pointerup', { ...init, ...pointer, buttons: 0 }))
+    target.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }))
+  }, { parts: gridPart, selector: gridCellSelector(0, 0) })
+  await expect.poll(() => active()).toMatchObject({ row: 0, column: 0 })
+  await expect(queryTabs()).toHaveCount(1)
   await cell(0, 0).click()
   await page.keyboard.press('End')
   await settled()
@@ -1238,6 +1346,51 @@ try {
   await expect.poll(scrollTop).toBe(keptTop)
   expect(await active()).toMatchObject({ row: kept.row, column: kept.column, selected: 'true' })
   await expect.poll(() => widthOf(header('id'))).toBeCloseTo(resized, 0)
+  // A press after that move and before the frame that writes the offsets back: it lands on the row drawn there before the
+  // move, rather than taking the dropped offsets for a scroll to the top and selecting a row near it.
+  await textbox().focus()
+  // The tab switch above built the grid afresh, so this tag marks the scroller to find once the pane shows again.
+  await scroller().evaluate(element => { element.dataset.moved = 'early' })
+  const early = await page.evaluate(({ parts }) => new Promise(resolve => {
+    const press = () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', ctrlKey: true, bubbles: true, cancelable: true }))
+    // The pane shows again in a later task; a mutation observer runs right after the move, before the grid's next frame. The
+    // press waits for the second Ctrl+R, for the move (a removal of the grid's ancestor) and for the pane to show again (a
+    // hidden scroller also reads 0).
+    const scroller = document.querySelector(parts.scroller + '[data-moved="early"]')
+    let reopened = false, moved = false
+    const ready = () => reopened && moved && scroller.isConnected && scroller.clientHeight > 0
+    const observer = new MutationObserver(records => {
+      moved ||= records.some(record => [...record.removedNodes].some(node => node.contains?.(scroller)))
+      if (ready()) pressNow()
+    })
+    const timer = setTimeout(() => { observer.disconnect(); resolve({ dropped: scroller.scrollTop, inGrid: false, moved: 'never shown again, moved ' + moved }) }, 5000)
+    const pressNow = () => { try { pressAt() } catch (error) { resolve({ dropped: scroller.scrollTop, inGrid: false, moved: 'press failed: ' + error.message }) } }
+    const pressAt = () => {
+      observer.disconnect()
+      clearTimeout(timer)
+      const root = scroller.closest('[data-result-grid]'), box = scroller.getBoundingClientRect(), headHeight = root.querySelector(parts.head).offsetHeight
+      const dropped = scroller.scrollTop
+      // The second row of the view, clear of the row numbers. The dock lays the pane out again only after the frame, so the
+      // scroller can still sit outside the window here: the press goes to the scroller itself, at a point of its box.
+      const x = box.left + Math.min(box.width / 2, 200), y = box.top + headHeight + 30, target = scroller
+      const init = { bubbles: true, cancelable: true, composed: true, view: window, clientX: x, clientY: y, button: 0, detail: 1 }
+      const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true }
+      target.dispatchEvent(new PointerEvent('pointerdown', { ...init, ...pointer, buttons: 1 }))
+      target.dispatchEvent(new MouseEvent('mousedown', { ...init, buttons: 1 }))
+      target.dispatchEvent(new PointerEvent('pointerup', { ...init, ...pointer, buttons: 0 }))
+      target.dispatchEvent(new MouseEvent('mouseup', { ...init, buttons: 0 }))
+      resolve({ dropped, inGrid: root.contains(target) && headHeight > 0, moved: scroller.dataset.moved })
+    }
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true })
+    press()
+    // Ctrl+R reads which panes show, which the dock publishes in a microtask: one runs between the presses.
+    Promise.resolve().then(() => { press(); reopened = true })
+  }), { parts: gridPart })
+  expect(early).toEqual({ dropped: 0, inGrid: true, moved: 'early' })
+  await expect.poll(scrollTop).toBe(keptTop)
+  const [earlyFirst, earlyLast] = await visibleRows()
+  const earlyRow = (await active()).row
+  expect(earlyRow >= earlyFirst - 1 && earlyRow <= earlyLast && earlyFirst > 1, `pressed row ${earlyRow}, rows ${earlyFirst} to ${earlyLast} shown`).toBe(true)
   // A press on the grid's scroll bar leaves the focus on the grid, so the arrow keys move a cell screen readers hear.
   const bar = await scroller().evaluate(element => { const box = element.getBoundingClientRect(); return { x: box.left + element.clientWidth + (element.offsetWidth - element.clientWidth) / 2, y: box.top + element.clientHeight * 0.75, width: element.offsetWidth - element.clientWidth } })
   if (bar.width > 0) {
@@ -1282,7 +1435,7 @@ try {
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(status()).toContainText(/^Cancelled · /)
   await outputTab(/^Results/).click()
   await expect(strip()).toContainText('This result is incomplete')
@@ -1429,7 +1582,7 @@ try {
     await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
     await expect(status()).toContainText(/^Executing · /)
     await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
-    await toolbarButton(page, 'Cancel').click()
+    await queryBarButton(page, 'Cancel').click()
     await expect(status()).toContainText(/^Cancelled · /, { timeout: 30000 })
     await outputTab(/^Results/).click()
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')

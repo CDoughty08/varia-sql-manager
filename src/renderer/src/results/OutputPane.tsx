@@ -5,6 +5,7 @@ import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { gridLimits as g } from '../grid/constants'
 import ResultsStack, { batchText, stackNeed } from '../grid/ResultsStack'
+import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
 import { setKey, type OutputViewName, type ResultJob, type ResultSetEntry, type TabResults } from './ResultsService'
 import { formatCount, messagesSummary, plural, runSummary } from './status'
@@ -164,10 +165,10 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
       {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       <PaneMenuButton pane="output" />
     </div>
-    {!tab ? <div className="output-empty"><strong>Query results</strong><p>{!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
+    {!tab ? <EmptyState className="output-empty" icon="table" title="Query results" detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div ref={viewRef} className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>
         {view === 'results' ? <>
-          {tab.status === 'closed' ? <div className="output-empty"><p>Results were closed to free memory. Execute the query again to see them.</p></div> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />}
+          {tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." /> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />}
           {showStrip && <MessagesStrip tabId={tabId} tab={tab} fits={stripFits} maxHeight={stripMax} />}
         </> : view === 'plan' ? <PlanView tabId={tabId} tab={tab} plans={plans} /> : <MessagesView tabId={tabId} tab={tab} />}
       </div>}
