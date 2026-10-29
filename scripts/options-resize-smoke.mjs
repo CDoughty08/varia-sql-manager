@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { electron, expect } from './fixtures/smoke.mjs'
-import { resizeContent } from './fixtures/window-resize.mjs'
+import { resizeContent, resizeWindow } from './fixtures/window-resize.mjs'
 import { backendReady, editorTextbox, editorText } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -85,6 +85,19 @@ try {
   // Repeating the same size has no native event and must still complete.
   stage = 'verify same-size completion'
   await resizeContent(application, page, 1024, 700)
+  // A change of the outer size (object-actions-smoke's window) waits for the same event, which would close a menu opened
+  // before it arrives. It grows, since the window is already at its minimum height.
+  stage = 'verify outer-size barrier'
+  const [outerWidth, outerHeight] = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await holdResize()
+  completed = false
+  const resizedOuter = resizeWindow(application, page, outerWidth, outerHeight + 40).then(() => { completed = true })
+  await expect.poll(held).toBe(true)
+  await expect.poll(() => page.evaluate(() => innerHeight)).toBe(740)
+  expect(completed, 'resizeWindow waits for the application resize event even after the viewport changed').toBe(false)
+  await releaseResize()
+  await resizedOuter
+  await resizeWindow(application, page, outerWidth, outerHeight + 40)
   expect(failures).toEqual([])
   console.log('Options resize regression passed: the event barrier preserves the mnemonic and leaves the query unchanged.')
 } catch (error) {

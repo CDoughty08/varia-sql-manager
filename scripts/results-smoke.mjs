@@ -969,10 +969,10 @@ try {
   await expect(memory).toHaveText('Warning: Results 236 MB / 256 MB. When it is full, new results are truncated.')
   await expect(memory.locator('.codicon-warning')).toHaveCount(1)
   await expect(memory).toHaveAttribute('title', /When it is full, new results are truncated\.$/)
-  // Script As's segment, then the query's facts and the editor's segments, give way to a long text; the backend status and
+  // Script As's segment, then the query's facts, give way to a long text; the backend status, the editor's short facts and
   // the indicator keep their size. Every segment keeps one line (step 17 fits a long server name into a small window).
   expect(await statusBar(page).locator(`:scope > :not(${part.statusSegment})`).evaluateAll(parts => parts.map(part => getComputedStyle(part).flexShrink + ' ' + getComputedStyle(part).whiteSpace)))
-    .toEqual(['0 nowrap', '1 nowrap', '1 nowrap', '0 nowrap'])
+    .toEqual(['0 nowrap', '1 nowrap', '0 nowrap', '0 nowrap'])
   // Closing the results releases them; the backend reports the fall before it answers, and the indicator hides. Run
   // while a grid has focus, it moves focus to the Results tab, which stays, rather than dropping it with the grid.
   await cell(0, 0).click()
