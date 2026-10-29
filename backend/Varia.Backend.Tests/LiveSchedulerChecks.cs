@@ -128,6 +128,17 @@ internal static class LiveSchedulerChecks
             && LiveSql.For(LiveSql.DatabasesProbe, LiveSql.MaxBand) is { Restricted: null } databases && databases.Text("", admin: false) == databases.Body
             && LiveSql.Session.Contains("WHEN @catalog IS NULL THEN 0 WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE CONVERT(int, ISNULL(IS_MEMBER(N'ssis_admin'), 0)) END", StringComparison.Ordinal),
             "the catalog probe reads catalog_properties only in an admin's text (sysadmin or ssis_admin, as the session probe reads), and as zeros otherwise, with no parameter: " + restricted[..Math.Min(400, restricted.Length)]);
+        // The sampler refuses a query that does not fit its entry before it opens: a row of status values alone fits, as the catalog
+        // probe's does, but not one without series or status values, nor a status value the entry does not declare; and the live
+        // lint sees both of the catalog probe's texts.
+        var catalogSpec = catalog.Probes[LiveSql.CatalogProbe];
+        check(fingerprint.Problems(catalogSpec).Count == 0
+            && (fingerprint with { Status = null }).Problems(catalogSpec).Any(problem => problem.StartsWith("has a metrics row without series or status values", StringComparison.Ordinal))
+            && (fingerprint with { Status = [.. fingerprint.Status!, new("stray", "folders_count")] }).Problems(catalogSpec).Any(problem => problem.EndsWith(": stray", StringComparison.Ordinal))
+            && (fingerprint with { Status = [new("foldersCount", "missing_column")] }).Problems(catalogSpec).Any(problem => problem.EndsWith(": foldersCount", StringComparison.Ordinal))
+            && fingerprint.Texts(LiveSql.UncommittedPrologue).SequenceEqual([LiveSql.UncommittedPrologue + fingerprint.Body, LiveSql.UncommittedPrologue + restricted])
+            && LiveSql.For(LiveSql.AgentProbe, LiveSql.MaxBand)!.Texts(LiveSql.UncommittedPrologue).Count() == 1,
+            "a probe's row may carry status values alone (the catalog probe's fits its entry), never one its entry lacks or from a column it does not return, and its restricted text is among the texts the lint reads");
         // The lint catches what it is for.
         var bad = new Dictionary<string, string>
         {
