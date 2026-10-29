@@ -41,7 +41,7 @@ export type PortMessage =
   | { t: 'live'; rid: number; bytes: number; event: LiveEvent }
 export type PortEndResult = ResultsReadResult | ResultsCloseResult | LiveEnd | LiveUpdateResult
 
-const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'error']) }).strict()
+const message = z.object({ text: z.string().max(limits.messages.characters), kind: z.enum(['info', 'server', 'print', 'error']) }).strict()
 /** EVENT bodies for a query.execute request. */
 export const queryEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resultSet.opened'), descriptor: backendDescriptorSchema }).strict(),

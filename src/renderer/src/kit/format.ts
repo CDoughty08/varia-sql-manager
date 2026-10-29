@@ -119,14 +119,15 @@ export interface ErrorReport {
 }
 
 /**
- * The text Copy details puts on the clipboard: what was being done, the code, the message and SQL Server's numbers,
- * one per line, then any extra text; bounded. Callers pass only what the view shows plus diagnostics, never SQL text or
- * credentials.
+ * The text Copy details puts on the clipboard: what was being done, the code, the message, SQL Server's numbers, the
+ * failure's reason and an unexpected failure's exception types, one per line, then any extra text; bounded. Callers pass
+ * only what the view shows plus diagnostics, never SQL text or credentials.
  */
 export function errorDetailsText({ message, code, details, context, extra }: ErrorReport): string {
   const sql = details && [details.number !== undefined && `Msg ${details.number}`, details.class !== undefined && `Level ${details.class}`,
     details.state !== undefined && `State ${details.state}`, details.server && `Server ${details.server}`].filter(Boolean).join(', ')
-  const lines = [context, code && `Code: ${code}`, `Message: ${message}`, sql && `SQL Server: ${sql}`].filter((line): line is string => !!line)
+  const lines = [context, code && `Code: ${code}`, `Message: ${message}`, sql && `SQL Server: ${sql}`, details?.reason && `Reason: ${details.reason}`,
+    details?.exception && `Exception: ${details.exception}`].filter((line): line is string => !!line)
   const text = lines.join('\n') + (extra?.trim() ? '\n\n' + extra.trim() : '')
   return text.length > maxErrorDetails ? text.slice(0, maxErrorDetails - 1) + '…' : text
 }

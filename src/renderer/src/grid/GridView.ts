@@ -1,6 +1,7 @@
 import type { Platform } from '../../../shared/commands/keybindings'
 import type { ResultDescriptor } from '../../../shared/contracts'
 import { nextFrame } from '../core/frame'
+import { typeScale } from '../../../shared/theme/metrics'
 import { monoFontFamily, uiFontFamily } from '../fonts'
 import type { ResultHandle, RowWindow } from '../results/ResultClient'
 import type { GridViewState } from '../results/ResultsService'
@@ -11,7 +12,7 @@ import { gridLimits as g } from './constants'
 import { GridData, portBusy } from './data'
 import { gridKeyAction, pageStep } from './keyboard'
 import { ColumnLayout, hitTest, rowHeaderWidth, visibleRange, type VisibleRange } from './layout'
-import { fitWidth, initialWidth, measureCharWidth, typeHintChars } from './measure'
+import { fitWidth, initialWidth, measureCharWidth, sqlTypeLabel, typeHintChars } from './measure'
 import { freshRing, ringStep, rotation, slotOf, type RowRing } from './ring'
 import { applyWheel, ensureVisible, normalizeWheel, offsetsDropped, onNativeScroll, rebaseRow, remap, rowsContainerY, rowTop, scrollCap, scrollModel, topRowOf, type ScrollModel } from './scroll'
 import { columnTitle, covered, dragSelection, navigate, pressButton, pressSelection, selectAll, windowRanges, type CellRange, type GridHit, type GridSelection } from './selection'
@@ -36,7 +37,9 @@ interface RowSlot {
   readonly cells: CellSlot[]; readonly pin: CellSlot
   row: number; top: number; width: number; odd: boolean; headerSel: boolean; shown: boolean
 }
-interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
+/** A pooled column header: the name, then the SQL type (`type`, in muted small text and hidden from screen readers, which read it in the tooltip). Each is
+ *  in its own bidi isolate (.rg-cn, .rg-ct), so a name with an unterminated override cannot reorder the type after it. */
+interface HeaderSlot { readonly el: HTMLDivElement; readonly text: Text; readonly type: Text; column: number; sel: boolean; shown: boolean; left: number; width: number }
 interface Drag { readonly pointerId: number; readonly x0: number; readonly y0: number; x: number; y: number; dragging: boolean; readonly hit: GridHit; readonly modifiers: boolean }
 /** A column border being dragged: the width follows the pointer once a frame, and Escape puts `width0` back. */
 interface Resize { readonly pointerId: number; readonly column: number; readonly x0: number; readonly width0: number; readonly wasUserSized: boolean; x: number; applied: number }
@@ -55,12 +58,16 @@ export interface GridViewOptions {
   readonly resultCount: number
   readonly platform: Platform
   readonly stats?: GridStats
+  /** Whether headers show each column's SQL type after its name (Tools › Options › Query Results › Results to Grid). */
+  readonly showTypes?: boolean
   onSelection(selection: GridSelection): void
   /** Ctrl+C, and Edit › Copy (the copy event): runs Copy. */
   onCopy(): void
   /** Escape outside a drag or resize: cancels the tab's copy or save; false when there was none. */
   onEscape(): boolean
   onStatus(status: GridStatus): void
+  /** Whether the columns are wider than the grid, so it shows a horizontal scroll bar when it has no vertical one; reported on change. */
+  onWide?(wide: boolean): void
   onError(error: unknown): void
   /** Opens an XML, JSON or plan value; without it no cell is a link. */
   onOpenValue?(row: number, column: number): void
@@ -110,6 +117,10 @@ export class GridView {
   private capOverride: number | undefined
   private charWidth: number
   private headerWidth: (text: string) => number
+  private typeWidth: (text: string) => number
+  /** Each column's SQL type as its header shows it. */
+  private readonly types: readonly string[]
+  private showTypes: boolean
   private rowHeader = 0
   private width = -1
   private spacerHeight = -1
@@ -120,9 +131,14 @@ export class GridView {
   private pendingLeft: number | undefined
   /** Whether a scroll event came since the last frame, and the scroller's offsets that frame left (offsetsDropped). */
   private scrolled = false
+  /** The panes changed since the last frame (panesChanged), so offsets found at 0 may be a DOM move's reset. */
+  private moved = false
   private lastTop = 0
   private lastLeft = 0
   private viewportWidth = 0
+  /** The scroller's width with its vertical scroll bar: a grid sized to its rows has none. */
+  private outerWidth = 0
+  private wide: boolean | undefined
   private viewportHeight = 0
   private lastTopRow = 0
   private cancelFrame: (() => void) | undefined
@@ -158,11 +174,14 @@ export class GridView {
     const measure = fontMeasure()
     this.charWidth = measure.charWidth
     this.headerWidth = measure.header
+    this.typeWidth = measure.type
+    this.types = o.descriptor.columns.map(sqlTypeLabel)
+    this.showTypes = o.showTypes ?? true
     this.capOverride = o.stats?.scrollCap
     this.cap = this.capOverride ?? scrollCap(devicePixelRatio)
     // Widths belong to the grid's saved state; they are allocated on first mount, from the declared types.
     if (!o.state.widths || o.state.widths.length !== this.columns) {
-      o.state.widths = Float64Array.from(o.descriptor.columns, column => initialWidth(this.headerWidth(columnTitle(column.name)), typeHintChars(column), this.charWidth))
+      o.state.widths = Float64Array.from(o.descriptor.columns, (column, index) => initialWidth(this.headerTextWidth(index), typeHintChars(column), this.charWidth))
       o.state.sized = false
     }
     this.layout = new ColumnLayout(o.state.widths, this.cap - rowHeaderWidth(0, this.charWidth))
@@ -191,6 +210,7 @@ export class GridView {
     this.cleanup.push(o.handle.subscribe(() => this.schedule()), registerGridAnchor(this.root, () => this.menuAnchor()))
     if (o.stats) this.cleanup.push(o.stats.add({ counters: () => this.data.counters, nodes: () => this.root.getElementsByTagName('*').length + 1, setScrollCap: px => { this.capOverride = px; this.updateCap() } }))
     this.viewportWidth = this.scroller.clientWidth
+    this.outerWidth = this.scroller.offsetWidth
     this.viewportHeight = this.scroller.clientHeight
     // The first frame is drawn now, not a frame later: the rows of a tile already cached show at once, and the others are
     // requested a frame sooner.
@@ -244,12 +264,27 @@ export class GridView {
     this.setStatus({})
     this.schedule()
   }
-  update(o: { resultCount: number }): void {
-    if (o.resultCount === this.resultCount) return
+  update(o: { resultCount: number; showTypes?: boolean }): void {
+    const showTypes = o.showTypes ?? this.showTypes
+    if (o.resultCount === this.resultCount && showTypes === this.showTypes) return
     this.resultCount = o.resultCount
+    if (showTypes !== this.showTypes) {
+      // Widths stay as they are; every header writes its type again.
+      this.showTypes = showTypes
+      for (const header of this.headerSlots) header.column = -1
+    }
     this.schedule()
   }
   invalidate(): void { this.schedule() }
+  /**
+   * The panes around the grid changed: closing and opening its pane within one frame moves the grid without resizing it,
+   * and the move resets the scroller's offsets to 0 without a scroll event. Until the next frame writes the saved offsets
+   * back, a press must take a reset to 0 for that move, not for a native scroll to the top.
+   */
+  panesChanged(): void {
+    this.moved = true
+    this.schedule()
+  }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -365,6 +400,7 @@ export class GridView {
     const resize = new ResizeObserver(() => {
       try {
         this.viewportWidth = this.scroller.clientWidth
+        this.outerWidth = this.scroller.offsetWidth
         this.viewportHeight = this.scroller.clientHeight
         this.updateCap()
         this.schedule()
@@ -421,6 +457,23 @@ export class GridView {
     return hitTest(x, y, { viewport: { top: this.o.state.virtualTop, left: this.o.state.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })
   }
 
+  /** Native scrolling (including a cell's scrollIntoView) can precede its scroll event and our next frame. A press must
+   *  use the offsets and size now on screen, or it can select a neighbouring link and open the wrong value. */
+  private syncPointerFrame(): void {
+    const width = this.scroller.clientWidth, height = this.scroller.clientHeight
+    const top = this.scroller.scrollTop, left = this.scroller.scrollLeft
+    const scrolled = top !== this.lastTop || left !== this.lastLeft
+    if (!scrolled && width === this.viewportWidth && height === this.viewportHeight) return
+    this.viewportWidth = width
+    this.viewportHeight = height
+    // Even a native scroll back to 0 is real here: its queued scroll event has not marked it yet. Offsets at 0 after the
+    // panes changed are the move's reset instead, which the frame restores (offsetsDropped).
+    this.scrolled ||= scrolled && !(this.moved && top === 0 && left === 0)
+    this.cancelFrame?.()
+    this.cancelFrame = undefined
+    this.runFrame()
+  }
+
   /** Presses inside the cells keep focus on the grid itself, not its scroller, and select no text. */
   private mouseDown(event: MouseEvent): void {
     this.clicks = event.detail
@@ -431,8 +484,10 @@ export class GridView {
 
   private pointerDown(event: PointerEvent): void {
     const press = pressButton(event, this.o.platform)
+    if (!press) return
+    this.syncPointerFrame()
     const point = this.point(event)
-    if (!press || !point.inside) return
+    if (!point.inside) return
     let hit = this.hitAt(point.x, point.y)
     if (!hit) return
     if (hit.kind === 'resize') {
@@ -550,7 +605,7 @@ export class GridView {
       for (const result of results) chars = Math.max(chars, result.widths[0] ?? 0)
       const userSized = this.o.state.userSized ??= new Set()
       userSized.add(column)
-      this.layout.setWidth(column, fitWidth(this.headerWidth(columnTitle(this.o.descriptor.columns[column].name)), chars, this.charWidth))
+      this.layout.setWidth(column, fitWidth(this.headerTextWidth(column), chars, this.charWidth))
       this.schedule()
     }, error => {
       if (abort.signal.aborted || this.disposed) return
@@ -596,7 +651,7 @@ export class GridView {
     let title = ''
     if (slot?.header && slot.header.column >= 0) {
       const column = this.o.descriptor.columns[slot.header.column]
-      title = `${columnTitle(column.name)} (${column.dataType}, ${column.nullable ? 'null' : 'not null'})`
+      title = `${columnTitle(column.name)} (${this.types[slot.header.column]}, ${column.nullable ? 'null' : 'not null'})`
     } else if (slot?.cell) {
       const bits = slot.cell.bits
       if (bits & ERR) title = 'This value could not be read and is shown as NULL.'
@@ -674,13 +729,18 @@ export class GridView {
     const headers = cellsPerRow
     if (headers > this.headerSlots.length || headers < this.headerSlots.length * (1 - g.poolSlack)) {
       while (this.headerSlots.length < headers) {
-        const el = this.head.ownerDocument.createElement('div'), text = this.head.ownerDocument.createTextNode('')
+        const doc = this.head.ownerDocument, el = doc.createElement('div'), nameEl = doc.createElement('span'), text = doc.createTextNode(''), typeEl = doc.createElement('span'), type = doc.createTextNode('')
         el.className = 'rg-ch'
         el.setAttribute('role', 'columnheader')
         el.style.display = 'none'
-        el.append(text)
+        nameEl.className = 'rg-cn'
+        nameEl.append(text)
+        typeEl.className = 'rg-ct'
+        typeEl.setAttribute('aria-hidden', 'true')
+        typeEl.append(type)
+        el.append(nameEl, typeEl)
         this.head.append(el)
-        const header: HeaderSlot = { el, text, column: -1, sel: false, shown: false, left: Number.NaN, width: -1 }
+        const header: HeaderSlot = { el, text, type, column: -1, sel: false, shown: false, left: Number.NaN, width: -1 }
         this.slots.set(el, { header })
         this.headerSlots.push(header)
       }
@@ -701,7 +761,7 @@ export class GridView {
       if (this.disposed || state.sized) return
       for (let column = 0; column < this.columns; column++) {
         if (state.userSized?.has(column)) continue
-        this.layout.setWidth(column, initialWidth(this.headerWidth(columnTitle(this.o.descriptor.columns[column].name)), widths[column] ?? 0, this.charWidth))
+        this.layout.setWidth(column, initialWidth(this.headerTextWidth(column), widths[column] ?? 0, this.charWidth))
       }
       state.sized = true
       this.schedule()
@@ -728,6 +788,7 @@ export class GridView {
     // A scroller that lost its offsets shows the saved ones again, as a grid built afresh does.
     const restore = !previous || offsetsDropped({ scrolled: this.scrolled, scrollTop, scrollLeft, lastTop: this.lastTop, lastLeft: this.lastLeft })
     this.scrolled = false
+    this.moved = false
     const model = scrollModel(rows, height, this.cap)
     let virtualTop: number
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
@@ -755,6 +816,8 @@ export class GridView {
       this.head.style.width = total + 'px'
       columnsMoved = true
     }
+    const wide = total > this.outerWidth
+    if (wide !== this.wide && this.outerWidth > 0) { this.wide = wide; this.o.onWide?.(wide) }
     if (model.spacerHeight !== this.spacerHeight) { this.spacerHeight = model.spacerHeight; this.spacer.style.height = model.spacerHeight + 'px' }
     if ((model.mode === 'virtual') !== this.wheelAttached) {
       this.wheelAttached = model.mode === 'virtual'
@@ -995,6 +1058,7 @@ export class GridView {
           header.column = column
           const name = this.o.descriptor.columns[column].name
           header.text.nodeValue = columnTitle(name)
+          header.type.nodeValue = this.showTypes ? this.types[column] : ''
           header.el.setAttribute('aria-colindex', String(column + 2))
           header.el.classList.toggle('unnamed', !name)
           if (this.hovered === header.el) { this.hovered.removeAttribute('title'); this.hovered = undefined }
@@ -1009,6 +1073,12 @@ export class GridView {
       if (sel !== header.sel) { header.sel = sel; header.el.classList.toggle('sel', sel) }
     }
     for (const header of this.headerSlots) if (!used.has(header) && header.shown) { header.shown = false; header.column = -1; header.el.style.display = 'none'; header.el.removeAttribute('aria-colindex') }
+  }
+
+  /** What a column's header needs for its text: the name, and the gap and type after it when types are shown. */
+  private headerTextWidth(column: number): number {
+    const name = this.headerWidth(columnTitle(this.o.descriptor.columns[column].name))
+    return this.showTypes ? name + g.typeGap + this.typeWidth(this.types[column]) : name
   }
 
   /** The grid's own ARIA: counts change at most once a second while rows stream in. */
@@ -1038,12 +1108,13 @@ function firstCell(resultIndex: number): GridSelection {
 
 let measureContext: CanvasRenderingContext2D | null | undefined
 let measuredCharWidth: number | undefined
-/** The grid font's digit width and a header measurer (canvas measureText in the UI font). One canvas serves every grid,
- *  and the digit width is measured once, again only when fonts finish loading (`fresh`). */
-function fontMeasure(fresh = false): { charWidth: number; header: (text: string) => number } {
+/** The grid font's digit width and header measurers (canvas measureText in the UI font, for names and the smaller types).
+ *  One canvas serves every grid, and the digit width is measured once, again only when fonts finish loading (`fresh`). */
+function fontMeasure(fresh = false): { charWidth: number; header: (text: string) => number; type: (text: string) => number } {
   const context = measureContext === undefined ? measureContext = document.createElement('canvas').getContext('2d') : measureContext
-  if (!context) return { charWidth: 7.2, header: text => text.length * 7 }
+  if (!context) return { charWidth: 7.2, header: text => text.length * 7, type: text => text.length * 6 }
   if (fresh || measuredCharWidth === undefined) measuredCharWidth = measureCharWidth(text => { context.font = `${g.fontSize}px ${monoFontFamily}`; return context.measureText(text).width })
   const header = (text: string) => { context.font = `${g.fontSize}px ${uiFontFamily}`; return context.measureText(text).width }
-  return { charWidth: measuredCharWidth, header }
+  const type = (text: string) => { context.font = `${typeScale.xs.size}px ${uiFontFamily}`; return context.measureText(text).width }
+  return { charWidth: measuredCharWidth, header, type }
 }

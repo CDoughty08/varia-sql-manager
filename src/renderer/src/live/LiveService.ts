@@ -22,6 +22,10 @@ const MiB = 1024 * 1024
 export const liveServiceLimits = {
   /** Open handles in a window: main runs at most this many live streams on the results port. */
   handles: limits.live.portStreams,
+  /** Background views (Object Explorer's status chips, one per server and login) holding a slot at once. They take only
+   *  slots no other view wants: they give theirs up to a view that opens when every slot of the window is taken, or that
+   *  the backend refuses (BUSY) at its caps of 8 a server and 32 a backend, and wait when the backend refuses them. */
+  background: 8,
   /** Hidden views that keep their status probes running (a source's `hidden: 'statusOnly'`). */
   statusOnly: 4,
   /** A status-only view samples at most this often: the catalogue's hidden interval, which docs/live.md states. */
@@ -62,6 +66,10 @@ export interface LiveSpec {
   /** Hidden, keep the probes without tables running at 30 s or slower instead of pausing, where the source allows it
    *  (an SSIS execution this window started, so its end is still seen). At most 4 such views a window; others pause. */
   whileHidden?: 'statusOnly'
+  /** A background view: it runs only in a slot nobody else wants (at most liveServiceLimits.background of them), waits
+   *  for one when none is free or the backend refuses it (BUSY), and gives its slot up, newest first, to a view that opens
+   *  when every slot is taken, or that the backend refuses on the same server. */
+  background?: true
 }
 
 export type LiveStatus = 'connecting' | 'live' | 'paused' | 'dormant' | 'lost' | 'ended'
@@ -84,6 +92,8 @@ export interface LiveSnapshot {
   readonly pausedBy?: 'hidden' | 'user'
   /** Hidden, but its probes without tables keep running (LiveSpec.whileHidden). */
   readonly hiddenMode?: 'statusOnly'
+  /** A background view waiting for a free slot (status dormant): it runs nothing until one frees. */
+  readonly waiting?: true
   readonly probes: Readonly<Record<string, LiveProbeSnapshot>>
   readonly connectionId: string
   /** The running subscription's id: a new one each time the view subscribes again. */
@@ -238,6 +248,9 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     /** Coalesces snapshot notifications: an animation frame in the app. */
     schedule?: (callback: () => void) => void
     catalog?: LiveCatalog
+    /** The server a connection reaches, as the user typed it: a view the backend refuses at its per-server cap takes a
+     *  background view's slot on that server. Without it, only one on the same connection. */
+    serverOf?: (connectionId: string) => string | undefined
   }) {
     super({ handles: [] })
     this.timers = o.timers ?? browserTimers
@@ -280,15 +293,52 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
     const source = this.catalog.sources[spec.source]
     const valid = !!source && spec.probes.length >= 1 && spec.probes.length <= limits.live.probes && new Set(spec.probes.map(probe => probe.probe)).size === spec.probes.length &&
       spec.probes.every(probe => this.catalog.probes[probe.probe]?.source === spec.source)
-    const failure = this.disposed ? { code: 'PORT_CLOSED' as const, message: 'The workbench closed.' } : !valid ? { code: 'INVALID_PARAMS' as const, message: invalidSpec }
-      : this.handles.size >= liveServiceLimits.handles ? { code: 'TOO_MANY_REQUESTS' as const, message: tooMany } : undefined
+    let failure: { code: ErrorCode; message: string } | undefined = this.disposed ? { code: 'PORT_CLOSED', message: 'The workbench closed.' } : !valid ? { code: 'INVALID_PARAMS', message: invalidSpec } : undefined
+    // Every slot taken: a background view waits for one, and any other view takes the newest background view's slot once
+    // that view's stream has ended (main counts a stream until its end arrives).
+    let wait = false, yielded = false, after: StreamRecord | undefined
+    if (!failure && spec.background) wait = this.holding() >= liveServiceLimits.handles || this.holding(true) >= liveServiceLimits.background
+    else if (!failure && this.holding() >= liveServiceLimits.handles) {
+      // An ended background view is not taken over: its owner disposes it, which frees its slot.
+      const victim = [...this.handles.values()].reverse().find(handle => handle.background && handle.holdsSlot() && handle.status !== 'ended' && handle.status !== 'lost')
+      if (victim) { after = victim.yieldSlot(); yielded = true } else failure = { code: 'TOO_MANY_REQUESTS', message: tooMany }
+    }
     const handle = new Handle(this, spec, owner, failure)
     if (failure) return handle
     this.handles.set(handle.id, handle)
-    handle.start()
+    if (wait) handle.queue()
+    else if (yielded) handle.startAfter(after)
+    else handle.start()
     this.changed()
     this.rebalance()
     return handle
+  }
+
+  /** Open views that hold a slot (all but background views waiting for one); with `background`, background views only. */
+  private holding(background = false): number {
+    let count = 0
+    for (const handle of this.handles.values()) if (handle.holdsSlot() && (!background || handle.background)) count++
+    return count
+  }
+
+  /** A view closed: the oldest background view waiting for a slot takes it, once the closed view's stream has ended. */
+  private slotFreed(after: StreamRecord | undefined): void {
+    for (const handle of [...this.handles.values()]) {
+      if (this.holding() >= liveServiceLimits.handles || this.holding(true) >= liveServiceLimits.background) return
+      if (!handle.background || handle.holdsSlot()) continue
+      if (handle.claimSlot(after)) after = undefined
+    }
+  }
+
+  /** The backend refused `requester` (BUSY) at its caps: the newest running background view on the same server gives its
+   *  slot up. Returns the stream whose end the requester waits for (undefined when it has ended), or false when no
+   *  background view runs there, since one on another server would free nothing the server's cap counts. */
+  yieldOnServer(requester: Handle): StreamRecord | undefined | false {
+    const serverOf = this.o.serverOf, server = serverOf?.(requester.connectionId)
+    const same = (handle: Handle) => server !== undefined ? serverOf?.(handle.connectionId) === server : handle.connectionId === requester.connectionId
+    // A dormant view holds no subscription the backend counts.
+    const victim = [...this.handles.values()].reverse().find(handle => handle !== requester && handle.background && handle.holdsSlot() && (handle.status === 'connecting' || handle.status === 'live' || handle.status === 'paused') && same(handle))
+    return victim ? victim.yieldSlot() : false
   }
 
   /** Open views of a source, as they are: it never subscribes, so a badge or summary that reads it starts no sampling of
@@ -351,6 +401,7 @@ export class LiveService extends SnapshotStore<LiveServiceSnapshot> implements D
   removed(handle: Handle): void {
     if (this.handles.get(handle.id) !== handle) return
     this.handles.delete(handle.id)
+    if (!this.disposed) this.slotFreed(handle.pendingEnd())
     this.changed()
     this.rebalance()
   }
@@ -389,6 +440,11 @@ class Handle implements LiveHandle {
   private readonly tracks = new Map<string, { probe: LiveProbeId; table: number; keys: string[]; seq: number }>()
   private args: LiveArgs | undefined
   private readonly whileHidden: 'statusOnly' | undefined
+  readonly background: boolean
+  /** A background view without a slot: dormant until LiveService gives it one. */
+  private waiting = false
+  /** This view, refused BUSY, already took a background view's slot: a second refusal ends it. Cleared once it opens. */
+  private busyRetried = false
   private snapshot: LiveSnapshot
   private stream: StreamRecord | undefined
   /** The last subscription this view stopped: the next one waits for its end (see restart). */
@@ -429,6 +485,7 @@ class Handle implements LiveHandle {
     this.connectionId = spec.connectionId
     this.args = spec.args
     this.whileHidden = spec.whileHidden
+    this.background = !!spec.background
     for (const probe of spec.probes) {
       const catalogue = service.catalog.probes[probe.probe]
       const interval = catalogue?.intervalMs ?? { default: limits.live.intervalMs.min, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
@@ -514,6 +571,55 @@ class Handle implements LiveHandle {
     })
   }
 
+  /** Subscribes once `after` (the stream whose slot this view takes) has ended. */
+  startAfter(after: StreamRecord | undefined): void {
+    if (after) this.previous = after
+    this.restart()
+  }
+
+  holdsSlot(): boolean { return !this.waiting }
+  /** The stream this view stopped whose end has not arrived: whoever takes its slot waits for it. */
+  pendingEnd(): StreamRecord | undefined { return this.previous && !this.previous.settled ? this.previous : undefined }
+
+  /** A background view opened with no slot free: dormant, running nothing, until LiveService gives it one. */
+  queue(): void {
+    this.waiting = true
+    this.status = 'dormant'
+    this.changed()
+  }
+
+  /** The backend refused this background view (BUSY at its caps): it waits, running nothing, until a view closes. */
+  private waitForSlot(): void {
+    this.waiting = true
+    this.status = 'dormant'
+    this.clearTimer('staleTimer')
+    this.leaveStatusOnly()
+    this.changed()
+  }
+
+  /** Another view needs this background view's slot: it stops (its history stays) and waits for one. Returns the stream
+   *  whose end the other view waits for. */
+  yieldSlot(): StreamRecord | undefined {
+    this.stop()
+    this.waiting = true
+    this.status = 'dormant'
+    this.clearTimer('staleTimer')
+    this.leaveStatusOnly()
+    this.changed()
+    return this.pendingEnd()
+  }
+
+  /** A slot came free: subscribe again once `after` has ended, or, while hidden, stay dormant until shown. */
+  claimSlot(after: StreamRecord | undefined): boolean {
+    // A waiting view whose owner lost its connection has ended: it takes no slot.
+    if (this.disposed || !this.waiting || this.status !== 'dormant') return false
+    this.waiting = false
+    if (after) this.previous = after
+    if (this.hidden) this.changed()
+    else this.restart()
+    return true
+  }
+
   /** Ends the running subscription, if any, without reporting its end: the view moves on (dormant, or a new
    *  subscription). Its results are released by the backend; the view's tables then read released. */
   private stop(): void {
@@ -539,6 +645,7 @@ class Handle implements LiveHandle {
 
   private applyOpened(record: StreamRecord, event: LiveOpenedEvent): void {
     record.opened = true
+    this.busyRetried = false
     this.spid = event.spid
     const now = this.service.now()
     let rings = false
@@ -599,6 +706,18 @@ class Handle implements LiveHandle {
     this.stream = undefined
     this.clearTimer('retryTimer')
     this.updateError = false
+    // The backend refused the subscription at its caps (8 a server, 32 a backend). A background view waits for a slot
+    // rather than end; another view takes a background view's slot on the same server, once.
+    if (!result.ok && result.code === 'BUSY' && !record.opened) {
+      if (this.background) { this.waitForSlot(); return }
+      const after = this.busyRetried ? false : this.service.yieldOnServer(this)
+      if (after !== false) {
+        this.busyRetried = true
+        this.previous = after
+        this.restart()
+        return
+      }
+    }
     if (result.ok) {
       const end = result.value
       if (end.resume !== undefined) this.resume = end.resume
@@ -659,8 +778,9 @@ class Handle implements LiveHandle {
     this.clearTimer('dormantTimer')
     this.hiddenPaused = false
     this.leaveStatusOnly()
-    // Back in view: a dormant view subscribes again (its history continues, with a gap); a paused one resumes at once.
-    if (this.status === 'dormant') this.restart()
+    // Back in view: a dormant view subscribes again (its history continues, with a gap); a paused one resumes at once. A
+    // background view waiting for a slot stays dormant until it gets one.
+    if (this.status === 'dormant') { if (!this.waiting) this.restart() }
     else this.resumeRunning()
   }
 
@@ -927,7 +1047,7 @@ class Handle implements LiveHandle {
   }
 
   refresh(): void {
-    if (this.disposed) return
+    if (this.disposed || this.waiting) return
     if (this.status === 'dormant') { this.restart(); return }
     const record = this.stream
     if (!record || this.pausedNow()) return
@@ -1050,10 +1170,10 @@ class Handle implements LiveHandle {
       }
     }
     // A pause the backend has not taken back (a refused resume) is nobody's wish: it reads Paused, with the error.
-    const pausedBy = this.status === 'dormant' ? (this.userPaused ? 'user' : 'hidden')
+    const pausedBy = this.status === 'dormant' ? (this.userPaused ? 'user' : this.waiting ? undefined : 'hidden')
       : this.status === 'paused' ? (this.userPaused ? 'user' : this.hiddenPaused ? 'hidden' : undefined) : undefined
     return {
-      status: this.status, ...pausedBy ? { pausedBy } : {}, ...this.statusOnly && !this.userPaused && this.stream ? { hiddenMode: 'statusOnly' as const } : {}, probes, connectionId: this.connectionId,
+      status: this.status, ...pausedBy ? { pausedBy } : {}, ...this.statusOnly && !this.userPaused && this.stream ? { hiddenMode: 'statusOnly' as const } : {}, ...this.waiting ? { waiting: true as const } : {}, probes, connectionId: this.connectionId,
       ...this.stream ? { subscriptionId: this.stream.subscriptionId } : {}, ...this.spid !== undefined && this.stream ? { spid: this.spid } : {},
       ...this.ended ? { ended: this.ended } : {}, ...this.error ? { error: this.error } : {}
     }

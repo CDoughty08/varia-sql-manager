@@ -8,9 +8,10 @@ using Varia.Backend.Explorer;
 namespace Varia.Backend.Live;
 
 /// <summary>The pool and the prologue of a live scope (docs/ipc.md, Live subscriptions). Server DMVs read on the
-/// connection's " - Activity Monitor" pool in the login's own initial catalog; SSISDB reads (the SSIS sources, later) use
-/// the " - Integration Services" pool with Initial Catalog SSISDB, which the SSIS tree and dialogs share with their own
-/// prologue. Each scope's pool keeps its SET options away from query tabs, Object Explorer and scripting.</summary>
+/// connection's " - Activity Monitor" pool in the login's own initial catalog, except Object Explorer's status (below);
+/// SSISDB reads (the SSIS sources, later) use the " - Integration Services" pool with Initial Catalog SSISDB, which the SSIS
+/// tree and dialogs share with their own prologue. Each scope's pool keeps its SET options away from query tabs, Object
+/// Explorer and scripting.</summary>
 internal static class LiveConnections
 {
     public const string ServerSuffix = " - Activity Monitor";
@@ -22,6 +23,14 @@ internal static class LiveConnections
         "ssisdb" => ("SSISDB", SsisSuffix),
         _ => throw new InvalidOperationException("This live scope reads no SQL Server.")
     };
+
+    /// <summary>A source's pool. Object Explorer's status samples by default, for as long as the pane shows, so on a box server
+    /// and Managed Instance it opens in master: a session in the login's own database (the Connect dialog's Database, or
+    /// the login's default) would keep that database from being restored, set single-user or dropped, and could not connect
+    /// while it is offline. Azure SQL Database runs none of its probes and keeps the connection's own catalog, which a contained
+    /// user signs in to.</summary>
+    public static (string? Database, string Suffix) Pool(string scope, string source, ServerProfile profile) =>
+        source == "explorer" && profile.EngineEdition is 1 or 2 or 3 or 4 or 8 ? ("master", Pool(scope).Suffix) : Pool(scope);
 
     /// <summary>The live band of a server: its major version (2016 to 2025), or the newest for Managed Instance, which reports
     /// 12 while running the newest engine.</summary>
@@ -122,7 +131,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
     {
         if (connection is { State: ConnectionState.Open }) return;
         Drop();
-        var (database, suffix) = LiveConnections.Pool(source.Scope);
+        var (database, suffix) = host.Profile(connectionId) is { } profile ? LiveConnections.Pool(source.Scope, source.Id, profile) : LiveConnections.Pool(source.Scope);
         var opening = host.PoolConnection(connectionId, test?.Database ?? database, suffix);
         connection = opening;
         sessionRead = false;

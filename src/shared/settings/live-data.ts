@@ -22,6 +22,11 @@ export const liveDataSettings = [
     description: 'How long a paused, hidden live view keeps its subscription before it ends it and frees what the backend holds for it. Showing the view again starts a new subscription; its history is kept.'
   },
   {
+    key: 'liveData.explorerStatus', page: 'environment.liveData', label: 'Show live status in Object Explorer', type: 'boolean', default: true, varia: true,
+    keywords: ['live', 'object explorer', 'status', 'chips', 'restoring', 'offline', 'read-only', 'single user', 'agent', 'jobs', 'availability group', 'server load'],
+    description: 'While Object Explorer shows, reads each connected server\'s database states, restore progress, running SQL Server Agent jobs and availability group health every few seconds, on one session of its own per server, and shows them as chips on the nodes. It pauses while Object Explorer or the window is hidden, and never reloads the tree. While it is False, nodes show only what their list said when it loaded.'
+  },
+  {
     key: 'liveData.historyMinutes', page: 'environment.liveData', label: 'Keep chart history for', type: 'integer', min: 5, max: 120, default: 60, unit: 'minutes', varia: true,
     keywords: ['live', 'history', 'chart', 'minutes', 'memory'],
     description: 'How far back each live view\'s charts reach. History is kept in memory only (at most 7,200 samples a chart, 4 MiB a view and 32 MiB in all; the newest samples are kept), never on disk, and is lost when the window reloads.'

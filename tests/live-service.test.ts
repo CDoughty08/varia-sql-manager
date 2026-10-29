@@ -115,9 +115,9 @@ const connectionId = '6f1e3a52-8a8b-4d63-9a43-2c1e1e0d7c11'
 const otherConnection = '0b6f2f8e-0b0e-4f6a-9d61-6d8c2b7f1e22'
 const allProbes: LiveProbeId[] = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
 const spec = (probes: LiveProbeId[] = allProbes, extra: Partial<LiveSpec> = {}): LiveSpec => ({ connectionId, source: 'debug.synthetic', probes: probes.map(probe => ({ probe })), ...extra })
-function makeService(o: { settings?: Partial<SettingsValues>; catalog?: LiveCatalog } = {}) {
+function makeService(o: { settings?: Partial<SettingsValues>; catalog?: LiveCatalog; serverOf?: (connectionId: string) => string | undefined } = {}) {
   settings = settingsStore(o.settings)
-  service = new LiveService({ client, settings, page, schedule: callback => callback(), ...o.catalog ? { catalog: o.catalog } : {} })
+  service = new LiveService({ client, settings, page, schedule: callback => callback(), ...o.catalog ? { catalog: o.catalog } : {}, ...o.serverOf ? { serverOf: o.serverOf } : {} })
   return service
 }
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
@@ -893,6 +893,204 @@ describe('LiveService', () => {
     expect(client.streams).toHaveLength(17)
     const wrong = service.open({ connectionId, source: 'debug.synthetic', probes: [] }, owner().value)
     expect(wrong.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'INVALID_PARAMS' } })
+  })
+
+  it('runs at most 8 background views, gives their slots to views that open when the window is full, and hands slots back as views close', async () => {
+    makeService()
+    client.holdCancel = true
+    const background = () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value)
+    const chips = Array.from({ length: 8 }, background)
+    // The ninth waits for a slot rather than failing, and runs nothing, even when its owner hides and shows again.
+    const ninth = owner()
+    chips.push(service.open(spec(['debug.synthetic.status'], { background: true }), ninth.value))
+    expect(client.streams).toHaveLength(liveServiceLimits.background)
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    chips[8].refresh()
+    ninth.show(false)
+    ninth.show(true)
+    await settle()
+    expect(client.streams).toHaveLength(8)
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    // Views the user opens fill the other 8 slots, then take background slots, newest first.
+    const views = Array.from({ length: liveServiceLimits.handles - liveServiceLimits.background }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    expect(client.streams).toHaveLength(16)
+    const extra = service.open(spec(['debug.synthetic.status']), owner().value)
+    expect(chips[7].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(client.streams[7].cancelled).toBe(true)
+    // The new view subscribes only once the stream it replaces has ended, so main never sees a 17th stream.
+    expect(client.streams).toHaveLength(16)
+    expect(extra.getSnapshot().status).toBe('connecting')
+    client.streams[7].end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(client.last.ended).toBe(false)
+    expect(chips.slice(0, 7).every(chip => chip.getSnapshot().waiting === undefined)).toBe(true)
+    // With every slot taken by views the user opened and no background view left running, one more is refused.
+    for (let i = 0; i < 7; i++) service.open(spec(['debug.synthetic.status']), owner().value)
+    for (const fake of client.streams.filter(fake => fake.cancelled && !fake.ended)) fake.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(chips.every(chip => chip.getSnapshot().waiting)).toBe(true)
+    expect(service.open(spec(['debug.synthetic.status']), owner().value).getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'TOO_MANY_REQUESTS' } })
+    const running = () => client.streams.filter(fake => !fake.ended && !fake.cancelled).length
+    expect(running()).toBe(16)
+    // A closed view's slot goes to the oldest waiting background view, after the closed view's stream has ended.
+    const streams = client.streams.length
+    views[0].dispose()
+    expect(chips[0].getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(streams)
+    client.streams.find(fake => fake.cancelled && !fake.ended)!.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(streams + 1)
+    expect(client.last.params.subscriptionId).not.toBe(chips[0].id)
+    expect(chips[0].getSnapshot().status).toBe('connecting')
+    expect(chips.slice(1).every(chip => chip.getSnapshot().waiting)).toBe(true)
+  })
+
+  it('never takes over an ended background view, which its owner disposes', async () => {
+    makeService()
+    const chips = Array.from({ length: liveServiceLimits.background }, () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value))
+    client.streams[7].end({ ok: false, error: 'Too many live views are reading this server.', code: 'TOO_MANY_REQUESTS' })
+    await settle()
+    expect(chips[7].getSnapshot().status).toBe('ended')
+    for (let i = 0; i < liveServiceLimits.handles - liveServiceLimits.background; i++) service.open(spec(['debug.synthetic.status']), owner().value)
+    service.open(spec(['debug.synthetic.status']), owner().value)
+    expect(chips[7].getSnapshot()).toMatchObject({ status: 'ended' })
+    expect(chips[7].getSnapshot().waiting).toBeUndefined()
+    expect(chips[6].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+  })
+
+  it('passes a freed slot over a waiting background view that has since lost its connection', async () => {
+    makeService()
+    const views = Array.from({ length: liveServiceLimits.handles }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    const gone = owner({ connectionId }), next = owner({ connectionId })
+    const first = service.open(spec(['debug.synthetic.status'], { background: true }), gone.value)
+    const second = service.open(spec(['debug.synthetic.status'], { background: true }), next.value)
+    // Waiting is not a pause: nothing hid the view.
+    expect(first.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(first.getSnapshot().pausedBy).toBeUndefined()
+    gone.move(undefined)
+    expect(first.getSnapshot().status).toBe('ended')
+    views[0].dispose()
+    await settle()
+    expect(first.getSnapshot().status).toBe('ended')
+    expect(second.getSnapshot().status).toBe('connecting')
+    expect(client.last.params.subscriptionId).toBe(second.id)
+  })
+
+  it('keeps a hidden background view dormant when a slot frees, and subscribes it when it shows', async () => {
+    makeService()
+    const views = Array.from({ length: liveServiceLimits.handles }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    const chip = owner({ visible: false })
+    const handle = service.open(spec(['debug.synthetic.status'], { background: true }), chip.value)
+    expect(handle.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    views[3].dispose()
+    await settle()
+    expect(handle.getSnapshot().waiting).toBeUndefined()
+    expect(handle.getSnapshot().status).toBe('dormant')
+    expect(client.streams).toHaveLength(16)
+    chip.show(true)
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(handle.getSnapshot().status).toBe('connecting')
+  })
+
+  it('gives a freed slot to a waiting background view only while fewer than 8 background views run', async () => {
+    makeService()
+    const chips = Array.from({ length: liveServiceLimits.background + 1 }, () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value))
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    view.dispose()
+    await settle()
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(client.streams).toHaveLength(liveServiceLimits.background + 1)
+    chips[0].dispose()
+    await settle()
+    expect(chips[8].getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(liveServiceLimits.background + 2)
+  })
+
+  it('gives a background view\'s slot on the same server to a view the backend refuses at its per-server cap', async () => {
+    const servers: Record<string, string> = { [connectionId]: 'sql01', [otherConnection]: 'sql01', third: 'sql02' }
+    makeService({ serverOf: id => servers[id] })
+    const busy = (fake: FakeStream) => fake.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    const elsewhere = service.open(spec(['debug.synthetic.status'], { background: true, connectionId: 'third' }), owner({ connectionId: 'third' }).value)
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    deliver(client.streams[0], opened(client.streams[0]))
+    deliver(client.streams[1], opened(client.streams[1]))
+    // A view the user opens on the same server, through another connection, is refused: the chips there give way, the
+    // other server's stay, and the view subscribes again once the chips' stream has ended.
+    const view = service.open(spec(['debug.synthetic.status'], { connectionId: otherConnection }), owner({ connectionId: otherConnection }).value)
+    busy(client.last)
+    await settle()
+    expect(client.streams[1].cancelled).toBe(true)
+    expect(client.streams[0].cancelled).toBe(false)
+    expect(chip.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(elsewhere.getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(4)
+    expect(client.last.params).toMatchObject({ connectionId: otherConnection, source: 'debug.synthetic' })
+    expect(view.getSnapshot().status).toBe('connecting')
+    deliver(client.last, opened(client.last))
+    expect(view.getSnapshot().status).toBe('live')
+    // Closing it hands the slot back to the chips.
+    view.dispose()
+    await settle()
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+    expect(client.last.params.connectionId).toBe(connectionId)
+  })
+
+  it('ends a view the backend refuses again, or that has no background view on its server to take over', async () => {
+    const servers: Record<string, string> = { [connectionId]: 'sql01', [otherConnection]: 'sql02' }
+    makeService({ serverOf: id => servers[id] })
+    const busy = (fake: FakeStream) => fake.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    const second = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    deliver(client.streams[0], opened(client.streams[0]))
+    deliver(client.streams[1], opened(client.streams[1]))
+    const other = service.open(spec(['debug.synthetic.status'], { connectionId: otherConnection }), owner({ connectionId: otherConnection }).value)
+    busy(client.last)
+    await settle()
+    expect(other.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+    // On the same server, one background view gives way; a second refusal ends the view rather than take another.
+    const view = service.open(spec(['debug.synthetic.status']), owner({ connectionId }).value)
+    busy(client.last)
+    await settle()
+    expect(second.getSnapshot().waiting).toBe(true)
+    busy(client.last)
+    await settle()
+    expect(view.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+  })
+
+  it('takes over no background view that is dormant, which holds no subscription the backend counts', async () => {
+    makeService({ serverOf: () => 'sql01' })
+    const hidden = owner()
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), hidden.value)
+    deliver(client.last, opened(client.last))
+    hidden.show(false)
+    vi.advanceTimersByTime(defaultSettings['liveData.stopAfterHiddenMinutes'] * 60_000 + 1000)
+    await settle()
+    expect(chip.getSnapshot().status).toBe('dormant')
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    client.last.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    await settle()
+    expect(view.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+  })
+
+  it('keeps a background view the backend refuses waiting, and tries it again when a view closes', async () => {
+    makeService()
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner().value)
+    client.last.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    await settle()
+    expect(chip.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(chip.getSnapshot().error).toBeUndefined()
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    view.dispose()
+    await settle()
+    expect(client.streams).toHaveLength(3)
+    expect(client.last.params.subscriptionId).not.toBe(chip.id)
+    expect(chip.getSnapshot().status).toBe('connecting')
   })
 
   it('never pauses hidden views while Pause live views that are hidden is off, and applies the setting at once', async () => {

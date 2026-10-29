@@ -37,7 +37,9 @@ export const liveArgsSchemas = {
     start: liveStartSchema.optional()
   }).strict(),
   // The Activity Monitor's probes take only their own settings (interval, pause) for now: no args.
-  activity: z.never()
+  activity: z.never(),
+  // Object Explorer's status chips take no args either.
+  explorer: z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

@@ -1,8 +1,16 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { afterEach, describe, expect, it } from 'vitest'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import { queryStatusModel, serverText, versionLabel, type QueryStatusInput } from '../src/renderer/src/results/query-status'
 import { statusLeads } from '../src/renderer/src/results/status'
 import { iconSpec } from '../src/shared/icons'
+import QueryStatusBar from '../src/renderer/src/QueryStatusBar'
+import type { Workbench } from '../src/renderer/src/core/workbench'
+import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
+import type { QueryTab } from '../src/renderer/src/documents'
+import type { LiveConnection } from '../src/renderer/src/services/connections'
+import { workbenchFixture } from './fixtures/workbench'
 
 const settings = defaultSettings
 const connection = { server: 'sql01', serverVersion: '16.00.4135', productVersion: '16.0.4135.4' }
@@ -13,7 +21,7 @@ const texts = (model: ReturnType<typeof queryStatusModel>) => model.segments.map
 describe('the query status bar', () => {
   it('shows SSMS\'s segments in its order: server (version), login (SPID), database, elapsed time and rows', () => {
     const model = queryStatusModel(input({ session: { login: 'CONTOSO\\ana', spid: 57 }, run: run('completed', { summary: { status: 'completed', elapsedMs: 3_725_000 } }) }))
-    expect(model).toMatchObject({ tone: 'ready', icon: 'check', text: 'Query executed successfully.', place: 'sql01 (16.0) | CONTOSO\\ana (57) | AppData' })
+    expect(model).toMatchObject({ tone: 'ready', icon: 'pass', text: 'Query executed successfully.', place: 'sql01 (16.0) | CONTOSO\\ana (57) | AppData' })
     expect(texts(model)).toEqual(['Server: sql01 (16.0)', 'Login: CONTOSO\\ana (57)', 'Database: AppData', 'Elapsed time: 01:02:05', 'Rows: 1,234 rows'])
   })
   it('says what the query is doing, in SSMS\'s words, with its colours', () => {
@@ -28,12 +36,28 @@ describe('the query status bar', () => {
     // The backend stopped mid-run, and Close Results keeps the sentence of how the run ended.
     expect(lead({ run: run('lost') })).toEqual(['error', 'error', 'Query failed.'])
     expect(lead({ run: run('closed', { summary: { status: 'cancelled', elapsedMs: 5 } }) })).toEqual(['error', 'debug-stop', 'Query was cancelled.'])
-    expect(lead({ run: run('closed') })).toEqual(['ready', 'check', 'Query executed successfully.'])
+    expect(lead({ run: run('closed') })).toEqual(['ready', 'pass', 'Query executed successfully.'])
+    // A run the backend lost, or main failed without a summary, keeps that after Close Results, never "successfully".
+    expect(lead({ run: run('closed', { closedFrom: 'lost' }) })).toEqual(['error', 'error', 'Query failed.'])
+    expect(lead({ run: run('closed', { closedFrom: 'failed' }) })).toEqual(['error', 'error', 'Query failed.'])
     expect(lead({ connection: { ...connection, lost: true }, run: run('completed') })).toEqual(['error', 'debug-disconnect', 'Connection lost.'])
     // The sentences are the output pane's.
     expect(statusLeads.completed).toBe('Query executed successfully.')
   })
+  it('shows only the connection\'s facts in the window\'s status bar: the results head says how the run went, its time and rows', () => {
+    const segment = (patch: Partial<QueryStatusInput>) => { const model = queryStatusModel(input({ variant: 'segment', session: { login: 'sa', spid: 52 }, ...patch })); return [model.tone, model.icon, model.text, ...texts(model)] }
+    const facts = ['Server: sql01 (16.0)', 'Login: sa (52)', 'Database: AppData']
+    expect(segment({})).toEqual(['ready', 'plug', 'Connected.', ...facts])
+    expect(segment({ running: true, run: run('running'), now: 63_500 })).toEqual(['ready', 'plug', 'Connected.', ...facts])
+    for (const status of ['completed', 'completedWithErrors', 'failed', 'cancelled', 'timedOut', 'lost', 'closed'] as const) expect(segment({ run: run(status) }), status).toEqual(['ready', 'plug', 'Connected.', ...facts])
+    expect(segment({ connection: { ...connection, lost: true }, run: run('failed') })).toEqual(['error', 'debug-disconnect', 'Connection lost.', 'Server: sql01 (connection lost)', 'Database: AppData'])
+    expect(segment({ connection: undefined })).toEqual(['disconnected', 'debug-disconnect', 'Disconnected.'])
+    // Its time and row settings are the classic bar's; the segment ignores them.
+    expect(segment({ settings: { ...settings, 'textEditor.statusBar.executionTime': 'end', 'textEditor.statusBar.showRowCount': true }, run: run('completed') })).toEqual(['ready', 'plug', 'Connected.', ...facts])
+  })
   it('counts elapsed time while a query runs, and shows the run\'s own time after', () => {
+    // A run without a summary took until it ended, not until now.
+    expect(texts(queryStatusModel(input({ run: run('closed', { closedFrom: 'lost', endedAt: 4500 }), now: 999_000 })))).toContain('Elapsed time: 00:00:03')
     expect(texts(queryStatusModel(input({ running: true, run: run('running', { rowsRead: 1 }), now: 63_500 })))).toEqual(['Server: sql01 (16.0)', 'Database: AppData', 'Elapsed time: 00:01:02', 'Rows: 1 row'])
     expect(texts(queryStatusModel(input({ run: run('failed', { rowsRead: 0, summary: { status: 'failed', elapsedMs: 900 } }) })))).toContain('Elapsed time: 00:00:00')
     // Before the first run, as in SSMS.
@@ -68,6 +92,27 @@ describe('the query status bar', () => {
   })
   it('uses codicons of the icon registry', () => {
     // The spinner spins with codicon-modifier-spin, which only the codicon font's glyphs take.
-    for (const icon of ['plug', 'debug-disconnect', 'loading', 'check', 'warning', 'error', 'debug-stop', 'watch', 'lock']) expect(iconSpec(icon)?.source, icon).toBe('codicon')
+    for (const icon of ['plug', 'debug-disconnect', 'loading', 'pass', 'warning', 'error', 'debug-stop', 'watch', 'lock']) expect(iconSpec(icon)?.source, icon).toBe('codicon')
+  })
+})
+
+describe('the query status facts\' environment tag', () => {
+  const cleanups: (() => void)[] = []
+  afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+  /** The facts for a query on a Production connection, as the window's status bar segment and as the query window bar. */
+  function render(variant: 'segment' | 'bar') {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    const theme = { subscribe: () => () => {}, getSnapshot: () => 0, accent: (color?: string) => color }
+    const workbench = { ...fixture, theme } as unknown as Workbench
+    const tab: QueryTab = fixture.documents.create('SQLQuery1.sql', 'SELECT 1', 'master', 'c1')
+    const connection: LiveConnection = { id: 'c1', server: 'sql01', database: 'master', serverVersion: '16.00.4135', generation: 1, options: { server: 'sql01', database: 'master', authentication: 'windows', trustServerCertificate: false, environment: 'Production' } }
+    return renderToStaticMarkup(createElement(WorkbenchProvider, { workbench, children: createElement(QueryStatusBar, { tab, connection, variant }) }))
+  }
+  it('leads the server in the query window bar, and is left out of the window\'s status bar segment, which shows it after the backend\'s state', () => {
+    expect(render('bar')).toContain('query-status-environment')
+    expect(render('bar')).toContain('PROD')
+    expect(render('segment')).not.toContain('query-status-environment')
+    expect(render('segment')).not.toContain('PROD')
   })
 })

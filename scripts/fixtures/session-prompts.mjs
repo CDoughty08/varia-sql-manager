@@ -11,7 +11,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
 import { explorerRow } from './explorer-tree.mjs'
-import { activeDocumentName, anyResultGrid, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
+import { crashRendererAndAwaitLoss } from './dialog-lifecycle.mjs'
+import { activeDocumentName, anyResultGrid, backendReady, banner, closeDocumentButton, documentTabs, executingMark, explorerToolbar, queryServer, querySession, toolbarButton } from './ui.mjs'
 
 const wait = ms => new Promise(done => setTimeout(done, ms))
 
@@ -39,8 +40,8 @@ const titles = application => application.evaluate(() => globalThis.variaPrompts
 const lastPrompt = application => application.evaluate(() => globalThis.variaPrompts.at(-1))
 const answerNext = (application, ...labels) => application.evaluate((_electron, queued) => { globalThis.variaAnswers.push(...queued) }, labels)
 const calls = async (control, method) => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(call => call.method === method)
-// Electron turns SIGTERM into app.quit() on Linux and macOS; on Windows the child is cmd.exe, so main is asked to quit.
-const quit = (application, child) => process.platform === 'win32' ? application.evaluate(({ app }) => { setImmediate(() => app.quit()) }) : child.kill('SIGTERM')
+// These are repeated user quits, each cancellable. Electron's POSIX SIGTERM handler restores SIG_DFL after its first signal.
+const quit = application => application.evaluate(({ app }) => { setImmediate(() => app.quit()) })
 
 /** A fresh app on the fake backend with its own profile and control directory, its prompts mocked, and the helpers the
  *  steps share. */
@@ -54,7 +55,7 @@ async function launch(launchOptions, name) {
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   page.on('dialog', () => {})
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await mockPrompts(application)
   const run = async sql => {
@@ -92,7 +93,7 @@ async function launch(launchOptions, name) {
 export async function sessionPrompts(launchOptions) {
   let app = await launch(launchOptions, 'sessions')
   try {
-    const { application, child, page, control, errors, state, run, connectDialog, tabs, server, session, newQuery, activeName, closeTab, idle, sessionCloses } = app
+    const { application, page, control, errors, state, run, connectDialog, tabs, server, session, newQuery, activeName, closeTab, idle, sessionCloses } = app
 
     // 1. F5 on a disconnected query opens Connect, and the query runs once connected; the status bar shows its login
     // and SPID, as SSMS does.
@@ -197,7 +198,7 @@ export async function sessionPrompts(launchOptions) {
     await expect(session).toHaveText('fake (56)')
     const fourth = await activeName()
     const asked = (await messages(application)).length
-    await quit(application, child)
+    await quit(application)
     await expect.poll(async () => (await messages(application)).length).toBe(asked + 1)
     await wait(1000)
     expect(state.exited).toBe(false)
@@ -211,13 +212,13 @@ export async function sessionPrompts(launchOptions) {
     await expect(executingMark(documentTabs(page))).toHaveCount(1)
     const executing = await activeName()
     const cancels = (await calls(control, 'query.cancel')).length
-    await quit(application, child)
+    await quit(application)
     await expect.poll(async () => (await messages(application)).length).toBe(asked + 2)
     expect(await lastPrompt(application)).toMatchObject({ title: 'Query executing', message: `${executing} is still executing.`, buttons: ['Cancel Query and Close', 'Keep Running'], defaultId: 1, cancelId: 1 })
     await idle()
     expect((await messages(application)).length).toBe(asked + 2)
     await answerNext(application, 'Cancel Query and Close')
-    await quit(application, child)
+    await quit(application)
     await expect.poll(async () => (await messages(application)).length).toBe(asked + 4)
     expect(await lastPrompt(application)).toMatchObject({ title: 'Uncommitted transactions', detail: `• ${third}\n• ${fourth} (2 nested levels)\n\nYes commits every nesting level; No rolls back.`, defaultId: 0, cancelId: 2 })
     await idle()
@@ -225,7 +226,7 @@ export async function sessionPrompts(launchOptions) {
     await expect(executingMark(documentTabs(page))).toHaveCount(1)
     expect(state.exited).toBe(false)
     await answerNext(application, 'Cancel Query and Close', 'Yes')
-    await quit(application, child)
+    await quit(application)
     await expect.poll(() => state.exited, { timeout: 30000 }).toBe(true)
     expect((await calls(control, 'query.cancel')).length).toBe(cancels + 1)
     expect((await sessionCloses()).slice(5)).toEqual(['commit', 'commit', 'rollback'])
@@ -243,12 +244,12 @@ export async function sessionPrompts(launchOptions) {
     await answerNext(application, 'hold')
     await closeTab(await activeName())
     await expect.poll(() => titles(application)).toEqual(['Uncommitted transactions'])
-    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+    await crashRendererAndAwaitLoss(application, 'session transaction prompt')
     await expect.poll(() => titles(application)).toEqual(['Uncommitted transactions', 'Workbench stopped'])
     expect(await application.evaluate(() => globalThis.variaAborted)).toEqual(['Uncommitted transactions'])
     // The page that asked is gone; the new one loads (Playwright's page for the crashed one cannot be used, so main asks).
     const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)
-    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await expect.poll(() => js("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     console.log('Session checks: a crash closes the open transaction prompt.')
   } finally { await app.cleanup() }
 }

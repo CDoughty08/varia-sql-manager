@@ -81,6 +81,18 @@ describe('Database Properties draft', () => {
     // What the draft sends, main's schema accepts.
     expect(actionRequestSchema.safeParse({ ...owner as DatabaseRequest, connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }).success).toBe(true)
   })
+  it('names the database it read, so a database that has taken the name since is never changed in its place', () => {
+    const model = databaseModel({ general: { ...databaseModel().general, id: 7 } })
+    const sent = request(model, draft => setOption(draft, 'autoClose', 'true')) as DatabaseRequest
+    expect(sent).toEqual({ action: 'properties', target, closeConnections: false, changes: { options: { autoClose: 'true' } }, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+    const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }
+    expect(actionRequestSchema.safeParse({ ...sent, ...ids }).success).toBe(true)
+    // Main refuses an identity the describe could not have written, and one on another action.
+    for (const identity of [{ id: 0, created: sent.identity!.created }, { id: 7, created: '2026-01-02 03:04:05' }, { id: 7, created: `${sent.identity!.created}\n` }, { id: 7.5, created: sent.identity!.created }, { ...sent.identity, extra: 1 }]) {
+      expect(actionRequestSchema.safeParse({ ...sent, ...ids, identity }).success, JSON.stringify(identity)).toBe(false)
+    }
+    expect(actionRequestSchema.safeParse({ action: 'rename', ...ids, target: { kind: 'database', name: 'AppData' }, newName: 'B', identity: sent.identity }).success).toBe(false)
+  })
   it('shows a problem instead of sending a number out of range or an empty owner', () => {
     expect(request(undefined, draft => setOption(draft, 'maxDop', '40000'))).toEqual({ problem: 'Max DOP must be a whole number from 0 to 32,767.' })
     expect(request(undefined, draft => setOption(draft, 'maxDopForSecondary', 'all'))).toEqual({ problem: 'Max DOP for Secondary must be PRIMARY or a whole number from 0 to 32,767.' })
