@@ -8,7 +8,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
-import { enlargeOutput } from './fixtures/results-pane.mjs'
+import { enlargeOutput, sizeResultStack } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
@@ -556,9 +556,13 @@ try {
   await expect(messagesStrip(page)).toHaveAttribute('aria-expanded', 'true')
   await expect.poll(() => inView(errorMessages(page).first())).toBe(true)
   await messagesStrip(page).click()
-  // One set in a pane too short for a caption, a header and four rows shows its grid without the caption.
+  // One set in a pane too short for a caption, a header and four rows shows its grid without the caption. The window
+  // size alone does not make it that short: Reset restores the split of the first window, whose size differs between
+  // machines (a CI display can be smaller than it), and later height changes all go to the output pane. So the sash
+  // sizes the stack to fit a caption, a header and three rows.
   await resize(1024, 700)
   await run('-- varia-fake: sets=N1*3')
+  expect(Math.abs(await sizeResultStack(page, 26 + 22 + 3 * 20 + 2) - (26 + 22 + 3 * 20 + 2))).toBeLessThanOrEqual(1)
   await expect.poll(() => page.locator(part.resultStack).evaluate(stack => stack.clientHeight)).toBeLessThan(26 + 22 + 4 * 20 + 2)
   await expect(page.locator(part.resultCaption)).toHaveCount(0)
   await expect.poll(() => rowsShown(0)).toBeGreaterThanOrEqual(1)

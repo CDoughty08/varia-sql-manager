@@ -44,27 +44,50 @@ internal static class ExplorerChecks
         {
             (prefix + "0000000a", "0", "1", "0", "1"), (prefix + "0000000b", "0", "1", "1", "1"), (prefix + "0000000c", "0", "1", "1", "0"),
             (prefix + "0000000d", "0", "1", "1", null), (prefix + "0000000e_off", "6", "1", "0", null), (prefix + "0000000f", "0", "0", "1", "1"),
-            ("VariaScratch_other", "6", "1", "0", null)
+            (prefix + "00000010_rs", "1", "1", "0", null), ("VariaScratch_other", "6", "1", "0", null)
+        };
+        // Stale backups of gone databases: database, device, the server's backup folder, version.
+        const string folder = "/var/opt/mssql/data/";
+        var backups = new string?[][]
+        {
+            [prefix + "00000011_rs", folder + prefix + "00000011_rs.bak", folder, "16"], [prefix + "00000012_act", "NUL", @"C:\Backup", "16"],
+            [prefix + "00000013_rs", "/home/someone/" + prefix + "00000013_rs.bak", folder, "14"], [prefix + "00000014_rs", folder + prefix + "00000014_rs.bak", folder, "14"],
+            ["VariaScratch_other", folder + "VariaScratch_other.bak", folder, "16"]
         };
         var markers = new List<string>();
         var dropped = new List<string>();
+        var drops = new List<string>();
+        var deleted = new List<string>();
+        var forgotten = new List<string>();
         Task<SqlRun> Run(string sql, string database)
         {
             static SqlRun Rows(params string?[][] rows) => new("completed", null, [[.. rows]]);
             if (sql.StartsWith("SELECT d.name", StringComparison.Ordinal)) return Task.FromResult(Rows([.. databases.Select(item => new string?[] { item.Name, item.State, item.Stale, item.Access })]));
+            if (sql == ScratchDatabase.StaleBackupsSql) return Task.FromResult(Rows(backups));
+            if (sql.StartsWith("EXEC master.sys.xp_delete_file", StringComparison.Ordinal)) deleted.Add(sql);
+            if (sql.StartsWith("EXEC msdb.dbo.sp_delete_database_backuphistory", StringComparison.Ordinal)) forgotten.Add(sql);
             if (sql.Contains("varia.scratch", StringComparison.Ordinal))
             {
                 var item = databases.Single(item => sql.Contains("N'" + item.Name + "'", StringComparison.Ordinal));
                 markers.Add(item.Name);
                 return Task.FromResult(item.Marker is null ? new SqlRun("failed", "The server principal is not able to access the database.", []) : Rows([item.Marker]));
             }
-            if (sql.Contains("DROP DATABASE", StringComparison.Ordinal)) dropped.Add(databases.Single(item => sql.Contains("DROP DATABASE [" + item.Name + "]", StringComparison.Ordinal)).Name);
+            if (sql.Contains("DROP DATABASE", StringComparison.Ordinal))
+            {
+                dropped.Add(databases.Single(item => sql.Contains("DROP DATABASE [" + item.Name + "]", StringComparison.Ordinal)).Name);
+                drops.Add(sql);
+            }
             return Task.FromResult(Rows());
         }
         await ScratchDatabase.SweepAsync(Run, _ => { });
-        check(dropped.SequenceEqual([prefix + "0000000b", prefix + "0000000e_off"]) && markers.SequenceEqual([prefix + "0000000b", prefix + "0000000c", prefix + "0000000d"]),
-            "the stale-scratch sweep drops only marked online databases and offline ones; an online one whose marker cannot be read is left alone: dropped "
+        check(dropped.SequenceEqual([prefix + "0000000b", prefix + "0000000e_off", prefix + "00000010_rs"]) && markers.SequenceEqual([prefix + "0000000b", prefix + "0000000c", prefix + "0000000d"])
+            && !drops[0].Contains("SET ONLINE", StringComparison.Ordinal) && drops[1].Contains("SET ONLINE", StringComparison.Ordinal) && !drops[2].Contains("SET ONLINE", StringComparison.Ordinal),
+            "the stale-scratch sweep drops only marked online databases and ones not online, bringing only an offline one online first (a restoring one cannot be); an online one whose marker cannot be read is left alone: dropped "
             + string.Join(", ", dropped) + "; marker read for " + string.Join(", ", markers));
+        check(deleted.SequenceEqual(["EXEC master.sys.xp_delete_files N'" + folder + prefix + "00000011_rs.bak';", "EXEC master.sys.xp_delete_file 0, N'" + folder + prefix + "00000014_rs.bak';"])
+            && forgotten.SequenceEqual(new[] { "00000011_rs", "00000012_act", "00000013_rs", "00000014_rs" }.Select(suffix => "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = N'" + prefix + suffix + "';")),
+            "the sweep deletes a gone scratch database's Linux backup file only where the checks write it (named after it in the backup folder; xp_delete_files from 2019, xp_delete_file before), "
+            + "never NUL, another path or another name's, and forgets the backup history of every gone scratch database: deleted " + string.Join(" ", deleted));
     }
 
     private static void Catalog(Action<bool, string> check)

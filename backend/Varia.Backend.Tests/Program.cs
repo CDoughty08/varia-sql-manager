@@ -196,6 +196,32 @@ Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
     "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+{
+    // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
+    const string rs = "VariaScratch_20261018120000_0123abcd_rs";
+    var windows = ScratchDatabase.Backup.For(rs, "Windows", @"C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\Backup", 17);
+    var linux = ScratchDatabase.Backup.For(rs, "Linux", "/var/opt/mssql/data/", 16);
+    static bool Refused(Func<ScratchDatabase.Backup> make)
+    {
+        try { make(); return false; }
+        catch (InvalidOperationException) { return true; }
+    }
+    Check(windows is { Device: "NUL", IsFile: false } && ScratchDatabase.Backup.For(rs, null, null, 13).Device == "NUL"
+        && ScratchDatabase.RestoringSql(windows) == "ALTER DATABASE [" + rs + "] SET RECOVERY FULL;\nBACKUP DATABASE [" + rs + "] TO DISK = N'NUL';\nBACKUP LOG [" + rs + "] TO DISK = N'NUL' WITH NORECOVERY;"
+        && linux is { Device: "/var/opt/mssql/data/" + rs + ".bak", IsFile: true } && ScratchDatabase.Backup.For(rs, "Linux", "/var/opt/mssql/backup", 17).Device == "/var/opt/mssql/backup/" + rs + ".bak"
+        && ScratchDatabase.RestoringSql(linux) == "ALTER DATABASE [" + rs + "] SET RECOVERY FULL;\nBACKUP DATABASE [" + rs + "] TO DISK = N'/var/opt/mssql/data/" + rs + ".bak';\n"
+            + "BACKUP LOG [" + rs + "] TO DISK = N'/var/opt/mssql/data/" + rs + ".bak' WITH NORECOVERY;"
+        && linux.DatabaseSql("COPY_ONLY") == "BACKUP DATABASE [" + rs + "] TO DISK = N'/var/opt/mssql/data/" + rs + ".bak' WITH COPY_ONLY;"
+        && !ScratchDatabase.RestoringSql(linux).Contains("/dev/null", StringComparison.Ordinal) && !ScratchDatabase.Backup.FactsSql.Contains("/dev/null", StringComparison.Ordinal)
+        && ScratchDatabase.Backup.FactsSql.Contains("sys.sp_executesql N'SELECT @platform = host_platform FROM sys.dm_os_host_info;'", StringComparison.Ordinal)
+        && ScratchDatabase.Backup.FactsSql.Contains("SERVERPROPERTY('InstanceDefaultBackupPath')", StringComparison.Ordinal)
+        && ScratchDatabase.Backup.DeleteSql(linux.Device, 15) == "EXEC master.sys.xp_delete_files N'/var/opt/mssql/data/" + rs + ".bak';"
+        && ScratchDatabase.Backup.DeleteSql(linux.Device, 14) == "EXEC master.sys.xp_delete_file 0, N'/var/opt/mssql/data/" + rs + ".bak';"
+        && Refused(() => ScratchDatabase.Backup.For("Sales", "Linux", "/var/opt/mssql/data/", 16)) && Refused(() => ScratchDatabase.Backup.For("VariaScratch_20261018120000_0123abcd_tbd.]", "Linux", "/var/opt/mssql/data/", 16))
+        && Refused(() => ScratchDatabase.Backup.For(rs, "Linux", null, 16)) && Refused(() => ScratchDatabase.Backup.For(rs, "Linux", @"C:\Backup", 16)),
+        "scratch backups go to NUL on Windows and, since SQL Server on Linux cannot write /dev/null, to one file named after the scratch database in its backup folder (full and tail-log backup alike), "
+        + "deleted with xp_delete_files from 2019 or xp_delete_file before; only a sweepable scratch name of plain characters names a file, and only in a Linux folder");
+}
 SsisFixtureChecks.Run(Check);
 Check(LiveResultChecks.CancelBound(5000, 1200) == 5000 && LiveResultChecks.CancelBound(5000, 4000) == 8000, "a cancel's time bound keeps its floor and grows with a slower reference");
 QueryResult Stopped(string status, params long[] rowsRead) => new([.. rowsRead.Select((read, index) => new ResultDescriptor(1, index, 1, 1, "rows", [], read, 1, 1, 0, 0, "complete", null, true))],
