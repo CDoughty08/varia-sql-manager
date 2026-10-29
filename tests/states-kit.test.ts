@@ -58,6 +58,11 @@ describe('states kit words', () => {
       .toBe('Loading Tables on localhost\nCode: SQL_ERROR\nMessage: Invalid object name \'dbo.Nope\'.\nSQL Server: Msg 208, Level 16, State 1, Server localhost')
     expect(errorDetailsText({ message: 'The backend stopped.' })).toBe('Message: The backend stopped.')
     expect(errorDetailsText({ message: 'Failed.', code: 'BACKEND_ERROR', extra: '  System.IO.FileNotFoundException\n' })).toBe('Code: BACKEND_ERROR\nMessage: Failed.\n\nSystem.IO.FileNotFoundException')
+    // The backend's exception types for BACKEND_ERROR (the generic sentence hides them), and a connect failure's reason.
+    expect(errorDetailsText({ message: 'The backend operation failed.', code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' }, context: 'Connecting to localhost' }))
+      .toBe('Connecting to localhost\nCode: BACKEND_ERROR\nMessage: The backend operation failed.\nException: System.DllNotFoundException (0x80131524)')
+    expect(errorDetailsText({ message: 'Not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, class: 20, state: 0, server: 'sql01', reason: 'certificate' } }))
+      .toBe('Code: SQL_ERROR\nMessage: Not trusted.\nSQL Server: Msg -2146893019, Level 20, State 0, Server sql01\nReason: certificate')
     const long = errorDetailsText({ message: 'x'.repeat(40_000) })
     expect(long).toHaveLength(maxErrorDetails)
     expect(long.endsWith('…')).toBe(true)
@@ -99,6 +104,9 @@ describe('states kit components', () => {
     expect(markup.startsWith('<div class="inline-error">')).toBe(true)
     const quiet = html(createElement(InlineError, { message: 'Shown again.', role: 'status', copy: false }))
     expect(quiet).toBe('<div class="inline-error"><span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span><div class="inline-error-body"><p class="inline-error-message" role="status">Shown again.</p></div></div>')
+    // A note (why nothing here fixes it) is part of the live sentence, so it is read with it and lines up with it.
+    expect(html(createElement(InlineError, { message: 'Not trusted.', note: 'Install a trusted certificate.', copy: false })))
+      .toContain('<p class="inline-error-message" role="alert">Not trusted.<span class="inline-error-note">Install a trusted certificate.</span></p>')
   })
   it('draw bounded placeholder rows that say what is loading', () => {
     expect(html(createElement(Skeleton, { label: 'Loading databases' }))).toBe('<div class="skeleton" role="status"><span class="visually-hidden">Loading databases…</span>'

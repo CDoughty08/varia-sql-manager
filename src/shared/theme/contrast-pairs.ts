@@ -91,7 +91,11 @@ export const contrastPairs: readonly ContrastPair[] = [
     ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
-  ...text(['notifications.foreground'], ['notifications.background']),
+  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
+  // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
+  ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
+  ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
@@ -201,7 +205,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
   ...text(['errorForeground'], hovered(...editor)),
   ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
-  ...graphic(['sash.hoverBorder'], panel)
+  ...graphic(['sash.hoverBorder'], panel),
+  // Property sheets in a document (Database Properties): a switch's outline and track, on and off, and its thumb in each
+  // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
+  ...graphic(['input.border', 'button.background'], editor),
+  ...graphic(['descriptionForeground'], input),
+  ...graphic(['button.foreground'], [...editor, 'button.background'])
 ]
 
 /**

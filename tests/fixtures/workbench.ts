@@ -51,7 +51,10 @@ import { designerContribution } from '../../src/renderer/src/contributions/desig
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
+import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
+import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
+import { NotificationService } from '../../src/renderer/src/core/notifications'
 import { SettingsService } from '../../src/renderer/src/settings/SettingsService'
 import { defaultSettings, scriptingOptionsFrom, type SettingsValues } from '../../src/shared/settings/catalog'
 import type { SettingsState } from '../../src/shared/settings/schema'
@@ -292,7 +295,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
+  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   const inputMode = new InputModeService(fakeInputMode())
+  const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const context = new ContextKeyService({
     platform,
     documents,
@@ -310,6 +315,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recentFiles,
     recovery,
     designer: designers.context,
+    properties: properties.context,
+    notifications,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -363,7 +370,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
-    ssisProperties
+    ssisProperties,
+    properties,
+    notifications
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -384,7 +393,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
-    settingsContribution(workbench)
+    settingsContribution(workbench),
+    notificationsContribution(workbench)
   ]
   /** Starts a query on the active document that stays running until `finish` is called. */
   const startQuery = () => {
@@ -414,9 +424,11 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     dialogs.dispose()
     designers.dispose()
     ssisProperties.dispose()
+    properties.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     settings.dispose()
+    notifications.dispose()
     documents.dispose()
     backend.dispose()
   }
@@ -441,7 +453,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     dialogs,
     designers,
     ssisProperties,
+    properties,
     focusEditor,
+    notifications,
     queries,
     files,
     recentFiles,

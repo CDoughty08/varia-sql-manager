@@ -3,7 +3,7 @@ name: CI
 on:
   # Any base branch, so pull requests stacked on another open pull request are tested too.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   workflow_dispatch:
@@ -31,7 +31,8 @@ jobs:
     name: Linux (live SQL Server, Electron smoke)
     if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the build and checks before them.
+    timeout-minutes: 90
     services:
       sql:
         image: mcr.microsoft.com/mssql/server:2022-latest
@@ -68,6 +69,7 @@ jobs:
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci
       - name: Type check, .NET checks (offline and live), vitest, production build
+        id: check
         run: npm run check
       - name: Integrated authentication without a Kerberos ticket
         # Linux connects with integrated authentication through GSSAPI (SqlClient's managed SNI). With no ticket, the backend
@@ -80,6 +82,7 @@ jobs:
           dpkg -s libgssapi-krb5-2 > /dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y libgssapi-krb5-2; }
           npx vitest run tests/kerberos-live.test.ts
       - name: Prepare the Electron sandbox and display
+        id: display
         # Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor; Chromium's sandbox needs them because
         # npm's chrome-sandbox helper is not setuid root. The smoke tests launch with chromiumSandbox (scripts/*-smoke.mjs),
         # so the runner user gets the real sandbox instead of Playwright's Linux default of --no-sandbox.
@@ -88,7 +91,8 @@ jobs:
           command -v xvfb-run || { sudo apt-get update && sudo apt-get install -y xvfb; }
       - name: IPC benchmarks
         # Check exports and performance before the long smoke suite. Floors are enforced on Linux only; the table goes
-        # to the job summary.
+        # to the job summary. The smoke steps below still run when this one fails (the job fails all the same), so one run
+        # reports both.
         timeout-minutes: 15
         run: |
           npm run bench
@@ -96,14 +100,19 @@ jobs:
           xvfb-run -a -s "-screen 0 1600x1000x24" npm run bench:grid -- --live
           node scripts/check-bench.mjs --enforce
       - name: Electron smoke tests
-        timeout-minutes: 25
+        # After any earlier failure but the build's or the display's, so a benchmark or Kerberos failure hides no smoke result.
+        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
+        # The suites took 24 min 49 s on PR #51 against the old 25, and wave 4 keeps adding to them.
+        timeout-minutes: 45
         run: xvfb-run -a -s "-screen 0 1600x1000x24" npm run test:smoke
       - name: Scripting smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display, and Script As dialogs and nested submenus must fit it everywhere.
+        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/scripting-smoke.mjs
       - name: Results grid smoke test on a 1024x768 display
         # Windows runners have a 1024x768 display; the grid, its strips and the toolbar must work and fit there too.
+        if: (success() || failure()) && steps.check.outcome == 'success' && steps.display.outcome == 'success'
         timeout-minutes: 8
         run: xvfb-run -a -s "-screen 0 1024x768x24" node scripts/results-smoke.mjs
       - name: Upload smoke-test screenshots
@@ -125,14 +134,15 @@ jobs:
 
   desktop:
     name: ${{ matrix.os }}
-    # Windows minutes bill at 2x and macOS at 10x, so draft pull requests run only the Linux job.
-    if: (github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none') && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # Every pull request, drafts included: the repository is public, so these runners cost nothing.
+    if: github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    # Room for every timed step below (tests/ci-workflow.test.ts) plus the build and checks before them.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
         with:
@@ -148,17 +158,19 @@ jobs:
           cache-dependency-path: backend/Varia.Backend/packages.lock.json
       - run: npm ci
       - name: Type check, offline .NET checks, vitest, production build
+        id: check
         run: npm run check
       - name: Electron smoke tests
         # The smoke suites assert Windows/Linux window chrome (controls overlay, hidden menu bar, Ctrl shortcuts), so on
         # macOS they fail at the first check; they run there once its native menu bar and Cmd shortcuts are covered.
         if: runner.os != 'macOS'
-        # Measured stage timings project the complete Windows suite past 21 minutes with live-view and lifecycle coverage.
-        timeout-minutes: 25
+        # The complete Windows suite passed 21 minutes with live-view and lifecycle coverage, and wave 4 keeps adding to it.
+        timeout-minutes: 45
         run: npm run test:smoke
       - name: IPC benchmarks (report only)
         # The IPC and results grid benchmarks. Shared Windows and macOS runners vary too much for floors; the end-to-end
-        # runs follow the smoke tests' platforms.
+        # runs follow the smoke tests' platforms. They report even after a smoke failure.
+        if: (success() || failure()) && steps.check.outcome == 'success'
         timeout-minutes: 15
         shell: bash
         run: |

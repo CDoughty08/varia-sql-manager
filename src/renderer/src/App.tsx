@@ -18,6 +18,7 @@ import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import TableDesigner from './designer/TableDesigner'
 import SsisProperties from './ssis/SsisProperties'
+import DatabaseProperties from './properties/DatabaseProperties'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -33,6 +34,7 @@ import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
+import Toasts from './kit/Toasts'
 import { useMenuTarget } from './menus/useMenuTarget'
 import { connectionDefaults } from '../../shared/connections'
 
@@ -72,6 +74,7 @@ export default function App() {
   const editorDialogs = useServiceSnapshot(workbench.editorDialogs)
   const { open: recoveryOpen } = useServiceSnapshot(workbench.recovery)
   const { values: settings } = useServiceSnapshot(workbench.settings)
+  const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -91,9 +94,10 @@ export default function App() {
   const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
-  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
-  // SSIS properties have a server and database, but they are their own: the toolbar's pickers do not change them.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isCustom = isCustomKind(activeKind)
+  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer,
+  // Database Properties and SSIS properties have a server and database, but they are their own: the toolbar's pickers do not change them.
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties'
+  const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -205,6 +209,9 @@ export default function App() {
 
   async function disconnect(id: string) {
     if (queries.isConnectionRunning(id)) return
+    // A document's Apply or Save on it would be cancelled partway without asking (its menu item is greyed for the same reason).
+    const busy = documents.connectionBusy(id)
+    if (busy) { setExplorerError(busy); return }
     try {
       await documents.runTask(async () => {
         // Its queries' open transactions are asked about once, then each is committed or rolled back in its own session;
@@ -264,9 +271,10 @@ export default function App() {
         </div> })}</div>
         {active.id ? <>
           {statusTop && statusBar}
-          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or SSIS properties show. */}
+          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer, Database Properties or SSIS properties show. */}
           <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
+          {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
           {isSsisDocumentKind(activeKind) && <SsisProperties key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
@@ -279,6 +287,7 @@ export default function App() {
     <ObjectDialog />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
+    <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
     <MenuLayer />
   </div>

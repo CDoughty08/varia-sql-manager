@@ -1,6 +1,6 @@
 import type { DocumentKind, SqlFile } from '../../shared/contracts'
 import type { IconId } from '../../shared/icons'
-import { isSsisDocumentKind, ssisDocumentSpecs, type SsisDocumentKind } from '../../shared/ssis/catalog.ts'
+import { ssisDocumentKinds, ssisDocumentSpecs, type SsisDocumentKind } from '../../shared/ssis/catalog.ts'
 
 export interface QueryDocument {
   readonly id: string
@@ -14,12 +14,12 @@ export interface QueryDocument {
    *  lost); its next execution says so before its own messages. */
   readonly sessionNotice?: SessionNotice
   /** Absent for a query; an XML, JSON or plan value opened from the results has no connection and never executes; a table
-   *  designer and an SSIS Catalog object's properties have no text at all. */
+   *  designer, Database Properties and an SSIS Catalog object's properties have no text at all. */
   readonly kind?: Exclude<WorkbenchDocumentKind, 'sql'>
 }
-/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer
- *  or an SSIS Catalog object's properties, which live only in the renderer. */
-export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | SsisDocumentKind
+/** What a tab holds: a shared DocumentKind (its text crosses IPC to be saved and kept by AutoRecover), or a table designer,
+ *  Database Properties or an SSIS Catalog object's properties, which live only in the renderer. */
+export type WorkbenchDocumentKind = DocumentKind | 'tableDesigner' | 'databaseProperties' | SsisDocumentKind
 /** Documents whose content is not text in the editor: a provider saves and closes them (DocumentService.registerProvider). */
 export type CustomDocumentKind = Exclude<WorkbenchDocumentKind, DocumentKind>
 
@@ -31,9 +31,11 @@ export type SessionNotice = 'restarted' | 'lost'
 export const documentKind = (document: Pick<QueryDocument, 'kind'> | undefined): WorkbenchDocumentKind => document?.kind ?? 'sql'
 /** A query tab, as opposed to a value opened from the results: only queries connect, execute, and have results. */
 export const isQueryDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && documentKind(document) === 'sql'
-/** A document a provider owns (DocumentService.registerProvider): a table designer or an SSIS properties document. */
-export const isCustomKind = (kind: WorkbenchDocumentKind): kind is CustomDocumentKind => kind === 'tableDesigner' || isSsisDocumentKind(kind)
-/** A document whose content is text in the editor (a query or a value), as opposed to a table designer or SSIS properties. */
+const customKinds: ReadonlySet<WorkbenchDocumentKind> = new Set<CustomDocumentKind>(['tableDesigner', 'databaseProperties', ...ssisDocumentKinds])
+/** A kind without text in the editor: its provider (DocumentService.registerProvider) saves and closes it. */
+export const isCustomKind = (kind: WorkbenchDocumentKind | undefined): kind is CustomDocumentKind => !!kind && customKinds.has(kind)
+/** A document whose content is text in the editor (a query or a value), as opposed to a table designer, Database Properties
+ *  or SSIS properties. */
 export const isTextDocument = (document: Pick<QueryDocument, 'kind'> | undefined): boolean => !!document && !isCustomKind(documentKind(document))
 type KindInfo = { readonly language: string; readonly icon: IconId; readonly label: string; readonly value: string; readonly blankName: string }
 /**
@@ -46,6 +48,7 @@ export const kindInfo: Readonly<Record<WorkbenchDocumentKind, KindInfo>> = {
   json: { language: 'json', icon: 'json', label: 'JSON document', value: 'JSON', blankName: 'JSON' },
   sqlplan: { language: 'xml', icon: 'execution-plan', label: 'Execution plan', value: 'execution plan', blankName: 'PLAN' },
   tableDesigner: { language: '', icon: 'table', label: 'Table Designer', value: 'table', blankName: 'Table Designer' },
+  databaseProperties: { language: '', icon: 'settings-gear', label: 'Database Properties', value: 'database properties', blankName: 'Database Properties' },
   ...Object.fromEntries((Object.keys(ssisDocumentSpecs) as SsisDocumentKind[]).map(kind => [kind, { language: '', icon: ssisDocumentSpecs[kind].icon, label: ssisDocumentSpecs[kind].title, value: ssisDocumentSpecs[kind].noun, blankName: ssisDocumentSpecs[kind].title }])) as Record<SsisDocumentKind, KindInfo>
 }
 

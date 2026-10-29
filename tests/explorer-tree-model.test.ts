@@ -5,6 +5,7 @@ import {
   computeWindow, flatten, needsQuery, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
+import { meterWork } from './fixtures/work-meter'
 
 /** A node table built by hand: `add` appends a child (or a root), and fields can be set on the result. */
 function table() {
@@ -116,9 +117,16 @@ describe('flatten', () => {
         return id
       } })
     }
-    const rows = t.rows()
+    const { result: rows, work } = meterWork(() => t.rows())
     expect(rows.count).toBe(250_000 + 6)
     expect(visits.every(count => count === 1)).toBe(true)
+    // Its five row arrays grow by doubling from 256 rows: O(log n) allocations, and allocating and copying O(n) elements in
+    // all. A fixed growth step, a copy per row or a second pass is quadratic or more work, whatever the runner's speed.
+    const arrays = 5, growths = Math.ceil(Math.log2(rows.count / 256))
+    expect(work.allocations, JSON.stringify(work)).toBeLessThanOrEqual(arrays * (growths + 1))
+    expect(work.allocated, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 4 * rows.count)
+    expect(work.elements, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 2 * rows.count)
+    expect([work.characters, work.costly]).toEqual([0, 0])
     expect(Array.from(rows.ids.subarray(0, prefix.length))).toEqual(prefix)
     expect(children.every((node, index) => rows.nodes[index + prefix.length] === node)).toBe(true)
     expect(rows.nodes.at(-1)).toBe(security)
@@ -289,11 +297,21 @@ describe('type-ahead', () => {
       } })
     }
     // Count actual matching work, independent of shared-runner scheduling or garbage-collection pauses.
-    expect(typeAhead(rows, 0, 'zzz')).toBe(-1)
+    const missed = meterWork(() => typeAhead(rows, 0, 'zzz'))
+    expect(missed.result).toBe(-1)
     expect(visited).toHaveLength(rows.count)
     expect(new Set(visited).size).toBe(rows.count)
+    // Matching a row scans its label at most once plus the prefix twice (at the start and after the schema), with no
+    // locale-aware, Unicode or regular-expression call per row: only the buffer is lowercased, once.
+    const longest = Math.max(...labels.map(label => label.length))
+    expect(missed.work.characters, JSON.stringify(missed.work)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'z'.length) + 'zzz'.length)
+    expect(missed.work.costly, JSON.stringify(missed.work)).toBeLessThanOrEqual(1)
+    // Nor any array work per row (a few dozen elements is the buffer's own handling).
+    expect(missed.work.elements + missed.work.allocated, JSON.stringify(missed.work)).toBeLessThanOrEqual(1000)
     visited.length = 0
-    const last = typeAhead(rows, 0, 'table99999')
+    const { result: last, work: found } = meterWork(() => typeAhead(rows, 0, 'table99999'))
+    expect(found.characters, JSON.stringify(found)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'table99999'.length) + 'table99999'.length)
+    expect(found.costly).toBeLessThanOrEqual(1)
     expect(nodes.get(rows.ids[last])!.label).toBe('dbo.table99999')
     expect(visited).toHaveLength(rows.count)
     expect(new Set(visited).size).toBe(rows.count)

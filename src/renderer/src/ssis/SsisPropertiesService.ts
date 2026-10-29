@@ -151,7 +151,8 @@ export class SsisPropertiesService extends SnapshotStore<SsisPropertiesSnapshot>
   private provider(kind: SsisDocumentKind): CustomDocumentProvider {
     return {
       kind,
-      // Read-only: there is never anything to save.
+      // Read-only: there is never anything to save, so File › Save All passes it by.
+      inSaveAll: false,
       save: async () => true,
       canClose: () => undefined,
       revision: () => 0,

@@ -10,7 +10,7 @@ import {
 } from './menus'
 
 // A Record so that a new Category cannot be left out of the document: its commands would otherwise vanish from it.
-const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, 'Integration Services': true, Preferences: true, Developer: true, Help: true }
+const categoryOrder: Readonly<Record<Category, true>> = { File: true, Edit: true, View: true, Query: true, Connection: true, 'Object Explorer': true, 'Table Designer': true, 'Database Properties': true, 'Integration Services': true, Preferences: true, Developer: true, Help: true }
 const categories: readonly (Category | undefined)[] = [...Object.keys(categoryOrder) as Category[], undefined]
 const platformNames: Readonly<Record<Platform, string>> = { win32: 'Windows', linux: 'Linux', darwin: 'macOS' }
 const menuNames: Readonly<Record<MenuId, string>> = {

@@ -5,7 +5,7 @@ import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionRequestSchema } from '../shared/actions/schema.ts'
-import { ssisDescribeSchema } from '../shared/ssis/schema.ts'
+import { ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
@@ -39,6 +39,7 @@ export const requestSchemas = {
   'actions.script': actionRequestSchema,
   'actions.execute': actionRequestSchema,
   'ssis.describe': ssisDescribeSchema,
+  'ssis.execute': ssisExecuteSchema,
   'activity.details': activityDetailsRequestSchema,
   'activity.kill': activityKillRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>

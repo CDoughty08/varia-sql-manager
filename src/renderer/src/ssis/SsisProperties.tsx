@@ -43,7 +43,7 @@ export default function SsisProperties({ documentId }: { readonly documentId: st
   const notice = hasNotice(state) ? <SsisNotice state={state} close={close} retry={retry} /> : undefined
   const sections = ssisSectionViews(state)
   return <DocumentFrame id={ssisFrameId(documentId)} title={displayText(title)} subtitle={spec.title} crumbs={ssisCrumbs(state)} state={stateView} verbs={verbs} facts={ssisFacts(state.model)}
-    notice={state.model ? notice : undefined} attributes={{ 'data-ssis-document': documentId }}
+    banner={state.model ? notice : undefined} attributes={{ 'data-ssis-document': documentId }}
     {...sections.length ? { sections, frame: state.frame, onFrame: frame => service.setFrame(documentId, frame) } : {}}>
     {/* A first read retried keeps its failure (and Retry, which keeps focus) above the skeleton while it reads. */}
     {state.loading ? <>{notice}<Skeleton rows={6} label={`Reading the ${spec.noun}`} /></> : notice}

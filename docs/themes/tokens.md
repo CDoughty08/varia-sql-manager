@@ -91,7 +91,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `errorForeground` | VS Code | `$error` | `#f39a9a` | `#b42229` | Error text. |
 | `warningForeground` | Varia | `$warning` | `#e4bb6a` | `#875800` | Warning text. |
 | `successForeground` | Varia | `$success` | `#74d19c` | `#146f3b` | Success text, such as the Execute button and confirmations. |
-| `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. Not used yet; reserved for notifications. |
+| `infoForeground` | Varia | `$info` | `#8f9cff` | `#4453d0` | Information text. |
 | `focusBorder` | VS Code | `$focus` | `#8f9cff` | `#4453d0` | Focus ring around the focused control. |
 | `icon.foreground` | VS Code | `$icon` | `#a3a9b5` | `#4d5461` | Default glyph color. |
 | `widget.shadow` | VS Code | `$shadow` | `#00000085` | `#10182824` | Shadow of dialogs, floating dock groups, and editor widgets. |
@@ -315,12 +315,12 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `dialog.labelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Field labels in dialogs. |
 | `dialog.descriptionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Secondary text in dialogs. |
 | `settings.headerForeground` | VS Code | `$textStrong` | `#f5f6f8` | `#0a0c10` | Section headings in dialogs. |
-| `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts. Not used yet; reserved for notifications. |
-| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. Not used yet; reserved for notifications. |
-| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. Not used yet; reserved for notifications. |
-| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. Not used yet; reserved for notifications. |
-| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. Not used yet; reserved for notifications. |
-| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. Not used yet; reserved for notifications. |
+| `notifications.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Notification toasts, above the status bar at the bottom right. |
+| `notifications.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Notification text. |
+| `notifications.border` | VS Code | `@widget.border` | `#6b7286` | `#d4d8df` | Notification border. |
+| `notificationsErrorIcon.foreground` | VS Code | `@errorForeground` | `#f39a9a` | `#b42229` | Error notification icon. |
+| `notificationsWarningIcon.foreground` | VS Code | `@warningForeground` | `#e4bb6a` | `#875800` | Warning notification icon. |
+| `notificationsInfoIcon.foreground` | VS Code | `@infoForeground` | `#8f9cff` | `#4453d0` | Information notification icon. |
 | `quickInput.background` | VS Code | `@editorWidget.background` | `#1d2026` | `#ffffff` | Command palette and pickers (quick input). |
 | `quickInput.foreground` | VS Code | `@editorWidget.foreground` | `#d9dce3` | `#1c1f26` | Command palette text. |
 | `quickInputTitle.background` | VS Code | `$raised` | `#1c1f25` | `#f1f3f6` | Title row of pickers that have one. |

@@ -433,8 +433,8 @@
         },
         "infoForeground": {
           "$ref": "#/definitions/value",
-          "description": "(Varia) Information text. Not used yet; reserved for notifications. Default $info (Dark #8f9cff, Light #4453d0).",
-          "markdownDescription": "(Varia) Information text. Not used yet; reserved for notifications. Default `$info` (Dark `#8f9cff`, Light `#4453d0`)."
+          "description": "(Varia) Information text. Default $info (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(Varia) Information text. Default `$info` (Dark `#8f9cff`, Light `#4453d0`)."
         },
         "focusBorder": {
           "$ref": "#/definitions/value",
@@ -1328,33 +1328,33 @@
         },
         "notifications.background": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Notification toasts. Not used yet; reserved for notifications. Default @editorWidget.background (Dark #1d2026, Light #ffffff).",
-          "markdownDescription": "(VS Code) Notification toasts. Not used yet; reserved for notifications. Default `@editorWidget.background` (Dark `#1d2026`, Light `#ffffff`)."
+          "description": "(VS Code) Notification toasts, above the status bar at the bottom right. Default @editorWidget.background (Dark #1d2026, Light #ffffff).",
+          "markdownDescription": "(VS Code) Notification toasts, above the status bar at the bottom right. Default `@editorWidget.background` (Dark `#1d2026`, Light `#ffffff`)."
         },
         "notifications.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Notification text. Not used yet; reserved for notifications. Default @editorWidget.foreground (Dark #d9dce3, Light #1c1f26).",
-          "markdownDescription": "(VS Code) Notification text. Not used yet; reserved for notifications. Default `@editorWidget.foreground` (Dark `#d9dce3`, Light `#1c1f26`)."
+          "description": "(VS Code) Notification text. Default @editorWidget.foreground (Dark #d9dce3, Light #1c1f26).",
+          "markdownDescription": "(VS Code) Notification text. Default `@editorWidget.foreground` (Dark `#d9dce3`, Light `#1c1f26`)."
         },
         "notifications.border": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Notification border. Not used yet; reserved for notifications. Default @widget.border (Dark #6b7286, Light #d4d8df).",
-          "markdownDescription": "(VS Code) Notification border. Not used yet; reserved for notifications. Default `@widget.border` (Dark `#6b7286`, Light `#d4d8df`)."
+          "description": "(VS Code) Notification border. Default @widget.border (Dark #6b7286, Light #d4d8df).",
+          "markdownDescription": "(VS Code) Notification border. Default `@widget.border` (Dark `#6b7286`, Light `#d4d8df`)."
         },
         "notificationsErrorIcon.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default @errorForeground (Dark #f39a9a, Light #b42229).",
-          "markdownDescription": "(VS Code) Error notification icon. Not used yet; reserved for notifications. Default `@errorForeground` (Dark `#f39a9a`, Light `#b42229`)."
+          "description": "(VS Code) Error notification icon. Default @errorForeground (Dark #f39a9a, Light #b42229).",
+          "markdownDescription": "(VS Code) Error notification icon. Default `@errorForeground` (Dark `#f39a9a`, Light `#b42229`)."
         },
         "notificationsWarningIcon.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Warning notification icon. Not used yet; reserved for notifications. Default @warningForeground (Dark #e4bb6a, Light #875800).",
-          "markdownDescription": "(VS Code) Warning notification icon. Not used yet; reserved for notifications. Default `@warningForeground` (Dark `#e4bb6a`, Light `#875800`)."
+          "description": "(VS Code) Warning notification icon. Default @warningForeground (Dark #e4bb6a, Light #875800).",
+          "markdownDescription": "(VS Code) Warning notification icon. Default `@warningForeground` (Dark `#e4bb6a`, Light `#875800`)."
         },
         "notificationsInfoIcon.foreground": {
           "$ref": "#/definitions/value",
-          "description": "(VS Code) Information notification icon. Not used yet; reserved for notifications. Default @infoForeground (Dark #8f9cff, Light #4453d0).",
-          "markdownDescription": "(VS Code) Information notification icon. Not used yet; reserved for notifications. Default `@infoForeground` (Dark `#8f9cff`, Light `#4453d0`)."
+          "description": "(VS Code) Information notification icon. Default @infoForeground (Dark #8f9cff, Light #4453d0).",
+          "markdownDescription": "(VS Code) Information notification icon. Default `@infoForeground` (Dark `#8f9cff`, Light `#4453d0`)."
         },
         "quickInput.background": {
           "$ref": "#/definitions/value",

@@ -23,6 +23,8 @@ export const limits = {
   maxRows: 2_147_483_647,
   /** `lateErrors`: error entries kept after the count or character cap, so the error that stopped a script is never lost. */
   messages: { count: 1000, characters: 1_000_000, errorCharacters: 16_384, lateErrors: 20 },
+  /** An error's `details`: the server that answered, and BACKEND_ERROR's exception types (ErrorDetailsLimits in C#). */
+  errorDetails: { server: 256, exception: 512 },
   pending: { requests: 256, control: 32, stdinBytes: 32 * MiB },
   backend: { inFlight: 288, metadataSlots: 8, sessions: 32, resultReads: 16 },
   credit: { min: 64 * KiB, max: 16 * MiB, workerDefault: 4 * MiB, perStream: 16 * MiB, perPort: 64 * MiB },
@@ -91,3 +93,6 @@ export const errorCodes = [
   'PAGE_INVALID', 'RESULT_DECODER_FAILED'
 ] as const
 export type ErrorCode = typeof errorCodes[number]
+/** Why a connection failed, when the fix is known: 'certificate', the server's TLS certificate was not trusted. */
+export const errorReasons = ['certificate'] as const
+export type ErrorReason = typeof errorReasons[number]

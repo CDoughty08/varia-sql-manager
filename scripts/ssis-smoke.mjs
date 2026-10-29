@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentNotice, documentStaleBadge, documentStatePill, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, toolbarButton } from './fixtures/ui.mjs'
+import { closeDocumentButton, documentCrumbs, documentFactValues, documentFrame, documentHeader, documentBanner, documentStaleBadge, documentState, documentSubtitle, documentTab, documentTabs, frameSection, menuItemNames, part, quickInputRows, sectionColumn, sectionList, toolbarButton } from './fixtures/ui.mjs'
 
 // The SSIS Catalog's properties documents against the fake backend (tests/fixtures/backend.mjs, workbench mode), through
 // main's real schemas: Properties from a node's menu, the palette, Enter and a double-click; the sections and their list,
@@ -85,7 +85,7 @@ try {
   const items = await menuOn(finance, 'Properties')
   expect(items.filter(label => label === 'Properties')).toHaveLength(1)
   await expect(tab('Folder Properties - Finance')).toHaveAttribute('aria-selected', 'true')
-  await expect(documentStatePill(frame('Finance'))).toHaveText('Loading')
+  await expect(documentState(frame('Finance'))).toHaveText('Loading')
   // Long enough for the focus the open asked for (a frame, or 50 ms in a throttled window) to find nothing to focus.
   await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 250)))
   expect(await focusIn('Finance')).toBe(false)
@@ -167,7 +167,7 @@ try {
   const fresh = await headerHeight('Finance')
   await writeFile(join(control, 'hold', 'ssis.describe'), '')
   await page.keyboard.press('F5')
-  await expect(documentStatePill(frame('Finance'))).toHaveText('Refreshing')
+  await expect(documentState(frame('Finance'))).toHaveText('Refreshing')
   expect(await headerHeight('Finance')).toBe(fresh)
   await expect(fact('Finance', 'Description')).toHaveText('Nightly finance loads')
   expect((await lines('calls.jsonl')).some(call => call.method === 'query.execute')).toBe(false)
@@ -186,15 +186,15 @@ try {
   await frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true }).click()
   await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveAttribute('data-stale', '')
   await expect(documentStaleBadge(frame('Daily.dtsx'))).toHaveText(/^Stale since /)
-  await expect(documentNotice(frame('Daily.dtsx')).getByRole('alert')).toHaveText('The SSIS Catalog did not answer in time.')
+  await expect(documentBanner(frame('Daily.dtsx')).getByRole('alert')).toHaveText('The SSIS Catalog did not answer in time.')
   await expect(fact('Daily.dtsx', 'Version')).toHaveText('1.0.7')
   expect(await headerHeight('Daily.dtsx')).toBe(daily)
   // Retry from the keyboard keeps focus on Retry while it reads (disabled, not removed) and after it fails again.
-  const retry = documentNotice(frame('Daily.dtsx')).getByRole('button', { name: 'Retry', exact: true })
+  const retry = documentBanner(frame('Daily.dtsx')).getByRole('button', { name: 'Retry', exact: true })
   await retry.focus()
   await writeFile(join(control, 'hold', 'ssis.describe'), '')
   await page.keyboard.press('Enter')
-  await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Refreshing')
+  await expect(documentState(frame('Daily.dtsx'))).toHaveText('Refreshing')
   await expect(retry).toHaveAttribute('aria-disabled', 'true')
   await expect(retry).toBeFocused()
   await rm(join(control, 'hold', 'ssis.describe'))
@@ -205,10 +205,10 @@ try {
   await rm(join(control, 'ssis', 'fail'))
   await writeFile(join(control, 'hold', 'ssis.describe'), '')
   await page.keyboard.press('Enter')
-  await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Refreshing')
+  await expect(documentState(frame('Daily.dtsx'))).toHaveText('Refreshing')
   await expect(retry).toBeFocused()
   await rm(join(control, 'hold', 'ssis.describe'))
-  await expect(documentNotice(frame('Daily.dtsx'))).toHaveCount(0)
+  await expect(documentBanner(frame('Daily.dtsx'))).toHaveCount(0)
   await expect(documentStaleBadge(frame('Daily.dtsx'))).not.toHaveAttribute('data-stale', '')
   await expect(frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true })).toBeFocused()
   expect(await focusIn('Daily.dtsx')).toBe(true)
@@ -217,8 +217,8 @@ try {
   // 7. An object deleted elsewhere: Refresh says so over the last model, and Close is the way out.
   await writeFile(join(control, 'ssis', 'missing'), '')
   await frame('Daily.dtsx').getByRole('button', { name: 'Refresh', exact: true }).click()
-  await expect(documentStatePill(frame('Daily.dtsx'))).toHaveText('Not found')
-  const notice = documentNotice(frame('Daily.dtsx'))
+  await expect(documentState(frame('Daily.dtsx'))).toHaveText('Not found')
+  const notice = documentBanner(frame('Daily.dtsx'))
   await expect(notice.getByRole('alert')).toHaveText('The package Daily.dtsx no longer exists in the SSIS Catalog.')
   await expect(fact('Daily.dtsx', 'Version')).toHaveText('1.0.7')
   expect(await headerHeight('Daily.dtsx')).toBe(daily)
@@ -234,7 +234,7 @@ try {
   const references = frame('Loads').getByRole('table', { name: 'References', exact: true })
   await expect(references).toHaveAttribute('aria-rowcount', '2049')
   await expect(frame('Loads').getByRole('table', { name: 'Parameters', exact: true })).toHaveAttribute('aria-rowcount', '2049')
-  await expect(documentNotice(frame('Loads'))).toContainText('each list shows its first 2,048')
+  await expect(documentBanner(frame('Loads'))).toContainText('each list shows its first 2,048')
   // 6,144 rows of 4 to 7 cells each were 67,701 elements; a screen of rows is a few hundred.
   const bounded = async () => {
     const { rows, nodes } = await drawn('Loads')

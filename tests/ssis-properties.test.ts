@@ -348,7 +348,7 @@ describe('SSIS properties documents', () => {
     documents.activate(id)
     expect(ssisProperties.get(id)?.frame).toBe(frame)
   })
-  it('are custom documents with their kind\'s icon and no text, which the provider never asks to save', async () => {
+  it('are custom documents with their kind\'s icon and no text, which nothing asks to save, Save All included', async () => {
     const { documents, run } = ssis()
     for (const kind of ['ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment'] as const) {
       expect(isCustomKind(kind)).toBe(true)
@@ -360,6 +360,8 @@ describe('SSIS properties documents', () => {
     expect(await documents.save(id)).toBe(true)
     expect(documents.closeRefusal(id)).toBeUndefined()
     expect(documents.get(id)?.dirty).toBe(false)
+    // File › Save All passes it by: it has nothing to save.
+    expect(documents.inSaveAll(id)).toBe(false)
   })
 })
 

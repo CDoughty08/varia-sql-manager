@@ -10,7 +10,8 @@ namespace Varia.Backend.Tests;
 /// <summary>Offline SSIS Catalog checks (PR S1b): the embedded catalogue against Object Explorer's, every SsisSql statement and
 /// every SSIS tree listing against the SSIS lint, which itself catches what it exists for, prologues, error mapping, request
 /// validation, parameter binding, value formatting, revisions, the SSIS tree's own connection and its empty-folder rows, and
-/// the service's gates and cancellation with a fake host.</summary>
+/// the service's gates and cancellation with a fake host; and for PR S-A, ssis.execute: its verbs, write templates and their
+/// lint, validation, Stop Operation's refusals, and the action service's refusals before connecting, gates and Stop.</summary>
 internal static class SsisChecks
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -28,6 +29,7 @@ internal static class SsisChecks
         await ValidationAsync(check);
         await TreeAsync(check);
         await GatesAsync(check);
+        await SsisActionChecks.RunAsync(check);
     }
 
     private static void Catalog(Action<bool, string> check)
@@ -114,11 +116,11 @@ internal static class SsisChecks
         var codes = new (int Number, byte Severity, string Code)[]
         {
             (1222, 16, "BLOCKED"), (1205, 13, "BLOCKED"), (229, 14, "PERMISSION_DENIED"), (230, 14, "PERMISSION_DENIED"), (4060, 11, "NO_DB_ACCESS"), (916, 14, "NO_DB_ACCESS"),
-            (208, 16, "CATALOG_MISSING"), (942, 14, "DATABASE_UNAVAILABLE"), (927, 14, "DATABASE_UNAVAILABLE"), (924, 14, "DATABASE_UNAVAILABLE"), (-2, 11, "TIMEOUT"), (10054, 20, "CONNECTION_LOST"), (233, 16, "CONNECTION_LOST"), (50000, 16, "SQL_ERROR"), (601, 12, "SQL_ERROR"), (27123, 16, "SQL_ERROR")
+            (208, 16, "CATALOG_MISSING"), (942, 14, "DATABASE_UNAVAILABLE"), (927, 14, "DATABASE_UNAVAILABLE"), (924, 14, "DATABASE_UNAVAILABLE"), (-2, 11, "TIMEOUT"), (10054, 20, "CONNECTION_LOST"), (233, 16, "CONNECTION_LOST"), (50000, 16, "SQL_ERROR"), (601, 12, "SQL_ERROR"), (27123, 16, "WINDOWS_AUTH_REQUIRED"), (27124, 16, "SQL_ERROR")
         };
         var wrong = codes.Where(item => SsisErrors.CodeOf(item.Number, item.Severity, false) != item.Code).Select(item => item.Number + " " + SsisErrors.CodeOf(item.Number, item.Severity, false)).ToList();
         check(wrong.Count == 0 && SsisErrors.CodeOf(50000, 16, broken: true) == "CONNECTION_LOST" && SsisErrors.CodeOf(1222, 20, false) == "CONNECTION_LOST",
-            "SQL Server errors map to SSIS codes: 1222 and 1205 BLOCKED, 229 PERMISSION_DENIED, 4060 NO_DB_ACCESS, 208 CATALOG_MISSING; 601 is read again: " + string.Join(", ", wrong));
+            "SQL Server errors map to SSIS codes: 1222 and 1205 BLOCKED, 229 PERMISSION_DENIED, 4060 NO_DB_ACCESS, 208 CATALOG_MISSING, 27123 (a SQL Server login) WINDOWS_AUTH_REQUIRED; 601 is read again: " + string.Join(", ", wrong));
         // A catalog database the login could not open: gone (no row), unavailable to everyone, or closed to this login.
         check(ExplorerLabels.Unavailable(6, 0) == "Offline" && ExplorerLabels.Unavailable(1, 0) == "Restoring..." && ExplorerLabels.Unavailable(0, 1) == "Single User, in use by another session"
             && ExplorerLabels.Unavailable(0, 0) is null && ExplorerLabels.Unavailable(0, 2) is null && SsisErrors.NotAvailable("SSISDB", "Restoring...") == "Database SSISDB is not available (Restoring...). Retry when it is back online.",
@@ -178,12 +180,21 @@ internal static class SsisChecks
     }
 
     /// <summary>A host whose connections never reach a server: <see cref="Hold"/> keeps opens waiting until released.</summary>
-    private sealed class FakeHost(int major = 16, bool linux = false) : ISsisHost
+    internal sealed class FakeHost(int major = 16, bool linux = false, string auth = "integrated", int edition = 3) : ISsisHost
     {
         public SemaphoreSlim? Hold { get; set; }
         public int Opens;
-        public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", 3, "sa", false, true, false, ExplorerCatalog.MinBand, linux);
+        /// <summary>Writes' own connections asked for, and the catalog database each named.</summary>
+        public int ActionConnections;
+        public string? ActionCatalog;
+        public ServerProfile Profile(string connectionId) => new(major, major + ".0.1.1", edition, "sa", false, true, false, ExplorerCatalog.MinBand, linux);
         public SqlConnection SsisConnection(string connectionId, string catalogDatabase) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+        public SqlConnection SsisActionConnection(string connectionId, string catalogDatabase)
+        {
+            Interlocked.Increment(ref ActionConnections);
+            ActionCatalog = catalogDatabase;
+            return new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false;Initial Catalog=" + catalogDatabase);
+        }
         public SqlConnection SsisServerConnection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         public async Task OpenAsync(SqlConnection connection, CancellationToken token)
         {
@@ -191,7 +202,7 @@ internal static class SsisChecks
             if (Hold is { } hold) await hold.WaitAsync(token);
             throw new RequestException("AUTH_KERBEROS", "The Kerberos ticket has expired. Run kinit, then retry.");
         }
-        public string Authentication(string connectionId) => "integrated";
+        public string Authentication(string connectionId) => auth;
     }
 
     private static SsisDescribeArgs Args(string view, ObjectRefDto target, string? connectionId = null) => new(connectionId ?? Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), view, target);

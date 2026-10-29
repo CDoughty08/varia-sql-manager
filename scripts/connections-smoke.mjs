@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { activeDocument, connectErrorDetails, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocument, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -20,7 +20,8 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 300000)
+// Ten minutes: the suite took five on a Linux runner once the Connect dialog's two-pane checks joined it.
+const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 600000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
 // Environment labels' phase: the fake backend behind main's real request, history and library handlers.
@@ -39,6 +40,52 @@ async function open() {
   await expect(page.getByText('Loading saved connections…')).toHaveCount(0)
   return page.getByRole('dialog', { name: 'Connect', exact: true })
 }
+/** Custom Properties (Name, Color, Environment) starts collapsed; this opens it, and it stays open for the window. */
+async function customProperties(dialog) {
+  const toggle = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+}
+/** The dialog's layout: the two panes side by side inside 720x520, and the failure at Connect, between the form and the footer. */
+const layout = dialog => dialog.evaluate((form, part) => {
+  const box = element => element?.getBoundingClientRect()
+  const outer = box(form), sources = box(form.querySelector(part.connectSourcesPane)), fields = box(form.querySelector(part.connectFormPane))
+  const footer = box(form.querySelector(part.connectionFooter)), scroll = box(form.querySelector(part.connectFormScroll)), failure = box(form.querySelector(part.connectFailure))
+  return {
+    size: outer.width <= 720.5 && outer.height <= 520.5, sideBySide: sources.right <= fields.left + 0.5 && Math.abs(sources.top - fields.top) < 1,
+    connectInside: footer.bottom <= outer.bottom + 0.5, failureAtConnect: failure ? failure.top >= scroll.bottom - 0.5 && failure.bottom <= footer.top + 0.5 : null
+  }
+}, part)
+/** Where the footer's Connect and Cancel (or Stop) sit: what shows at Connect must never move them under the pointer. */
+const footerPlace = dialog => dialog.locator(part.connectionFooter).evaluate(footer => [...footer.querySelectorAll('button')].slice(1).map(button => {
+  const box = button.getBoundingClientRect()
+  return [box.top, box.bottom, box.right].map(Math.round)
+}))
+/**
+ * Stacked, in a narrow or zoomed window: the panes in one scroll, the list two rows tall, the form with room for at least
+ * two of its rows beside the outcome, and, with the panes scrolled back up to the list, the outcome under the scroll and
+ * the footer at the dialog's bottom.
+ */
+const stackedRoom = dialog => dialog.evaluate((form, part) => {
+  const box = element => element.getBoundingClientRect()
+  const panes = form.querySelector(part.connectPanes), list = form.querySelector(part.connectionSources), row = form.querySelector(part.connectionListRow), scroll = form.querySelector(part.connectFormScroll), actions = form.querySelector(part.connectActions), outcome = form.querySelector(part.connectOutcome), footer = form.querySelector(part.connectionFooter)
+  scroll.scrollIntoView({ block: 'start' })
+  const top = Math.max(box(scroll).top, box(panes).top), bottom = Math.min(box(scroll).bottom, box(panes).bottom, box(actions).top)
+  const room = bottom - top >= 60
+  panes.scrollTop = 0
+  const end = box(form).top + form.clientTop + form.clientHeight
+  return {
+    stacked: box(form.querySelector(part.connectSourcesPane)).bottom <= box(scroll).top + 0.5, rows: list.clientHeight >= 2 * box(row).height, room,
+    inside: !!outcome && box(outcome).top >= box(panes).bottom - 0.5 && box(actions).bottom <= end + 0.5 && Math.abs(box(footer).bottom - end) < 1 && form.scrollHeight <= form.clientHeight + 0.5
+  }
+}, part)
+/** Whether the focused element's focus ring (outline) lies inside the scrolling list that holds it, which would clip it. */
+const ringInside = dialog => dialog.evaluate((form, part) => {
+  const row = document.activeElement, list = form.querySelector(part.connectionSources)
+  const style = getComputedStyle(row), reach = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset)
+  const inner = row.getBoundingClientRect(), outer = list.getBoundingClientRect()
+  return list.contains(row) && style.outlineStyle !== 'none' && inner.left - reach >= outer.left - 0.5 && inner.right + reach <= outer.left + list.clientWidth + 0.5
+}, part)
 /** A saved connection's row by its name: the Environment list has a Development option too. */
 const savedNamed = (dialog, name) => dialog.locator(part.connectionChoice + ' strong', { hasText: new RegExp('^' + name + '$') })
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
@@ -51,6 +98,29 @@ try {
   await dialog.getByLabel('Filter connections').fill('not-a-match')
   await expect(dialog.getByText('recent-server', { exact: true })).toHaveCount(0)
   await dialog.getByLabel('Filter connections').fill('')
+  // Connect v2: saved connections on the left, the form on the right, one bounded size.
+  expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureAtConnect: null })
+  // Up and Down move from the filter box through the rows and back.
+  await dialog.getByLabel('Filter connections').focus()
+  // With a modifier the key stays the text's: Shift+Down selects, Ctrl+Down and Cmd+Down move the caret.
+  await page.keyboard.press('Shift+ArrowDown')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+ArrowDown')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(savedConnections(dialog).first()).toBeFocused()
+  // The scrolling list would clip a ring drawn outside the row.
+  expect(await ringInside(dialog)).toBe(true)
+  await page.keyboard.press('ArrowDown')
+  await expect(savedConnections(dialog).nth(1)).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await page.keyboard.press('ArrowUp')
+  await expect(dialog.getByLabel('Filter connections')).toBeFocused()
+  // Custom Properties starts collapsed, with nothing set to summarise.
+  const customToggle = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+  await expect(customToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(dialog.getByLabel('Name', { exact: true })).toBeHidden()
+  await expect(dialog.locator('#connect-custom-summary')).toHaveText('No name, color or environment')
   // Integrated authentication needs a Kerberos ticket off Windows, so the dialog opens, and Reset returns, to SQL Server
   // authentication there. The options read as SSMS's on every platform.
   const defaultAuthentication = process.platform === 'win32' ? 'windows' : 'sql'
@@ -66,6 +136,12 @@ try {
   await authentication.selectOption('windows')
   await expect(userName).toHaveValue(windowsIdentity)
   await expect(userName).toBeDisabled()
+  // Only the types with a password show Password and Remember password.
+  await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByLabel('Remember password', { exact: true })).toHaveCount(0)
+  await authentication.selectOption('sql')
+  await expect(dialog.getByLabel('Password', { exact: true })).toBeVisible()
+  await expect(dialog.getByLabel('Remember password', { exact: true })).toBeVisible()
   await authentication.selectOption(defaultAuthentication === 'windows' ? 'sql' : 'windows')
   await dialog.getByRole('button', { name: 'Reset', exact: true }).click()
   await expect(authentication).toHaveValue(defaultAuthentication)
@@ -74,8 +150,16 @@ try {
   // SQL Server Authentication's field is Login, as in SSMS 22.
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('never-store-this-marker')
+  await customProperties(dialog)
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
+  // Collapsed again, the header still says what is set (the colour as its dot); open, it stays open.
+  await customToggle.click()
+  await expect(dialog.locator('#connect-custom-summary')).toContainText('Development')
+  await expect(dialog.locator('#connect-custom-summary').locator(part.visuallyHidden)).toHaveText('Name Development, Color Red')
+  await expect(dialog.locator('#connect-custom-summary').locator(part.connectionSwatch)).toHaveCount(1)
+  await expect(customToggle).toHaveAttribute('aria-describedby', 'connect-custom-summary')
+  await customProperties(dialog)
   await dialog.getByRole('button', { name: 'Add favorite', exact: false }).click()
   await expect(dialog.getByRole('button', { name: 'Remove favorite', exact: false })).toBeEnabled()
   await dialog.getByRole('button', { name: 'Register server', exact: true }).click()
@@ -105,6 +189,10 @@ try {
   await advanced.getByLabel('Packet size', { exact: true }).fill('8192')
   await advanced.screenshot({ path: resolve('artifacts', 'advanced-connection-properties.png') })
   await advanced.getByRole('button', { name: 'OK', exact: true }).click()
+  // Advanced stays behind its button, which says how many properties the connection sets.
+  // Always Encrypted and secure enclaves went back to False: stored as edited, they set nothing, so 8 of the 10 count.
+  await expect(dialog.locator('#connect-advanced-summary')).toHaveText('8 properties set')
+  await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toHaveAttribute('aria-describedby', 'connect-advanced-summary')
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
   // Reading while the app saves is deliberate (Windows refuses to replace an open file); a failed save shows its dialog error here.
   // OK stores only the fields changed or touched (Always Encrypted and secure enclaves went back to False), so the
@@ -133,8 +221,13 @@ try {
   await expect(dialog.getByRole('button', { name: 'Advanced…', exact: true })).toBeFocused()
   await dialog.getByRole('tab', { name: 'Browse', exact: true }).click()
   await expect(dialog.getByText('Discovering local servers…')).toHaveCount(0, { timeout: 10000 })
+  // Refresh stays beside the source select, where it reads as a button, not wrapped under it as a lone word.
+  const middle = async locator => { const box = await locator.boundingBox(); return box.y + box.height / 2 }
+  expect(Math.abs(await middle(dialog.getByRole('button', { name: 'Refresh', exact: true })) - await middle(dialog.getByLabel('Server source', { exact: true })))).toBeLessThan(2)
   await dialog.getByLabel('Server source', { exact: true }).selectOption('registered')
   await expect(savedNamed(dialog, 'Development')).toBeVisible()
+  // The narrow list cuts a long name short, so the row's tooltip starts with the name.
+  await expect(dialog.locator(part.connectionChoice, { has: page.locator('strong', { hasText: /^Development$/ }) })).toHaveAttribute('title', /^Development\n/)
   await savedNamed(dialog, 'Development').click()
   await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('#e66b73')
@@ -191,7 +284,7 @@ try {
     const [number, severity, , answered] = await connectErrorDetails(dialog).locator('dd').allTextContents()
     expect(['18456 14', '233 20']).toContain(number + ' ' + severity)
     expect(answered).toBe(process.env.VARIA_TEST_SQL_SERVER)
-    expect([...await dialog.getByRole('alert').allTextContents(), ...await connectErrorDetails(dialog).allTextContents()].join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
+    expect((await connectFailure(dialog).allTextContents()).join(' ')).not.toMatch(/never-store-this-marker|Password=/i)
     // Load databases with the same login fails the same way, and shows the same details under its note.
     const liveDatabaseDetails = databaseErrorDetails(dialog)
     await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
@@ -209,7 +302,13 @@ try {
     await dialog.getByLabel('Trust server certificate', { exact: true }).check()
     await dialog.getByLabel('Database Name', { exact: true }).focus()
     await expect(dialog.getByText(/databases available/)).toBeVisible({ timeout: 35000 })
+    // Development servers have self-signed certificates: without Trust server certificate the connect fails with the fix,
+    // and the fix connects. A server whose certificate this computer trusts connects at once.
+    await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+    const liveTrust = dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true })
+    await expect.poll(async () => await dialog.count() === 0 || await liveTrust.isVisible(), { timeout: 30000 }).toBe(true)
+    if (await dialog.count()) await liveTrust.click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     const liveLibrary = JSON.parse(await readFile(join(profile, 'connections.json'), 'utf8'))
     expect(liveLibrary.profiles.some(item => item.options.server === process.env.VARIA_TEST_SQL_SERVER && item.lastConnected)).toBe(true)
@@ -246,11 +345,16 @@ try {
         if (params.server === 'slow-server') return new Promise(resolve => { globalThis.dbPending.push(resolve) })
         if (params.server === 'db-error') return { ok: false, error: 'Login failed.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'db-error' } }
         if (params.server === 'db-error-plain') return { ok: false, error: 'Discovery failed without details.' }
+        if (params.server === 'db-backend-error') return { ok: false, error: 'The backend operation failed. Verify the connection and object permissions.', code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' } }
         return { ok: true, value: [{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }] }
       }
       if (method === 'connections.connect') {
         if (params.server === 'server-down') return { ok: false, error: 'Server unavailable.', code: 'SQL_ERROR', details: { number: 53, state: 0, class: 20, server: 'server-down' } }
         if (params.server === 'server-down-plain') return { ok: false, error: 'Server unavailable without details.' }
+        // A self-signed certificate: refused until Trust server certificate is on, and always under Strict encryption.
+        if (params.server === 'cert-error' && (!params.trustServerCertificate || params.encrypt === 'strict')) return { ok: false, error: 'The certificate chain was issued by an authority that is not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, state: 0, class: 20, server: 'cert-error', reason: 'certificate' } }
+        if (params.server === 'cert-error') return { ok: false, error: 'Login failed after trusting the certificate.', code: 'SQL_ERROR', details: { number: 18456, state: 1, class: 14, server: 'cert-error' } }
+        if (params.server === 'backend-error') return { ok: false, error: 'The backend operation failed. Verify the connection and object permissions.', code: 'BACKEND_ERROR', details: { exception: 'System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)' } }
         return { ok: true, value: { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '17.0.fixture', color: params.color, displayName: params.displayName, commandTimeout: params.advanced?.commandTimeout ?? 0 } }
       }
       // alice@CONTOSO.COM, unless the suite holds the answer back (identityPending) to look at the dialog while it waits.
@@ -348,9 +452,18 @@ try {
   await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
   await expect(dialog.getByText(/Could not load databases: Discovery failed without details/)).toBeVisible()
   await expect(databaseDetails).toHaveCount(0)
+  // A BACKEND_ERROR's details are only its exception types: no Error details expander with nothing in it.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('db-backend-error')
+  await dialog.getByRole('button', { name: 'Load databases', exact: true }).click()
+  await expect(dialog.getByText(/Could not load databases: The backend operation failed/)).toBeVisible()
+  await expect(databaseDetails).toHaveCount(0)
   await dialog.getByLabel('Server Name', { exact: true }).fill('server-down')
+  // A failure shows above the footer: Connect and Cancel stay where they were before it.
+  await expect(connectOutcome(dialog)).toHaveCount(0)
+  const footerBefore = await footerPlace(dialog)
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable')
+  expect(await footerPlace(dialog)).toEqual(footerBefore)
   // The details expander starts closed, opens to SQL Server's facts, and goes with the error once the options change.
   const details = connectErrorDetails(dialog)
   await expect(details).toHaveCount(1)
@@ -365,10 +478,86 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog.getByRole('alert')).toContainText('Server unavailable without details')
   await expect(details).toHaveCount(0)
+  // An untrusted certificate offers to trust it and connect again, as checking Trust server certificate would.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('cert-error')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('not trusted')
+  expect(await footerPlace(dialog)).toEqual(footerBefore)
+  const trust = dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true })
+  await expect(connectFailure(dialog)).toBeInViewport()
+  expect(await layout(dialog)).toEqual({ size: true, sideBySide: true, connectInside: true, failureAtConnect: true })
+  await dialog.screenshot({ path: resolve('artifacts', 'connect-dialog-failure.png') })
+  // Zoomed in on the smallest window, the panes stack in one scroll that still shows two list rows and the form beside
+  // the failure, with Connect and the failure inside the dialog.
+  const contentSize = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  await dialog.getByRole('tab', { name: 'History', exact: true }).click()
+  await expect(savedConnections(dialog).first()).toBeVisible()
+  for (const [width, height, zoom] of [[1024, 700, 1.5], [1280, 800, 2]]) {
+    await size(width, height)
+    await app.evaluate(({ BrowserWindow }, factor) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor), zoom)
+    await expect.poll(() => stackedRoom(dialog), `zoom ${zoom} at ${width}x${height}`).toEqual({ stacked: true, rows: true, room: true, inside: true })
+    await expect(connectFailure(dialog)).toBeInViewport()
+    await expect(dialog.getByRole('button', { name: 'Connect', exact: true })).toBeInViewport()
+    if (zoom === 2) {
+      // Stacked too, Connect and Cancel stay put whether or not the outcome shows: an edit clears the failure, and
+      // Connect brings it back.
+      const stackedFooter = await footerPlace(dialog)
+      const trustBox = dialog.getByLabel('Trust server certificate', { exact: true })
+      await trustBox.check()
+      await trustBox.uncheck()
+      await expect(connectFailure(dialog)).toHaveCount(0)
+      expect(await footerPlace(dialog)).toEqual(stackedFooter)
+      await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+      await expect(dialog.getByRole('alert')).toContainText('not trusted')
+      expect(await footerPlace(dialog)).toEqual(stackedFooter)
+      await expect.poll(() => stackedRoom(dialog)).toEqual({ stacked: true, rows: true, room: true, inside: true })
+    }
+    if (zoom === 1.5) await page.screenshot({ path: resolve('artifacts', 'connect-dialog-zoomed.png') })
+  }
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1))
+  await size(...contentSize)
+  await expect.poll(async () => (await layout(dialog)).sideBySide).toBe(true)
+  await connectFailure(dialog).screenshot({ path: resolve('artifacts', 'connect-certificate-fix.png') })
+  await trust.click()
+  await expect(dialog.getByRole('alert')).toContainText('Login failed after trusting the certificate.')
+  await expect(dialog.getByLabel('Trust server certificate', { exact: true })).toBeChecked()
+  await expect(trust).toHaveCount(0)
+  expect(await app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'cert-error').map(call => call.params.trustServerCertificate))).toEqual([false, false, true])
+  // Strict encryption validates the certificate whatever the box says: the dialog explains, with nothing to click.
+  await dialog.getByLabel('Encrypt', { exact: true }).selectOption('strict')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  // The explanation is part of the alert, so it is read with the error, and it lines up with the error's sentence.
+  const explained = async (text) => {
+    await expect(dialog.getByRole('alert')).toContainText(text)
+    const [note, sentence] = await Promise.all([connectFailureNote(dialog).boundingBox(), connectFailureSentence(dialog).boundingBox()])
+    expect(Math.abs(note.x - sentence.x)).toBeLessThan(1)
+  }
+  await explained(/Strict encryption always validates/)
+  await expect(trust).toHaveCount(0)
+  await connectFailure(dialog).screenshot({ path: resolve('artifacts', 'connect-certificate-strict.png') })
+  await dialog.getByLabel('Encrypt', { exact: true }).selectOption('mandatory')
+  // A pinned Host Name in Certificate is a check the person chose: trusting would skip it, so the dialog only explains.
+  await dialog.getByLabel('Trust server certificate', { exact: true }).uncheck()
+  await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('sql01.contoso.com')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await explained(/did not match the Server Certificate or the Host Name in Certificate/)
+  await expect(trust).toHaveCount(0)
+  await dialog.getByLabel('Host Name in Certificate', { exact: true }).fill('')
+  await dialog.getByLabel('Trust server certificate', { exact: true }).check()
+  // BACKEND_ERROR's sentence is generic; Copy details carries the exception types the backend named.
+  await dialog.getByLabel('Server Name', { exact: true }).fill('backend-error')
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('The backend operation failed.')
+  await expect(details).toHaveCount(0)
+  await connectFailure(dialog).getByRole('button', { name: 'Copy details', exact: true }).click()
+  await expect(connectFailureCopyStatus(dialog)).toHaveText('Details copied.')
+  expect(await app.evaluate(({ clipboard }) => clipboard.readText())).toBe('Connecting to backend-error\nCode: BACKEND_ERROR\nMessage: The backend operation failed. Verify the connection and object permissions.\nException: System.InvalidOperationException (0x80131509) > System.DllNotFoundException (0x80131524)')
   const history = await page.evaluate(() => window.varia.loadConnectionLibrary())
   expect(history.value.library.profiles.some(item => item.options.server === 'server-down')).toBe(false)
   await dialog.getByLabel('Server Name', { exact: true }).fill('connected-server')
   await dialog.getByLabel('Database Name', { exact: true }).fill('AppData')
+  await customProperties(dialog)
   await dialog.getByLabel('Name', { exact: true }).fill('Development')
   // Leaving a saved profile for another server drops that profile's name and color, so choose them for this server.
   await expect(dialog.getByLabel('Color', { exact: true })).toHaveValue('')
@@ -395,7 +584,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
@@ -414,7 +603,7 @@ async function entraChecks(dialog, windowsIdentity) {
   const connect = dialog.getByRole('button', { name: 'Connect', exact: true })
   const user = dialog.getByLabel('User name', { exact: true })
   await authentication.selectOption('entraMfa')
-  await expect(password).toBeDisabled()
+  await expect(password).toHaveCount(0)
   await user.fill('')
   await expect(user).toHaveAttribute('placeholder', 'user@contoso.com (optional)')
   await expect(connect).toBeEnabled()
@@ -427,7 +616,7 @@ async function entraChecks(dialog, windowsIdentity) {
   await expect(password).toBeEnabled()
   await authentication.selectOption('entraManagedIdentity')
   await expect(dialog.getByLabel('User assigned identity', { exact: true })).toBeEnabled()
-  await expect(password).toBeDisabled()
+  await expect(password).toHaveCount(0)
   await authentication.selectOption('entraIntegrated')
   await expect(user).toBeDisabled()
   await expect(user).toHaveValue(windowsIdentity)
@@ -438,15 +627,20 @@ async function entraChecks(dialog, windowsIdentity) {
   await dialog.getByLabel('Server Name', { exact: true }).fill('entra-wait')
   const stopButton = dialog.getByRole('button', { name: 'Stop', exact: true })
   const connectIds = () => app.evaluate(() => globalThis.connectionCalls.filter(call => call.method === 'connections.connect' && call.params.server === 'entra-wait').map(call => call.context?.requestId))
+  await expect(connectOutcome(dialog)).toHaveCount(0)
+  const footerBefore = await footerPlace(dialog)
   await connect.click()
   await expect(stopButton).toBeEnabled()
   await expect(stopButton).toBeFocused()
   await expect(dialog.getByText('Complete the sign-in in your web browser. Waiting up to 3 minutes…', { exact: true })).toBeVisible()
+  // The waiting line shows above the footer, so Stop is where Cancel was, and Connecting… where Connect was.
+  expect(await footerPlace(dialog)).toEqual(footerBefore)
   await expect(dialog.getByLabel('Server Name', { exact: true })).toBeDisabled()
   await dialog.screenshot({ path: resolve('artifacts', 'connect-dialog-entra.png') })
   await stopButton.click()
   await expect(dialog.getByText('Connection cancelled.', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('alert')).toHaveCount(0)
+  expect(await footerPlace(dialog)).toEqual(footerBefore)
   await expect(dialog.getByLabel('Server Name', { exact: true })).toBeEnabled()
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled()
   let ids = await connectIds()
@@ -569,6 +763,23 @@ async function rememberPassword() {
   await launch(options, 'fake · Ready')
   dialog = await remembered()
   await connected(dialog)
+  // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
+  // main gives a password only to those, so the fix checks the box and asks for the password instead of connecting.
+  await writeFile(join(control, 'untrusted-certificate'), '')
+  dialog = await remembered()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('not trusted')
+  const connects = async () => (await calls()).filter(call => call.method === 'connections.connect').length
+  const attempted = await connects()
+  await dialog.getByRole('button', { name: 'Trust server certificate and connect', exact: true }).click()
+  await expect(dialog.getByText(/enter the password, then connect/)).toBeVisible()
+  await expect(form(dialog).password).toBeFocused()
+  await expect(dialog.getByLabel('Trust server certificate', { exact: true })).toBeChecked()
+  await expect(dialog.getByRole('alert')).toHaveCount(0)
+  expect(await connects()).toBe(attempted)
+  await rm(join(control, 'untrusted-certificate'))
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
   // (7) Rejected after a password change: forgotten, and the dialog says so.
   await writeFile(join(control, 'reject-passwords'), '')
   dialog = await remembered()
@@ -606,10 +817,10 @@ async function rememberPassword() {
   dialog = await remembered()
   await dialog.getByRole('button', { name: 'Remove saved password-check', exact: true }).first().click()
   await expect.poll(async () => ({ saved: await entries(), entry: await historyId('password-check') })).toEqual({ saved: [], entry: undefined })
-  // (10) Windows Authentication has no password to remember.
+  // (10) Windows Authentication has no password to remember: neither Password nor Remember password shows.
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('windows')
-  await expect(form(dialog).remember).toBeDisabled()
-  await expect(form(dialog).remember).not.toBeChecked()
+  await expect(form(dialog).remember).toHaveCount(0)
+  await expect(form(dialog).password).toHaveCount(0)
   await noSecrets()
   // (11) Stop through main's own handlers (varia:request registers the dialog's requestId, varia:connections-cancel sends
   // CANCEL): the fake ends a Microsoft Entra sign-in wait only on a CANCEL frame, and logs it.
@@ -687,6 +898,7 @@ async function environmentLabels() {
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill('any-password')
+  await customProperties(dialog)
   await expect(dialog.getByLabel('Environment', { exact: true }).locator('option')).toHaveText(['<none>', 'Production', 'Staging', 'Test', 'Development', 'Custom…'])
   await dialog.getByLabel('Color', { exact: true }).selectOption('#e66b73')
   await dialog.getByLabel('Environment', { exact: true }).selectOption('Production')
@@ -740,6 +952,8 @@ async function environmentLabels() {
   await expect.poll(saved).toBe('Staging')
   // (4) The history row shows it, choosing the entry fills it in, and another server drops it with the name and colour.
   dialog = await open()
+  // Opened once, Custom Properties stays open for this window's later dialogs.
+  await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'true')
   const entry = savedConnections(dialog, 'prod-server').first()
   await expect(entry.locator(part.statusPill)).toHaveText('STAGING')
   await entry.click()
@@ -764,6 +978,17 @@ async function environmentLabels() {
   await dialog.getByLabel('Custom environment label', { exact: true }).fill('Test')
   await dialog.getByLabel('Custom environment label', { exact: true }).pressSequentially('ing')
   await expect(dialog.getByLabel('Custom environment label', { exact: true })).toHaveValue('Testing')
+  // Collapsed, the summary keeps the label in view; a blank Custom label there makes Connect open the section at the label.
+  await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
+  await expect(dialog.locator('#connect-custom-summary').locator(part.statusPill)).toHaveText('Testing')
+  await customProperties(dialog)
+  await dialog.getByLabel('Custom environment label', { exact: true }).fill('')
+  await dialog.getByRole('button', { name: 'Custom Properties', exact: true }).click()
+  await expect(dialog.getByLabel('Custom environment label', { exact: true })).toBeHidden()
+  await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toHaveText('Enter an environment label.')
+  await expect(dialog.getByRole('button', { name: 'Custom Properties', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await expect(dialog.getByLabel('Custom environment label', { exact: true })).toBeFocused()
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   // (4c) The dialog opens on the last connection, whose form still says Production: the saved entry's label wins.
@@ -836,9 +1061,11 @@ async function environmentLabels() {
     await expect(longEntry.locator(part.statusPill)).toHaveText(label)
     const fits = await longEntry.evaluate((button, part) => {
       const outer = button.getBoundingClientRect(), pill = button.querySelector(part.statusPill).getBoundingClientRect(), name = button.querySelector('strong').getBoundingClientRect()
-      return { inside: pill.width > 0 && pill.left >= outer.left && pill.right <= outer.right + 0.5, name: name.width > 0 }
+      const shown = button.querySelector(part.statusPillLabel)
+      return { inside: pill.width > 0 && pill.left >= outer.left && pill.right <= outer.right + 0.5, name: name.width > 0, whole: shown.scrollWidth <= shown.clientWidth }
     }, part)
-    expect(fits, label).toEqual({ inside: true, name: true })
+    // PROD stays whole beside the long name, which gives way; only the long custom label is cut short.
+    expect(fits, label).toEqual({ inside: true, name: true, whole: label === 'PROD' })
   }
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(dialog).toHaveCount(0)

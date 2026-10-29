@@ -165,6 +165,12 @@ using (var offline = new SqlService())
 Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
     && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
     "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+static SqlRun Names(params string[] names) => new("Completed", null, [[.. names.Select(name => new string?[] { name })]]);
+Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123abcd", "model", "varia_scratch_0123456789ab"))
+        == ScratchDatabase.Lasting(Names("master", "model"))
+    && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
+    && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
+    "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
 Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
         "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "SSISDB" }.Any(ScratchDatabase.Sweepable),
@@ -225,6 +231,24 @@ try
         }
     }
     await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+    // Development servers (the local one, CI's container) have self-signed certificates: without Trust server certificate,
+    // connect and Load databases fail with the reason the Connect dialog offers to fix. A server with a trusted certificate
+    // connects instead, and then there is nothing to check.
+    var validated = Live("master") with { TrustServerCertificate = false, Encrypt = "mandatory" };
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try
+        {
+            var opened = await Call<object>(method, validated);
+            if (opened is ConnectionInfo trusted) await Call<object>("connections.disconnect", new ConnectionArgs(trusted.Id));
+            Console.WriteLine(method + ": the server's certificate is trusted here, so the untrusted-certificate check is skipped.");
+        }
+        catch (RequestException error)
+        {
+            Check(error.Code == "SQL_ERROR" && error.Details is { Reason: ErrorDetailsLimits.Certificate, Class: 20, Server.Length: > 0 },
+                method + " answers an untrusted server certificate with the reason certificate and SqlClient's own message: " + error.Code + " " + error.Details?.Number + " " + error.Message);
+        }
+    }
 
     // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
     var signIn = Guid.NewGuid().ToString();

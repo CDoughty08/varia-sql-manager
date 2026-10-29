@@ -33,7 +33,7 @@ export const iconStroke = 1
 
 /** The codicons Varia draws; tests/icons.test.ts checks each exists in the bundled font. */
 export const codiconIcons = [
-  'add', 'archive', 'arrow-left', 'arrow-small-down', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right', 'circle-filled',
+  'add', 'archive', 'arrow-left', 'arrow-small-down', 'bell', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right', 'circle-filled',
   'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code', 'collapse-all', 'comment', 'copy',
   'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'error', 'file', 'file-code', 'filter',
   'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph', 'history', 'info', 'insert', 'json', 'law',

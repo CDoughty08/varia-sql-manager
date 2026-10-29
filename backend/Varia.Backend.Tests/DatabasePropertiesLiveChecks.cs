@@ -77,10 +77,20 @@ internal static class DatabasePropertiesLiveChecks
             && after == before, "Script of a change on master returns SSMS's text and changes nothing (" + before + " then " + after + ")");
         var refused = await client.Script("tempdb", new DatabaseChangesDto(Options: new() { ["recoveryModel"] = "FULL" }));
         check(refused is { Error.Code: "NOT_SUPPORTED", Text: null }, "Script refuses what SQL Server refuses on its own databases (tempdb's recovery model)");
+        // A document stays open while Object Explorer renames, drops or restores databases: Script and Apply name the database
+        // read (database_id, create_date as the describe wrote it), and the preflight refuses another that has the name now.
+        var masterModel = (await client.Describe("master")).DatabaseProperties;
+        var msdbModel = (await client.Describe("msdb")).DatabaseProperties;
+        var masterIdentity = masterModel?.General.Id is { } masterId ? new DatabaseIdentityDto(masterId, masterModel.General.Created) : null;
+        var same = await client.Call<ActionScriptResult>("actions.script", client.Args("master", flipped) with { Identity = masterIdentity });
+        var other = await client.Call<ActionScriptResult>("actions.script", client.Args("msdb", flipped) with { Identity = masterIdentity });
+        check(masterIdentity is { Id: > 0 } && msdbModel?.General.Id is { } msdbId && msdbId != masterIdentity.Id && same is { Error: null, Text: not null }
+            && other is { Error.Code: "NOT_FOUND", Text: null } && other.Error.Message.Contains("not the one these properties were read from", StringComparison.Ordinal),
+            "Script names the database it read: master's identity scripts master, and msdb under master's identity is refused NOT_FOUND");
 
         // SQL Server builds exactly Script's statement for every batch the catalogue can plan, with the database and the
         // login named by every hostile fragment at the sysname limit, and nothing runs.
-        var databases = (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar;
+        var databases = ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql));
         var mismatches = new List<string>();
         var total = 0;
         foreach (var fragment in InjectionMatrix.Fragments.Append("]").Append("'").Append(" ").Append("‮"))
@@ -92,7 +102,7 @@ internal static class DatabasePropertiesLiveChecks
                 if (!selected[index].SequenceEqual([DatabaseAlter.Statement(catalog, corpus[index])])) mismatches.Add(corpus[index].Template + " " + corpus[index].Key + " " + fragment[..1]);
             total += corpus.Count;
         }
-        check(mismatches.Count == 0 && total > 1000 && (await Sql("SELECT COUNT(*) FROM sys.databases;")).Scalar == databases,
+        check(mismatches.Count == 0 && total > 1000 && ScratchDatabase.Lasting(await Sql(ScratchDatabase.DatabaseNamesSql)) == databases,
             "SQL Server builds exactly Script's statement for all " + total + " Database Properties batches with hostile database and login names, and the dry run changes nothing: " + string.Join(", ", mismatches.Take(5)));
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")

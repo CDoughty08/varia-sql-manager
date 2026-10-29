@@ -8,7 +8,8 @@ import { kindScope } from '../src/shared/explorer/refs'
 import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
-  parameterObjectTypes, permissionTypes, securableTypes, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits, systemParameters,
+  parameterObjectTypes, permissionTypes, securableTypes, ssisActions, ssisActionVerbs, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits,
+  stoppableOperationTypes, systemParameters,
   isSsisDocumentKind, ssisCommandEntries, ssisDocumentKinds, ssisDocumentName, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs, ssisVerbSpecs, validationStatuses
 } from '../src/shared/ssis/catalog'
 import { commandDescriptor } from '../src/shared/commands/catalog'
@@ -79,8 +80,23 @@ describe('SSIS catalogue', () => {
     expect(validationStatuses).toEqual([{ code: 'N', label: 'Not validated' }])
   })
   it('keeps error codes retryable only where a retry can help', () => {
-    expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'SQL_ERROR'])
+    expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'NOT_RUNNING', 'CANCELLED', 'SQL_ERROR'])
     expect(ssisErrorCodes).toContain('CATALOG_MISSING')
+    // Stop Operation on an ended operation, or on a created one nobody started (it never runs), is information, and a SQL Server
+    // login cannot fix itself by retrying.
+    expect(ssisErrorRetryable).toMatchObject({ WINDOWS_AUTH_REQUIRED: false, ALREADY_FINAL: false, NOT_STARTED: false })
+  })
+  it('declares each ssis.execute verb with its steps, procedures and gates, Stop Operation first', () => {
+    expect(ssisActionVerbs).toEqual(['stopOperation'])
+    expect(ssisActions.stopOperation).toEqual({ title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true })
+    for (const verb of ssisActionVerbs) {
+      const spec = ssisActions[verb]
+      expect(spec.steps.length, verb).toBeGreaterThan(0)
+      for (const name of spec.procedures) expect(name, verb).toMatch(/^[a-z_]+$/)
+    }
+    // Executions and validations, by the code table's own types.
+    expect([...stoppableOperationTypes]).toEqual([200, 300, 301])
+    for (const type of stoppableOperationTypes) expect(operationTypes.map(row => row.code)).toContain(type)
   })
   it('keeps the read path\'s limits, and main uses them for varia:ssis-cancel', () => {
     expect(ssisLimits).toMatchObject({ name: 128, packageName: 260, description: 1024, value: 4000, rows: 2048, describeMs: 40_000, gateWaitMs: 30_000, readPerConnection: 2, readTotal: 4,
@@ -90,6 +106,12 @@ describe('SSIS catalogue', () => {
     expect(ssisLimits.describeBytes).toBeLessThan(16 * 1024 * 1024 / 2)
     expect(methodPolicies['ssis.describe']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 45_000 })
     expect(methodPolicies['ssis.describe'].deadlineMs as number).toBeGreaterThan(ssisLimits.describeMs)
+  })
+  it('keeps the write path\'s limits: one write per connection, two in all, no deadline, and a sensitive frame', () => {
+    expect(ssisLimits).toMatchObject({ writePerConnection: 1, writeTotal: 2, registeredWrites: 64, preflightLockTimeoutMs: 10_000, preflightMs: 25_000, stopGraceMs: 10_000 })
+    // A write waits for locks as SSMS does, so only Stop ends it; later verbs carry sensitive values, so the frame is zeroed once written.
+    expect(methodPolicies['ssis.execute']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    expect(ssisLimits.registeredWrites).toBeLessThanOrEqual(ssisLimits.registered)
   })
   it('loads in plain Node 24, as the other catalogues do', () => {
     const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'ssis', name))
@@ -107,7 +129,8 @@ describe('generated SSIS files', () => {
     await expect(ssisCatalogJson()).toMatchFileSnapshot('../backend/Varia.Backend/Ssis/ssis-catalog.json')
   })
   it('exports sorted keys, every view, error and table', () => {
-    const json = JSON.parse(ssisCatalogJson()) as { version: number; catalogDatabase: string; views: { view: string; kind: string }[]; errors: { code: string; retryable: boolean }[]; features: string[]; limits: Record<string, number> }
+    const json = JSON.parse(ssisCatalogJson()) as { version: number; catalogDatabase: string; views: { view: string; kind: string }[]; errors: { code: string; retryable: boolean }[]; features: string[]; limits: Record<string, number>;
+      actions: { verb: string }[]; stoppableOperationTypes: number[]; openStatuses: number[]; finalStatuses: number[] }
     const sorted = (value: unknown, path: string): void => {
       if (Array.isArray(value)) { value.forEach((item, index) => sorted(item, `${path}[${index}]`)); return }
       if (!value || typeof value !== 'object') return
@@ -121,6 +144,8 @@ describe('generated SSIS files', () => {
     expect(json.errors.map(error => error.code)).toEqual(ssisErrorCodes)
     expect(json.features).toEqual([...ssisFeatures])
     expect(json.limits).toEqual(ssisLimits)
+    expect(json.actions).toEqual(ssisActionVerbs.map(verb => ({ verb, ...ssisActions[verb] })))
+    expect(json).toMatchObject({ stoppableOperationTypes: [200, 300, 301], openStatuses: [...openStatuses], finalStatuses: [...finalStatuses] })
   })
   it('keeps the generated part of docs/integration-services.md in sync, below its hand-written part', async () => {
     const current = readFileSync(docsPath, 'utf8')
@@ -129,8 +154,9 @@ describe('generated SSIS files', () => {
     expect(current.indexOf(generatedMarker, at + 1)).toBe(-1)
     await expect(current.slice(0, at) + renderSsisDocs()).toMatchFileSnapshot('../docs/integration-services.md')
   })
-  it('documents every view, error, feature and limit', () => {
+  it('documents every view, verb, error, feature and limit', () => {
     const docs = renderSsisDocs()
+    for (const verb of ssisActionVerbs) expect(docs, verb).toContain(`| \`${verb}\` | ${ssisActions[verb].title} |`)
     for (const view of describeViews) expect(docs, view).toContain(`| \`${view}\` |`)
     for (const code of ssisErrorCodes) expect(docs, code).toContain(`| \`${code}\` |`)
     for (const feature of ssisFeatures) expect(docs, feature).toContain(`| \`${feature}\` |`)

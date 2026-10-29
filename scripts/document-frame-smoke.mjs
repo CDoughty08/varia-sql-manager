@@ -155,6 +155,17 @@ try {
   await expect(current()).toHaveAttribute('data-section', 'permissions')
   await expect(frameSection(frame, 'Permissions').getByRole('table')).toHaveCount(1)
   expect((await fixtureState()).frame.collapsed).toEqual([])
+  // Tab from the list goes into the section chosen (its heading's toggle), not to the first control in the column (Options').
+  await item('permissions').focus()
+  await page.keyboard.press('Tab')
+  expect(await page.evaluate(() => document.activeElement?.closest('section[data-section]')?.id), 'Tab enters the chosen section').toBe('doc-section-permissions')
+  // A section with nothing to focus leaves Tab to the browser, whose next stop is the column, not Options' toggle.
+  await item('general').click()
+  await page.keyboard.press('Tab')
+  expect(await columnFocused(), 'Tab from a section with nothing to focus reaches the column').toBe(true)
+  await item('permissions').click()
+  await settle()
+  await expect(current()).toHaveAttribute('data-section', 'permissions')
   await scrollColumn('start')
   await expect(current()).toHaveAttribute('data-section', 'general')
   await scrollColumn('end')

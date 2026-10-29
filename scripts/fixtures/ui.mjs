@@ -66,6 +66,9 @@ export const part = {
   /** Object Explorer's fault view (an InlineError) and the outcome line of its Copy details. */
   explorerFault: '.explorer-fault',
   inlineErrorStatus: '.inline-error-status',
+  /** An InlineError's sentence (the live region) and the note read with it. */
+  inlineErrorMessage: '.inline-error-message',
+  inlineErrorNote: '.inline-error-note',
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
@@ -87,6 +90,9 @@ export const part = {
   explorerError: '.explorer-error',
   // Menus and the quick input
   menuLayer: '.menu-layer',
+  // Toasts (src/renderer/src/kit/Toasts.tsx): the layer holds the stack and the two live regions that announce them.
+  toastLayer: '.toast-layer',
+  toastMessage: '.toast-message',
   menuMnemonic: '.menu-mnemonic',
   menuKeybinding: '.menu-keybinding',
   quickInput: '.quick-input',
@@ -107,6 +113,22 @@ export const part = {
   statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** The Connect dialog's failure: its InlineError and the Error details under it. */
+  connectFailure: '.connect-failure',
+  // Connect v2's layout, for the probes that measure it: the two panes, the form's own scroll, and at its bottom the
+  // outcome (busy, notices, the failure) above the footer with Connect.
+  connectPanes: '.connect-panes',
+  connectSourcesPane: '.connect-sources-pane',
+  connectFormPane: '.connect-form-pane',
+  connectFormScroll: '.connect-form-scroll',
+  connectActions: '.connect-actions',
+  connectOutcome: '.connect-outcome',
+  connectionFooter: '.connection-footer',
+  /** The saved connections' list, one of its rows (the entry with its star and ×), and a connection's colour dot. */
+  connectionSources: '.connection-sources',
+  connectionListRow: '.connection-list-row',
+  connectionSwatch: '.connection-swatch',
+  visuallyHidden: '.visually-hidden',
   /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
   connectionScroll: '.connection-scroll',
   environmentPreview: '.environment-preview',
@@ -121,10 +143,16 @@ export const part = {
   tableDesigner: '.table-designer',
   // The document frame
   documentHeader: '.document-header',
-  /** The header's kind of document ("Folder Properties"), the fact line, and the notice above the content. */
+  /** The header's kind of document ("Folder Properties") and the fact line. */
   documentSubtitle: '.document-subtitle',
   documentFacts: '.document-facts',
-  documentNotice: '.document-notice',
+  /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
+  statusPill: '.status-pill',
+  documentBanner: '.document-banner',
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  propertyField: '.property-field',
+  propertyFact: '.property-fact',
+  fieldHint: '.field-hint',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -297,8 +325,16 @@ export const renameBox = page => explorerTree(page).getByRole('textbox', { name:
 // Dialogs
 
 /** The Connect dialog's Error details expander under a failed connect, or under the database note (Load databases). */
-export const connectErrorDetails = dialog => dialog.locator('[role="alert"] + details')
+export const connectErrorDetails = dialog => dialog.locator(`${part.connectFailure} > details`)
 export const databaseErrorDetails = dialog => dialog.locator('[role="status"] + details')
+/** The Connect dialog's failure box, and its sentence and note (the note is read with the sentence and lines up with it). */
+export const connectFailure = dialog => dialog.locator(part.connectFailure)
+export const connectFailureSentence = dialog => connectFailure(dialog).locator(part.inlineErrorMessage)
+export const connectFailureNote = dialog => connectFailure(dialog).locator(part.inlineErrorNote)
+/** The outcome line of the Connect failure's Copy details. */
+export const connectFailureCopyStatus = dialog => connectFailure(dialog).locator(part.inlineErrorStatus)
+/** What shows at Connect while it works or after it: busy, notices and the failure. */
+export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 /** An object dialog's Connection and Progress boxes (Delete Object, Database Properties). */
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
@@ -313,6 +349,15 @@ export const savedConnections = (dialog, text) => dialog.locator(part.connection
 /** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
 export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
 
+// Toasts
+
+/** The toast stack (a region named Notifications) and its toasts, each a group named by its severity. */
+export const toastStack = page => page.getByRole('region', { name: 'Notifications', exact: true })
+export const toasts = page => toastStack(page).getByRole('group')
+export const toastMessage = toast => toast.locator(part.toastMessage)
+/** The live region that reads toasts politely (info and warning), or at once (errors) with `assertive`. */
+export const toastAnnouncer = (page, assertive = false) => page.locator(`${part.toastLayer} > [role="${assertive ? 'alert' : 'status'}"]`)
+
 // Document frames (src/renderer/src/kit/DocumentFrame.tsx): Activity Monitor, SSIS documents, properties as documents
 
 /** A document's frame, a region named by its title. */
@@ -320,14 +365,10 @@ export const documentFrame = (page, title) => page.getByRole('region', named(tit
 /** The header row, for its height (it has no role of its own inside the frame's region). */
 export const documentHeader = frame => frame.locator(part.documentHeader)
 export const documentCrumbs = frame => frame.getByRole('navigation', { name: 'Location', exact: true }).getByRole('listitem')
-/** The header's kind of document, and its state: a status pill (Loading, Not found) or the age of what it shows. */
-export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
-export const documentStatePill = frame => documentHeader(frame).locator(part.statusPill)
+/** The header's age of what it shows (a StaleBadge), beside its state pill (documentState). */
 export const documentStaleBadge = frame => documentHeader(frame).locator(part.staleBadge)
 /** The fact line's values, in order. */
 export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
-/** What the document says above its content: a failure (an inline error whose message is an alert, with its actions) or a note. */
-export const documentNotice = frame => frame.locator(part.documentNotice)
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
@@ -347,6 +388,21 @@ export const scriptSplitter = frame => frame.getByRole('separator', { name: 'Res
 export const scriptActions = (frame, name) => scriptDrawer(frame).getByRole('group', { name: 'Script', exact: true }).getByRole('button', name === undefined ? {} : named(name))
 export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
 export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
+/** Muted words after the title ("Database Properties"). */
+export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
+/** The header's state pill ("Normal", "Restoring, Standby", Loading, Not found). */
+export const documentState = frame => documentHeader(frame).locator(part.statusPill)
+/** What the document says between its header and content: its last action's outcome, a failure with its actions, or a note. */
+export const documentBanner = frame => frame.locator(part.documentBanner)
+/** A verb in the header, whose group is named "<title> actions". */
+export const documentVerb = (frame, title, name) => frame.getByRole('group', named(title + ' actions')).getByRole('button', named(name))
+/** A property sheet's row (label, control, notes), by its control's label. */
+export const propertyRow = (frame, label) => frame.locator(part.propertyField).filter({ has: frame.page().getByLabel(label, { exact: true }) })
+const exactly = text => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+/** A read-only fact's value, by its label. */
+export const propertyFact = (frame, label) => frame.locator(part.propertyFact).filter({ has: frame.page().getByRole('term').filter({ hasText: exactly(label) }) }).getByRole('definition')
+/** The strip under a property sheet's sections that shows the hovered or focused row's whole description. */
+export const fieldHint = frame => frame.locator(part.fieldHint)
 
 // Menus and the quick input
 
