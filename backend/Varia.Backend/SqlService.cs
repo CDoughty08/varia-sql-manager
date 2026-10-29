@@ -727,7 +727,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
             {
-                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message); continue; }
+                if (error.Class <= 10) { if (!IsContextChange(error)) messages.Add(error.Message, InformationalKind(error)); continue; }
                 // An error while rows stream means the statement producing the current result set stopped early.
                 if (currentSet is not null) currentSet.Incomplete = true;
                 lock (errors)
@@ -763,7 +763,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         void Report(SqlException error)
         {
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
                 else if (!Delivered(item)) Raise(Describe(item));
             if (!error.Errors.Cast<SqlError>().Any(item => item.Class > 10)) Raise(error.Message);
         }
@@ -1005,7 +1005,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             // Messages delivered with the exception (e.g. PRINT before a severe error, or the error itself) belong in Messages,
             // in order, except errors InfoMessage already reported.
             foreach (SqlError item in error.Errors)
-                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message); }
+                if (item.Class <= 10) { if (!IsContextChange(item)) messages.Add(item.Message, InformationalKind(item)); }
                 else if (status == "failed" && !Delivered(item)) messages.Add(Describe(item), MessageKind.Error);
             var details = error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(Describe).ToList();
             if (details.Count == 0)
@@ -1163,6 +1163,11 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>"Changed database context to 'x'." (5701) and "Changed language setting to x." (5703): SQL Server sends
     /// them for USE, a session's login, and the toolbar's database change, and SSMS leaves them out of Messages.</summary>
     private static bool IsContextChange(SqlError error) => error.Number is 5701 or 5703;
+    /// <summary>PRINT arrives as number 0 and RAISERROR as 50000 or a user message's number (above 50000): what the script itself
+    /// printed, which opens the Messages strip. Every other informational number is SQL Server's own (8153's NULL warning,
+    /// STATISTICS output, DBCC, sp_rename's caution).</summary>
+    private static MessageKind InformationalKind(SqlError error) => InformationalKind(error.Number);
+    internal static MessageKind InformationalKind(int number) => number == 0 || number >= 50000 ? MessageKind.Print : MessageKind.Server;
 
     /// <summary>A global results.memory EVENT, checked once a second and after each results.close: when usage crosses 50,
     /// 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below what the status bar was last shown (results were

@@ -82,7 +82,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon',
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon',
     '.editor-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
     '.tile-caption > .codicon'
   ],
@@ -113,7 +113,7 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
-  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.document-script-head'],
+  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head'],
   control: ['.icon-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item'],
   status: ['.status-bar', '.query-status-bar']

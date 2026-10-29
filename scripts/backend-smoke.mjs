@@ -70,7 +70,7 @@ async function messages() {
 }
 /** A data cell of the first results grid, by row and column. */
 const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).first()
-const running = () => expect(outputStatus(page)).toContainText('Executing query…')
+const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
   await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -322,6 +322,11 @@ try {
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
+  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
+  // whole inside the pane.
+  const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
+  await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => shown(gridCell(0, 1))).toBe(true)
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])

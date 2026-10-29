@@ -272,12 +272,13 @@ internal static class LiveResultChecks
         check(typed.ResultSets[0] is { RowsStored: 1 } && typed.ResultSets[0].Columns[0] is { DataType: "xml", Role: "xml" } && RowsOf(store, typed.ResultSets[0])[0][0]!.StartsWith("<o><name>"),
             "FOR XML ... TYPE arrives as one xml cell");
 
-        // Messages: in order, errors in SSMS's two lines with the line in the whole script, and SSMS's row counts.
+        // Messages: in order, errors in SSMS's two lines with the line in the whole script, and SSMS's row counts (Varia's own
+        // lines, "info") apart from PRINT output ("print"), which opens the Messages strip.
         var messages = await run("SELECT 1 AS one;\nPRINT 'a';\nSELECT 1/0;\nPRINT 'b';\nSELECT TOP (2) name FROM sys.objects;");
         var entries = messages.Messages;
         // A single batch that SQL Server ran to its end after an error says nothing more than SSMS does.
-        check(messages.Status == "completedWithErrors" && entries.Count == 5 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "info")
-            && entries[2] == new MessageEntry("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.", "error") && entries[3] == new MessageEntry("b", "info")
+        check(messages.Status == "completedWithErrors" && entries.Count == 5 && entries[0] == new MessageEntry("(1 row affected)", "info") && entries[1] == new MessageEntry("a", "print")
+            && entries[2] == new MessageEntry("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered.", "error") && entries[3] == new MessageEntry("b", "print")
             && entries[4] == new MessageEntry("(2 rows affected)", "info") && messages.Error!.Message.StartsWith("Msg 8134, Level 16, State 1, Line 3\nDivide by zero error encountered."),
             "messages keep their order and kinds in SSMS's formats: " + string.Join(" | ", entries.Select(entry => entry.Kind + ":" + entry.Text)));
         var skipped = await run("PRINT 'one';\nGO\nRAISERROR('sev16', 16, 1);\nPRINT 'after';\nGO\nPRINT 'three';");
