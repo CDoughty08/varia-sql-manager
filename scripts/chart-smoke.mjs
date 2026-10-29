@@ -28,6 +28,9 @@ page.on('pageerror', error => failures.push(error.message))
 const live = (method, ...args) => page.evaluate(([name, values]) => window.__variaLive[name](...values), [method, args])
 const chart = key => live('chart', key)
 const sleep = ms => new Promise(done => setTimeout(done, ms))
+// A chart renames itself at most once per chartLimits.labelMs (5 s), so a poll on its name waits past that; the fixture's
+// default (5 s off Windows) raced it on a slow Linux runner.
+const labelSettles = { timeout: 10_000 }
 async function menu(id) {
   await app.evaluate(({ Menu }, itemId) => {
     const item = Menu.getApplicationMenu().getMenuItemById(itemId)
@@ -246,7 +249,7 @@ try {
   await live('updateChart', driven, { series: [1, 2], unit: 'count', max: undefined, spanMs: 20_000, title: 'Renamed metrics' })
   await expect(chartLegend(drivenBox)).toHaveAttribute('aria-label', 'Renamed metrics series')
   await expect(chartLegend(drivenBox).getByRole('listitem')).toHaveText(['Wave', 'Rate'])
-  await expect.poll(async () => (await chart(driven)).label).toMatch(/^Renamed metrics: Wave .*; Rate .* over the last 20 seconds$/)
+  await expect.poll(async () => (await chart(driven)).label, labelSettles).toMatch(/^Renamed metrics: Wave .*; Rate .* over the last 20 seconds$/)
   await expect.poll(async () => (await chart(driven)).pixels.colors['charts.orange']).toBeGreaterThan(10)
   await live('unmountChart', driven)
   console.log('Props passed: new series, window and title reached the mounted chart.')
@@ -262,13 +265,13 @@ try {
   step = 'stale'
   // Paused, the view collects nothing; within a few seconds its newest sample is no longer "now".
   await live('setUserPaused', id, true)
-  await expect.poll(async () => (await chart(key)).label).toMatch(/ from \d\d:\d\d:\d\d to \d\d:\d\d:\d\d$/)
+  await expect.poll(async () => (await chart(key)).label, labelSettles).toMatch(/ from \d\d:\d\d:\d\d to \d\d:\d\d:\d\d$/)
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
   await expect(table.locator('tbody tr').first().locator('th')).toHaveText(/^\d\d:\d\d:\d\d$/)
   await live('setUserPaused', id, false)
   await expect(table.locator('tbody tr').first().locator('th')).toHaveText('now')
   await box.getByRole('button', { name: 'View as table', exact: true }).click()
-  await expect.poll(async () => (await chart(key)).label).toMatch(/ over the last 10 seconds$/)
+  await expect.poll(async () => (await chart(key)).label, labelSettles).toMatch(/ over the last 10 seconds$/)
   console.log('Stale passed: paused, the chart names its window by the clock, and says "now" again once samples arrive.')
 
   step = 'tile'
