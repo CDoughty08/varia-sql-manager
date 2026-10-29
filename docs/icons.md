@@ -25,7 +25,7 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `role` | Server, database and application roles. |
 | `shield` | Audits, audit specifications, security policies. |
 | `execution-plan` | Execution plan documents. |
-| `agent-job` | SQL Server Agent jobs (planned). |
+| `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
 | `ssis-package` | Integration Services packages (planned). |
 | `ssis-environment` | Integration Services environments (planned). |
 

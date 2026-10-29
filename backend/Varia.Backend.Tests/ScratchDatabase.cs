@@ -19,6 +19,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private readonly Func<string, string, Task<SqlRun>> run;
     private readonly List<string> created = [];
     private bool loginCreated;
+    private Backup? restoringBackup;
 
     private ScratchDatabase(Func<string, string, Task<SqlRun>> run, string suffix)
     {
@@ -31,7 +32,18 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ReadOnly => Name + "_ro";
     public string Offline => Name + "_off";
     public string SingleUser => Name + "_su";
+    /// <summary>A database left RESTORING by a tail-log backup WITH NORECOVERY (created on demand, by CreateStatesAsync), its
+    /// backups where <see cref="Backup"/> puts them.</summary>
+    public string Restoring => Name + "_rs";
     public string Snapshot => Name + "_snap";
+    /// <summary>A database Object Explorer's status checks revert to its snapshot <see cref="RevertSnapshot"/>: a RESTORE that
+    /// needs no backup file (created on demand, by CreateRevertAsync).</summary>
+    public string Reverted => Name + "_rv";
+    public string RevertSnapshot => Name + "_rvs";
+    /// <summary>The SQL Server Agent job Object Explorer's status checks run, marked by its description.</summary>
+    public string Job => Name + "_job";
+    /// <summary>What marks a scratch Agent job (its description), as the extended property marks a database.</summary>
+    public const string JobMarker = "varia.scratch";
     /// <summary>Where the Script As round trip runs scripts (created on demand).</summary>
     public string RoundTrip => Name + "_rt";
     /// <summary>Where the Script As injection matrix creates its objects and runs their scripts (created on demand).</summary>
@@ -64,11 +76,18 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
-    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
+    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup; _rs is left restoring, and
+    // _rv is reverted to its snapshot _rvs.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
+    private static partial Regex JobPattern();
+
+    /// <summary>Whether an Agent job's name is one a run of the checks gave its own job (<see cref="Job"/>); the sweep deletes
+    /// only such jobs that also carry <see cref="JobMarker"/>.</summary>
+    internal static bool IsScratchJob(string name) => JobPattern().IsMatch(name);
 
     /// <summary>Whether the sweep drops a database of this name once it is stale and marked (or not online).</summary>
     internal static bool Sweepable(string name) => Pattern().IsMatch(name);
@@ -122,7 +141,18 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                 if (marker.Status != "completed" || marker.Scalar is null or "0") continue;
             }
             log("Dropping stale scratch database " + name);
-            await Drop(run, name, online);
+            // Only an offline database is brought online first, so its files go with it; a restoring one cannot be, and drops as it is.
+            await Drop(run, name, row[1] != "6");
+        }
+        // A crashed run's backup files on Linux (Windows ones went to NUL) and its backup history, once their database is gone.
+        var backups = await run(StaleBackupsSql, "msdb");
+        foreach (var group in (backups.Sets.Count == 0 ? [] : backups.Sets[0]).Where(row => row[0] is { } name && Pattern().IsMatch(name)).GroupBy(row => row[0]!, StringComparer.Ordinal))
+        {
+            foreach (var row in group)
+                if (row[1] is { } device && device != NullDevice && device == Backup.FileIn(row[2] ?? "", group.Key)
+                    && (await run(Backup.DeleteSql(device, int.Parse(row[3]!, CultureInfo.InvariantCulture)), "master")).Status != "completed")
+                    log("Could not delete a stale scratch backup file of " + group.Key);
+            await run(HistorySql(group.Key), "msdb");
         }
         var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
@@ -131,6 +161,75 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
             }
+    }
+
+    /// <summary>Backups older than 6 hours of scratch databases that no longer exist, with each one's device, the folder a Linux
+    /// backup file of the checks would be in, and the version (which delete procedure the server has).</summary>
+    internal const string StaleBackupsSql = "SELECT DISTINCT s.database_name, f.physical_device_name, " + Backup.FolderSql + ", CONVERT(int, SERVERPROPERTY('ProductMajorVersion')) "
+        + "FROM msdb.dbo.backupset AS s JOIN msdb.dbo.backupmediafamily AS f ON f.media_set_id = s.media_set_id "
+        + "WHERE s.database_name LIKE N'VariaScratch[_]%' AND s.backup_finish_date < DATEADD(hour, -6, GETDATE()) AND DB_ID(s.database_name) IS NULL;";
+
+    private static string HistorySql(string database) => "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Quote(database) + ";";
+
+    /// <summary>The null device SQL Server on Windows backs up to without writing a file.</summary>
+    internal const string NullDevice = "NUL";
+
+    /// <summary>Where a scratch database's backups go. SQL Server on Windows writes them to the null device, so no file is left.
+    /// SQL Server on Linux cannot: it sizes the target first, and /dev/null fails (error 3634 in 'DiskChangeFileSize'). There
+    /// they go to one file named after the scratch database in the instance's default backup folder (its data folder on 2017,
+    /// which has no backup folder property and uses the data folder by default), which <see cref="ForgetAsync"/> deletes and
+    /// the stale sweep finds again through msdb's history.</summary>
+    internal sealed record Backup(string Database, string Device, int Major)
+    {
+        internal const string FolderSql = "COALESCE(CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultBackupPath')), CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath')))";
+
+        /// <summary>The platform, folder and version; sys.dm_os_host_info (2017+) is read through sp_executesql, so the batch also compiles on 2016.</summary>
+        internal const string FactsSql = "DECLARE @platform nvarchar(256) = N'Windows';\n"
+            + "IF OBJECT_ID(N'sys.dm_os_host_info') IS NOT NULL EXEC sys.sp_executesql N'SELECT @platform = host_platform FROM sys.dm_os_host_info;', N'@platform nvarchar(256) OUTPUT', @platform = @platform OUTPUT;\n"
+            + "SELECT @platform, " + FolderSql + ", CONVERT(int, SERVERPROPERTY('ProductMajorVersion'));";
+
+        public bool IsFile => Device != NullDevice;
+
+        /// <summary>A scratch database's backup file in a Linux folder.</summary>
+        internal static string FileIn(string folder, string database) => folder.TrimEnd('/') + "/" + database + ".bak";
+
+        /// <summary>The target on a server of this platform, folder and version. Only a sweepable scratch name of letters, digits
+        /// and underscores names a file.</summary>
+        internal static Backup For(string database, string? platform, string? folder, int major)
+        {
+            if (platform != "Linux") return new(database, NullDevice, major);
+            if (!Pattern().IsMatch(database) || database.Contains('.', StringComparison.Ordinal) || database.Contains(']', StringComparison.Ordinal))
+                throw new InvalidOperationException("Scratch setup failed: only a scratch database's backup gets a file name.");
+            if (folder is not ['/', ..]) throw new InvalidOperationException("Scratch setup failed: SQL Server on Linux reported no default backup folder.");
+            return new(database, FileIn(folder, database), major);
+        }
+
+        public static async Task<Backup> ForAsync(Func<string, string, Task<SqlRun>> run, string database)
+        {
+            var facts = await run(FactsSql, "master");
+            if (facts.Status != "completed" || facts.Sets.Count == 0 || facts.Sets[0].Count == 0) throw new InvalidOperationException("Scratch setup failed: " + facts.Error);
+            var row = facts.Sets[0][0];
+            return For(database, row[0], row[1], int.Parse(row[2]!, CultureInfo.InvariantCulture));
+        }
+
+        /// <summary>BACKUP DATABASE to the target.</summary>
+        public string DatabaseSql(string? with = null) => "BACKUP DATABASE " + Bracket(Database) + " TO DISK = " + Quote(Device) + (with is null ? "" : " WITH " + with) + ";";
+
+        /// <summary>BACKUP LOG to the target; in a file it appends to the full backup's media set.</summary>
+        public string LogSql(string with) => "BACKUP LOG " + Bracket(Database) + " TO DISK = " + Quote(Device) + " WITH " + with + ";";
+
+        /// <summary>Deletes a backup file (sysadmin): xp_delete_files from SQL Server 2019, before it xp_delete_file's backup
+        /// type, which deletes only a backup file.</summary>
+        internal static string DeleteSql(string file, int major) => major >= 15
+            ? "EXEC master.sys.xp_delete_files " + Quote(file) + ";"
+            : "EXEC master.sys.xp_delete_file 0, " + Quote(file) + ";";
+
+        /// <summary>Deletes the file, best effort (a failure is a value), and only once it went (or there was none) the database's
+        /// backup history, so a file left behind is still in msdb for the stale sweep to try again.</summary>
+        public async Task ForgetAsync(Func<string, string, Task<SqlRun>> run)
+        {
+            if (!IsFile || (await run(DeleteSql(Device, Major), "master")).Status == "completed") await run(HistorySql(Database), "msdb");
+        }
     }
 
     private static string Quote(string value) => "N'" + value.Replace("'", "''") + "'";
@@ -186,14 +285,48 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
             + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
         // Snapshots need an edition that has them; the file goes to the instance's default data path.
-        var snapshot = await run("DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));\n"
-            + "DECLARE @logical sysname = (SELECT name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(Name) + ") AND type = 0);\n"
-            + "DECLARE @sql nvarchar(max) = N'CREATE DATABASE ' + QUOTENAME(" + Quote(Snapshot) + ") + N' ON (NAME = ' + QUOTENAME(@logical) + N', FILENAME = ' "
-            + "+ QUOTENAME(@path + " + Quote(Snapshot + ".ss") + ", '''') + N') AS SNAPSHOT OF ' + QUOTENAME(" + Quote(Name) + ") + N';';\nEXEC (@sql);", "master");
-        HasSnapshot = snapshot.Status == "completed";
+        HasSnapshot = await CreateSnapshotAsync(Name, Snapshot);
         if (HasSnapshot) created.Insert(0, Snapshot);
         else Console.WriteLine("Database snapshot checks skipped: this server could not create a snapshot.");
     }
+
+    /// <summary>A snapshot of a database, its file in the instance's default data path; false when the server cannot create one.</summary>
+    private async Task<bool> CreateSnapshotAsync(string source, string snapshot)
+    {
+        var result = await run("DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));\n"
+            + "DECLARE @logical sysname = (SELECT name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(source) + ") AND type = 0);\n"
+            + "DECLARE @sql nvarchar(max) = N'CREATE DATABASE ' + QUOTENAME(" + Quote(snapshot) + ") + N' ON (NAME = ' + QUOTENAME(@logical) + N', FILENAME = ' "
+            + "+ QUOTENAME(@path + " + Quote(snapshot + ".ss") + ", '''') + N') AS SNAPSHOT OF ' + QUOTENAME(" + Quote(source) + ") + N';';\nEXEC (@sql);", "master");
+        return result.Status == "completed";
+    }
+
+    /// <summary>For a bare scratch name: the marked database to revert (<see cref="Reverted"/>) and its snapshot, which disposal
+    /// drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateRevertAsync()
+    {
+        await CreateMarkedAsync(Reverted);
+        if (!await CreateSnapshotAsync(Reverted, RevertSnapshot)) return false;
+        created.Insert(0, RevertSnapshot);
+        return true;
+    }
+
+    /// <summary>For a bare scratch name, Object Explorer's live status checks: the database itself (online and open), and
+    /// read-only, offline, single-user and restoring ones, each marked before its state is set. RESTORING comes from a full
+    /// and a tail-log backup WITH NORECOVERY (<see cref="RestoringSql"/>): to the null device on Windows, to one file on Linux,
+    /// which disposal deletes.</summary>
+    public async Task CreateStatesAsync()
+    {
+        foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser, Restoring }) await CreateMarkedAsync(name);
+        await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
+            + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
+        // Known before the backups run, so disposal deletes a file even when the tail-log backup fails.
+        restoringBackup = await Backup.ForAsync(run, Restoring);
+        await Exec(RestoringSql(restoringBackup));
+    }
+
+    /// <summary>Leaves a database RESTORING: full recovery, a full backup, and a tail-log backup WITH NORECOVERY to the same target.</summary>
+    internal static string RestoringSql(Backup backup) =>
+        "ALTER DATABASE " + Bracket(backup.Database) + " SET RECOVERY FULL;\n" + backup.DatabaseSql() + "\n" + backup.LogSql("NORECOVERY");
 
     /// <summary>Creates the empty, marked round-trip database with the scratch database's collation.</summary>
     public Task<string> CreateRoundTripAsync() => CreateMarkedAsync(RoundTrip);
@@ -271,6 +404,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var name in created) await Drop(run, name, name != Offline);
+        // The restoring database's backup file (Linux) goes, then its history.
+        if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");
     }
 }

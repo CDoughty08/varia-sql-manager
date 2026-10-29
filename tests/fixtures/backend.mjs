@@ -30,7 +30,10 @@
 // table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
 // an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
 // the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
-// count as protocol violations.
+// count as protocol violations. Object Explorer's `explorer` source runs only while the control directory holds
+// explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
+// jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
+// unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -38,7 +41,7 @@
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
 // commits or rolls back what is open.
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -48,6 +51,7 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { liveProbes } from '../../src/shared/live/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -553,25 +557,48 @@ const fixtures = {
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
-  if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined
+  if ((params.source !== 'debug.synthetic' && !explorer) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {
     id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
     probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
-    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0, source: params.source, kept: new Map()
   }
   live.grant = more => { live.available += more; wakeLive(live) }
   live.end = ended => {
     clearTimeout(live.timer)
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
+    for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, opened([...live.probes.keys()]))
+  sendLive(live, explorer ? explorerOpened([...live.probes.keys()]) : opened([...live.probes.keys()]))
   wakeLive(live)
+}
+const explorerOpened = probes => ({ type: 'live.opened', seq: 0, source: 'explorer', probes: probes.map(probe => ({ probe, intervalMs: liveProbes[probe].intervalMs.default, minIntervalMs: liveProbes[probe].intervalMs.min, maxIntervalMs: liveProbes[probe].intervalMs.max, state: 'ok' })) })
+/** explorer-status.json, or undefined while there is none (or it does not parse). */
+function explorerStatus() {
+  if (!controlDirectory) return undefined
+  try { return JSON.parse(readFileSync(join(controlDirectory, 'explorer-status.json'), 'utf8')) } catch { return undefined }
+}
+/** One explorer probe's sample: its table as a new stored revision (two kept per probe), or the Agent count. */
+function explorerSample(live, probe) {
+  const status = explorerStatus() ?? {}
+  if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
+  const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
+  const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
 }
 function sendLive(live, value) {
   const body = encodeControl(value)
@@ -599,7 +626,8 @@ function wakeLive(live) {
     probe.last = now
     probe.resumed = false
     const n = ++probe.samples
-    if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
+    else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })

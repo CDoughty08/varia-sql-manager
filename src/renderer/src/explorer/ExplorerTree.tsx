@@ -6,6 +6,7 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
+import { rowStatus } from './ExplorerStatusService'
 import { layoutWindow, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
@@ -18,8 +19,9 @@ const announceDelayMs = 500
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId }: { readonly activeConnectionId?: string }) {
-  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions } = workbench
+  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions, explorerStatus } = workbench
   const snapshot = useServiceSnapshot(explorer)
+  const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const renaming = useServiceSnapshot(explorer.renaming)
@@ -186,7 +188,8 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
           node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
           active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
-          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} match={kind === RowKind.Node ? match : undefined} partial={kind === RowKind.Node && !!partial?.has(rowId)} />
+          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} match={kind === RowKind.Node ? match : undefined} partial={kind === RowKind.Node && !!partial?.has(rowId)}
+          status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined} />
       })}
     </div>
   </div>

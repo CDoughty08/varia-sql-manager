@@ -2,12 +2,12 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
+import { expandExplorerPath, explorerLines, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
 import {
   activeServerRows, backendReady, connectionDot, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault,
   explorerFilterField, explorerFooter, explorerFreshness, explorerFreshnessScope, explorerLabel, explorerMatches, explorerNoMatch, explorerServerCount, explorerSublabel, explorerToolbar, itemCount,
-  messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, toolbarButton as mainToolbarButton
+  messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, staleBadge, statusChips, toolbarButton as mainToolbarButton
 } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
@@ -786,12 +786,16 @@ try {
     if (!width) expect(fit.clipped).toEqual([])
   }
   await pane.evaluate(element => { element.style.width = '' })
-  // RowEnd's slot holds E2's environment tag (later E3's chips): with the tag's own markup and rules, a custom label shows
-  // whole within the tag's cap, and in a 200 px pane gives way (ellipsized) while the dot stays inside the row. Only the
-  // cap cuts it, E2's 40% of the row (less the active server's glyph) or 12em: the pill is as wide as its label needs or
-  // as the cap, whichever is less. Whether a label reaches the cap depends on the font: Linux's fallback, DejaVu Sans,
-  // sets PRODUCTION about 12 px wider than Segoe UI, past the cap of the active server's row in the default pane. Widths
-  // are fractional layout boxes, since a label within a pixel of its box can report a scrollWidth past its clientWidth.
+  // RowEnd's slot holds E2's environment tag and E3's live chips (none here: the stub's connections have no live status):
+  // with the tag's own markup and rules, a custom label shows whole within its cap, and in a 200 px pane gives way
+  // (ellipsized) while the dot stays inside the row. Two things cut it. E2's cap: 40% of the row (less the active server's
+  // glyph) or 12em. And E3's share for the server's name: short of room, the name keeps the smaller of its text and
+  // min(35cqw, 10em) (.oe-label), and the row's end, the tag in it, takes what is left. So the pill is as wide as its label
+  // needs, or as the cap, or as the room the name's share leaves, whichever is least. Which one cuts depends on the font:
+  // Linux's fallback, DejaVu Sans, sets PRODUCTION about 12 px wider than Segoe UI, past the cap of the active server's
+  // row in the default pane. Widths are fractional layout boxes, since a label within a pixel of its box can report a
+  // scrollWidth past its clientWidth.
+  await expect(statusChips(serverRow)).toHaveCount(0)
   const tagFit = text => serverRow.evaluate((row, { text, part }) => {
     const make = value => {
       const tag = document.createElement('span'), pill = document.createElement('span'), label = document.createElement('span')
@@ -805,44 +809,71 @@ try {
       tag.append(pill)
       return { tag, pill, label }
     }
-    const end = row.querySelector(part.explorerEnd), style = getComputedStyle(row), token = name => parseFloat(style.getPropertyValue(name))
-    // What the pill needs: the same pill out of the row's flow, sized by its label alone.
-    const free = make(text).pill
-    Object.assign(free.style, { position: 'absolute', left: '0', top: '0', visibility: 'hidden' })
-    row.append(free)
-    const needed = free.getBoundingClientRect().width
-    free.remove()
+    const end = row.querySelector(part.explorerEnd), name = row.querySelector(part.explorerLabel), style = getComputedStyle(row), token = name => parseFloat(style.getPropertyValue(name))
+    const width = element => element.getBoundingClientRect().width
+    const outer = element => { const box = getComputedStyle(element); return width(element) + parseFloat(box.marginLeft) + parseFloat(box.marginRight) }
+    /** An element's width out of the row's flow, sized by its own text alone. */
+    const unconstrained = element => {
+      Object.assign(element.style, { position: 'absolute', left: '0', top: '0', width: 'auto', maxWidth: 'none', visibility: 'hidden' })
+      row.append(element)
+      const size = width(element)
+      element.remove()
+      return size
+    }
+    // What the pill needs, and what the server's name needs.
+    const needed = unconstrained(make(text).pill), nameNeeded = unconstrained(name.cloneNode(true))
     // The cap, as the rule gives it (cqw is a share of the row's content box) and as the longest label a profile takes
     // meets it.
     const widest = make('W'.repeat(32))
     end.prepend(widest.tag)
-    const content = row.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const content = width(row) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
     const glyph = row.querySelector(part.explorerActive) ? token('--varia-glyph-sm') + token('--varia-space-1') : 0
     const rule = Math.min(0.4 * content - glyph, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
-    const cap = widest.pill.getBoundingClientRect().width, capped = widest.label.scrollWidth > widest.label.clientWidth
+    // The room the name's share leaves the tag: the row's content less what comes before the name (fixed: indent, chevron,
+    // icon), the name's share, the gaps around the sublabel (which gives way to nothing first), the end's padding, and the
+    // end's other parts (the active query's glyph, the dot) with their gaps.
+    const share = Math.min(0.35 * content, 10 * parseFloat(getComputedStyle(name).fontSize)), kept = Math.min(nameNeeded, share)
+    const inFlow = [...row.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
+    const gap = parseFloat(style.columnGap), endStyle = getComputedStyle(end), endGap = parseFloat(endStyle.columnGap)
+    const before = name.getBoundingClientRect().left - row.getBoundingClientRect().left - parseFloat(style.paddingLeft)
+    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + (element.matches(part.explorerSublabel) ? 0 : outer(element)), gap * (to - from))
+    const others = [...end.children].filter(element => element !== widest.tag).reduce((sum, element) => sum + outer(element) + endGap, 0)
+    const room = content - before - kept - between - parseFloat(endStyle.paddingLeft) - others
+    const limit = Math.min(rule, room)
+    const cap = width(widest.pill), capped = widest.label.scrollWidth > widest.label.clientWidth, nameAtCap = width(name)
     widest.tag.remove()
     const { tag, pill } = make(text)
     end.prepend(tag)
-    const shown = pill.getBoundingClientRect().width
-    const result = { whole: shown >= needed - 0.5, shown, needed, cap, rule, capped, dotInside: row.querySelector(part.explorerDot).getBoundingClientRect().right <= row.getBoundingClientRect().right, label: row.querySelector(part.explorerLabel).getBoundingClientRect().width }
+    const shown = width(pill)
+    const result = { whole: shown >= needed - 0.5, shown, needed, cap, rule, room, limit, capped, nameNeeded, share, kept, nameAtCap, dotInside: row.querySelector(part.explorerDot).getBoundingClientRect().right <= row.getBoundingClientRect().right, label: width(name) }
     tag.remove()
     return result
   }, { text, part })
+  /** The cap is the least of the rule and the room the name's share leaves; where that room cuts the tag, the name keeps exactly its share. */
+  const exact = fit => {
+    expect(fit.cap, JSON.stringify(fit)).toBeCloseTo(fit.limit, 0)
+    if (fit.room < fit.rule) expect(fit.nameAtCap, JSON.stringify(fit)).toBeCloseTo(fit.kept, 0)
+  }
   // A short custom label is well inside the cap in any font, and shows whole.
   const short = await tagFit('QA EAST')
   expect(short).toMatchObject({ whole: true, capped: true, dotInside: true })
-  expect(short.cap).toBeCloseTo(short.rule, 0)
+  exact(short)
   expect(short.needed).toBeLessThan(short.cap - 8)
   // PRODUCTION shows whole where the cap leaves it room (Segoe UI), and otherwise takes all of the cap.
   const production = await tagFit('PRODUCTION')
   expect(production).toMatchObject({ capped: true, dotInside: true })
-  expect(production.shown, JSON.stringify(production)).toBeCloseTo(Math.min(production.needed, production.rule), 0)
+  exact(production)
+  expect(production.shown, JSON.stringify(production)).toBeCloseTo(Math.min(production.needed, production.limit), 0)
+  // In a 200 px pane the server's name keeps its share, and the tag gives way to it: the room that share leaves, not the
+  // 40% rule, is what cuts the label.
   await pane.evaluate(element => { element.style.width = '200px' })
   const narrow = await tagFit('PRODUCTION EU WEST')
   await pane.evaluate(element => { element.style.width = '' })
   expect(narrow).toMatchObject({ whole: false, capped: true, dotInside: true })
-  expect(narrow.shown).toBeCloseTo(narrow.rule, 0)
-  expect(narrow.label).toBeGreaterThan(0)
+  exact(narrow)
+  expect(narrow.room, JSON.stringify(narrow)).toBeLessThan(narrow.rule)
+  expect(narrow.shown).toBeCloseTo(narrow.limit, 0)
+  expect(narrow.label, JSON.stringify(narrow)).toBeCloseTo(narrow.kept, 0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
   console.log('Object Explorer checks: 30 px server rows with version, login, connection dot and active-query glyph, muted item counts (left out while filtered), the environment tag\'s slot, the footer\'s freshness, and the Filter loaded objects box by keyboard and from the palette.')
@@ -1005,7 +1036,18 @@ try {
       await press('F5')
       await expect(await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Note', wait)).toHaveAttribute('aria-label', 'Note (nvarchar(20), null)')
       expect(await (await explorerRow(page, server, 'Databases', name, 'Tables', 'dbo.Orders', 'Columns', 'Id', wait)).getAttribute('id')).toBe(idRowId)
-      console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, and F5 on the server shows a column added by a query below what stays expanded.')
+      // Live status: a state another session sets shows as a chip on the database's row within a few samples, and goes
+      // when it is undone, with no refresh (the row keeps its id).
+      const databaseRow = await revealExplorerRow(page, server, 'Databases', name)
+      const databaseRowId = await databaseRow.getAttribute('id')
+      await run(`ALTER DATABASE [${name}] SET READ_ONLY WITH ROLLBACK IMMEDIATE;`, 'read-only')
+      await expect(statusChips(databaseRow)).toHaveText(['READ-ONLY'], wait)
+      await expect(databaseRow).toHaveAttribute('aria-label', `${name} (Read-only)`)
+      await run(`ALTER DATABASE [${name}] SET READ_WRITE WITH ROLLBACK IMMEDIATE;`, 'read-write')
+      await expect(statusChips(databaseRow)).toHaveCount(0, wait)
+      await expect(databaseRow).toHaveAttribute('aria-label', name)
+      expect(await (await explorerRow(page, server, 'Databases', name, wait)).getAttribute('id')).toBe(databaseRowId)
+      console.log('Object Explorer checks: on a real server, F5 on Databases adds a new scratch database\'s row and keeps the others, F5 on the server shows a column added by a query below what stays expanded, and a database a query sets read-only shows its live chip, without a refresh, until it is set back.')
     } finally {
       // Object Explorer's pool holds no database open, so nothing it did blocks the drop.
       if (created) await run(`USE master;\nIF DB_ID(N'${name}') IS NOT NULL\nBEGIN\n  ALTER DATABASE [${name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n  DROP DATABASE [${name}];\nEND`, 'dropped')

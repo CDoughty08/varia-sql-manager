@@ -89,8 +89,17 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer'])
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview'] })
+    // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
+    // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
+    expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'] })
+    expect(liveProbes['explorer.databases']).toMatchObject({ intervalMs: { default: 5000, min: 2000 }, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
+    expect(liveProbes['explorer.databases'].permission).toBeUndefined()
+    expect(liveProbes['explorer.progress']).toMatchObject({ permission: 'serverState', tables: [{ id: 'progress', key: ['name'] }] })
+    expect(liveProbes['explorer.agent']).toMatchObject({ gates: { editions: [1, 2, 3, 8] }, series: [{ id: 'runningJobs', counter: 'gauge' }] })
+    expect(liveProbes['explorer.agent'].permission).toBeUndefined()
+    expect(liveProbes['explorer.availability']).toMatchObject({ permission: 'serverState', gates: { editions: [2, 3] }, tables: [{ id: 'groups', key: ['name'] }] })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
   })

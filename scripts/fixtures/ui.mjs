@@ -95,8 +95,10 @@ export const part = {
   explorerErrorRow: '.explorer-row.error',
   explorerSyntheticRow: '.explorer-row.synthetic',
   explorerError: '.explorer-error',
-  /** A row's end (RowEnd): indicators (the environment tag, later state chips), the item count, the connection dot. */
+  /** A row's end (RowEnd): indicators (live state chips, the environment tag), the item count, the connection dot. */
   explorerEnd: '.oe-end',
+  /** A row's live status chips (ExplorerStatusService), hidden from screen readers: the row's name says them. */
+  explorerChips: '.oe-chips',
   explorerCount: '.oe-count',
   /** A server's connection dot; data-state says online, error or lost (the row's name and tooltip say it in words). */
   explorerDot: '.oe-dot',
@@ -133,6 +135,8 @@ export const part = {
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
   statusPillLabel: '.status-pill-label',
+  /** A pill's number (StatusPill `value`: a percentage, a count), which never gives way to the label beside it. */
+  statusPillValue: '.status-pill-value',
   /** The spans that hold the tag with its visually hidden prefix: the query bar's, the classic query status bar's, and the window status bar's. */
   queryEnvironment: '.query-bar-environment',
   queryStatusEnvironment: '.query-status-environment',
@@ -381,6 +385,8 @@ export const explorerLabel = row => row.locator(part.explorerLabel)
 export const explorerSublabel = row => row.locator(part.explorerSublabel)
 export const itemCount = row => row.locator(part.explorerCount)
 export const connectionDot = row => row.locator(part.explorerDot)
+/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 jobs running"). */
+export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPill}`)
 /** The server rows marked as the active query's server (at most one). */
 export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
 export const explorerMatches = page => explorerTree(page).locator(part.explorerMatch)
