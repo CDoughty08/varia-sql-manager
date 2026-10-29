@@ -176,8 +176,8 @@ try {
   await expect(explorerSublabel(appData)).toHaveCount(0)
   await expect(appData).toHaveAttribute('title', /Its state changed since Databases loaded\. Refresh Databases to update it\./)
   // A pane narrower than 30em shows only each row's first chip, rather than every chip cut to a letter or two. At the
-  // default pane width the chip that shows is whole (RESTORING 42 % keeps its percentage), and the server's PROD tag keeps
-  // its word whole beside the chips: the label gives up the row's empty space first, and the chips give way, not the tag.
+  // default pane width the chip that shows keeps its count (RESTORING 42 % keeps its percentage), and the server's PROD tag
+  // keeps its word whole beside the chips: the label gives up the row's empty space first, and the chips give way, not the tag.
   const narrow = await statusServer.evaluate(row => row.getBoundingClientRect().width < 30 * parseFloat(getComputedStyle(row).fontSize))
   await expect(statusChips(statusServer).first()).toBeVisible()
   await expect(statusChips(statusServer).nth(1)).toBeVisible({ visible: !narrow })
@@ -189,15 +189,59 @@ try {
     + ` (row ${Math.round(row.getBoundingClientRect().width)} px)`, parts)
   // Whether an element's text is whole and it ends inside the box that clips it.
   const shown = (locator, clip) => locator.evaluate((element, clip) => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= element.closest(clip).getBoundingClientRect().right + 0.5, clip)
-  // The database row has room: RESTORING 42 % is whole. The server row is short of it (its name, the chips, PROD, the
-  // active query's glyph and the dot): the jobs chip's word gives way, its count does not, and PROD stays whole.
+  // How a row shares out its room, as fractional layout widths: what its name, its chips and its first chip's glyph and
+  // count need out of the row's flow; the name's share (.oe-label: short of room, the name keeps the smaller of its text and
+  // min(35cqw, 10em)); and the room that share leaves the chips: the row's content less what comes before the name, the
+  // share, the gaps up to the row's end, the end's padding, and the end's other parts (the tag, the active query's glyph,
+  // the dot) with their gaps.
+  const fit = row => row.evaluate((row, part) => {
+    const width = element => element.getBoundingClientRect().width
+    const outer = element => { const box = getComputedStyle(element); return width(element) + parseFloat(box.marginLeft) + parseFloat(box.marginRight) }
+    const unconstrained = element => {
+      Object.assign(element.style, { position: 'absolute', left: '0', top: '0', width: 'auto', maxWidth: 'none', visibility: 'hidden' })
+      row.append(element)
+      const size = width(element)
+      element.remove()
+      return size
+    }
+    const style = getComputedStyle(row), name = row.querySelector(part.explorerLabel), end = row.querySelector(part.explorerEnd), chips = end.querySelector(part.explorerChips)
+    const first = chips.querySelector(part.statusPill), bare = first.cloneNode(true)
+    bare.querySelector(part.statusPillLabel).remove()
+    const content = width(row) - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const nameNeeded = unconstrained(name.cloneNode(true)), share = Math.min(0.35 * content, 10 * parseFloat(getComputedStyle(name).fontSize)), kept = Math.min(nameNeeded, share)
+    const inFlow = [...row.children].filter(element => getComputedStyle(element).position !== 'absolute'), from = inFlow.indexOf(name), to = inFlow.indexOf(end)
+    const gap = parseFloat(style.columnGap), endStyle = getComputedStyle(end), endGap = parseFloat(endStyle.columnGap)
+    const before = name.getBoundingClientRect().left - row.getBoundingClientRect().left - parseFloat(style.paddingLeft)
+    const between = inFlow.slice(from + 1, to).reduce((sum, element) => sum + (element.matches(part.explorerSublabel) ? 0 : outer(element)), gap * (to - from))
+    const others = [...end.children].filter(element => element !== chips).reduce((sum, element) => sum + outer(element) + endGap, 0)
+    const value = first.querySelector(part.statusPillValue)
+    return {
+      name: width(name), nameNeeded, share, kept, room: content - before - kept - between - parseFloat(endStyle.paddingLeft) - others,
+      chips: width(chips), chipsNeeded: unconstrained(chips.cloneNode(true)), countNeeds: unconstrained(bare),
+      countInside: !!value && value.getBoundingClientRect().right <= chips.getBoundingClientRect().right + 0.5
+    }
+  }, part)
+  // Short of room, each row's name keeps exactly its share (whole where its text fits it) and the chips take all the room
+  // that share leaves, up to what they need, so no empty space is left while they give way; a chip's word gives way
+  // before its count, which is whole wherever that room holds it with its glyph. Which rows are short depends on the font:
+  // in Segoe UI both names fit their share and the database row has room for RESTORING 42 %; Linux's DejaVu Sans sets
+  // status-server past its share of a 278 px row, and RESTORING a few pixels past what AppData leaves it.
   await expect(statusChips(appData).first()).toHaveText('RESTORING 42 %')
-  expect([await shown(statusChips(appData).first().locator(part.statusPillLabel), part.explorerChips), await shown(statusChips(appData).first().locator(part.statusPillValue), part.explorerChips)], layout).toEqual([true, true])
   await expect(statusChips(statusServer).first().locator(part.statusPillValue)).toHaveText('2')
-  expect(await shown(statusChips(statusServer).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
+  for (const [row, which] of [[appData, 'AppData'], [statusServer, 'status-server']]) {
+    const room = await fit(row), message = `${which}: ${JSON.stringify(room)}; server row: ${layout}`
+    expect(room.chips, message).toBeCloseTo(Math.min(room.chipsNeeded, room.room), 0)
+    if (room.room < room.chipsNeeded) expect(room.name, message).toBeCloseTo(room.kept, 0)
+    else expect(room.name, message).toBeGreaterThan(room.kept - 0.5)
+    if (room.room >= room.countNeeds) expect(room.countInside, message).toBe(true)
+  }
+  // The database row's count is whole in any font. The server row is short of room (its name, the chips, PROD, the active
+  // query's glyph and the dot): the jobs chip's word gives way, and PROD and the dot stay whole.
+  expect(await shown(statusChips(appData).first().locator(part.statusPillValue), part.explorerChips), layout).toBe(true)
+  expect(await statusChips(statusServer).first().locator(part.statusPillLabel).evaluate(label => label.scrollWidth > label.clientWidth), layout).toBe(true)
   const prod = environmentPill(statusServer, 'explorer')
   await expect(prod).toHaveText('PROD')
-  expect([await shown(prod.locator(part.statusPillLabel), part.explorerRow), await shown(statusServer.locator(part.explorerDot), part.explorerRow), await shown(explorerLabel(statusServer), part.explorerRow)], layout).toEqual([true, true, true])
+  expect([await shown(prod.locator(part.statusPillLabel), part.explorerRow), await shown(statusServer.locator(part.explorerDot), part.explorerRow)], layout).toEqual([true, true])
   console.log('Object Explorer status chips at the default pane width: ' + layout)
   // The server changes: the next samples move the chips, and the tree is not listed again.
   const listings = (await calls()).filter(call => call.method === 'explorer.children').length
