@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (241)
+## Color keys (250)
 
 ### Base
 
@@ -381,6 +381,20 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `connection.purple` | Varia | `$purple` | `#ab95ea` | `#7a4bbf` | Purple connection color. |
 | `connection.default` | Varia | `$neutral` | `#8d939f` | `#6b7280` | Swatch of connections without a color. |
 | `connection.favoriteForeground` | Varia | `$yellow` | `#d8bf5e` | `#8f6b00` | Favorite star in the connection dialog. |
+
+### Charts
+
+| Key | Source | Default | Varia Dark | Varia Light | Description |
+| --- | --- | --- | --- | --- | --- |
+| `charts.foreground` | VS Code | `$textTertiary` | `#a3a9b5` | `#4d5461` | Chart labels, legends, and the crosshair. |
+| `charts.lines` | VS Code | `$border` | `#262a31` | `#e3e6eb` | Chart grid lines and baseline. |
+| `charts.blue` | VS Code | `$chart1` | `#3987e5` | `#2a78d6` | First series of a chart; series take blue, orange, green, yellow, then purple. |
+| `charts.orange` | VS Code | `$chart2` | `#d95926` | `#d4581f` | Second series of a chart. |
+| `charts.green` | VS Code | `$chart3` | `#199e70` | `#12936a` | Third series of a chart. |
+| `charts.yellow` | VS Code | `$chart4` | `#c98500` | `#a87200` | Fourth series of a chart. |
+| `charts.purple` | VS Code | `$chart5` | `#9085e9` | `#6250d6` | Fifth series of a chart. |
+| `charts.red` | VS Code | `$error` | `#f39a9a` | `#b42229` | A status mark on a chart, such as a failed execution on a timeline; never the color of a series. |
+| `charts.gray` | Varia | `$neutral` | `#8d939f` | `#6b7280` | "Other" in a stacked chart: everything the named series leave out. |
 
 ## SQL syntax scopes (16)
 
