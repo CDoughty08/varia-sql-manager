@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { isCommandId } from '../src/shared/commands/catalog'
 import { parseWhen } from '../src/shared/commands/when'
+import { isIconId } from '../src/shared/icons'
 import { childParentKinds, kindSpecs, nodeKinds, type NodeKind, type NodeSubtype, type ParentKind } from '../src/shared/explorer/catalog'
 import {
   preflightIds, scriptAsSubmenuId, scriptAsTitleKeys, scriptAsTitles, scriptCommandEntries, scriptCommandId, scriptCommandIds, scriptCommandTitle, scriptContextValues,
@@ -97,7 +98,7 @@ describe('scripting catalogue', () => {
       's 2_dml@1 dml -', 'i 2_dml@2 dml -', 'u 2_dml@3 dml -', 'e 2_dml@4 dml -', 'x 3_execute@1 execute -'
     ])
     expect(scriptDestinations.map(destination => Object.values(scriptDestinationSpecs[destination]).join(' '))).toEqual([
-      'New Query Editor Window n 1 file-code true', 'File… f 2 save-as true', 'Clipboard l 3 clippy false'
+      'New Query Editor Window n 1 file-code true Open in Query Window', 'File… f 2 save-as true Save Script As…', 'Clipboard l 3 clippy false Copy'
     ])
     for (const titled of [...scriptVerbs.map(verb => [scriptVerbTitle(verb), scriptVerbSpecs[verb].mnemonic]), ...scriptDestinations.map(destination => [scriptDestinationSpecs[destination].title, scriptDestinationSpecs[destination].mnemonic])]) {
       expect(titled[0].toLowerCase(), titled[0]).toContain(titled[1])
@@ -240,13 +241,8 @@ describe('scripting catalogue', () => {
     })
     for (const entry of Object.values(entries)) for (const placement of entry.placements) expect(() => parseWhen(placement.when)).not.toThrow()
   })
-  it('uses destination icons that exist in the bundled codicon font', async () => {
-    // Untyped Monaco internals, as in command-catalog.test.ts.
-    const library = 'monaco-editor/base/common/codiconsLibrary.js', util = 'monaco-editor/base/common/codiconsUtil.js'
-    await import(library)
-    const { getCodiconFontCharacters } = await import(util) as { getCodiconFontCharacters(): Record<string, number> }
-    const characters = getCodiconFontCharacters()
-    for (const destination of scriptDestinations) expect(Object.hasOwn(characters, scriptDestinationSpecs[destination].icon), destination).toBe(true)
+  it('uses destination icons of the icon registry', () => {
+    for (const destination of scriptDestinations) expect(isIconId(scriptDestinationSpecs[destination].icon), destination).toBe(true)
   })
   it('keeps the spec\'s limits and error codes', () => {
     expect(scriptLimits).toEqual({

@@ -11,9 +11,10 @@ import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/i
 import { decodeControl, encodeControl } from '../src/shared/ipc/wire/msgpack'
 import type { BackendMethod, BackendMethods, ResultDescriptor } from '../src/shared/contracts'
 import { decodePage } from '../src/shared/ipc/wire/pages'
-import { cellText } from '../src/shared/ipc/wire/cells'
+import { CELL_NULL, cellFlags, cellText } from '../src/shared/ipc/wire/cells'
 import { fuzzSeed, mulberry32 } from './fuzz/prng'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
+import { liveEndSchema, liveEventSchema, liveUpdateResultSchema, type BackendLiveEvent } from '../src/shared/live/schema'
 
 // The Release build, as CI checks it: npm run check builds it before vitest runs.
 const dll = resolve('backend/Varia.Backend/bin/Release/net10.0/Varia.Backend.dll')
@@ -97,6 +98,12 @@ describe('real .NET sidecar over protocol v2', () => {
     expect(value.connectionString).toContain('Encrypt=Strict')
     expect(value.connectionString).not.toContain('super-secret')
     expect(value.connectionString).toContain('Trust Server Certificate=False')
+  })
+  it('takes a connection environment label with the options, bounds it, and keeps it out of the connection string', async () => {
+    const connection = backend(), options = { server: 'localhost', database: '', authentication: 'windows' as const, trustServerCertificate: false }
+    const value = await call(connection, 'connections.preview', { ...options, environment: 'Production' })
+    expect(value.connectionString).not.toContain('Production')
+    await expect(call(connection, 'connections.preview', { ...options, environment: 'P'.repeat(33) })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   })
   it('rejects invalid enclave and discovery settings before connecting', async () => {
     const connection = backend()
@@ -205,6 +212,23 @@ describe('real .NET sidecar over protocol v2', () => {
       design: { schema: 'dbo', name: "q]'); --", columns: [{ name: 'Id', type: { system: 'decimal', precision: 38, scale: 0 }, allowNulls: false, identity: { seed: '-1', increment: '1' } }], primaryKey: [0] } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(call(connection, 'actions.describe', { ...ids, requestId: crypto.randomUUID(), dialog: 'tableDesigner', target: { kind: 'database', name: 'tempdb' } })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     expect(deadlineFor('actions.execute', { action: 'rename', ...ids, target, newName: 'x' })).toEqual({ deadlineMs: 0, backstopMs: 0 })
+  })
+  it('offers the Activity Monitor session actions in HELLO and checks them before the connection', async () => {
+    const hello = await raw().hello()
+    expect(hello.methods).toEqual(expect.arrayContaining(['activity.details', 'activity.kill']))
+    const connection = backend()
+    const ids = { connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() }, loginTime = '2026-10-22T06:50:12.347'
+    for (const params of [{ ...ids, sessionId: 0, loginTime }, { ...ids, sessionId: 32_768, loginTime }, { ...ids, sessionId: 69, loginTime: '2026-10-22 06:50:12' },
+      { ...ids, sessionId: 69, loginTime: '2026-10-22T06:50:12Z' }, { ...ids, sessionId: 69, loginTime, text: 'plan' }, { ...ids, sessionId: 69, loginTime, text: 'batch', locks: true },
+      { ...ids, requestId: 'x', sessionId: 69, loginTime }, { ...ids, sessionId: 69, loginTime, extra: 1 }]) {
+      await expect(call(connection, 'activity.details', params as never), JSON.stringify(params)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    }
+    const session = { sessionId: 69, loginTime, hostProcessId: null }
+    for (const sessions of [[], Array.from({ length: 65 }, (_, index) => ({ ...session, sessionId: index + 1 })), [session, session], [{ ...session, loginTime: 'now' }], [{ ...session, extra: 1 }]]) {
+      await expect(call(connection, 'activity.kill', { connectionId: ids.connectionId, sessions } as never), JSON.stringify(sessions).slice(0, 80)).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    }
+    await expect(call(connection, 'activity.details', { ...ids, sessionId: 69, loginTime, locks: true })).rejects.toMatchObject({ code: 'NOT_CONNECTED', message: 'Connect to a SQL Server first.' })
+    await expect(call(connection, 'activity.kill', { connectionId: ids.connectionId, sessions: [session] })).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
   })
   it('handles cancellation of a completed or unknown query', async () => {
     await expect(call(backend(), 'query.cancel', { queryId: crypto.randomUUID() })).resolves.toEqual({ cancelled: false })
@@ -563,5 +587,136 @@ describe('real .NET sidecar results (test hooks)', () => {
       await vi.waitUntil(async () => (await readdir(folder)).every(name => !name.endsWith('.tmp')), { timeout: 10_000, interval: 50 })
       expect((await readdir(folder)).sort()).toEqual(['n1.json'])
     } finally { await rm(folder, { recursive: true, force: true }) }
+  }, 60_000)
+})
+
+describe('real .NET sidecar live subscriptions (test hooks)', () => {
+  const hooks = { VARIA_BACKEND_TEST_HOOKS: '1' }
+  const params = (args: Record<string, number> = { tickMs: 20 }, probes = ['debug.synthetic.table', 'debug.synthetic.metrics', 'debug.synthetic.status']) => ({
+    subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000 })), args
+  }) as BackendMethods['live.subscribe']['params']
+  /** A live subscription whose events main's schema must accept; `ack` acknowledges the last one, as the worker will. */
+  function subscribe(connection: BackendConnection, value: BackendMethods['live.subscribe']['params']) {
+    const events: { event: BackendLiveEvent; bytes: number }[] = []
+    const invalid: unknown[] = []
+    const sent = connection.send('live.subscribe', value, { deadlineMs: 0, onEvent: (event, bytes) => {
+      const parsed = liveEventSchema.safeParse(event)
+      if (!parsed.success) { invalid.push(parsed.error.issues); return false }
+      events.push({ event: parsed.data, bytes })
+    } })
+    sent.done.catch(() => {})
+    return { ...sent, events, invalid, ack: () => connection.credit(sent.id, events.at(-1)!.bytes) }
+  }
+  const tableOf = (event: BackendLiveEvent) => event.type === 'live.tick' ? event.samples.find(sample => sample.probe === 'debug.synthetic.table')?.tables?.[0] : undefined
+
+  it('sends main-valid frames one acknowledged tick at a time, and its tables are readable results', async () => {
+    const connection = backend(hooks)
+    expect((await connection.ready).methods).toEqual(expect.arrayContaining(['live.subscribe', 'live.update']))
+    const value = params()
+    const live = subscribe(connection, value)
+    await expect.poll(() => live.events.length).toBe(1)
+    await new Promise(done => setTimeout(done, 300))
+    expect(live.events.map(item => item.event.type)).toEqual(['live.opened'])
+    for (let tick = 1; tick <= 3; tick++) {
+      live.ack()
+      await expect.poll(() => live.events.length).toBe(tick + 1)
+    }
+    expect(live.invalid).toEqual([])
+    const tables = live.events.map(item => tableOf(item.event)).filter(table => table !== undefined)
+    expect(tables.map(table => [table.revision, table.retired])).toEqual([[1, undefined], [2, undefined], [3, [tables[0].descriptor.resultId]]])
+    const read = connection.send('results.read', { resultId: tables[2].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    expect(await read.done).toMatchObject({ rows: 3, complete: true })
+    const released = connection.send('results.read', { resultId: tables[0].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    await expect(released.done).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+
+    const update = (patch: Record<string, unknown>) => call(connection, 'live.update', { subscriptionId: value.subscriptionId, source: 'debug.synthetic', ...patch } as BackendMethods['live.update']['params'])
+    expect(liveUpdateResultSchema.safeParse(await update({ paused: true })).success).toBe(true)
+    live.ack()
+    await new Promise(done => setTimeout(done, 300))
+    const held = live.events.length
+    expect(await update({ paused: false })).toMatchObject({ applied: true, probes: [{ paused: false }, { paused: false }, { paused: false }] })
+    await expect.poll(() => live.events.length).toBe(held + 1)
+    const resumed = live.events.at(-1)!.event
+    expect(resumed.type === 'live.tick' && resumed.samples.every(sample => sample.gap === 'resumed')).toBe(true)
+    await expect(update({ paused: true, extra: 1 })).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
+    connection.cancel(live.id, 1)
+    const end = await live.done
+    expect(liveEndSchema.safeParse(end).success).toBe(true)
+    expect(end).toMatchObject({ ended: 'cancelled' })
+    const gone = connection.send('results.read', { resultId: tables[2].descriptor.resultId, firstRow: 0, maxRows: 10 }, { deadlineMs: 60_000, credit: 65_536, stream: { data: () => {} } })
+    await expect(gone.done).rejects.toMatchObject({ code: 'RESULT_RELEASED' })
+    await expect(update({ paused: true })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  }, 60_000)
+
+  it('ends a subscription whose source ended, keeping its last table, and one whose connection is disconnected', async () => {
+    const connection = backend(hooks)
+    const ended = subscribe(connection, params({ tickMs: 20, endAfterTicks: 2 }, ['debug.synthetic.table']))
+    await expect.poll(() => ended.events.length).toBe(1)
+    ended.ack()
+    await expect.poll(() => ended.events.length).toBe(2)
+    ended.ack()
+    const end = await ended.done as { kept?: number[] }
+    expect(end).toMatchObject({ ended: 'sourceEnded', ticks: 2, kept: [tableOf(ended.events[2].event)!.descriptor.resultId] })
+    expect(await call(connection, 'results.close', { resultIds: end.kept! })).toMatchObject({ closed: 1 })
+
+    const value = params()
+    const disconnected = subscribe(connection, value)
+    await expect.poll(() => disconnected.events.length).toBe(1)
+    await call(connection, 'connections.disconnect', { connectionId: value.connectionId })
+    expect(await disconnected.done).toMatchObject({ ended: 'disconnected' })
+  }, 60_000)
+
+  /** Every row of a stored result as the worker decodes it: each cell's text, null for NULL. */
+  async function rowsOf(connection: BackendConnection, descriptor: ResultDescriptor | { resultId: number; columns: readonly { wire: 'text' | 'binary' }[] }) {
+    const rows: (string | null)[][] = []
+    const read = connection.send('results.read', { resultId: descriptor.resultId, firstRow: 0, maxRows: 65_536 }, { deadlineMs: 60_000, credit: 16 * 1024 * 1024, stream: { data: (_seq, body) => {
+      const view = decodePage(body, descriptor.columns)
+      for (let row = 0; row < view.rowCount; row++) rows.push(descriptor.columns.map((_, column) => cellFlags(view, column, row) & CELL_NULL ? null : cellText(view, column, row).text))
+    } } })
+    await read.done
+    return rows
+  }
+
+  it('sends main-valid table samples (two tables, facets, an append log) whose keys equal the cells the worker decodes', async () => {
+    const connection = backend(hooks)
+    const value = params({ tickMs: 20, rows: 6, logRows: 3, lateEvery: 2 }, ['debug.synthetic.grid', 'debug.synthetic.log'])
+    const live = subscribe(connection, value)
+    for (let tick = 0; tick < 5; tick++) {
+      await expect.poll(() => live.events.length).toBe(tick + 1)
+      live.ack()
+    }
+    await expect.poll(() => live.events.length).toBe(6)
+    expect(live.invalid).toEqual([])
+    const ticks = live.events.map(item => item.event).filter(event => event.type === 'live.tick')
+    const grid = ticks.at(-1)!.samples.find(sample => sample.probe === 'debug.synthetic.grid')!
+    expect(grid.tables?.map(table => table.table)).toEqual([0, 1])
+    expect(ticks[0].samples.find(sample => sample.probe === 'debug.synthetic.grid')!.tables![0].facets).toMatchObject([{ column: 'group' }])
+    const items = await rowsOf(connection, grid.tables![0].descriptor)
+    expect(items.map(row => row[2])).toEqual(items.map(row => 'Item ' + row[0]))
+    // The row tone travels as the last column with its role, so the grid hides it; its cells name each row's tone.
+    expect(grid.tables![0].descriptor.columns.at(-1)).toMatchObject({ name: 'tone', role: 'tone' })
+    expect(items.map(row => row[4])).toEqual(items.map(row => ['error', 'warning', 'running', null, null][Number(row[0]) % 5]))
+    // Track two keys as the grid will: the cell texts the worker decoded.
+    const keys = [items[1][0]!, items[4][0]!]
+    await call(connection, 'live.update', { subscriptionId: value.subscriptionId, source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 9, keys }] } as BackendMethods['live.update']['params'])
+    live.ack()
+    await expect.poll(() => live.events.length).toBe(7)
+    const next = live.events.at(-1)!.event
+    const tracked = next.type === 'live.tick' ? next.samples.find(sample => sample.probe === 'debug.synthetic.grid')!.tables![0] : undefined
+    const after = await rowsOf(connection, tracked!.descriptor)
+    expect(tracked!.tracked!.seq).toBe(9)
+    expect(tracked!.tracked!.rows.map(row => after[row][0])).toEqual(keys)
+    const log = ticks.flatMap(event => event.samples.filter(sample => sample.probe === 'debug.synthetic.log').flatMap(sample => sample.append ?? [])).at(-1)!
+    const messages = (await rowsOf(connection, log.descriptor)).map(row => Number(row[0]))
+    expect(new Set(messages).size).toBe(messages.length)
+    expect(messages.length).toBeGreaterThan(5)
+    connection.cancel(live.id, 1)
+    expect(await live.done).toMatchObject({ ended: 'cancelled' })
+  }, 60_000)
+
+  it('has no synthetic source without its test hooks', async () => {
+    const connection = backend()
+    const live = subscribe(connection, params())
+    await expect(live.done).rejects.toMatchObject({ code: 'INVALID_PARAMS' })
   }, 60_000)
 })

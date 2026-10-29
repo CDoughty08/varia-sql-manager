@@ -2,6 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow, explorerStatics, explorerTree } from './fixtures/explorer-tree.mjs'
+import { activeDocumentName, backendReady, documentTabs, editorText as editorTextOf, messages, part, quickInput, quickInputActive, quickInputBox, quickInputMessage, quickInputRows, searchBox } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'palette-profile-'))
@@ -20,7 +21,7 @@ async function launch() {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     dialog.showSaveDialog = async () => ({ canceled: true })
@@ -44,18 +45,18 @@ const menuItem = id => application.evaluate(({ Menu }, itemId) => {
 const clickMenu = id => application.evaluate(({ Menu }, itemId) => Menu.getApplicationMenu().getMenuItemById(itemId).click(), id)
 const calls = method => application.evaluate((_electron, name) => globalThis.variaCalls.filter(call => call.method === name).length, method)
 const textbox = () => page.locator('.monaco-editor [role="textbox"]')
-const editorText = () => page.locator('.monaco-editor .view-lines').innerText()
-const tabs = () => page.locator('.query-tabs').getByRole('tab')
-const selectedTab = () => page.locator('.query-tabs').getByRole('tab', { selected: true }).getAttribute('aria-label')
-const widget = () => page.locator('.quick-input')
+const editorText = () => editorTextOf(page)
+const tabs = () => documentTabs(page).getByRole('tab')
+const selectedTab = () => activeDocumentName(page)
+const widget = () => quickInput(page)
 const combobox = name => page.getByRole('combobox', { name, exact: true })
-const activeId = () => page.locator('.quick-input [role="combobox"]').getAttribute('aria-activedescendant')
+const activeId = () => quickInputBox(page).getAttribute('aria-activedescendant')
 /** The option aria-activedescendant names, as the screen reader sees it. */
-const activeOption = () => page.evaluate(() => {
-  const id = document.querySelector('.quick-input [role="combobox"]')?.getAttribute('aria-activedescendant')
+const activeOption = () => page.evaluate(widget => {
+  const id = document.querySelector(widget + ' [role="combobox"]')?.getAttribute('aria-activedescendant')
   const option = id ? document.getElementById(id) : null
   return option && { role: option.getAttribute('role'), selected: option.getAttribute('aria-selected'), disabled: option.getAttribute('aria-disabled'), name: option.getAttribute('aria-label'), text: option.textContent }
-})
+}, part.quickInput)
 const variable = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--varia-editor-background').trim().toLowerCase())
 const windowBackground = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBackgroundColor().toLowerCase())
 // expect.poll does not retry a callback that throws, and appearance.json appears only after the first choice.
@@ -108,8 +109,8 @@ try {
   await expect.poll(async () => (await activeOption())?.text).toContain('File: New Query')
   expect((await activeOption()).text).toContain('Ctrl+N')
   // The key keeps a visible outline on the active row's fill, and an edge marks the row by more than its hue.
-  expect(await widget().locator('.quick-input-row.active kbd').evaluate(kbd => { const style = getComputedStyle(kbd); return style.borderTopColor === style.color })).toBe(true)
-  expect(await widget().locator('.quick-input-row.active').evaluate(row => getComputedStyle(row).boxShadow)).toMatch(/inset/)
+  expect(await quickInputActive(page).locator('kbd').evaluate(kbd => { const style = getComputedStyle(kbd); return style.borderTopColor === style.color })).toBe(true)
+  expect(await quickInputActive(page).evaluate(row => getComputedStyle(row).boxShadow)).toMatch(/inset/)
   await page.keyboard.press('Enter')
   await expect(tabs()).toHaveCount(2)
   await expect(widget()).toHaveCount(0)
@@ -137,7 +138,7 @@ try {
   await expect(combobox('Command Palette')).toBeFocused()
   await page.keyboard.type('zzzz')
   await expect(widget().getByRole('status')).toHaveText('No matching commands')
-  await expect(widget().locator('.quick-input-empty')).toHaveText('No matching commands')
+  await expect(widget().locator(part.quickInputEmpty)).toHaveText('No matching commands')
   await page.keyboard.press('Escape')
 
   // 5. Focus is back in the editor before the command runs, so Undo acts on the editor.
@@ -174,10 +175,10 @@ try {
   expect(await activeOption()).toMatchObject({ disabled: 'true', name: 'Query: Cancel Executing Query, Alt+Pause' })
   // Matches on a dimmed row are dimmed too, and so is the key of the active one. (A row found by a keyword, such as
   // Script As… by "execute", highlights nothing.)
-  expect(await widget().locator('.quick-input-row.disabled:not(.active):has(.quick-input-label .quick-input-hl)').first().evaluate(row => getComputedStyle(row.querySelector('.quick-input-hl')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
-  expect(await widget().locator('.quick-input-row.active.disabled').evaluate(row => getComputedStyle(row.querySelector('kbd')).color === getComputedStyle(row.querySelector('.quick-input-label')).color)).toBe(true)
+  expect(await quickInputRows(page).and(page.locator(`[aria-disabled="true"][aria-selected="false"]:has(${part.quickInputLabel} ${part.quickInputHighlight})`)).first().evaluate((row, part) => getComputedStyle(row.querySelector(part.quickInputHighlight)).color === getComputedStyle(row.querySelector(part.quickInputLabel)).color, part)).toBe(true)
+  expect(await quickInput(page).getByRole('option', { selected: true, disabled: true }).evaluate((row, label) => getComputedStyle(row.querySelector('kbd')).color === getComputedStyle(row.querySelector(label)).color, part.quickInputLabel)).toBe(true)
   // The live region stays in the accessibility tree while empty, so the hint is announced when it arrives.
-  const message = widget().locator('.quick-input-message[aria-live="polite"]')
+  const message = quickInputMessage(page)
   expect(await message.evaluate(element => getComputedStyle(element).display)).not.toBe('none')
   await page.keyboard.press('Enter')
   await expect(message).toHaveText('No query is running in this tab.')
@@ -241,7 +242,7 @@ try {
       if (method === 'explorer.children') {
         const { node } = params, owner = node.type === 'object' ? node.object : node.owner
         const nodes = (node.type === 'object' ? statics.objects[node.object.kind] : statics.folders[node.folder]).map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
-        if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'svg:database', hasChildren: true })
+        if (node.type === 'folder' && node.folder === 'databases') nodes.push({ ref: { type: 'object', object: { kind: 'database', name: 'AppData' } }, label: 'AppData', icon: 'database', hasChildren: true })
         return { ok: true, value: { nodes, total: nodes.length, elapsedMs: 1 } }
       }
       if (method === 'query.session.close') return { ok: true, value: { closed: true } }
@@ -269,7 +270,7 @@ try {
   const explorer = await explorerRow(page, 'server-a')
   await expect(explorer).toBeVisible()
   await expect.poll(() => calls('query.execute')).toBe(1)
-  await expect(page.locator('.messages')).toContainText('Executed on server-a in master')
+  await expect(messages(page)).toContainText('Executed on server-a in master')
   await textbox().focus()
   await page.keyboard.press('Control+U')
   await expect(combobox('Change Database')).toBeFocused()
@@ -298,7 +299,7 @@ try {
   await textbox().focus()
   await page.keyboard.press('F5')
   await expect.poll(() => calls('query.execute')).toBe(executed + 1)
-  await expect(page.locator('.messages')).toContainText('Executed on server-a in AppData')
+  await expect(messages(page)).toContainText('Executed on server-a in AppData')
   // F8 moves focus to Object Explorer, as in SSMS, so the F5 after it refreshes rather than executes.
   await textbox().focus()
   const refreshed = await calls('explorer.children'), ran = await calls('query.execute')
@@ -310,9 +311,9 @@ try {
 
   // 11. A double-click or a held Enter on a command that opens a picker picks nothing there, and choosing the query's
   // own server again keeps its session.
-  const disconnects = await calls('connections.disconnect'), comboboxName = () => page.locator('.quick-input [role="combobox"]').getAttribute('aria-label')
+  const disconnects = await calls('connections.disconnect'), comboboxName = () => quickInputBox(page).getAttribute('aria-label')
   await palette('disconnect from', 'Connection: Disconnect from Server…')
-  await widget().locator('.quick-input-row.active').dblclick()
+  await quickInputActive(page).dblclick()
   expect(await comboboxName()).toBe('Disconnect from Server')
   await expect(combobox('Disconnect from Server')).toBeFocused()
   await page.keyboard.press('Escape')
@@ -344,6 +345,36 @@ try {
   await expect(textbox()).toBeFocused()
   console.log('Palette checks: database picker, chord pass-through, F5 by focus, F8 focus, double-click and held Enter guards, the current server kept, and Go to Query.')
 
+  // 12b. The header's search box opens Search over open queries, commands, and the objects Object Explorer has loaded;
+  // a found object's folders open, it is selected, and Object Explorer takes focus.
+  const databases = await explorerRow(page, 'server-a', 'Databases')
+  await databases.click()
+  await page.keyboard.press('ArrowRight')
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'AppData')).toBeVisible()
+  await page.keyboard.press('ArrowLeft')
+  await textbox().focus()
+  // View › Search (and Ctrl+Q) opens Search where F1 opens the palette, centred at the top; the search box drops it down
+  // below itself.
+  const centre = box => box.x + box.width / 2
+  await clickMenu('workbench.search')
+  await expect(combobox('Search')).toBeFocused()
+  expect(Math.abs(centre(await widget().boundingBox()) - await page.evaluate(() => window.innerWidth / 2))).toBeLessThan(1)
+  await page.keyboard.press('Escape')
+  await expect(widget()).toHaveCount(0)
+  await searchBox(page).click()
+  await expect(combobox('Search')).toBeFocused()
+  const [dropped, box] = [await widget().boundingBox(), await searchBox(page).boundingBox()]
+  expect([Math.abs(centre(dropped) - centre(box)) < 1, dropped.y >= box.y + box.height, dropped.y - (box.y + box.height) < 8]).toEqual([true, true, true])
+  await page.keyboard.insertText('AppData')
+  const found = quickInputRows(page).filter({ hasText: 'server-a › Databases' })
+  await expect(found).toHaveCount(1)
+  await found.click()
+  await expect(widget()).toHaveCount(0)
+  const appData = await explorerRow(page, 'server-a', 'Databases', 'AppData')
+  await expect(appData).toHaveAttribute('aria-selected', 'true')
+  await expect(explorerTree(page)).toBeFocused()
+  console.log('Palette checks: the header\'s search box drops Search down below itself, finds a loaded Object Explorer object and brings it forward.')
+
   // 13. Behind a modal dialog, workbench keys neither run nor are consumed, and Edit › Undo (how ⌘Z arrives on macOS)
   // does not reach into the editor behind it.
   await typeSql('SELECT 42;')
@@ -373,8 +404,8 @@ try {
   await expect.poll(windowBackground).toBe('#ffffff')
   expect(await appearance()).toBe(saved)
   await page.keyboard.press('Escape')
-  await expect.poll(variable).toBe('#11151c')
-  await expect.poll(windowBackground).toBe('#11151c')
+  await expect.poll(variable).toBe('#16181d')
+  await expect.poll(windowBackground).toBe('#16181d')
   expect(await appearance()).toBe(saved)
   await themePicker()
   await page.keyboard.type('varia light')
@@ -385,20 +416,20 @@ try {
   await expect(textbox()).toBeFocused()
   await palette('cancel', 'Query: Cancel Executing Query')
   await page.keyboard.press('Enter')
-  await expect(widget().locator('.quick-input-message')).not.toBeEmpty()
+  await expect(quickInputMessage(page)).not.toBeEmpty()
   await page.screenshot({ path: resolve('artifacts', 'palette-light.png') })
   await page.keyboard.press('Escape')
   await themePicker()
   await page.keyboard.type('dark')
   await page.keyboard.press('Enter')
   await expect.poll(async () => JSON.parse(await appearance() ?? '{}').mode).toBe('dark')
-  await expect.poll(variable).toBe('#11151c')
-  await expect.poll(windowBackground).toBe('#11151c')
+  await expect.poll(variable).toBe('#16181d')
+  await expect.poll(windowBackground).toBe('#16181d')
   console.log('Palette checks: modal dialogs block workbench keys; the Color Theme picker previews, cancels, and chooses.')
 
   // 15. An Enter that ends an IME composition never accepts a row.
   await palette('new query', 'File: New Query')
-  await page.evaluate(() => document.querySelector('.quick-input [role="combobox"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })))
+  await quickInputBox(page).evaluate(input => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true })))
   // Keys are handled in order, so had that Enter accepted the row, this key would reach the new query instead.
   await page.keyboard.type('x')
   await expect(combobox('Command Palette')).toHaveValue('>new queryx')
@@ -428,15 +459,15 @@ try {
   await expect(widget()).toHaveCount(0)
   await textbox().focus()
   await page.keyboard.press('F1')
-  await expect(widget().locator('.quick-input-row').first()).toContainText('View: Reset Layout')
-  await expect(widget().locator('.quick-input-row').first()).toContainText('recently used')
+  await expect(quickInputRows(page).first()).toContainText('View: Reset Layout')
+  await expect(quickInputRows(page).first()).toContainText('recently used')
   await page.keyboard.press('Escape')
   await application.evaluate(({ session }) => session.defaultSession.flushStorageData())
   await application.close()
   await launch()
   await textbox().focus()
   await page.keyboard.press('F1')
-  await expect(widget().locator('.quick-input-row').first()).toContainText('View: Reset Layout')
+  await expect(quickInputRows(page).first()).toContainText('View: Reset Layout')
   await page.keyboard.press('Escape')
   expect(failures).toEqual([])
   console.log('Palette checks passed: open and close paths, keyboard navigation, focus restoration, disabled hints, native menu state, pickers, chord pass-through, F5 by focus, Go to Query, modal blocking, theme preview, IME, robustness, codicons, and recently used commands across a restart.')

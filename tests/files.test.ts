@@ -726,7 +726,7 @@ describe('custom documents (the table designer\'s tab)', () => {
     const base = fixture()
     const state = { revision: 0, refusal: undefined as string | undefined, pending: undefined as ReturnType<typeof deferred<boolean>> | undefined }
     const provider = {
-      kind: 'tableDesigner' as const, revision: () => state.revision, canClose: () => state.refusal, focus: vi.fn(), closed: vi.fn(), follows: () => false,
+      kind: 'tableDesigner' as const, inSaveAll: true, revision: () => state.revision, canClose: () => state.refusal, focus: vi.fn(), closed: vi.fn(), follows: () => false,
       save: vi.fn(async (id: string) => { if (state.pending) return state.pending.promise; base.documents.setDirty(id, false); return true })
     }
     const registration = base.documents.registerProvider(provider)

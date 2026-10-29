@@ -1,17 +1,17 @@
 import { memo } from 'react'
 import { statusBadges, type ExplorerIcon as IconName } from '../../../shared/explorer/catalog.ts'
+import { codiconClass, type CodiconId } from '../../../shared/icons'
 import Icon from '../Icon'
 
-/** The 8×8 mark at an icon's bottom right: a node's status, a failed or slow load, or a lost connection. */
+/** The mark at an icon's bottom right: a node's status, a failed or slow load, or a lost connection. */
 export type BadgeName = keyof typeof statusBadges | 'lost'
-const badgeIcons: Readonly<Record<BadgeName, string>> = { ...statusBadges, lost: 'debug-disconnect' }
+const badgeIcons: Readonly<Record<BadgeName, CodiconId>> = { ...statusBadges, lost: 'debug-disconnect' }
 
-/** A node's icon: `svg:` names are `Icon.tsx`'s stroke icons, the rest codicons; folders take the folder colour. */
+/** A node's icon from the registry; folders take the folder colour. */
 function ExplorerIcon({ name, folder, badge }: { name: IconName; folder?: boolean; badge?: BadgeName }) {
-  const glyph = name.startsWith('svg:') ? <Icon name={name.slice(4) as Parameters<typeof Icon>[0]['name']} /> : <span className={`codicon codicon-${name}`} />
   const mark = badge && badgeIcons[badge]
   return <span className={`oe-icon${folder ? ' folder' : ''}`} aria-hidden="true">
-    {glyph}{mark && <span className={`oe-badge codicon codicon-${mark}`} data-badge={badge} />}
+    <Icon name={name} />{mark && <span className={`oe-badge ${codiconClass(mark)}`} data-badge={badge} />}
   </span>
 }
 

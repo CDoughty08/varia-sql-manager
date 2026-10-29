@@ -2,8 +2,9 @@
 // the tree for suites that answer explorer.children in main instead of through a backend.
 import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { explorerTree, part } from './ui.mjs'
 
-export const explorerTree = page => page.getByRole('tree', { name: 'Object Explorer', exact: true })
+export { explorerTree }
 
 /**
  * The row at a path of labels from a server down (`'server-a', 'Databases', 'AppData'`), once it is rendered: rows are
@@ -14,17 +15,17 @@ export async function explorerRow(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}, labels = path
   let id = null
   await expect.poll(async () => {
-    id = await page.evaluate(path => {
-      const rows = [...document.querySelectorAll('.explorer-tree [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+    id = await page.evaluate(({ path, part }) => {
+      const rows = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
       const stack = []
       for (const row of rows) {
         const level = Number(row.getAttribute('aria-level'))
         stack.length = level - 1
-        stack[level - 1] = row.querySelector('.oe-label')?.textContent ?? row.querySelector('.oe-text')?.textContent ?? ''
+        stack[level - 1] = row.querySelector(part.explorerLabel)?.textContent ?? row.querySelector(part.explorerText)?.textContent ?? ''
         if (level === path.length && path.every((label, index) => stack[index] === label)) return row.id
       }
       return null
-    }, labels)
+    }, { path: labels, part })
     return id
   }, { message: 'Object Explorer row ' + labels.join(' › '), ...options }).not.toBeNull()
   return page.locator('#' + id)
@@ -54,20 +55,40 @@ export async function revealExplorerRow(page, ...path) {
   throw new Error(`Object Explorer row ${label} is not in the tree (scrollTop ${after.top}, height ${after.height}, scroll height ${after.scrollHeight}): ${(await explorerLines(page)).join(' | ')}`)
 }
 
-/** Expands each row of a path that is collapsed, from the server down, by its chevron. */
+/**
+ * Expands each row of a path that is collapsed, from the server down, by its chevron. A row moves whenever a folder above
+ * it finishes loading (expanding Tables, then Views below it, moves Views down by the tables that arrive), so a click aimed
+ * at a chevron can land on another row and expand nothing. The click is therefore not forced: Playwright waits for the
+ * chevron to stop moving and retries a press that another row receives. A row that still moves between the press and the
+ * release loses the click, so the step clicks again, only while the row still reads collapsed, until it is expanded.
+ */
 export async function expandExplorerPath(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}
+  // Room for a lost click, the 2 s that notice it and a second click, on slow Linux runners too (CI ran out at 5 s).
+  const timeout = options.timeout ?? (process.platform === 'win32' ? 15000 : 10000)
   for (let length = 1; length <= path.length; length++) {
     const row = await explorerRow(page, ...path.slice(0, length), options)
-    if (await row.getAttribute('aria-expanded') === 'false') await row.locator('.oe-twistie').click({ force: true })
-    await expect(row).toHaveAttribute('aria-expanded', 'true', options)
+    if (await row.getAttribute('aria-expanded') !== 'false') {
+      await expect(row).toHaveAttribute('aria-expanded', 'true', options)
+      continue
+    }
+    let clicks = 0
+    await expect(async () => {
+      if (await row.getAttribute('aria-expanded') === 'false') {
+        clicks++
+        await row.locator(part.explorerTwistie).click({ timeout: Math.min(timeout, 5000) })
+      }
+      // An expansion shows within a frame of the click; a lost click leaves the row collapsed for the next attempt.
+      await expect(row).toHaveAttribute('aria-expanded', 'true', { timeout: 2000 })
+    }).toPass({ timeout, intervals: [100, 250, 500] })
+    if (clicks > 1) console.log(`Object Explorer row ${path.slice(0, length).join(' › ')} took ${clicks} clicks to expand: an earlier one was lost while the row moved.`)
   }
 }
 
 /** The visible rows as `level label [expanded]` lines, for failure messages and screenshots of the structure. */
-export const explorerLines = page => page.evaluate(() => [...document.querySelectorAll('.explorer-tree [role="treeitem"]')]
+export const explorerLines = page => page.evaluate(part => [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')]
   .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-  .map(row => `${row.getAttribute('aria-level')} ${row.querySelector('.oe-label, .oe-text')?.textContent}${row.hasAttribute('aria-expanded') ? ` [${row.getAttribute('aria-expanded')}]` : ''}`))
+  .map(row => `${row.getAttribute('aria-level')} ${row.querySelector(part.explorerRowText)?.textContent}${row.hasAttribute('aria-expanded') ? ` [${row.getAttribute('aria-expanded')}]` : ''}`), part)
 
 /**
  * The static folders a SQL Server 2022 box serves below each kind and folder, with their labels, as plain data: a stub

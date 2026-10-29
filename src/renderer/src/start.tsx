@@ -1,5 +1,5 @@
 import React from 'react'
-import type { Root } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
 // XML, JSON and plan values open from the results grid in their own tabs.
@@ -23,6 +23,10 @@ import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
+import Tile from './kit/Tile'
+import { LiveChart } from './live/LiveChart'
+import { liveTestHooks } from './live/test-hooks'
+import { mountTestGrid } from './live/test-grid'
 import 'dockview-react/dist/styles/dockview.css'
 import './styles.css'
 
@@ -35,8 +39,9 @@ export async function start(root: Root): Promise<void> {
   // editor's first frame has its font and options; neither waits for main longer than its timeout.
   const [theme, settings] = await Promise.all([ThemeService.create(window.varia, domThemeTarget(monaco)), SettingsService.create(window.varia)])
   const workbench = createWorkbench(window.varia, monaco, theme, settings)
-  // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs) and save
-  // AutoRecover's copies on demand (files-smoke.mjs); main enables test mode only in unpackaged smoke runs.
+  // Smoke tests drive the results API directly (backend-smoke.mjs), read the grids' counters (results-smoke.mjs), save
+  // AutoRecover's copies on demand (files-smoke.mjs) and open live views and their grids (live-smoke.mjs, live-grid-smoke.mjs); main enables test mode only in
+  // unpackaged smoke runs.
   if (window.varia.testMode) {
     const stats = workbench.gridStats
     Object.assign(window, {
@@ -47,7 +52,16 @@ export async function start(root: Root): Promise<void> {
         setScrollCap: (px?: number) => stats?.setScrollCap(px)
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
-      __variaRecovery: { flush: () => workbench.recovery.flush() }
+      __variaRecovery: { flush: () => workbench.recovery.flush() },
+      // Live views on the synthetic source, charts and grids of them, the SSIS tree's views, and the window's visibility
+      // (live-smoke.mjs, chart-smoke.mjs, live-grid-smoke.mjs, electron-smoke.mjs).
+      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table, state) => mountTestGrid(workbench, handle, probe, table, state), container => {
+        const chart = createRoot(container)
+        return {
+          render: (props, tile) => chart.render(<WorkbenchProvider workbench={workbench}>{tile ? <Tile caption={tile}><LiveChart {...props} /></Tile> : <LiveChart {...props} />}</WorkbenchProvider>),
+          unmount: () => chart.unmount()
+        }
+      }, workbench.ssisTree)
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

@@ -3,6 +3,7 @@ import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './wh
 import { actionContextKey, objectActions, objectActionSpecs, type ActionContextKey } from '../actions/catalog.ts'
 import { folderIds, nodeKinds } from '../explorer/catalog.ts'
 import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
+import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey } from '../ssis/catalog.ts'
 
 /**
  * `static` keys never change while the app runs, `state` keys come from service snapshots, `focus` keys from the
@@ -30,6 +31,11 @@ const actionKeys = Object.fromEntries(objectActions.map(action => [actionContext
   type: 'enum', scope: 'state', values: verbStates,
   description: `How the selected Object Explorer node offers ${objectActionSpecs[action].title}: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
 }])) as { readonly [K in ActionContextKey]: VerbKeyDeclaration }
+/** One key per SSIS verb (Folder Properties, …), from `ssisVerbMenuState` of the selection. */
+const ssisVerbKeys = Object.fromEntries(ssisVerbs.map(verb => [ssisVerbContextKey(verb), {
+  type: 'enum', scope: 'state', values: verbStates,
+  description: `How the selected Object Explorer node offers ${ssisVerbSpecs[verb].title}: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding \`when\` clauses.`
+}])) as { readonly [K in SsisVerbContextKey]: VerbKeyDeclaration }
 
 export const contextKeys = {
   isMac: { type: 'boolean', scope: 'static', description: 'The app runs on macOS.' },
@@ -42,16 +48,27 @@ export const contextKeys = {
   activePanel: { type: 'enum', scope: 'focus', values: ['explorer', 'editor', 'output', ''], description: "The pane that holds focus: Object Explorer, the query editor, Query Output, or '' for none." },
   outputGridFocus: { type: 'boolean', scope: 'focus', description: 'Focus is in a results grid, which copies its selected cells rather than text.' },
   designerFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active table designer; activePanel is then 'editor'." },
+  queryBarFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'." },
+  activityMonitorFocus: { type: 'boolean', scope: 'focus', description: "Focus is in the active Activity Monitor; activePanel is then 'editor'." },
   quickInputVisible: { type: 'boolean', scope: 'state', description: 'The command palette or a picker is open.' },
   backendStatus: { type: 'enum', scope: 'state', values: ['starting', 'ready', 'unresponsive', 'restarting', 'failed', 'stopped', ''], description: "The SQL backend's state; '' before the workbench has heard from main." },
   backendReady: { type: 'boolean', scope: 'state', description: "`backendStatus == 'ready'`." },
   hasActiveDocument: { type: 'boolean', scope: 'state', description: 'A query is open.' },
-  activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer.' },
+  activeDocumentIsText: { type: 'boolean', scope: 'state', description: 'The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor.' },
   activeDocumentIsDesigner: { type: 'boolean', scope: 'state', description: 'The active document is a table designer.' },
+  activeDocumentIsSsis: { type: 'boolean', scope: 'state', description: 'The active document is the properties of an SSIS Catalog folder, project, package or environment.' },
   designerEditable: { type: 'boolean', scope: 'state', description: "The active table designer has loaded, is not saving or saved, and its server is connected." },
   designerSaving: { type: 'boolean', scope: 'state', description: 'A table designer is saving its table (Stop cancels it).' },
   designerRowSelected: { type: 'boolean', scope: 'state', description: 'The active table designer has a column selected.' },
   designerPrimaryKeyRemovable: { type: 'boolean', scope: 'state', description: "Every column selected in the active table designer is a primary key column, so Remove Primary Key replaces Set Primary Key." },
+  activeDocumentIsProperties: { type: 'boolean', scope: 'state', description: 'The active document is Database Properties.' },
+  propertiesChanged: { type: 'boolean', scope: 'state', description: 'The active Database Properties document has changes that are not applied yet.' },
+  propertiesApplicable: { type: 'boolean', scope: 'state', description: 'The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected.' },
+  propertiesApplying: { type: 'boolean', scope: 'state', description: 'The active Database Properties document is applying its changes (Stop cancels them in SQL Server).' },
+  propertiesRefreshable: { type: 'boolean', scope: 'state', description: 'The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied.' },
+  activeDocumentIsActivityMonitor: { type: 'boolean', scope: 'state', description: 'The active document is an Activity Monitor.' },
+  activityPaused: { type: 'boolean', scope: 'state', description: 'The active Activity Monitor is paused: it runs no SQL until Resume.' },
+  activitySplit: { type: 'boolean', scope: 'state', description: 'The active Activity Monitor shows two panes (Split View).' },
   activeDocumentIsQuery: { type: 'boolean', scope: 'state', description: 'The active document is a query, not an XML, JSON, or execution plan value opened from the results.' },
   multipleDocuments: { type: 'boolean', scope: 'state', description: 'Two or more queries are open.' },
   documentBusy: { type: 'boolean', scope: 'state', description: 'A document task is in progress: opening, saving, or closing a query, or changing its connection.' },
@@ -63,6 +80,7 @@ export const contextKeys = {
   hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
+  panelTabsVisible: { type: 'boolean', scope: 'state', description: 'Window › Panel Tabs is on: a panel alone in its dock group shows its tab.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   editorWhitespace: { type: 'boolean', scope: 'state', description: 'View White Space is on in the query editor.' },
   editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
@@ -91,8 +109,10 @@ export const contextKeys = {
   ...scriptVerbKeys,
   explorerSelectionModifiable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node offers Modify: a T-SQL stored procedure, function, or trigger.' },
   ...actionKeys,
+  ...ssisVerbKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
   scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
+  hasNotifications: { type: 'boolean', scope: 'state', description: 'A notification toast is showing or waiting to show.' },
   explorerNode: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['background', 'folder', ...nodeKinds, ''],
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."
@@ -106,7 +126,8 @@ export const contextKeys = {
   },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
-  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }
+  pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'output', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output." },
+  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

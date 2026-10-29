@@ -1,9 +1,10 @@
 # Integration Services (SSIS Catalog)
 
-Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projects, packages and environments, and
-`ssis.describe` reads each of them for the properties documents that follow. Varia changes it in two ways so far: Create
-Catalog (Integration Services Catalogs › Create Catalog…, S9a), which creates `SSISDB` as SSMS 22 does, and Stop Operation
-(`ssis.execute`), which the backend runs and the Operations view (S3) will offer.
+Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projects, packages and environments. Properties
+on any of them (and Enter or a double-click on a package or environment, as in SSMS) opens its properties as a read-only
+document tab, which `ssis.describe` reads. Varia changes it in two ways so far: Create Catalog (Integration Services
+Catalogs › Create Catalog…, S9a), which creates `SSISDB` as SSMS 22 does, and Stop Operation (`ssis.execute`), which the
+backend runs and the Operations view (S3) will offer.
 This page records what is known about the catalog that the SSIS work builds on, how it was found out, and the test
 fixtures that stand in for a catalog where there is none; its last part, generated from `src/shared/ssis/catalog.ts`,
 is the reference for the tree, the reads, the catalog's code tables and the limits. The design is D-ssis (wave 4).
@@ -217,6 +218,44 @@ catalog's database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog ro
 Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in
 use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.
 
+### The live tree (`ssis.catalogProbe`)
+
+While a connection's SSISDB node is open (expanded, or listed with no folders) and shows (its server and Integration Services
+Catalogs folder are expanded), Object Explorer holds one live view of the `ssis.catalog` source for that connection (docs/live.md):
+every 30 s by default (Tools › Options › SQL Server Integration Services; 10 to 300 s, or off), one
+query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per row, over the columns
+the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.
+`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it): anyone
+else's sample runs a second constant query without it, so its fingerprint stays 0 and 0 for them. The first sample of a connection
+is its baseline, unless it came late: when SSISDB was already listed as the view opened (a view refused or ended and opened again,
+live updates turned on while browsing) or the view failed or paused before it sampled, that sample reloads SSISDB deeply, since
+what changed meanwhile would otherwise never show. A later sample, or the first of a new view on the same connection (SSISDB closed
+and opened again, Object Explorer shown again), reloads in the background only the listed nodes that show a view whose fingerprint
+changed, keeping expansion and selection and announcing what was added or removed; a reload never opens a node, one that a
+collapsed node hides waits until it shows, and one with a listing on its way in it, above it or below it (a first listing, the
+user's Refresh, an earlier reload, any of which may have read the catalog before the change) reloads once those listings answer, so
+a Refresh is never restarted or made shallower. The view pauses 2 s
+after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog's database, READ
+UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view
+(`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or
+restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server
+or the window has no room for another live view, the backend restarted it) opens again after 2 s, doubling to 60 s while it keeps
+ending before a sample. One that no retry would fix stops for good: the login cannot read the catalog or its sign-in is refused, the
+catalog lacks a view or column the probe reads, the request was refused as malformed, or the window closed
+(`PERMISSION_DENIED`, `LOGIN_FAILED`, `NOT_SUPPORTED`, `INVALID_PARAMS`, `PORT_CLOSED`). SSISDB then reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of
+the Integration Services Catalogs folder or of its server, or closing and opening SSISDB, tries again (a Refresh elsewhere does not).
+
+| Fingerprint | Catalog view | Object Explorer reloads |
+| --- | --- | --- |
+| `folders` | `catalog.folders` | Integration Services Catalog (deeply) |
+| `projects` | `catalog.projects` | Projects |
+| `packages` | `catalog.packages` | Packages |
+| `environments` | `catalog.environments` | Environments |
+| `variables` | `catalog.environment_variables` | Environments |
+| `references` | `catalog.environment_references` | Nothing in the tree (documents) |
+| `parameters` | `catalog.object_parameters` | Nothing in the tree (documents) |
+| `properties` | `catalog.catalog_properties` | Nothing in the tree (documents) |
+
 ### Reads (`ssis.describe`)
 
 One request reads one view in one batch, under the SSIS gates, and answers its model with a `revision`, or an error value. The
@@ -268,6 +307,33 @@ change to a role's members; a sysadmin's are not evaluated.
 | `CLR_REQUIRED` | No |
 | `CONFIGURATION_PENDING` | No |
 | `SQL_ERROR` | Yes |
+
+### Verbs and documents
+
+Each verb is one command (the palette shows it under Integration Services), on Object Explorer's menu for the kinds that offer it,
+and enabled by its context key, which the selected node sets. A verb marked as the default action runs on Enter and a double-click,
+as in SSMS. None of them changes the catalog yet. docs/commands.md lists the commands with their keys and menus.
+
+| Verb | Command | Menu item | Offered on | Opens | Default action | Context key |
+| --- | --- | --- | --- | --- | --- | --- |
+| `folderProperties` | `ssis.folderProperties` | Properties | Folder | Folder Properties | No | `ssisVerbFolderProperties` |
+| `projectProperties` | `ssis.projectProperties` | Properties | Project | Project Properties | No | `ssisVerbProjectProperties` |
+| `packageProperties` | `ssis.packageProperties` | Properties | Package | Package Properties | Yes | `ssisVerbPackageProperties` |
+| `environmentProperties` | `ssis.environmentProperties` | Properties | Environment | Environment Properties | Yes | `ssisVerbEnvironmentProperties` |
+
+A properties document is a read-only document tab named as SSMS names the dialog ("Folder Properties - Finance"), with one
+section per page. Opening an object that has a tab shows that tab and reads it again, and Refresh (F5 in the document,
+`ssis.refreshProperties`) reads it again while the last model stays on screen. A sensitive value always shows as `********`.
+
+| Document | Title | Reads (view) | Sections |
+| --- | --- | --- | --- |
+| `ssisFolder` | Folder Properties | `folder` | General |
+| `ssisProject` | Project Properties | `project` | General, Packages, Parameters, References |
+| `ssisPackage` | Package Properties | `package` | General, Parameters |
+| `ssisEnvironment` | Environment Properties | `environment` | General, Variables |
+
+Validation statuses shown in words: `N` Not validated; any other code shows as the catalog stores it.
+Commands: `ssis.folderProperties`, `ssis.projectProperties`, `ssis.packageProperties`, `ssis.environmentProperties`, `ssis.refreshProperties`.
 
 ### Writes (`ssis.execute`)
 

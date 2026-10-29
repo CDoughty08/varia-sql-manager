@@ -10,11 +10,19 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+//   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
+//                       certificate does (reason 'certificate')
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
+//   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE; for
+//                       ssisFolders and ssisProjects the SSIS catalog probe's fingerprints change with it, as after a
+//                       deployment elsewhere
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
+//   ssis/fail           ssis.describe answers a retryable TIMEOUT
+//   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
@@ -22,11 +30,30 @@
 //   cancels.jsonl       one { method } line per entra-wait request a CANCEL frame ended
 // Server 'entra-wait' connects (and lists databases) as a Microsoft Entra MFA sign-in waiting for the browser does: only a
 // CANCEL frame (the Connect dialog's Stop) ends it, answered CANCELLED.
+// live.subscribe for debug.synthetic (docs/ipc.md, Live subscriptions) runs as the real backend's test source does, with
+// stop-and-wait credit: live.opened, then a live.tick per wake only once the previous one is acknowledged, a snapshot
+// table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
+// an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
+// the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
+// count as protocol violations. Object Explorer's `explorer` source runs only while the control directory holds
+// explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
+// jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
+// unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
+// The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
+// a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
+// BLOCKED, as a probe that waited out its lock timeout does), the resources probe opens unavailable as the
+// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
+// a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
+// The SSIS tree's ssis.catalog source samples every 200 ms whatever its interval, its fingerprints counting the extra/ssis*
+// rows.
+// Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
+// modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
+// live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
 // A tab's session counts BEGIN TRAN, COMMIT and ROLLBACK in its scripts, and notes SET NOEXEC, PARSEONLY, FMTONLY and
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
 // commits or rolls back what is open.
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -36,6 +63,8 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { liveProbes } from '../../src/shared/live/catalog.ts'
+import { pendingProbes } from '../../src/shared/activity/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -43,6 +72,8 @@ const cancels = []
 const streams = new Map()
 // Requests a CANCEL frame named (an export stops at its next page), and directive scripts query.cancel stopped.
 const cancelled = new Set()
+// Live subscriptions by request id.
+const lives = new Map()
 const runningDirectives = new Set()
 const cancelledQueries = new Set()
 const controlDirectory = process.env.VARIA_TEST_BACKEND_DIR
@@ -74,10 +105,11 @@ function handle(frame) {
   if (frame.kind === FrameKind.CANCEL) {
     cancels.push({ id: frame.id, reason: frame.arg })
     cancelled.add(frame.id)
+    if (lives.has(frame.id)) { endLive(lives.get(frame.id), frame.arg === 4 ? 'shutdown' : 'cancelled'); return }
     if ((mode === 'echo' || mode === 'workbench') && streams.has(frame.id)) { streams.delete(frame.id); fail(frame.id, 'CANCELLED', 'The operation was cancelled.') }
     return
   }
-  if (frame.kind === FrameKind.CREDIT) { streams.get(frame.id)?.grant(frame.arg); return }
+  if (frame.kind === FrameKind.CREDIT) { (lives.get(frame.id) ?? streams.get(frame.id))?.grant(frame.arg); return }
   if (frame.kind === FrameKind.REQUEST && !frame.oversize) request(frame.id, frame.arg, decodeControl(frame.body))
 }
 
@@ -118,6 +150,11 @@ function request(id, deadline, { method, params, credit }) {
       break
     // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
     case 'error-details':
+      if (method === 'connections.connect' && params.server === 'certificate') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: 'certificate', reason: 'certificate' } } })
+      if (method === 'connections.connect' && params.server === 'crash') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'The backend operation failed.', details: { exception: 'System.DllNotFoundException (0x80131524)' } } })
+      // Out of bounds: a reason main does not know, and an exception summary longer than 512 characters.
+      if (method === 'connections.connect' && params.server === 'reason') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'Failed.', details: { reason: 'firewall' } } })
+      if (method === 'connections.connect' && params.server === 'exception') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'Failed.', details: { exception: 'x'.repeat(513) } } })
       if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
       break
     case 'events':
@@ -128,6 +165,7 @@ function request(id, deadline, { method, params, credit }) {
       process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, Uint8Array.of(0xc1)))
       return
   }
+  if (method === 'live.subscribe') return liveEcho(id, credit, params)
   if (credit !== undefined) return stream(id, credit, params)
   if (method === 'system.health') return respond(id, { protocolVersion: 2, pid: process.pid, cancels, deadline })
   if (method === 'query.cancel') return respond(id, { cancelled: false })
@@ -157,6 +195,38 @@ function stream(id, credit, { pages = 4, bytes = 40 * 1024 } = {}) {
   }
   streams.set(id, { grant: more => { available += more; pump() } })
   pump()
+}
+
+const syntheticProbes = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
+const opened = (probes, source = 'debug.synthetic') => ({ type: 'live.opened', seq: 0, source, probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 3_600_000, state: 'ok' })) })
+const statusTick = (seq, sample = seq) => ({ type: 'live.tick', seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 0, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: sample }] }] })
+/** Echo-mode live.subscribe: protocol tests of main's credited-EVENT rule. */
+function liveEcho(id, credit = 65_536, params = {}) {
+  const event = value => process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, encodeControl(value)))
+  // The opened frame reports the probes asked for (main refuses any other set); ticks sample the status probe.
+  const probes = Array.isArray(params.probes) ? params.probes.map(probe => probe.probe) : syntheticProbes
+  switch (mode) {
+    case 'live-overrun': event(opened(probes)); event(statusTick(1)); return
+    case 'live-data': event(opened(probes)); process.stdout.write(encodeFrame(FrameKind.DATA, id, 1, new Uint8Array(16))); return
+    case 'live-big': event({ ...opened(probes), padding: 'x'.repeat(300 * 1024) }); return
+  }
+  const ticks = params.ticks ?? 3
+  const live = { id, initial: credit, available: credit, seq: 0 }
+  const send = value => { const body = encodeControl(value); live.available -= body.length; process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, body)) }
+  live.grant = more => {
+    live.available += more
+    if (live.available < live.initial || !lives.has(id)) return
+    if (live.seq < ticks) return send(statusTick(++live.seq + (mode === 'live-seq-gap' ? 1 : 0)))
+    lives.delete(id)
+    respond(id, { ended: 'sourceEnded', kept: [], ticks, elapsedMs: 1 })
+  }
+  live.end = ended => respond(id, { ended, ticks: live.seq, elapsedMs: 1 })
+  lives.set(id, live)
+  send(opened(probes))
+}
+function endLive(live, ended) {
+  lives.delete(live.id)
+  if (live.end) return live.end(ended)
 }
 
 /** Whether a control file exists; `consume` also removes it. Only for startup and exit: see `controlled`. */
@@ -210,6 +280,10 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
+// With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
+// option's text, whose spaces are collapsed and trimmed, would name another database or none.
+const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
@@ -222,7 +296,7 @@ const explorerRows = {
   databases: () => [explorerObject({ kind: 'database', name: 'AppData' }, 'AppData', { hasChildren: true })],
   tables: owner => [explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Orders' }, 'dbo.Orders', { hasChildren: true, created: '2024-05-01T09:30:00' })],
   columns: owner => [
-    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'svg:key' }),
+    explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'key' }),
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
   ],
   logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
@@ -239,6 +313,20 @@ const explorerRows = {
     explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Child.dtsx' }, 'Child.dtsx', { subtype: 'child', icon: 'symbol-file' })
   ]
 }
+// What extra/<folder> adds: a role or table created since the folder was first listed.
+const explorerExtras = {
+  serverRoles: () => explorerObject({ kind: 'serverRole', name: 'VariaAuditors' }, 'VariaAuditors'),
+  tables: owner => explorerObject({ kind: 'table', database: owner.name, schema: 'dbo', name: 'Shipments' }, 'dbo.Shipments', { hasChildren: true }),
+  ssisFolders: () => explorerObject({ kind: 'ssisFolder', name: 'Sales' }, 'Sales', { hasChildren: true }),
+  ssisProjects: owner => explorerObject({ kind: 'ssisProject', ssisFolder: owner.name, name: 'Nightly' }, 'Nightly', { hasChildren: true, sublabel: '(Deployed 2026-10-22 09:30)' })
+}
+/** The SSIS catalog probe's fingerprints: each view's count 1 and checksum 100, and one more row per extra/ssis* cue. */
+function catalogFingerprints() {
+  const extra = folder => !!controlDirectory && existsSync(join(controlDirectory, 'extra', folder))
+  const views = ['folders', 'projects', 'packages', 'environments', 'variables', 'references', 'parameters', 'properties']
+  const more = { folders: extra('ssisFolders') ? 1 : 0, projects: extra('ssisProjects') ? 1 : 0 }
+  return views.flatMap(view => [{ id: view + 'Count', value: 1 + (more[view] ?? 0) }, { id: view + 'Checksum', value: 100 + 7 * (more[view] ?? 0) }])
+}
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
   const owner = node.type === 'object' ? node.object : node.owner
@@ -249,7 +337,8 @@ async function explorerChildren({ node, subtype }) {
   }
   // A folder lists its rows; an object whose kind lists rows (the SSIS catalog's folders) lists them after its folders.
   const list = node.type === 'folder' ? node.folder : kindSpecs[node.object.kind].list
-  const nodes = [...statics, ...(list ? explorerRows[list]?.(owner) ?? [] : [])]
+  const extra = node.type === 'folder' && explorerExtras[node.folder] && await controlled(join('extra', node.folder)) ? [explorerExtras[node.folder](owner)] : []
+  const nodes = [...statics, ...(list ? explorerRows[list]?.(owner) ?? [] : []), ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
@@ -325,6 +414,9 @@ function storeResults(id, sets) {
   })
 }
 const info = text => ({ text, kind: 'info' })
+// What a script printed (PRINT, RAISERROR), and SQL Server's other messages (STATISTICS, warnings), as the real backend marks them.
+const print = text => ({ text, kind: 'print' })
+const server = text => ({ text, kind: 'server' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
   database, messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
@@ -434,7 +526,7 @@ async function runDirective(id, params, directive) {
       if (status === 'cancelled') break
     }
     const messages = [
-      ...Array.from({ length: directive.messages }, (_, i) => info(`Message ${i + 1}`)),
+      ...Array.from({ length: directive.messages }, (_, i) => print(`Message ${i + 1}`)),
       ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
     ].slice(0, 1000)
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
@@ -459,9 +551,9 @@ async function runDirective(id, params, directive) {
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
     // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
-    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
+    messages: [server('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), server("Table '#temp'. Scan count 1, logical reads 2."),
       { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
-      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+      print('third batch')], elapsedMs: 3, status: 'completedWithErrors',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
@@ -484,6 +576,195 @@ const fixtures = {
   XML_CAST_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [{ ...column('doc', 'xml'), role: 'xml' }], rows: [['<a><b>1</b><b>2</b></a>']] }])
 }
 
+/** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
+function liveSubscribe(id, credit, params) {
+  if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
+  const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined, ssis = params.source === 'ssis.catalog'
+  if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer && !ssis) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : ssis ? probe.probe === 'ssis.catalogProbe' : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
+  if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
+  const now = Date.now()
+  const live = {
+    id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
+    probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0, source: params.source, kept: new Map()
+  }
+  live.grant = more => { live.available += more; wakeLive(live) }
+  live.end = ended => {
+    clearTimeout(live.timer)
+    const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
+    for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
+    for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
+    respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
+  }
+  lives.set(id, live)
+  if (params.source === 'activity') {
+    const denied = workbenchConnections.get(params.connectionId)?.server === 'no-permission'
+    const states = new Map([...live.probes.keys()].map(probe => [probe, pendingProbes[probe] ? { state: 'unavailable', reason: 'NOT_SUPPORTED', note: pendingProbes[probe] }
+      : denied && liveProbes[probe].permission === 'serverState' ? { state: 'unavailable', reason: 'PERMISSION_DENIED', note: 'The login lacks VIEW SERVER PERFORMANCE STATE.' } : { state: 'ok' }]))
+    for (const [probe, state] of states) if (state.state === 'unavailable') live.probes.get(probe).unavailable = true
+    sendLive(live, { type: 'live.opened', seq: 0, source: 'activity', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: liveProbes[probe.probe].intervalMs.min, maxIntervalMs: liveProbes[probe.probe].intervalMs.max, ...states.get(probe.probe) })) })
+  } else sendLive(live, explorer ? explorerOpened([...live.probes.keys()]) : opened([...live.probes.keys()], params.source))
+  wakeLive(live)
+}
+const explorerOpened = probes => ({ type: 'live.opened', seq: 0, source: 'explorer', probes: probes.map(probe => ({ probe, intervalMs: liveProbes[probe].intervalMs.default, minIntervalMs: liveProbes[probe].intervalMs.min, maxIntervalMs: liveProbes[probe].intervalMs.max, state: 'ok' })) })
+/** explorer-status.json, or undefined while there is none (or it does not parse). */
+function explorerStatus() {
+  if (!controlDirectory) return undefined
+  try { return JSON.parse(readFileSync(join(controlDirectory, 'explorer-status.json'), 'utf8')) } catch { return undefined }
+}
+/** One explorer probe's sample: its table as a new stored revision (two kept per probe), or the Agent count. */
+function explorerSample(live, probe) {
+  const status = explorerStatus() ?? {}
+  if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
+  const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
+  const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
+}
+/** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
+function overviewMetrics(n, first) {
+  const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
+  const wave = Math.sin(n / 3)
+  const values = {
+    cpuPercent: 35 + 20 * wave, schedulerDelay: 4 + wave, waitingTasks: 2_100 + 400 * wave, ioMegabytes: (3 + wave) * 1_048_576, readLatency: 4, writeLatency: 2, batchRequests: 950 + 50 * wave,
+    compilations: 12, recompilations: 1, blockedSessions: blocked ? 2 : 0, longestBlock: blocked ? 41_200 : 0, activeRequests: 12, userSessions: 87, logins: 3, runnablePerScheduler: 0.4,
+    workQueue: 0, grantsPending: 0, grantsOutstanding: 2, pageLifeExpectancy: 5_412, deadlocks: 0, lockWaits: 1
+  }
+  return liveProbes['activity.overview'].series.map(series => first && series.counter !== 'gauge' ? null : values[series.id] ?? null)
+}
+function sendLive(live, value) {
+  const body = encodeControl(value)
+  live.available -= body.length
+  process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
+}
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
+function wakeLive(live) {
+  clearTimeout(live.timer)
+  if (!lives.has(live.id)) return
+  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused && !probe.unavailable)
+  if (active.length === 0) return
+  const now = Date.now(), next = Math.min(...active.map(probe => probe.dueAt))
+  if (next > now) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
+  // Stop-and-wait: nothing is sampled while the previous frame is unacknowledged; its CREDIT wakes the source again.
+  if (live.available < live.initial) return
+  const samples = [], errors = []
+  for (const probe of active.filter(item => item.dueAt <= now)) {
+    const period = periodOf(live, probe), missed = Math.floor((now - probe.dueAt) / period)
+    const sample = {
+      probe: probe.probe, costMs: 0, effectiveIntervalMs: probe.intervalMs, ...(probe.last >= 0 ? { elapsedMs: now - probe.last } : {}),
+      ...(probe.last < 0 ? { gap: 'baseline' } : probe.resumed ? { gap: 'resumed' } : missed > 0 ? { gap: 'late' } : {}), ...(missed > 0 ? { skipped: missed } : {})
+    }
+    probe.dueAt += (missed + 1) * period
+    probe.last = now
+    probe.resumed = false
+    const n = ++probe.samples
+    if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
+    else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
+    else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
+    else if (live.source === 'activity') samples.push(sample)
+    else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
+    else if (probe.probe === 'ssis.catalogProbe') { const { gap, ...rest } = sample; samples.push({ ...rest, ...gap === 'late' ? { gap } : {}, status: catalogFingerprints() }) }
+    else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
+    else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
+  }
+  live.sampledAt = Math.max(live.sampledAt + 1, Date.now())
+  sendLive(live, { type: 'live.tick', seq: ++live.seq, sampledAt: live.sampledAt, samples, ...(errors.length ? { errors } : {}) })
+  live.ticks++
+  if (live.args.endAfterTicks && live.ticks >= live.args.endAfterTicks) { lives.delete(live.id); return live.end('sourceEnded') }
+  wakeLive(live)
+}
+/** One snapshot revision: ids n … n + rows − 1, sorted as asked (the id breaks ties), stored as a result. */
+function liveTable(live, probe, n) {
+  let rows = Array.from({ length: live.args.rows ?? 3 }, (_, offset) => ({ id: n + offset, label: 'Row ' + (n + offset), value: (n + offset) * 37 % 100 + n % 7 }))
+  if (probe.sort) rows = rows.sort((a, b) => { for (const key of probe.sort) { const left = a[key.column], right = b[key.column]; if (left !== right) return (left < right ? -1 : 1) * (key.descending ? -1 : 1) } return a.id - b.id })
+  const columns = [['id', 'int'], ['label', 'nvarchar'], ['value', 'int']].map(([name, dataType]) => ({ name, dataType, wire: 'text', nullable: false }))
+  const result = storeResult({ columns, rows: rows.map(row => [String(row.id), row.label, String(row.value)]) }, 0)
+  live.revisions.push(result.resultId)
+  const retired = live.revisions.length > 2 ? [live.revisions.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  const current = new Map(rows.map(row => [row.id, row.value]))
+  const diff = { added: [...current.keys()].filter(key => !live.previous.has(key)).length, removed: [...live.previous.keys()].filter(key => !current.has(key)).length, changed: [...current].filter(([key, value]) => live.previous.has(key) && live.previous.get(key) !== value).length }
+  live.previous = current
+  const track = probe.tracks.get(0)
+  const tracked = track && { seq: track.seq, rows: track.keys.map(key => rows.findIndex(row => String(row.id) === key)) }
+  return { table: 0, descriptor: describe(result), revision: n, ...(retired ? { retired } : {}), diff, ...(tracked ? { tracked } : {}) }
+}
+function liveUpdate(id, params) {
+  const live = [...lives.values()].find(item => item.subscriptionId === params.subscriptionId && item.grant && item.probes)
+  if (!live) return fail(id, 'NOT_FOUND', 'This live view has ended.')
+  const now = Date.now()
+  const resume = probe => { probe.dueAt = now; probe.resumed = probe.last >= 0 }
+  for (const patch of params.probes ?? []) {
+    const probe = live.probes.get(patch.probe)
+    if (!probe) return fail(id, 'INVALID_PARAMS', 'The probe is not part of this subscription.')
+    if (patch.intervalMs !== undefined) probe.intervalMs = patch.intervalMs
+    if (patch.paused !== undefined) { if (probe.paused && !patch.paused) resume(probe); probe.paused = patch.paused }
+    if (patch.sort !== undefined) probe.sort = patch.sort
+    if (patch.clear?.includes('sort')) probe.sort = undefined
+  }
+  for (const track of params.track ?? []) live.probes.get(track.probe)?.tracks.set(track.table, track)
+  if (params.args) live.args = { ...live.args, ...params.args }
+  if (params.paused !== undefined) { if (live.paused && !params.paused) for (const probe of live.probes.values()) resume(probe); live.paused = params.paused }
+  if (params.refresh) for (const probe of live.probes.values()) if (!probe.paused) probe.dueAt = Math.min(probe.dueAt, now)
+  respond(id, { applied: true, probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, effectiveIntervalMs: probe.intervalMs, paused: live.paused || !!probe.paused })) })
+  wakeLive(live)
+}
+
+// The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
+// entry point Daily.dtsx and Child.dtsx) and its environment Test. Times keep the catalog's own offset (+02:00), and a
+// sensitive parameter or variable has no value, as the backend never reads one. ssis/missing makes every object
+// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; ssis/many fills the
+// project's three lists to the 2,048 rows one read returns, with long descriptions, as a truncated answer; hold/ssis.describe
+// holds a read until the file goes or a CANCEL frame ends it (logged to cancels.jsonl).
+const ssisTime = '2026-10-21T14:05:06.1234567+02:00'
+const ssisParameter = (name, fields = {}) => ({ name, dataType: 'String', required: false, sensitive: false, valueType: 'V', valueSet: false, ...fields })
+const ssisModels = {
+  folder: target => ({ view: 'folder', id: 1, name: target.name, description: 'Nightly finance loads', createdBy: 'CONTOSO\\etl', created: ssisTime, projects: 1, environments: 1 }),
+  project: target => ({
+    view: 'project', id: 3, folder: target.ssisFolder, name: target.name, description: 'Loads the ledger', formatVersion: 1, deployedBy: 'CONTOSO\\etl', deployed: ssisTime, created: ssisTime,
+    versionLsn: 42, validationStatus: 'N', packages: [{ name: 'Daily.dtsx', entryPoint: true, version: '1.0.7' }, { name: 'Child.dtsx', entryPoint: false, version: '1.0.2', description: 'Called by Daily' }],
+    parameters: [ssisParameter('Server', { required: true, designDefault: 'localhost', value: 'sql01', valueSet: true }), ssisParameter('Password', { sensitive: true, valueSet: true }),
+      ssisParameter('Port', { dataType: 'Int32', valueType: 'R', valueSet: true, variable: 'Port' })],
+    references: [{ id: 7, type: 'R', environment: 'Test', validationStatus: 'N' }], truncated: false
+  }),
+  package: target => ({
+    view: 'package', id: 11, folder: target.ssisFolder, project: target.ssisProject, name: target.name, formatVersion: 8, version: '1.0.7', versionComments: 'Adds the ledger step',
+    entryPoint: target.name !== 'Child.dtsx', validationStatus: 'N', parameters: [ssisParameter('Rows', { dataType: 'Int64', designDefault: '9000000000' })], truncated: false
+  }),
+  environment: target => ({
+    view: 'environment', id: 5, folder: target.ssisFolder, name: target.name, description: 'Test servers', createdBy: 'CONTOSO\\etl', created: ssisTime,
+    variables: [{ name: 'Port', type: 'Int32', sensitive: false, value: '1433' }, { name: 'Secret', type: 'String', sensitive: true, description: 'Never read' }], truncated: false
+  })
+}
+/** The project at the cap of every list (ssisLimits.rows), each row with a 200-character description or value. */
+const ssisMany = (model, rows = 2048) => ({
+  ...model, truncated: true,
+  packages: Array.from({ length: rows }, (_, index) => ({ name: `Package ${index + 1}.dtsx`, entryPoint: index % 7 === 0, version: `1.0.${index}`, description: `Package ${index + 1} `.padEnd(200, 'x') })),
+  parameters: Array.from({ length: rows }, (_, index) => ssisParameter(`Parameter ${index + 1}`, { valueSet: true, ...index % 5 === 0 ? { sensitive: true } : { value: `Value ${index + 1} `.padEnd(200, 'v') } })),
+  references: Array.from({ length: rows }, (_, index) => ({ id: index + 1, type: index % 2 ? 'A' : 'R', ...index % 2 ? { folder: 'Shared' } : {}, environment: `Environment ${index + 1}`, validationStatus: 'N' }))
+})
+async function ssisDescribe(id, { view, target }) {
+  while (await controlled(join('hold', 'ssis.describe'))) {
+    if (cancelled.delete(id)) {
+      if (controlDirectory) appendFileSync(join(controlDirectory, 'cancels.jsonl'), JSON.stringify({ method: 'ssis.describe' }) + '\n')
+      return fail(id, 'CANCELLED', 'The operation was cancelled.')
+    }
+    await sleep(25)
+  }
+  if (await controlled(join('ssis', 'fail'))) return respond(id, { elapsedMs: 1, error: { code: 'TIMEOUT', message: 'The SSIS Catalog did not answer in time.', retryable: true } })
+  if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
+  const model = ssisModels[view](target)
+  return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
+}
+
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
 async function entraWait(id, method) {
   while (!cancelled.has(id)) await sleep(25)
@@ -502,25 +783,33 @@ async function workbench(id, method, params, credit) {
   }
   // A directive's `hold` and an export's hold apply later, after their first output.
   const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
-  if (!directive?.hold && method !== 'results.export') while (await controlled(join('hold', method))) await sleep(25)
+  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
+      if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
+        return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
+      }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0 }
+      // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {},
+        ...params.server === 'no-permission' && params.username ? { login: params.username } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }
     case 'connections.databases':
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      return respond(id, workbenchDatabases)
+      return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'live.subscribe': return liveSubscribe(id, credit, params)
+    case 'live.update': return liveUpdate(id, params)
     case 'connections.preview': return respond(id, { connectionString: 'Data Source=' + params.server })
     case 'connections.disconnect':
       for (const [sessionId, session] of sessions) if (session.connectionId === params.connectionId) sessions.delete(sessionId)
+      for (const live of [...lives.values()]) if (live.connectionId === params.connectionId) endLive(live, 'disconnected')
       return respond(id, { disconnected: workbenchConnections.delete(params.connectionId) })
     case 'query.session.close': {
       if (params.transaction === 'commit' && sessions.get(params.sessionId)?.transactions && await controlled('fail-commit')) {
@@ -556,7 +845,7 @@ async function workbench(id, method, params, credit) {
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
-    case 'databases.list': return respond(id, workbenchDatabases)
+    case 'databases.list': return respond(id, await databaseRows())
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
     case 'actions.describe':
@@ -582,6 +871,7 @@ async function workbench(id, method, params, credit) {
     case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    case 'ssis.describe': return ssisDescribe(id, params)
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)

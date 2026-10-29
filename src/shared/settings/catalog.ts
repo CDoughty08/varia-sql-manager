@@ -4,8 +4,11 @@ import { commandDescriptor, type CommandId } from '../commands/catalog'
 import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
+import { activityMonitorSettings } from './activity-monitor'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
+import { integrationServicesSettings } from './integration-services'
+import { liveDataSettings } from './live-data'
 import { objectExplorerSettings, scriptingSettingPrefix } from './object-explorer'
 import { settingPages as pages } from './pages'
 import { queryExecutionSettings } from './query-execution'
@@ -24,7 +27,10 @@ const settingAreas = [
   statusBarSettings,
   queryExecutionSettings,
   queryResultsSettings,
-  objectExplorerSettings
+  objectExplorerSettings,
+  liveDataSettings,
+  activityMonitorSettings,
+  integrationServicesSettings
 ] as const
 
 type Def = typeof settingAreas[number][number]

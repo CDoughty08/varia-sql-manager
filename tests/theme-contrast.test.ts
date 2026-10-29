@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from '../src/shared/theme/charts'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
+import { parseThemeSource } from '../src/shared/theme/format'
 import { colorKeys, cssVariable, sqlScopes, type ColorKey, type SqlScope } from '../src/shared/theme/registry'
-import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { resolveBuiltin, resolveTheme } from '../src/shared/theme/resolve'
 import type { ResolvedTheme, ThemeType } from '../src/shared/theme/types'
 
 const types: ThemeType[] = ['dark', 'light']
@@ -29,6 +32,22 @@ describe('built-in theme contrast', () => {
     expect(hoverPairs.length).toBeGreaterThan(4)
     expect(failures, failures.join('\n')).toEqual([])
   })
+  it('holds chart series to 3:1 and chart text to 4.5:1 on every surface a chart sits on', () => {
+    // Series are the chart's data (WCAG 1.4.11); grid lines are decorative and exempt. A tile's sparkline sits on the tile.
+    expect(chartSurfaces).toContain('tile.background')
+    for (const surface of chartSurfaces) {
+      for (const color of [...chartSeriesColors, ...chartStatusColors]) expect(contrastPairs).toContainEqual({ foreground: color, background: [surface], minimum: 3 })
+      expect(contrastPairs).toContainEqual({ foreground: 'charts.foreground', background: [surface], minimum: 4.5 })
+    }
+    expect(contrastExemptions['charts.lines']).toBeDefined()
+  })
+  it('leaves the active query\'s server row untinted, as a tint near the selection and hover fills read as one of them', () => {
+    // Its glyph (objectExplorer.activeConnectionForeground, paired above on every row state) marks it instead.
+    for (const type of types) {
+      const theme = resolveBuiltin(type)
+      expect(backgroundOf(theme, ['sideBar.background', 'objectExplorer.activeConnectionBackground']), type).toEqual(backgroundOf(theme, ['sideBar.background']))
+    }
+  })
   it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
     // Fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object Explorer's
@@ -41,9 +60,19 @@ describe('built-in theme contrast', () => {
       for (const surface of backgrounds) expect(outlines).toContainEqual({ foreground, background: [surface], minimum: 3 })
     }
   })
+  it('checks everything a toast draws over its own background, which a theme can set apart', () => {
+    const toast = (foreground: string, ...background: string[]) => ({ foreground, background: ['notifications.background', ...background] })
+    const expected = [
+      ...['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'].map(key => ({ ...toast(key), minimum: 4.5 })),
+      { ...toast('button.secondaryHoverForeground', 'button.secondaryHoverBackground'), minimum: 4.5 },
+      ...['button.border', 'focusBorder', 'notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'].map(key => ({ ...toast(key), minimum: 3 }))
+    ]
+    for (const pair of expected) expect(contrastPairs).toContainEqual(pair)
+  })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
-    const foregrounds = colorKeys.filter(key => /[Ff]oreground$/.test(key))
+    // Indicators (status dots and rings) are glyphs: they need a pair as text colors do.
+    const foregrounds = colorKeys.filter(key => /(?:[Ff]oreground|Indicator)$/.test(key))
     const missing = [...foregrounds.filter(key => !checked.has(key) && !contrastExemptions[key]), ...sqlScopes.filter(scope => !checked.has('syntax:' + scope))]
     expect(missing).toEqual([])
     for (const [key, reason] of Object.entries(contrastExemptions)) {
@@ -70,10 +99,24 @@ describe('built-in theme contrast', () => {
     const missing = rules.filter(({ color, background }) => !contrastExemptions[color!] && !contrastPairs.some(pair => pair.foreground === color && pair.background.at(-1) === background))
     expect(missing.map(rule => `${rule.selector}: ${rule.color} on ${rule.background}`)).toEqual([])
   })
+  it('holds the documentation example themes to the same pairs', () => {
+    // A key default that stops following an override the examples make (the status bar's, say) shows up here.
+    const directory = join('docs', 'themes', 'examples')
+    const files = readdirSync(directory).filter(file => file.endsWith('.json')).sort()
+    expect(files.length).toBeGreaterThan(1)
+    const failures = files.flatMap(file => {
+      const theme = parseThemeSource(readFileSync(join(directory, file)), file).theme!
+      return (theme.type === 'dual' ? types : [theme.type]).flatMap(type => {
+        const resolved = resolveTheme([theme], type).theme
+        return contrastPairs.map(pair => [pair, ratio(resolved, pair)] as const).filter(([pair, value]) => value < pair.minimum).map(([pair, value]) => `${file} ${describePair(type, pair, value)}`)
+      })
+    })
+    expect(failures, failures.join('\n')).toEqual([])
+  })
   it('composites translucent foregrounds and backgrounds before measuring', () => {
     const dark = resolveBuiltin('dark')
-    const pair: ContrastPair = { foreground: 'resultsGrid.nullForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 4.5 }
-    const striped = composite(hexColor('#d9e1ec08'), hexColor('#141a23'))
-    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#dfbd82b3'), striped), striped), 6)
+    const pair: ContrastPair = { foreground: 'emptyState.iconForeground', background: ['panel.background', 'resultsGrid.alternateRowBackground'], minimum: 3 }
+    const striped = composite(hexColor('#d9dce305'), hexColor('#16181d'))
+    expect(ratio(dark, pair)).toBeCloseTo(contrast(composite(hexColor('#7f869499'), striped), striped), 6)
   })
 })

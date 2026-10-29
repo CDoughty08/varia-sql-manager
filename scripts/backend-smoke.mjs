@@ -2,10 +2,12 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
+import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerFilterBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
-// and reconnected; and the UI's responsiveness while a million stored rows are read through the results worker.
+// and reconnected; the UI's responsiveness while a million stored rows are read through the results worker; and a live
+// subscription relayed through that worker, acknowledged by the page.
 // Main honours VARIA_TEST_BACKEND, VARIA_BACKEND_LIVENESS_MS, __variaTest, and test mode only in smoke runs.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -53,24 +55,24 @@ async function ready(generation) {
   await expect.poll(async () => { const { state } = await hooks(); return state.status === 'ready' && (generation === undefined || state.generation === generation) }, { timeout: 30000 }).toBe(true)
   return hooks()
 }
-const banner = () => page.locator('.backend-banner')
-const statusBar = () => page.locator('.status-bar')
+const banner = () => backendBanner(page)
+const statusBar = () => statusBarOf(page)
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
 async function typeSql(sql) {
   await page.locator('.monaco-editor [role="textbox"]').focus()
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
 }
-const execute = () => page.locator('.toolbar').getByRole('button', { name: /Execute/ })
+const execute = () => queryBarButton(page, /Execute/)
 async function messages() {
-  await page.getByRole('tab', { name: /^Messages/ }).click()
-  return page.locator('.messages')
+  await outputView(page, /^Messages/).click()
+  return messagesOf(page)
 }
 /** A data cell of the first results grid, by row and column. */
-const gridCell = (row, column) => page.locator(`[data-result-grid] .rg-row[aria-rowindex="${row + 2}"] .rg-c[aria-colindex="${column + 2}"]`).first()
-const running = () => expect(page.locator('.output-status')).toContainText('Executing query…')
+const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).first()
+const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
-  await page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true }).click()
+  await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
   await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
   return dialog
@@ -87,7 +89,7 @@ async function fillLogin(dialog, server, user, password) {
 /** Every button of the banner lies inside the window's content area. */
 async function bannerInViewport() {
   await expect(banner().getByRole('button').first()).toBeVisible()
-  await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.backend-banner button')].filter(button => {
+  await expect.poll(() => banner().evaluate(element => [...element.querySelectorAll('button')].filter(button => {
     const rect = button.getBoundingClientRect()
     return rect.left < 0 || rect.top < 0 || rect.right > innerWidth || rect.bottom > innerHeight || rect.width === 0
   }).map(button => button.textContent))).toEqual([])
@@ -98,7 +100,7 @@ try {
   step = 'real backend'
   // The real backend with its test hooks: debug.results.synthesize stores rows without a SQL Server.
   await launch({ VARIA_BACKEND_TEST_HOOKS: '1' })
-  await expect(statusBar()).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
+  await expect(backendReady(page)).toHaveText('Ready', { timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok && health.value.protocolVersion).toBe(2)
   expect(health.ok && health.value.smoVersion).toMatch(/^\d+\./)
@@ -154,13 +156,49 @@ try {
   expect(responsiveness.frames >= responsiveness.elapsed / 100 ? responsiveness.frameGap : responsiveness.timerGap).toBeLessThanOrEqual(linux ? 300 : 500)
   console.log('Responsiveness passed: a million synthetic rows read through the results worker without blocking the UI.')
 
+  // 7b. A live subscription through the real results worker and port to the backend's debug.synthetic source: each tick's
+  // table opens as a handle, a tick the page does not acknowledge holds the source, retired revisions are released, and
+  // cancelling releases the rest.
+  step = 'live relay'
+  const relayed = await page.evaluate(async () => {
+    const client = window.__variaResults, ticks = [], handles = []
+    let held
+    const params = {
+      subscriptionId: '3f0e8c52-6a1d-4c8e-9b7a-2d5f6e7a8b9c', connectionId: '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d', source: 'debug.synthetic',
+      probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }, { probe: 'debug.synthetic.metrics', intervalMs: 1000 }], args: { tickMs: 50, rows: 5 }
+    }
+    const stream = client.live(params, (event, bytes) => {
+      if (event.type === 'live.tick') {
+        ticks.push(event)
+        for (const sample of event.samples) for (const table of sample.tables ?? []) handles.push(client.open(table.descriptor))
+      }
+      // The fourth tick is held: the source must sample nothing until it is acknowledged.
+      if (ticks.length === 4 && held === undefined) { held = bytes; return }
+      stream.ack(bytes)
+    })
+    const until = async test => { const end = performance.now() + 15000; while (!test()) { if (performance.now() > end) throw new Error(`Live relay timed out after ${ticks.length} ticks.`); await new Promise(resolve => setTimeout(resolve, 20)) } }
+    await until(() => held !== undefined)
+    const heldAt = ticks.length
+    await new Promise(resolve => setTimeout(resolve, 600))
+    const whileHeld = ticks.length - heldAt
+    const newest = await handles.at(-1).getWindow(0, 10)
+    stream.ack(held)
+    await until(() => ticks.length >= heldAt + 2)
+    const firstState = handles[0].getSnapshot().state
+    stream.cancel()
+    const end = await stream.done
+    return { whileHeld, rows: newest.count, columns: newest.colEnd, firstState, end: end.ok ? end.value.ended : end.code, released: handles.every(handle => handle.getSnapshot().state === 'released'), streams: client.liveStreams }
+  })
+  expect(relayed).toEqual({ whileHeld: 0, rows: 5, columns: 3, firstState: 'released', end: 'cancelled', released: true, streams: 0 })
+  console.log('Live relay passed: ticks from the backend reach the page through the worker, wait for their acknowledgement, and release their tables.')
+
   step = 'reload'
   // 6. A workbench reload ends the generation with the page that owned it; the new page shows no banner.
   await page.reload()
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const reloaded = await ready(2)
   expect(reloaded.pid).not.toBe(first.pid)
-  await expect(statusBar()).toContainText('Ready')
+  await expect(backendReady(page)).toHaveText('Ready')
   await expect(banner()).toHaveCount(0)
 
   // 8. Live: a real session is lost with its backend, nothing is re-run, and Reconnect opens a new session.
@@ -179,20 +217,23 @@ try {
     await running()
     const before = await hooks()
     await app.evaluate(() => globalThis.__variaTest.kill())
-    await expect(page.locator('.messages .msg.error')).toContainText(lostQuery, { timeout: 30000 })
-    await expect(page.locator('.output-status')).toHaveText('The SQL backend stopped while this query was running.')
+    await expect(errorMessages(page)).toContainText(lostQuery, { timeout: 30000 })
+    await expect(outputStatus(page)).toHaveText('The SQL backend stopped while this query was running.')
     const after = await ready(before.state.generation + 1)
     expect(after.pid).not.toBe(before.pid)
     await expect(banner()).toContainText('1 connection was lost and 1 running script was stopped; nothing was re-run.')
-    await expect(page.locator('.explorer-row.lost')).toContainText('(connection lost)')
-    await page.locator('.explorer-row.lost').getByRole('button', { name: /^Reconnect/ }).click()
+    await expect(lostServerRows(page)).toContainText('(connection lost)')
+    await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
-    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
-    if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    // Windows Authentication has no Password field; SQL Server Authentication's starts empty.
+    if (liveUser) {
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
-    await expect(page.locator('.explorer-row.lost')).toHaveCount(0)
+    await expect(lostServerRows(page)).toHaveCount(0)
     // SPIDs can be reused, so the old session's temporary table shows whether the session is new.
     await typeSql("SELECT OBJECT_ID('tempdb..#varia_session_marker') AS marker;")
     await execute().click()
@@ -209,7 +250,7 @@ try {
   await mkdir(join(control, 'hold'))
   const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_BACKEND_LIVENESS_MS: '2000' })
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   let dialog = await connectDialog()
   await fillLogin(dialog, 'crash-server', 'reader', 'smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -221,34 +262,47 @@ try {
   await execute().click()
   await running()
   await expect.poll(async () => (await calls()).some(call => call.method === 'query.execute')).toBe(true)
+  // Focus is in the Filter loaded objects box when the last live connection goes with the backend.
+  await explorerFilterBox(page).focus()
+  await expect(explorerFilterBox(page)).toBeFocused()
   const crashed = await hooks()
   await writeFile(join(control, 'crash-next'), '')
   await rm(join(control, 'hold', 'query.execute'))
-  await expect(page.locator('.messages .msg.error')).toContainText(lostQuery)
+  await expect(errorMessages(page)).toContainText(lostQuery)
   const restarted = await ready(2)
   expect(restarted.pid).not.toBe(crashed.pid)
   const history = await states()
   expect(history.slice(history.indexOf('restarting:1'))).toEqual(expect.arrayContaining(['restarting:1', 'starting:2', 'ready:2']))
   expect(history.indexOf('restarting:1')).toBeLessThan(history.indexOf('starting:2'))
   expect(await app.evaluate(() => globalThis.__variaTest.states.find(state => state.status === 'restarting')?.lost)).toEqual({ generation: 1, reason: 'crash', connections: 1, queries: 1 })
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
-  const lostRow = page.locator('.explorer-row.lost')
+  const lostRow = lostServerRows(page)
   await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (connection lost)')
   await expect(lostRow).not.toHaveAttribute('aria-expanded')
-  await lostRow.locator('.oe-label').click({ button: 'right' })
-  await expect(page.getByRole('menu', { name: 'Object Explorer', exact: true }).locator('.menu-item .menu-label')).toHaveText(['Connect…', 'Reconnect…', 'Remove'])
+  // Its dot is a ring, in forced colors too; with no live server, the Filter loaded objects box goes, as its command does.
+  await expect(connectionDot(lostRow)).toHaveAttribute('data-state', 'lost')
+  await page.emulateMedia({ forcedColors: 'active' })
+  const ring = await connectionDot(lostRow).evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(ring.background).not.toBe(ring.border)
+  expect(ring.border).not.toBe('rgba(0, 0, 0, 0)')
+  await expect(explorerFilterBox(page)).toHaveCount(0)
+  // Focus the box held moves to the tree rather than the page, so keys still reach Object Explorer.
+  await expect(explorerTree(page)).toBeFocused()
+  await explorerLabel(lostRow).click({ button: 'right' })
+  await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove'])
   await page.keyboard.press('Escape')
-  await expect(page.locator('.menu')).toHaveCount(0)
+  await expect(openMenus(page)).toHaveCount(0)
   // Enter on the lost row reconnects it, as its button does: the Connect dialog opens filled in from it.
-  await lostRow.locator('.oe-label').click()
+  await explorerLabel(lostRow).click()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('dialog', { name: 'Connect', exact: true }).getByLabel('Server Name', { exact: true })).toHaveValue('crash-server')
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(execute()).toBeDisabled()
   await expect(execute()).toHaveAttribute('title', lostHint)
-  await expect(page.locator('.query-context')).toContainText('crash-server (connection lost)')
+  await expect(queryStatus(page)).toContainText('crash-server (connection lost)')
   await expect(banner()).toContainText('The SQL backend stopped unexpectedly and was restarted. 1 connection was lost and 1 running script was stopped; nothing was re-run.')
   // Nothing written to generation 1 reached generation 2, and the password never reached the call log.
   let recorded = await calls()
@@ -257,10 +311,10 @@ try {
   expect(JSON.stringify(recorded)).not.toContain('smoke-password-marker')
   // The keyboard opens the lost row's own menu too, not the empty area's: Shift+F10 in the tree with the row selected.
   const explorerMenu = page.getByRole('menu', { name: 'Object Explorer', exact: true })
-  await lostRow.locator('.oe-label').click()
+  await explorerLabel(lostRow).click()
   await expect(lostRow).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('Shift+F10')
-  await expect(explorerMenu.locator('.menu-item .menu-label')).toHaveText(['Connect…', 'Reconnect…', 'Remove'])
+  await expect.poll(() => menuItemNames(explorerMenu)).toEqual(['Connect…', 'Reconnect…', 'Remove'])
   await page.keyboard.press('Escape')
   await expect(explorerMenu).toHaveCount(0)
   await size(1024, 700)
@@ -274,13 +328,19 @@ try {
   await dialog.getByLabel('Password', { exact: true }).fill('smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.locator('.explorer-row.lost')).toHaveCount(0)
+  await expect(lostServerRows(page)).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
-  await expect(page.locator('.query-context')).not.toContainText('connection lost')
+  await expect(explorerFilterBox(page)).toHaveCount(1)
+  await expect(queryStatus(page)).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
+  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
+  // whole inside the pane.
+  const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
+  await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => shown(gridCell(0, 1))).toBe(true)
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])
@@ -385,7 +445,7 @@ try {
   const lock = () => quitting.evaluate(({ app }) => app.hasSingleInstanceLock() ? 'held' : 'released').catch(() => 'exited')
   await expect.poll(lock, { timeout: 10000, intervals: [50] }).toBe('released')
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }, profile)
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   await expect.poll(() => alive(stuck.pid), { timeout: 5000 }).toBe(false)
   await Promise.race([quitting.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])
   await close()
@@ -398,7 +458,7 @@ try {
   await expect(banner()).toContainText('The SQL backend is from a different build (protocol 1, expected 2). Run npm run backend:build, then restart.', { timeout: 5000 })
   console.log(`Incompatible backend reported ${Date.now() - started} ms after launch.`)
   expect((await hooks()).state).toMatchObject({ status: 'failed', reason: 'incompatible' })
-  await expect(page.locator('.toolbar').getByRole('button', { name: 'Connect', exact: true })).toBeDisabled()
+  await expect(toolbarButton(page, 'Connect')).toBeDisabled()
   expect(failures).toEqual([])
   console.log('Backend restart checks passed: real readiness and reload, crash during execute with Reconnect, manual restart prompt, crash loop, unresponsive warning, and incompatible build.')
 } catch (error) {

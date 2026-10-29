@@ -3,14 +3,16 @@ import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { kindScope } from '../src/shared/explorer/refs'
 import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
-  catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
+  catalogDatabase, catalogProbeRetryMs, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
   parameterObjectTypes, permissionTypes, securableTypes, ssisActions, ssisActionVerbs, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits,
-  stoppableOperationTypes, systemParameters, createCatalog, catalogBackupFile
+  stoppableOperationTypes, systemParameters, createCatalog, catalogBackupFile,
+  isSsisDocumentKind, ssisCommandEntries, ssisDocumentKinds, ssisDocumentName, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs, ssisVerbSpecs, validationStatuses
 } from '../src/shared/ssis/catalog'
+import { commandDescriptor } from '../src/shared/commands/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
 import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
 import { createCatalogDrainMs, methodPolicies } from '../src/shared/ipc/methods'
@@ -52,6 +54,30 @@ describe('SSIS catalogue', () => {
     expect(Object.keys(ssisFeatureSources)).toEqual([...ssisFeatures])
     for (const source of Object.values(ssisFeatureSources)) expect(source).toMatch(/^catalog\.[a-z_]+(\.[a-z_]+)?$/)
     expect(catalogDatabase).toBe('SSISDB')
+  })
+  it('gives each verb one command, on Object Explorer\'s menu for its own kind only, and each document its own view', () => {
+    expect(ssisVerbs).toEqual(['folderProperties', 'projectProperties', 'packageProperties', 'environmentProperties'])
+    const entries = ssisCommandEntries()
+    expect(Object.keys(entries)).toEqual([...ssisVerbs.map(verb => ssisVerbSpecs[verb].command), 'ssis.refreshProperties'])
+    for (const verb of ssisVerbs) {
+      const spec = ssisVerbSpecs[verb], key = ssisVerbContextKey(verb), kind = spec.kinds[0]
+      expect(spec, verb).toMatchObject({ class: 'document', writes: false, document: kind, menuTitle: 'Properties', group: '9_properties', mnemonic: 'p' })
+      expect(commandDescriptor(spec.command), verb).toEqual(entries[spec.command])
+      expect(entries[spec.command]).toMatchObject({ category: 'Integration Services', precondition: `backendReady && ${key} == 'enabled'`, menus: [{ menu: 'explorer.context', title: 'Properties', when: `explorerNode == '${kind}' && ${key} != ''` }] })
+      expect(key).toBe(`ssisVerb${verb[0].toUpperCase()}${verb.slice(1)}`)
+      // Only its own kind offers it.
+      for (const other of [...nodeKinds, 'folder' as const]) expect(ssisVerbMenuState(other)[verb], `${verb} on ${other}`).toBe(other === kind ? 'enabled' : '')
+    }
+    expect(ssisVerbContextValues(ssisVerbMenuState('ssisProject'))).toEqual({ ssisVerbFolderProperties: '', ssisVerbProjectProperties: 'enabled', ssisVerbPackageProperties: '', ssisVerbEnvironmentProperties: '' })
+    for (const kind of ssisDocumentKinds) {
+      expect(describeTargets[ssisDocumentSpecs[kind].view], kind).toBe(kind)
+      expect(ssisDocumentSpecs[kind].sections[0], kind).toEqual({ id: 'general', title: 'General' })
+      expect(unique(ssisDocumentSpecs[kind].sections.map(section => section.id)), kind).toBe(true)
+      expect(isSsisDocumentKind(kind)).toBe(true)
+    }
+    expect([isSsisDocumentKind('ssisCatalog'), isSsisDocumentKind('tableDesigner'), isSsisDocumentKind(undefined)]).toEqual([false, false, false])
+    expect(ssisDocumentName('ssisPackage', 'Daily.dtsx')).toBe('Package Properties - Daily.dtsx')
+    expect(validationStatuses).toEqual([{ code: 'N', label: 'Not validated' }])
   })
   it('keeps error codes retryable only where a retry can help', () => {
     expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'NOT_RUNNING', 'CANCELLED', 'SQL_ERROR'])
@@ -158,5 +184,20 @@ describe('generated SSIS files', () => {
     for (const feature of ssisFeatures) expect(docs, feature).toContain(`| \`${feature}\` |`)
     for (const key of Object.keys(ssisLimits)) expect(docs, key).toContain(`| \`${key}\` |`)
     expect(docs).toContain('| Packages | `ssisPackages` | Package (`ssisPackages`) | Name |')
+    expect(docs).toContain(`opens again after ${catalogProbeRetryMs.first / 1000} s, doubling to ${catalogProbeRetryMs.max / 1000} s`)
+  })
+  it('takes the live tree\'s interval from the probe\'s catalogue entry, as the settings do', async () => {
+    vi.resetModules()
+    vi.doMock('../src/shared/live/catalog.ts', async importOriginal => {
+      const original = await importOriginal<typeof import('../src/shared/live/catalog.ts')>()
+      return { ...original, liveProbes: { ...original.liveProbes, 'ssis.catalogProbe': { ...original.liveProbes['ssis.catalogProbe'], intervalMs: { default: 45_000, min: 15_000, max: 600_000 } } } }
+    })
+    try {
+      const { renderSsisDocs: render } = await import('../src/shared/ssis/docs')
+      expect(render()).toContain('every 45 s by default (Tools › Options › SQL Server Integration Services; 15 to 600 s, or off)')
+    } finally {
+      vi.doUnmock('../src/shared/live/catalog.ts')
+      vi.resetModules()
+    }
   })
 })

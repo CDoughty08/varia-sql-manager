@@ -236,6 +236,28 @@ describe('ResultsJobHost save', () => {
     expect(await failure(late.jobs.save(saveRequest()))).toMatchObject({ code: 'RESULT_UNAVAILABLE', message: jobSentences.closedBeforeSave })
     expect(late.calls).toEqual([])
   })
+  it('saves a live table\'s newest revision when the samples retired the one shown while the dialog was open', async () => {
+    // Revision 7 was shown at the click; two samples later 7 is retired and 9 is the table's newest.
+    const owned = new Set([7])
+    let asked: [number, number] | undefined
+    const { jobs, calls } = host({
+      owns: (_generation, resultId) => owned.has(resultId),
+      liveNewest: (generation, resultId) => { asked = [generation, resultId]; return () => owned.has(9) ? 9 : undefined },
+      showSaveDialog: async () => { owned.delete(7); owned.add(8); owned.delete(8); owned.add(9); return { canceled: false, filePath: '/x/live.csv' } }
+    })
+    const saving = jobs.save(saveRequest())
+    await settle()
+    expect(asked).toEqual([1, 7])
+    expect(calls.map(call => [call.method, call.params.resultId])).toEqual([['export', 9]])
+    calls[0].resolve(done)
+    expect(await saving).toMatchObject({ fileName: 'live.csv' })
+    // The stream ended while the dialog was open: nothing of it is left to save.
+    owned.clear()
+    owned.add(7)
+    const ended = host({ owns: (_generation, resultId) => owned.has(resultId), liveNewest: () => () => undefined, showSaveDialog: async () => { owned.clear(); return { canceled: false, filePath: '/x/y.csv' } } })
+    expect(await failure(ended.jobs.save(saveRequest()))).toMatchObject({ code: 'RESULT_UNAVAILABLE', message: jobSentences.closedBeforeSave })
+    expect(ended.calls).toEqual([])
+  })
   it('turns EXPORT_FAILED tokens into sentences that name only the file', async () => {
     const expected: Record<string, string> = {
       ACCESS: 'Could not save the results: access to out.csv is denied.', DISK_FULL: 'Could not save the results: the disk is full.',
@@ -299,7 +321,7 @@ describe('ResultsJobHost over the fake backend', () => {
     const { control, jobs, clipboard, execute, choose } = await workbench()
     const summary = await execute('-- varia-fake: sets=W1*3000,N1*10,M1*3 messages=2 errors=1\nSELECT 1')
     expect(summary.resultSets.map(set => [set.columns.length, set.rowsAvailable, set.state])).toEqual([[8, 3000, 'complete'], [7, 10, 'complete'], [1, 1, 'complete'], [1, 1, 'complete'], [1, 1, 'complete']])
-    expect(summary.messages).toEqual([{ text: 'Message 1', kind: 'info' }, { text: 'Message 2', kind: 'info' }, { text: 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.', kind: 'error' }])
+    expect(summary.messages).toEqual([{ text: 'Message 1', kind: 'print' }, { text: 'Message 2', kind: 'print' }, { text: 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.', kind: 'error' }])
     expect(summary).toMatchObject({ status: 'completedWithErrors', error: { code: 'SQL_ERROR' }, completedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}\+00:00$/) })
     const [w1, n1] = summary.resultSets
     expect(await jobs.copy(copyRequest({ resultId: w1.resultId, headers: true, parts: [{ rows: [[0, 1], [2999, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] }))).toMatchObject({ rows: 3, partial: false })

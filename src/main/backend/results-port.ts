@@ -1,5 +1,6 @@
 import type { BackendState, BackendStatus, QueryEvent, ResultDescriptor, ResultsCloseResult, ResultsReadParams, ResultsReadResult } from '../../shared/contracts'
-import { portRequestSchema, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import { portRequestSchema, testPortRequestSchema, type PortMessage, type PortRequest } from '../../shared/ipc/port-messages'
+import { liveDescriptors, liveRetired, type LiveEnd, type LiveEvent, type LiveSubscribeParams, type LiveUpdateParams, type LiveUpdateResult } from '../../shared/live/schema'
 import { cancelReasons, limits as wire, type CancelReason, type ErrorCode } from '../../shared/ipc/wire/protocol'
 import type { StreamSink } from './connection'
 import { BackendError, sentences } from './errors'
@@ -16,15 +17,20 @@ export interface PortMainLike {
 /** The renderer frame that asked for the port (WebFrameMain). */
 export interface FrameLike { postMessage(channel: string, message: unknown, transfer: never[]): void }
 export interface ReadStream { readonly done: Promise<unknown>; credit(bytes: number): void; cancel(reason: CancelReason): void }
+/** A live subscription in the backend: its events arrive through `onLive`, its credit acknowledges them, and `done`
+ *  settles with its end. */
+export interface LiveStreamHandle { readonly done: Promise<LiveEnd>; credit(bytes: number): void; cancel(reason: CancelReason): void }
 /** What the host needs from the backend; supervisorResults adapts BackendSupervisor. */
 export interface ResultsBackend {
   /** The generation whose results can be read now, or undefined while none is ready. */
   readyGeneration(): number | undefined
   read(generation: number, params: ResultsReadParams, sink: StreamSink, credit: number): ReadStream
   close(generation: number, resultIds: number[]): Promise<ResultsCloseResult>
+  live(generation: number, params: LiveSubscribeParams, onLive: (event: LiveEvent, bytes: number) => void, credit: number): LiveStreamHandle
+  liveUpdate(generation: number, params: LiveUpdateParams): Promise<LiveUpdateResult>
 }
-export interface PortLimits { outstanding: number; invalidMessages: number; opensPerMinute: number; ownedResults: number; perStream: number; perPort: number }
-export const portLimits: PortLimits = { ...wire.port, ownedResults: wire.registries.ownedResults, perStream: wire.credit.perStream, perPort: wire.credit.perPort }
+export interface PortLimits { outstanding: number; invalidMessages: number; opensPerMinute: number; ownedResults: number; perStream: number; perPort: number; liveStreams: number }
+export const portLimits: PortLimits = { ...wire.port, ownedResults: wire.registries.ownedResults, perStream: wire.credit.perStream, perPort: wire.credit.perPort, liveStreams: wire.live.portStreams }
 
 /**
  * Exactly one ArrayBuffer of exactly the page's bytes. Posting a view would structured-clone its whole backing store,
@@ -37,13 +43,21 @@ export function toExactArrayBuffer(body: Uint8Array): ArrayBuffer {
 
 /** `withheld` is credit the worker granted that the port's limits held back; it is passed on once there is room. */
 interface Stream { readonly rid: number; readonly generation: number; granted: number; received: number; withheld: number; handle?: ReadStream }
+/** `ids` are the results this stream's ticks named: the only ones its `retired` lists and its end may take back.
+ *  `snapshots` names the table (probe/index) of each snapshot revision not yet retired, and `newest` each table's latest. */
+interface LiveStream {
+  readonly rid: number; readonly generation: number; readonly subscriptionId: string; readonly source: string; readonly ids: Set<number>
+  readonly snapshots: Map<number, string>; readonly newest: Map<string, number>; granted: number; received: number; withheld: number; handle?: LiveStreamHandle
+}
 
 /**
  * Main's end of the results port: one MessagePort per renderer load, through which the results worker reads pages and
  * receives query events. Every worker message is validated (portRequestSchema), reads are limited to results the
  * current generation owns, credits are clamped (16 MiB per stream, 64 MiB per port), and page bodies are forwarded
  * without being decoded, as exact-size ArrayBuffers. A backend loss ends the streams but keeps the port: the port lives
- * as long as the renderer.
+ * as long as the renderer. Live subscriptions (at most 16, counted apart from the 64 outstanding requests) are streams of
+ * EVENTs whose credit the worker grants back once the page applied each one; their tables become readable as they
+ * arrive, and only their own results leave again when a tick retires them or the stream ends.
  */
 export class ResultsPortHost {
   private readonly backend: ResultsBackend
@@ -51,17 +65,25 @@ export class ResultsPortHost {
   private readonly now: () => number
   private readonly limits: PortLimits
   private readonly streams = new Map<number, Stream>()
+  private readonly lives = new Map<number, LiveStream>()
+  /** Live streams by subscription id: a second subscribe with the same id is refused. */
+  private readonly subscriptions = new Map<string, number>()
+  private readonly schema: typeof portRequestSchema
   /** Result ids the current generation holds for this renderer, oldest first. */
   private readonly owned = new Set<number>()
   private port: PortMainLike | undefined
   private generation = 0
   private status: BackendStatus = 'stopped'
   private closing = 0
+  private updating = 0
   private invalid = 0
   private opens: number[] = []
 
-  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits> }) {
+  /** `testSources`: accept test-only live sources (debug.synthetic); main sets it only for unpackaged smoke runs. `schema`
+   *  replaces the request schema (tests, with a catalogue the shipped one does not match yet). */
+  constructor(o: { backend: ResultsBackend; createChannel: () => { port1: PortMainLike; port2: unknown }; now?: () => number; limits?: Partial<PortLimits>; testSources?: boolean; schema?: typeof portRequestSchema }) {
     this.backend = o.backend
+    this.schema = o.schema ?? (o.testSources ? testPortRequestSchema : portRequestSchema)
     this.createChannel = o.createChannel
     this.now = o.now ?? (() => Date.now())
     this.limits = { ...portLimits, ...o.limits }
@@ -69,6 +91,9 @@ export class ResultsPortHost {
 
   get isOpen(): boolean { return !!this.port }
   get ownedCount(): number { return this.owned.size }
+  get liveCount(): number { return this.lives.size }
+  /** The snapshot revisions the live streams name and have not retired (each stream's `snapshots`), for tests of its bound. */
+  get liveSnapshotCount(): number { let count = 0; for (const stream of this.lives.values()) count += stream.snapshots.size; return count }
 
   /** A new port for the frame (after trusted()); the previous one closes and its streams are cancelled. */
   open(frame: FrameLike): void {
@@ -94,13 +119,21 @@ export class ResultsPortHost {
     this.opens = []
   }
 
-  /** The port and its streams end. Ownership stays with the generation. */
+  /** The port and its streams end. Ownership of query results stays with the generation; live streams' results go. */
   close(): void {
     const port = this.port
     this.port = undefined
     for (const stream of this.streams.values()) stream.handle?.cancel(cancelReasons.consumerGone)
     this.streams.clear()
+    // A cancelled subscription releases its results in the backend, so this renderer may no longer read them.
+    for (const stream of this.lives.values()) {
+      stream.handle?.cancel(cancelReasons.consumerGone)
+      this.disown(stream, [])
+    }
+    this.lives.clear()
+    this.subscriptions.clear()
     this.closing = 0
+    this.updating = 0
     try { port?.close() } catch { /* Already closed. */ }
   }
 
@@ -128,6 +161,28 @@ export class ResultsPortHost {
   /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
   owns(generation: number, resultId: number): boolean { return generation === this.generation && this.owned.has(resultId) }
 
+  /**
+   * For a live snapshot table's revision this renderer owns: a function that names the table's newest revision it owns
+   * when called (undefined once it no longer owns one: the stream ended without keeping it). Save Results As asks before
+   * its dialog, which may stay open for many samples while each revision is retired two samples on, and saves the revision
+   * the table has once the file is chosen; a source that ended meanwhile keeps its newest revision, which is saved.
+   * Undefined for any other result.
+   */
+  liveNewest(generation: number, resultId: number): (() => number | undefined) | undefined {
+    if (!this.owns(generation, resultId)) return undefined
+    for (const stream of this.lives.values()) {
+      const table = stream.generation === generation ? stream.snapshots.get(resultId) : undefined
+      if (table === undefined) continue
+      return () => {
+        const newest = stream.newest.get(table)
+        // Ownership alone decides: a stream's end disowns its results except those its source kept (still shown, saved until
+        // results.close), and a port's close or a new generation disowns them all.
+        return newest !== undefined && this.owns(generation, newest) ? newest : undefined
+      }
+    }
+    return undefined
+  }
+
   queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened') this.own([event.descriptor])
     this.post({ t: 'query', queryId, event })
@@ -139,7 +194,7 @@ export class ResultsPortHost {
   }
 
   private receive(data: unknown): void {
-    const parsed = portRequestSchema.safeParse(data)
+    const parsed = this.schema.safeParse(data)
     if (!parsed.success) {
       const rid = data !== null && typeof data === 'object' ? (data as { rid?: unknown }).rid : undefined
       if (typeof rid === 'number' && Number.isInteger(rid) && rid > 0 && rid < 2 ** 31) this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
@@ -150,21 +205,27 @@ export class ResultsPortHost {
     switch (request.t) {
       case 'read': return this.read(request)
       case 'credit': return this.credit(request.rid, request.bytes)
-      case 'cancel': this.streams.get(request.rid)?.handle?.cancel(cancelReasons.user); return
+      case 'cancel': (this.streams.get(request.rid) ?? this.lives.get(request.rid))?.handle?.cancel(cancelReasons.user); return
       case 'close': return this.closeResults(request)
+      case 'live': return this.live(request)
+      case 'liveUpdate': return this.liveUpdate(request)
     }
   }
 
   private outstanding(): number {
     let total = 0
     for (const stream of this.streams.values()) total += Math.max(0, stream.granted - stream.received)
+    for (const stream of this.lives.values()) total += Math.max(0, stream.granted - stream.received)
     return total
   }
 
+  /** Requests counted against the 64 outstanding: reads, closes and live updates (live streams have their own cap). */
+  private busy(): number { return this.streams.size + this.closing + this.updating }
+
   private read(request: Extract<PortRequest, { t: 'read' }>): void {
     const { rid } = request
-    if (this.streams.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
-    if (this.streams.size + this.closing >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (this.streams.has(rid) || this.lives.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation || !this.owned.has(request.resultId)) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     const credit = Math.min(request.credit, Math.max(wire.credit.min, this.limits.perPort - this.outstanding()))
     const stream: Stream = { rid, generation: request.generation, granted: credit, received: 0, withheld: 0 }
@@ -196,13 +257,19 @@ export class ResultsPortHost {
    *  worker grants only when a page arrives, so what the limits hold back is kept and passed on as room frees up:
    *  otherwise a stream left without credit would never receive another page. */
   private credit(rid: number, bytes: number): void {
+    const live = this.lives.get(rid)
+    if (live?.handle) {
+      // An acknowledgement returns at most what the stream's events took, so it can never make room for a second frame.
+      live.withheld = Math.max(0, Math.min(wire.live.initialCredit - (live.granted - live.received), live.withheld + bytes))
+      return this.grant(live)
+    }
     const stream = this.streams.get(rid)
     if (!stream?.handle) return
     stream.withheld = Math.min(this.limits.perStream, stream.withheld + bytes)
     this.grant(stream)
   }
 
-  private grant(stream: Stream): void {
+  private grant(stream: Stream | LiveStream): void {
     const grant = Math.min(stream.withheld, this.limits.perStream - (stream.granted - stream.received), this.limits.perPort - this.outstanding())
     if (!(grant >= 1) || !stream.handle) return
     stream.withheld -= grant
@@ -212,11 +279,97 @@ export class ResultsPortHost {
 
   private grantWithheld(): void {
     for (const stream of this.streams.values()) if (stream.withheld > 0) this.grant(stream)
+    for (const stream of this.lives.values()) if (stream.withheld > 0) this.grant(stream)
+  }
+
+  private live(request: Extract<PortRequest, { t: 'live' }>): void {
+    const { rid, params } = request
+    if (this.streams.has(rid) || this.lives.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.lives.size >= this.limits.liveStreams) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.liveTooMany)
+    if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    if (this.subscriptions.has(params.subscriptionId)) return this.end(rid, 'DUPLICATE_REQUEST', sentences.liveDuplicate)
+    const credit = wire.live.initialCredit
+    const stream: LiveStream = { rid, generation: request.generation, subscriptionId: params.subscriptionId, source: params.source, ids: new Set(), snapshots: new Map(), newest: new Map(), granted: credit, received: 0, withheld: 0 }
+    this.lives.set(rid, stream)
+    this.subscriptions.set(params.subscriptionId, rid)
+    const port = this.port
+    const onLive = (event: LiveEvent, bytes: number) => {
+      stream.received += bytes
+      if (this.lives.get(rid) !== stream) return
+      const descriptors = liveDescriptors(event)
+      this.own(descriptors)
+      for (const descriptor of descriptors) stream.ids.add(descriptor.resultId)
+      if (event.type === 'live.tick') {
+        for (const sample of event.samples) for (const entry of sample.tables ?? []) {
+          const table = sample.probe + '/' + entry.table
+          stream.snapshots.set(entry.descriptor.resultId, table)
+          stream.newest.set(table, entry.descriptor.resultId)
+        }
+      }
+      // A tick can never take back results it did not deliver: a query's, or another stream's.
+      for (const id of liveRetired(event)) if (stream.ids.delete(id)) { this.owned.delete(id); stream.snapshots.delete(id) }
+      this.post({ t: 'live', rid, bytes, event })
+    }
+    stream.handle = this.backend.live(request.generation, params, onLive, credit)
+    stream.handle.done.then(result => {
+      if (this.lives.get(rid) !== stream || this.port !== port) {
+        // The port closed (and disowned the stream's results) while the source was ending: nothing can read or close what
+        // it kept, so main closes it, rather than leave it counted against the result budget until the backend restarts.
+        if (result.ended === 'sourceEnded' && result.kept?.length && stream.generation === this.generation && this.backend.readyGeneration() === stream.generation) {
+          this.backend.close(stream.generation, result.kept).catch(() => { /* The backend went away; its results went with it. */ })
+        }
+        return
+      }
+      this.forgetLive(stream)
+      this.disown(stream, result.ended === 'sourceEnded' ? result.kept ?? [] : [])
+      this.post({ t: 'end', rid, ok: true, result })
+      this.grantWithheld()
+    }, error => {
+      if (this.lives.get(rid) !== stream || this.port !== port) return
+      this.forgetLive(stream)
+      this.disown(stream, [])
+      this.fail(rid, error)
+      this.grantWithheld()
+    })
+  }
+
+  private liveUpdate(request: Extract<PortRequest, { t: 'liveUpdate' }>): void {
+    const { rid, params } = request
+    if (this.streams.has(rid) || this.lives.has(rid)) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    const live = this.lives.get(this.subscriptions.get(params.subscriptionId) ?? 0)
+    if (!live || live.generation !== request.generation) return this.end(rid, 'NOT_FOUND', sentences.liveEnded)
+    if (live.source !== params.source) return this.end(rid, 'INVALID_REQUEST', 'The results request was invalid.')
+    if (this.backend.readyGeneration() !== request.generation) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
+    const port = this.port
+    this.updating++
+    this.backend.liveUpdate(request.generation, params).then(result => {
+      if (this.port !== port) return
+      this.updating--
+      this.post({ t: 'end', rid, ok: true, result })
+    }, error => {
+      if (this.port !== port) return
+      this.updating--
+      this.fail(rid, error)
+    })
+  }
+
+  private forgetLive(stream: LiveStream): void {
+    this.lives.delete(stream.rid)
+    if (this.subscriptions.get(stream.subscriptionId) === stream.rid) this.subscriptions.delete(stream.subscriptionId)
+  }
+
+  /** The stream's results leave what this renderer may read, except those its source kept (closed by results.close). */
+  private disown(stream: LiveStream, kept: readonly number[]): void {
+    const keep = new Set(kept)
+    // A later generation numbers its results afresh: an earlier stream's ids may now name other results.
+    if (stream.generation === this.generation) for (const id of stream.ids) if (!keep.has(id)) this.owned.delete(id)
+    stream.ids.clear()
   }
 
   private closeResults(request: Extract<PortRequest, { t: 'close' }>): void {
     const { rid } = request
-    if (this.streams.size + this.closing >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
+    if (this.busy() >= this.limits.outstanding) return this.end(rid, 'TOO_MANY_REQUESTS', sentences.tooMany)
     // Results of an earlier generation are already gone with it.
     const ids = request.generation === this.generation ? request.resultIds.filter(id => this.owned.delete(id)) : []
     if (ids.length === 0 || this.backend.readyGeneration() !== request.generation) {
@@ -264,6 +417,16 @@ export function supervisorResults(supervisor: BackendSupervisor): ResultsBackend
         cancel: reason => { if (id) supervisor.cancel(generation, id, reason) }
       }
     },
-    close: (generation, resultIds) => supervisor.request('results.close', { resultIds }, { generation })
+    close: (generation, resultIds) => supervisor.request('results.close', { resultIds }, { generation }),
+    live: (generation, params, onLive, credit) => {
+      let id = 0
+      const done = supervisor.request('live.subscribe', params, { generation, credit, onLive, onSent: sent => { id = sent } })
+      return {
+        done,
+        credit: bytes => { if (id) supervisor.credit(generation, id, bytes) },
+        cancel: reason => { if (id) supervisor.cancel(generation, id, reason) }
+      }
+    },
+    liveUpdate: (generation, params) => supervisor.request('live.update', params, { generation })
   }
 }

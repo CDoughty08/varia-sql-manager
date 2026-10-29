@@ -39,7 +39,7 @@ export interface DatabaseOptionDef {
   /** SSMS closes other connections to change it (its Open Connections prompt). */
   readonly exclusive?: true
   /** SQL Server refuses the change on a read-only database (3906, or 5073 for COLLATE; measured on SQL Server 2025), so
-   *  one ordered after Database Read-Only cannot share an OK with turning it on. */
+   *  one ordered after Database Read-Only cannot share an Apply with turning it on. */
   readonly refusedReadOnly?: true
   readonly sql?: OptionSql
   /** Where SMO's ScriptAlter writes it: a strict total order over every option. */
@@ -252,9 +252,9 @@ const stateNames: Readonly<Record<string, string>> = {
 export function databaseStatusText(state: string, flags: { readonly standby?: boolean; readonly readOnly?: boolean } = {}): string {
   return [stateNames[state] ?? state, flags.standby ? 'Standby' : '', flags.readOnly ? 'Read-Only' : ''].filter(Boolean).join(', ')
 }
-/** Why a change cannot share an OK with turning Database Read-Only on: SQL Server applies it after READ_ONLY and then
+/** Why a change cannot share an Apply with turning Database Read-Only on: SQL Server applies it after READ_ONLY and then
  *  refuses it, which would leave the database read-only with the change failed. */
-export const afterReadOnlyProblem = (label: string) => `${label} cannot change in the same OK as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.`
+export const afterReadOnlyProblem = (label: string) => `${label} cannot change in the same Apply as setting Database Read-Only to True: SQL Server refuses it once the database is read-only.`
 /** System databases whose owner SQL Server keeps as sa (Learn: "Changing the database owner" cannot be performed). */
 export const ownerNotOn: readonly SystemDatabase[] = ['master', 'model', 'tempdb']
 /**

@@ -1,6 +1,7 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { activeDocumentName, backendReady, part, quickInput, quickInputActive } from './fixtures/ui.mjs'
 
 // SSMS's editing commands in the real query editor, over the fake backend (no SQL Server): Comment and Uncomment
 // Selection, Make Uppercase and Lowercase, Increase and Decrease Line Indent from Edit › Advanced, Go To Line, Bookmarks
@@ -25,7 +26,7 @@ async function launch() {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -62,8 +63,7 @@ const advancedItem = async name => {
   return menu('Advanced').getByRole('menuitemcheckbox', { name, exact: true })
 }
 const closeMenus = async () => { await page.keyboard.press('Escape'); await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0) }
-const glyphs = () => page.locator('.monaco-editor .varia-bookmark')
-const activeTab = () => page.locator('.query-tabs [role="tab"][aria-selected="true"] .tab-name')
+const glyphs = () => page.locator('.monaco-editor ' + part.bookmarkGlyph)
 
 try {
   await launch()
@@ -139,23 +139,23 @@ try {
   await chord('N')
   await page.keyboard.insertText('W')
   await expect.poll(editorText).toBe('Wone\ntwo\nNthree')
-  const firstTab = await activeTab().textContent()
+  const firstTab = await activeDocumentName(page)
   await page.keyboard.press('Control+N')
-  await expect.poll(() => activeTab().textContent()).not.toBe(firstTab)
-  const secondTab = await activeTab().textContent()
+  await expect.poll(() => activeDocumentName(page)).not.toBe(firstTab)
+  const secondTab = await activeDocumentName(page)
   await textbox().focus()
   await page.keyboard.insertText('second')
   await chord('K')
   await expect(glyphs()).toHaveCount(1)
   await page.keyboard.press('Control+Tab')
-  await expect.poll(() => activeTab().textContent()).toBe(firstTab)
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
   // The caret is on line 1 after W; the next bookmarks are line 3, then the second query's line 1.
   await textbox().focus()
   await chord('N')
   await page.keyboard.insertText('3')
   await expect.poll(editorText).toBe('Wone\ntwo\n3Nthree')
   await chord('N')
-  await expect.poll(() => activeTab().textContent()).toBe(secondTab)
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   await chord('L')
   await expect(glyphs()).toHaveCount(0)
   await page.keyboard.press('Alt+e')
@@ -168,11 +168,11 @@ try {
   // 6. Insert Snippet (Ctrl+K Ctrl+X) lists the snippets by category; Create Table inserts with its placeholders as tab stops.
   await setText('')
   await chord('X')
-  const picker = page.locator('.quick-input')
+  const picker = quickInput(page)
   await expect(picker).toBeVisible()
-  await expect(picker.locator('.quick-input-group', { hasText: /^Table$/ })).toBeVisible()
+  await expect(picker.locator(part.quickInputGroup, { hasText: /^Table$/ })).toBeVisible()
   await page.keyboard.type('create table')
-  await expect(picker.locator('.quick-input-row.active .quick-input-label')).toHaveText('Create Table')
+  await expect(quickInputActive(page).locator(part.quickInputLabel)).toHaveText('Create Table')
   await page.keyboard.press('Enter')
   await expect(picker).toHaveCount(0)
   await expect.poll(editorText).toContain('CREATE TABLE dbo.TableName')

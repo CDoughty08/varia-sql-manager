@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { FolderId, NodeKind, NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerNodeRef } from '../src/shared/explorer/refs'
 import {
-  computeWindow, flatten, needsQuery, parentIndex, renderedIndices, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
+  computeWindow, filterMatch, filterText, flatten, flattenFiltered, layoutWindow, needsQuery, rowLayout, parentIndex, renderedIndices, revealScroll, rowIndex, rowKindOf, RowKind, rowOwner, siblingPlan, swallowedKey, syntheticId, treeKey, treeKeyOf, typeAhead,
   TypeAheadBuffer, type TreeNode, type VisibleRows
 } from '../src/renderer/src/explorer/tree-model'
+import { meterWork } from './fixtures/work-meter'
 
 /** A node table built by hand: `add` appends a child (or a root), and fields can be set on the result. */
 function table() {
@@ -43,12 +44,6 @@ function sample(count = 3) {
   for (let index = 0; index < count; index++) t.add(tables.id, `dbo.Table${index}`)
   return { ...t, server, databases, system, app, tables }
 }
-function bestOf3(action: () => void): number {
-  let best = Infinity
-  for (let run = 0; run < 3; run++) { const start = performance.now(); action(); best = Math.min(best, performance.now() - start) }
-  return best
-}
-
 describe('row ids', () => {
   it('encode the owner and kind of synthetic rows, and leave node ids alone', () => {
     for (const kind of [RowKind.Loading, RowKind.Error, RowKind.More, RowKind.Stopped, RowKind.Capped, RowKind.Paused, RowKind.MoreError]) {
@@ -111,12 +106,33 @@ describe('flatten', () => {
     expect(rows.nodes.map(node => node?.label)).toEqual(['server-a', 'Databases', 'System Databases', 'AppData', 'Tables', undefined, 'dbo.Table0', 'Security'])
     expect(rows.nodes.every((node, index) => node ? node.id === rows.ids[index] : rows.ids[index] < 0)).toBe(true)
   })
-  it('flattens 250,000 visible rows within the budget', () => {
+  it('flattens 250,000 visible rows with one visit per node, preserving order and identity', () => {
     const t = sample(250_000)
-    let rows = t.rows()
-    const time = bestOf3(() => { rows = t.rows() })
+    const prefix = [t.server, t.databases, t.system, t.app, t.tables].map(node => node.id)
+    const children = t.tables.children!, security = t.server.children!.find(node => node.folder === 'serverSecurity')!
+    const visits = new Uint8Array(t.nodes.size)
+    for (const [id, node] of t.nodes) {
+      Object.defineProperty(node, 'id', { configurable: true, enumerable: true, get: () => {
+        if (++visits[id - 1] > 1) throw new Error('Flatten inspected a node more than once.')
+        return id
+      } })
+    }
+    const { result: rows, work } = meterWork(() => t.rows())
     expect(rows.count).toBe(250_000 + 6)
-    expect(time).toBeLessThan(60)
+    expect(visits.every(count => count === 1)).toBe(true)
+    // Its five row arrays grow by doubling from 256 rows: O(log n) allocations, and allocating and copying O(n) elements in
+    // all. A fixed growth step, a copy per row or a second pass is quadratic or more work, whatever the runner's speed.
+    const arrays = 5, growths = Math.ceil(Math.log2(rows.count / 256))
+    expect(work.allocations, JSON.stringify(work)).toBeLessThanOrEqual(arrays * (growths + 1))
+    expect(work.allocated, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 4 * rows.count)
+    expect(work.elements, JSON.stringify(work)).toBeLessThanOrEqual(arrays * 2 * rows.count)
+    expect([work.characters, work.costly]).toEqual([0, 0])
+    expect(Array.from(rows.ids.subarray(0, prefix.length))).toEqual(prefix)
+    expect(children.every((node, index) => rows.nodes[index + prefix.length] === node)).toBe(true)
+    expect(rows.nodes.at(-1)).toBe(security)
+    expect(rows.nodes.every((node, index) => node === t.nodes.get(rows.ids[index]))).toBe(true)
+    expect([rows.levels[5], rows.posinset[5], rows.setsize[5]]).toEqual([5, 1, 250_000])
+    expect([rows.levels.at(-2), rows.posinset.at(-2), rows.setsize.at(-2)]).toEqual([5, 250_000, 250_000])
   })
 })
 
@@ -189,7 +205,8 @@ describe('keyboard', () => {
   it('toggles with Enter and Numpad plus and minus, and expands siblings with *', () => {
     const t = sample(1), rows = t.rows(), at = (label: string) => index(rows, t.nodes, label)
     expect(treeKey(rows, at('Tables'), 'enter', 10)).toEqual({ type: 'toggle', id: t.tables.id })
-    expect(treeKey(rows, at('dbo.Table0'), 'enter', 10)).toEqual({ type: 'none' })
+    // A node that does not expand runs its default action, if its kind has one (the tree looks it up).
+    expect(treeKey(rows, at('dbo.Table0'), 'enter', 10)).toEqual({ type: 'activate', id: rows.ids[at('dbo.Table0')] })
     expect(treeKey(rows, at('System Databases'), 'expand', 10)).toEqual({ type: 'expand', id: t.system.id })
     expect(treeKey(rows, at('Tables'), 'expand', 10)).toEqual({ type: 'none' })
     expect(treeKey(rows, at('Tables'), 'collapse', 10)).toEqual({ type: 'collapse', id: t.tables.id })
@@ -267,14 +284,41 @@ describe('type-ahead', () => {
     expect(t.nodes.get(rows.ids[typeAhead(rows, 0, 'e')])!.label).toBe('Error')
     expect(typeAhead(rows, 0, '')).toBe(-1)
   })
-  it('scans 100,000 rows within the budget', () => {
+  it('searches 100,000 rows in one pass and wraps without rescanning', () => {
     const labels = Array.from({ length: 100_000 }, (_, index) => `dbo.table${index}`)
     const { rows, nodes } = folder(labels)
-    let found = -1
-    const time = bestOf3(() => { found = typeAhead(rows, 0, 'zzz') })
-    expect(found).toBe(-1)
-    expect(time).toBeLessThan(20)
-    expect(nodes.get(rows.ids[typeAhead(rows, 0, 'table99999')])!.label).toBe('dbo.table99999')
+    const visited: number[] = []
+    for (const [index, node] of rows.nodes.entries()) {
+      const lower = node!.lower
+      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => {
+        visited.push(index)
+        if (visited.length > rows.count) throw new Error('Type-ahead inspected more than one pass of the visible rows.')
+        return lower
+      } })
+    }
+    // Count actual matching work, independent of shared-runner scheduling or garbage-collection pauses.
+    const missed = meterWork(() => typeAhead(rows, 0, 'zzz'))
+    expect(missed.result).toBe(-1)
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    // Matching a row scans its label at most once plus the prefix twice (at the start and after the schema), with no
+    // locale-aware, Unicode or regular-expression call per row: only the buffer is lowercased, once.
+    const longest = Math.max(...labels.map(label => label.length))
+    expect(missed.work.characters, JSON.stringify(missed.work)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'z'.length) + 'zzz'.length)
+    expect(missed.work.costly, JSON.stringify(missed.work)).toBeLessThanOrEqual(1)
+    // Nor any array work per row (a few dozen elements is the buffer's own handling).
+    expect(missed.work.elements + missed.work.allocated, JSON.stringify(missed.work)).toBeLessThanOrEqual(1000)
+    visited.length = 0
+    const { result: last, work: found } = meterWork(() => typeAhead(rows, 0, 'table99999'))
+    expect(found.characters, JSON.stringify(found)).toBeLessThanOrEqual(rows.count * (longest + 2 * 'table99999'.length) + 'table99999'.length)
+    expect(found.costly).toBeLessThanOrEqual(1)
+    expect(nodes.get(rows.ids[last])!.label).toBe('dbo.table99999')
+    expect(visited).toHaveLength(rows.count)
+    expect(new Set(visited).size).toBe(rows.count)
+    visited.length = 0
+    const wrapped = typeAhead(rows, last, 'table0')
+    expect(nodes.get(rows.ids[wrapped])!.label).toBe('dbo.table0')
+    expect(visited).toEqual([last, 0, wrapped])
   })
   it('collects printable keys until a pause of a second, ignoring IME, modifiers and leading spaces', () => {
     let now = 0
@@ -350,5 +394,126 @@ describe('* (expand siblings)', () => {
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: undefined })).toBe(false)
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: 'systemVersioned' })).toBe(true)
     expect(needsQuery({ kind: 'table', folder: undefined, subtype: 'history' })).toBe(false)
+  })
+})
+
+describe('Filter loaded objects', () => {
+  const filtered = (t: ReturnType<typeof sample>, text: string) => { const result = flattenFiltered(t.nodes, t.roots, filterText(text)); return { rows: describeRows(result.rows, t.nodes), matches: result.matches } }
+  it('keeps matches with their ancestors, counts the siblings that show, and leaves the rest out', () => {
+    const t = sample(12)
+    const other = t.add(0, 'server-b', { kind: 'server', expanded: true })
+    t.add(other.id, 'Databases', { folder: 'databases' })
+    expect(filtered(t, 'TABLE1')).toEqual({
+      rows: [['server-a', 1, 1, 2], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table1', 5, 1, 3], ['dbo.Table10', 5, 2, 3], ['dbo.Table11', 5, 3, 3], ['server-b', 1, 2, 2]],
+      matches: 3
+    })
+    expect(filtered(t, 'nothing')).toEqual({ rows: [['server-a', 1, 1, 2], ['server-b', 1, 2, 2]], matches: 0 })
+  })
+  it('names the nodes shown only for rows below them, whose item counts would misread, and not a match or its subtree', () => {
+    const t = sample(12)
+    t.add(t.tables.id, 'Columns', { folder: 'columns' })
+    const partial = (text: string, pinned?: number) => [...flattenFiltered(t.nodes, t.roots, filterText(text), 64, pinned).partial].map(id => t.nodes.get(id)!.label)
+    // Tables shows 3 of its 13 rows, so it is partial, as are its ancestors and the server.
+    expect(partial('table1')).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
+    // Tables matches, so it shows whole with its count; only its ancestors are partial.
+    expect(partial('tables')).toEqual(['AppData', 'Databases', 'server-a'])
+    // A server that matches nothing shows alone; the pinned selection's folder, collapsed, shows none of its rows.
+    expect(partial('nothing')).toEqual(['server-a'])
+    t.tables.expanded = false
+    expect(partial('nothing', t.tables.id)).toEqual(['Tables', 'AppData', 'Databases', 'server-a'])
+  })
+  it('shows a match\'s expanded rows as they are, and searches only expanded nodes', () => {
+    const t = sample(2)
+    // Below a collapsed folder, a loaded match stays hidden: the filter narrows what is open.
+    t.add(t.system.id, 'master', { kind: 'database' })
+    expect(filtered(t, 'tables')).toEqual({
+      rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table0', 5, 1, 2], ['dbo.Table1', 5, 2, 2]],
+      matches: 1
+    })
+    expect(filtered(t, 'master').rows).toEqual([['server-a', 1, 1, 1]])
+  })
+  it('keeps a shown node\'s loading, error and progress rows, and drops those of a node it leaves out', () => {
+    const t = sample(2)
+    Object.assign(t.tables, { more: 'auto', cursor: 'v1.tables.2', total: 10 })
+    Object.assign(t.databases, { load: 'error' })
+    expect(filtered(t, 'table0').rows).toEqual([
+      ['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['Error(Databases)', 3, 0, 0], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table0', 5, 1, 1], ['More(Tables)', 5, 0, 0]
+    ])
+    expect(filtered(t, 'security').rows).toEqual([['server-a', 1, 1, 1], ['Security', 2, 1, 1]])
+  })
+  it('keeps the pinned node (the selection) and its ancestors, matching or not, without counting them', () => {
+    const t = sample(2)
+    // Tables, collapsed while it showed only for its matches, stays with its ancestors.
+    t.tables.expanded = false
+    const pinned = (id: number, text: string) => { const result = flattenFiltered(t.nodes, t.roots, filterText(text), 64, id); return { rows: describeRows(result.rows, t.nodes), matches: result.matches } }
+    expect(pinned(t.tables.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 1], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1]], matches: 0 })
+    expect(filtered(t, 'table1').rows).toEqual([['server-a', 1, 1, 1]])
+    // A pinned leaf beside the matches, and a pinned node that is gone or a server, change nothing else.
+    t.tables.expanded = true
+    const security = t.nodes.get(t.server.children!.find(child => child.label === 'Security')!.id)!
+    expect(pinned(security.id, 'table1')).toEqual({ rows: [['server-a', 1, 1, 1], ['Databases', 2, 1, 2], ['AppData', 3, 1, 1], ['Tables', 4, 1, 1], ['dbo.Table1', 5, 1, 1], ['Security', 2, 2, 2]], matches: 1 })
+    expect(pinned(9999, 'table1')).toEqual(filtered(t, 'table1'))
+    expect(pinned(t.server.id, 'zzz')).toEqual({ rows: [['server-a', 1, 1, 1]], matches: 0 })
+  })
+  it('matches anywhere in the label, ignoring case and surrounding spaces', () => {
+    expect(filterText('  Ord ')).toBe('ord')
+    expect(filterMatch({ lower: 'dbo.orders' }, 'ord')).toBe(4)
+    expect(filterMatch({ lower: 'dbo.orders' }, '')).toBe(-1)
+  })
+  it('filters 100,000 loaded rows in one pass, reading each open node\'s name once and nothing below a collapsed one', () => {
+    const t = sample(100_000)
+    // A collapsed folder whose loaded rows would match: the filter narrows what is open, so it never looks inside.
+    const hidden = t.add(t.app.id, 'Views', { folder: 'views' })
+    for (let index = 0; index < 1_000; index++) t.add(hidden.id, `dbo.Table9View${index}`)
+    // An open match shows whole, down to its collapsed folders, whose loaded rows stay out of sight.
+    const table9 = t.tables.children![9], folder = t.add(table9.id, 'Columns', { folder: 'columns' })
+    table9.expanded = true
+    const columns = Array.from({ length: 100 }, (_, index) => t.add(folder.id, `table9_column${index}`, { kind: 'column' }))
+    const reads = new Map<number, number>()
+    for (const [id, node] of t.nodes) {
+      const lower = node.lower
+      Object.defineProperty(node, 'lower', { configurable: true, enumerable: true, get: () => { reads.set(id, (reads.get(id) ?? 0) + 1); return lower } })
+    }
+    // Count the work rather than time it, so a loaded runner cannot fail it: 1 + 10 + 100 + 1,000 + 10,000 tables match.
+    const result = flattenFiltered(t.nodes, t.roots, 'table9')
+    expect(result.matches).toBe(11_111)
+    expect(result.rows.count).toBe(11_111 + 5)
+    expect(reads.get(folder.id)).toBe(1)
+    expect(Math.max(...reads.values())).toBe(1)
+    expect(t.tables.children!.every(node => reads.get(node.id) === 1)).toBe(true)
+    expect([...hidden.children!, ...columns].some(node => reads.has(node.id))).toBe(false)
+  })
+})
+
+describe('row layout', () => {
+  it('makes server rows taller and places every row below them by it', () => {
+    const t = sample(3)
+    const other = t.add(0, 'server-b', { kind: 'server' })
+    const rows = t.rows(), layout = rowLayout(rows, 22, 30)
+    const index = Array.from(rows.ids).indexOf(other.id)
+    expect([layout.top(0), layout.height(0), layout.top(1), layout.height(1), layout.top(index), layout.height(index)]).toEqual([0, 30, 30, 22, 30 + (index - 1) * 22, 30])
+    expect(layout.total).toBe(rows.count * 22 + 2 * 8)
+    expect([layout.indexAt(0), layout.indexAt(29), layout.indexAt(30), layout.indexAt(51), layout.indexAt(52), layout.indexAt(1e9), layout.indexAt(-5)]).toEqual([0, 0, 1, 1, 2, rows.count - 1, 0])
+  })
+  it('scrolls a row into view by where the layout places it, servers above included', () => {
+    const t = sample(3)
+    for (const name of ['server-b', 'server-c', 'server-d']) t.add(0, name, { kind: 'server' })
+    const rows = t.rows(), layout = rowLayout(rows, 22, 30), last = rows.count - 1
+    // The last row, server-d, sits below 3 taller servers: its bottom is 3 · 8 px further down than index · 22 would say.
+    expect(layout.top(last) + layout.height(last)).toBe(last * 22 + 3 * 8 + 30)
+    expect(revealScroll(layout, last, 0, 100)).toBe(layout.total - 100)
+    expect(revealScroll(layout, 1, 200, 100)).toBe(30)
+    expect(revealScroll(layout, 1, 0, 100)).toBeUndefined()
+    expect([revealScroll(layout, -1, 0, 100), revealScroll(layout, rows.count, 0, 100)]).toEqual([undefined, undefined])
+  })
+  it('windows rows of different heights with overscan, clamped to the rows', () => {
+    const t = sample(1000), layout = rowLayout(t.rows(), 22, 30)
+    expect(layoutWindow(0, 220, layout, 0)).toEqual([0, 10])
+    expect(layoutWindow(30 + 22 * 99, 220, layout, 5)).toEqual([95, 115])
+    expect(layoutWindow(1e9, 220, layout)).toEqual([layout.count, layout.count])
+    expect(layoutWindow(0, 220, rowLayout(flatten(new Map(), [])))).toEqual([0, 0])
+    // Uniform rows window as computeWindow does.
+    const plain = rowLayout(t.rows(), 22, 22)
+    for (const top of [0, 2200, 5000]) expect(layoutWindow(top, 220, plain)).toEqual(computeWindow(top, 220, plain.count))
   })
 })

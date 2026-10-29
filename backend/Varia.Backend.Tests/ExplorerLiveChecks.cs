@@ -95,11 +95,11 @@ internal static class ExplorerLiveChecks
                 "Integration Services Catalogs is empty without SSISDB on Windows, and says the catalog is not supported on Linux: " + catalogs.Error?.Message);
         }
         var system = await client.All(Folder(Server, "systemDatabases"));
-        check(system.Nodes.Select(node => node.Label).SequenceEqual(["master", "model", "msdb", "tempdb"]) && system.Nodes.All(node => node is { Subtype: "system", Icon: "svg:database", HasChildren: true }),
+        check(system.Nodes.Select(node => node.Label).SequenceEqual(["master", "model", "msdb", "tempdb"]) && system.Nodes.All(node => node is { Subtype: "system", Icon: "database", HasChildren: true }),
             "System Databases lists exactly master, model, msdb and tempdb");
         var logins = await client.Labels(Folder(Server, "logins"));
         var roles = await client.All(Folder(Server, "serverRoles"));
-        check(logins.Contains(sqlUser ?? info.Login!) && roles.Nodes.Any(node => node is { Label: "sysadmin", Detail: "Fixed server role", Icon: "svg:role" }), "Logins include the test login; Server Roles include sysadmin");
+        check(logins.Contains(sqlUser ?? info.Login!) && roles.Nodes.Any(node => node is { Label: "sysadmin", Detail: "Fixed server role", Icon: "role" }), "Logins include the test login; Server Roles include sysadmin");
 
         // Paging: 97 rows a page, compared with one independent ORDER BY.
         var procedures = await client.All(Folder(Database("master"), "systemStoredProcedures"), pageSize: 97);
@@ -366,7 +366,7 @@ internal static class ExplorerLiveChecks
         var customerColumns = (await client.All(Folder(Table("Sales", "Customers"), "columns"))).Nodes;
         check(customerColumns.Select(Show).SequenceEqual(["Id (PK, int, not null)", "Name (Name(nvarchar(50)), not null)", "Email (nvarchar(200), null)", "Created (datetime2(3), not null)",
             "Notes (nvarchar(max), null)", "Doc (XML(DOCUMENT dbo.Coll), null)", "Frag (XML(CONTENT dbo.Coll), null)", "Extra (int, null)"])
-            && customerColumns[0] is { Icon: "svg:key", Detail: "Identity" } && customerColumns[7].Detail == "Sparse" && customerColumns[0].Ref.Object!.Parent == new ParentRefDto("table", "Sales", "Customers"),
+            && customerColumns[0] is { Icon: "key", Detail: "Identity" } && customerColumns[7].Detail == "Sparse" && customerColumns[0].Ref.Object!.Parent == new ParentRefDto("table", "Sales", "Customers"),
             "column labels: PK, alias type, max lengths, XML collections, sparse: " + string.Join(", ", customerColumns.Select(Show)));
         var orderColumns = (await client.All(Folder(Table("Sales", "Orders"), "columns"))).Nodes;
         check(orderColumns.Select(Show).SequenceEqual(["Id (PK, int, not null)", "CustomerId (FK, int, null)", "ReferrerId (FK, int, null)", "BackupId (FK, int, null)", "Price (decimal(8,2), not null)",
@@ -374,7 +374,7 @@ internal static class ExplorerLiveChecks
             "column labels: FK, decimal, computed: " + string.Join(", ", orderColumns.Select(Show)));
         var keys = (await client.All(Folder(Table("Sales", "Orders"), "keys"))).Nodes;
         check(keys.Select(node => (node.Label, node.Subtype, node.Status, node.Detail)).SequenceEqual([("FK_Orders_Backup", "foreign", "disabled", "Not trusted"), ("FK_Orders_Customers", "foreign", null, null),
-            ("FK_Orders_Referrer", "foreign", null, "Not trusted"), ("PK_Orders", "primary", null, null)]) && keys[3].Icon == "svg:key" && keys[0].Icon == "references",
+            ("FK_Orders_Referrer", "foreign", null, "Not trusted"), ("PK_Orders", "primary", null, null)]) && keys[3].Icon == "key" && keys[0].Icon == "references",
             "keys: primary and foreign, disabled and untrusted");
         check((await client.All(Folder(Table("Sales", "Customers"), "keys"))).Nodes.Select(node => (node.Label, node.Subtype)).SequenceEqual([("PK_Customers", "primary"), ("UQ_Customers_Email", "unique")])
             && (await client.All(Folder(Table("Sales", "Customers"), "constraints"))).Nodes.Select(node => (node.Label, node.Subtype)).SequenceEqual([("DF_Customers_Created", "default")]),

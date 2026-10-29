@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import type { spawn } from 'node:child_process'
@@ -8,7 +9,7 @@ import { BackendError, sentences } from '../src/main/backend/errors'
 import { FrameKind, FrameParser, encodeFrame, type Frame } from '../src/shared/ipc/wire/frames'
 import { decodeControl, encodeControl, encodeSensitiveControl } from '../src/shared/ipc/wire/msgpack'
 import { backendMethods, createCatalogDrainMs, deadlineFor } from '../src/shared/ipc/methods'
-import { cancelReasons, limits as wire } from '../src/shared/ipc/wire/protocol'
+import { cancelReasons, errorReasons, limits as wire } from '../src/shared/ipc/wire/protocol'
 import { ssisLimits } from '../src/shared/ssis/catalog'
 import { connectionRequestLimits, RendererRequests } from '../src/main/backend/renderer-requests'
 import { fakeSpawn, manualClock, settle } from './fixtures/fake-process'
@@ -105,7 +106,17 @@ describe('BackendConnection malformed input', () => {
     const failed = await failure(connect('sql.contoso.com'))
     expect(failed).toMatchObject({ code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: { number: 0, state: 0, class: 11, server: 'sql.contoso.com' } })
     expect(await failure(connect('long'))).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
+    expect(await failure(connect('certificate'))).toMatchObject({ code: 'SQL_ERROR', details: { number: -2146893019, class: 20, server: 'certificate', reason: 'certificate' } })
+    expect(await failure(connect('crash'))).toMatchObject({ code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' } })
+    for (const server of ['reason', 'exception']) expect(await failure(connect(server)), server).toMatchObject({ code: 'STREAM_PROTOCOL', details: undefined })
     expect(connection.lost).toBeUndefined()
+  })
+  it('bounds error details as the backend does', () => {
+    // ErrorDetailsLimits and ConnectionFailures.MaxServerLength in C#, which cut what they send to these lengths.
+    const contracts = readFileSync(resolve('backend/Varia.Backend/Contracts.cs'), 'utf8'), failures = readFileSync(resolve('backend/Varia.Backend/ConnectionFailures.cs'), 'utf8')
+    expect(Number(/MaxExceptionLength = (\d+);/.exec(contracts)?.[1])).toBe(wire.errorDetails.exception)
+    expect(Number(/MaxServerLength = (\d+);/.exec(failures)?.[1])).toBe(wire.errorDetails.server)
+    expect(/Certificate = "(\w+)";/.exec(contracts)?.[1]).toBe(errorReasons[0])
   })
   it('passes query events to their request and contains an undecodable one', async () => {
     const global: unknown[] = []
@@ -332,5 +343,80 @@ describe('Connect dialog Stop', () => {
     const early = crypto.randomUUID()
     expect(requests.cancel([early])).toBe(0)
     expect(() => requests.begin(early)).toThrow(expect.objectContaining({ code: 'CANCELLED' }))
+  })
+})
+
+describe('BackendConnection live subscriptions', () => {
+  /** A connection to an in-process backend that leaves requests pending, so a test sends each frame itself. */
+  function simulated() {
+    const { spawn, last } = fakeSpawn(backend => { backend.answer = false })
+    const connection = new BackendConnection({ command: 'fake', args: [], cwd: process.cwd(), packaged: false }, 1, { spawn })
+    connections.push(connection)
+    return { connection, backend: () => last() }
+  }
+  const subscribe = (connection: BackendConnection, onEvent: (event: unknown, bytes: number) => void) => {
+    const sent = connection.send('live.subscribe', {} as never, { deadlineMs: 0, onEvent })
+    sent.done.catch(() => {})
+    return sent
+  }
+  it('charges each live EVENT to its 64 KiB credit and accepts the next only once the previous is acknowledged', async () => {
+    const { connection, backend } = simulated()
+    await connection.ready
+    const events: { event: unknown; bytes: number }[] = []
+    const { id, done } = subscribe(connection, (event, bytes) => { events.push({ event, bytes }) })
+    await settle()
+    backend().send(FrameKind.EVENT, id, 0, { n: 1 })
+    await expect.poll(() => events.length).toBe(1)
+    expect(events[0]).toEqual({ event: { n: 1 }, bytes: encodeControl({ n: 1 }).length })
+    // An acknowledgement returns what the event took, never more, however much is asked: two frames can never be out.
+    connection.credit(id, 10 * 1024 * 1024)
+    connection.credit(id, 1)
+    await settle()
+    expect(backend().credits).toEqual([{ id, bytes: events[0].bytes }])
+    backend().send(FrameKind.EVENT, id, 0, { n: 2 })
+    await expect.poll(() => events.length).toBe(2)
+    // The third arrives before the second was acknowledged: the stream fails and is cancelled; the generation stays.
+    backend().send(FrameKind.EVENT, id, 0, { n: 3 })
+    expect(await failure(done)).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(events).toHaveLength(2)
+    await expect.poll(() => backend().cancels).toEqual([{ id, reason: cancelReasons.consumerGone }])
+    expect(connection.lost).toBeUndefined()
+  })
+  it('leaves the events of other methods uncredited', async () => {
+    const { connection, backend } = simulated()
+    await connection.ready
+    const events: unknown[] = []
+    const { id, done } = connection.send('query.execute', query('SELECT 1'), { deadlineMs: 0, onEvent: event => { events.push(event) } })
+    done.catch(() => {})
+    await settle()
+    for (let index = 0; index < 5; index++) backend().send(FrameKind.EVENT, id, 0, { index })
+    await expect.poll(() => events.length).toBe(5)
+    expect(connection.pendingCount).toBe(1)
+  })
+  it('fails a live stream whose backend sends a second EVENT before the first was acknowledged', async () => {
+    const connection = fake('live-overrun')
+    const events: unknown[] = []
+    expect(await failure(subscribe(connection, event => { events.push(event) }).done)).toMatchObject({ code: 'STREAM_PROTOCOL', message: sentences.invalid })
+    expect(events).toHaveLength(1)
+    expect((await health(connection)).cancels).toEqual([{ id: 1, reason: cancelReasons.consumerGone }])
+  })
+  it('fails a live stream that sends DATA, or an EVENT over 256 KiB', async () => {
+    for (const mode of ['live-data', 'live-big']) {
+      const connection = fake(mode)
+      expect(await failure(subscribe(connection, () => {}).done), mode).toMatchObject({ code: 'STREAM_PROTOCOL' })
+      expect(connection.lost, mode).toBeUndefined()
+    }
+  })
+  it('runs a live stream to its end over the fake backend, one acknowledged frame at a time', async () => {
+    const connection = fake('echo')
+    const seqs: number[] = []
+    let id = 0
+    const sent = connection.send('live.subscribe', { ticks: 2 } as never, { deadlineMs: 0, onEvent: (event, bytes) => {
+      seqs.push((event as { seq: number }).seq)
+      setTimeout(() => connection.credit(id, bytes), 20)
+    } })
+    id = sent.id
+    expect(await sent.done).toEqual({ ended: 'sourceEnded', kept: [], ticks: 2, elapsedMs: 1 })
+    expect(seqs).toEqual([0, 1, 2])
   })
 })

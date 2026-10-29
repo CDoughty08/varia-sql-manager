@@ -61,10 +61,13 @@
 {"id":"menu.view","label":"View"}
   {"accelerator":"Cmd+Shift+P","id":"workbench.showCommands","label":"Command Palette…","registerAccelerator":false,"type":"normal","click":[["command","workbench.showCommands"]]}
   {"accelerator":"Cmd+P","id":"workbench.quickOpen","label":"Go to Query…","registerAccelerator":false,"type":"normal","click":[["command","workbench.quickOpen"]]}
+  {"id":"workbench.search","label":"Search…","registerAccelerator":false,"type":"normal","click":[["command","workbench.search"]]}
   {"type":"separator"}
   {"id":"layout.save","label":"Save Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.save"]]}
   {"id":"layout.load","label":"Load Layout…","registerAccelerator":false,"type":"normal","click":[["command","layout.load"]]}
   {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
+  {"type":"separator"}
+  {"accelerator":"Cmd+Alt+A","id":"activity.open","label":"Activity Monitor","registerAccelerator":false,"type":"normal","click":[["command","activity.open"]]}
   {"type":"separator"}
   {"id":"view.theme","label":"Theme"}
     {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}
@@ -105,6 +108,7 @@
     {"id":"connection.reconnect@query.connection","label":"Reconnect…","registerAccelerator":false,"type":"normal","click":[["command","connection.reconnect"]]}
     {"type":"separator"}
     {"id":"query.changeConnection","label":"Change Connection…","registerAccelerator":false,"type":"normal","click":[["command","query.changeConnection"]]}
+    {"id":"connection.environment","label":"Environment…","registerAccelerator":false,"type":"normal","click":[["command","connection.environment"]]}
   {"accelerator":"Cmd+U","id":"query.changeDatabase","label":"Change Database…","registerAccelerator":false,"type":"normal","click":[["command","query.changeDatabase"]]}
   {"type":"separator"}
   {"id":"query.execute","label":"Execute","registerAccelerator":false,"type":"normal","click":[["command","query.execute"]]}
@@ -116,6 +120,7 @@
   {"id":"window.editor","label":"Query Editor","registerAccelerator":false,"type":"normal","click":[["command","window.editor"]]}
   {"id":"window.output","label":"Query Output","registerAccelerator":false,"type":"normal","click":[["command","window.output"]]}
   {"accelerator":"Cmd+R","id":"view.toggleResultsPane","label":"Show Results Pane","registerAccelerator":false,"type":"checkbox","click":[["command","view.toggleResultsPane"]],"checkedAfterClick":false}
+  {"id":"window.togglePanelTabs","label":"Panel Tabs","registerAccelerator":false,"type":"checkbox","click":[["command","window.togglePanelTabs"]],"checkedAfterClick":false}
   {"type":"separator"}
   {"id":"document.next","label":"Next Query","registerAccelerator":false,"type":"normal","click":[["command","document.next"]]}
   {"id":"document.previous","label":"Previous Query","registerAccelerator":false,"type":"normal","click":[["command","document.previous"]]}

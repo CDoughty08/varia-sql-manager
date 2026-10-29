@@ -4,6 +4,7 @@ import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerN
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
 import { scriptContextValues, scriptMenuState, type ScriptContextValues } from '../../../shared/scripting/catalog.ts'
+import { ssisVerbContextValues, ssisVerbMenuState, type SsisVerbContextValues } from '../../../shared/ssis/catalog.ts'
 import { onUnexpectedError } from '../core/errors'
 import type { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
@@ -12,9 +13,9 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
-import { emptyRows, flatten, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
+import { emptyRows, filterText, flatten, flattenFiltered, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeNote, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
 
-export type { TreeNode } from './tree-model'
+export type { NodeNote, TreeNode } from './tree-model'
 /** A sentence for the tree's live region; `id` changes with every announcement, so a repeated sentence is heard again. */
 export interface Announcement { readonly text: string; readonly id: number }
 export interface ExplorerSnapshot {
@@ -25,12 +26,21 @@ export interface ExplorerSnapshot {
   readonly announcement?: Announcement
   /** Changes when a selection made outside the tree asks it to scroll the selected row into view. */
   readonly reveal?: number
+  /**
+   * The Filter loaded objects box narrows `rows`: its text as rows match it (`filterText`), how many nodes match, and
+   * the nodes that show only some of their children (`FilteredRows.partial`), whose item counts are left out.
+   */
+  readonly filter?: { readonly text: string; readonly matches: number; readonly partial: ReadonlySet<number> }
 }
+/** The box's text as typed, and a count that changes when Filter Loaded Objects asks the box to take focus. */
+export interface QuickFilterState { readonly input: string; readonly focus: number }
+/** How fresh the listing that shows a row is: the node it is a child of (or itself, expanded), for the pane's footer. */
+export interface ListingFreshness { readonly label: string; readonly updatedAt: number; readonly staleSince?: number }
 /**
  * The Object Explorer context keys (state scope), from the selected node; the Script As keys come from `scriptMenuState`
- * and the object action keys from `actionMenuState`.
+ * the object action keys from `actionMenuState`, and the SSIS verb keys from `ssisVerbMenuState`.
  */
-export interface ExplorerContextState extends ScriptContextValues, ActionContextValues {
+export interface ExplorerContextState extends ScriptContextValues, ActionContextValues, SsisVerbContextValues {
   readonly explorerHasSelection: boolean
   readonly explorerSelectionKind: '' | 'folder' | NodeKind
   readonly explorerSelectionFolder: '' | FolderId
@@ -41,10 +51,11 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), explorerLoading: false
+  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
+  explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
-export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice'>
+export type ExplorerServiceLimits = LoaderLimits & ExplorerLimitValues<'pageSize' | 'folderCap' | 'nodeBudget' | 'siblingLoads' | 'filters' | 'loadingRowDelayMs' | 'deleteSlice' | 'quickFilter'>
 export interface ExplorerServiceOptions {
   readonly api: Pick<VariaApi, 'explorerChildren' | 'explorerCancel'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
@@ -54,19 +65,61 @@ export interface ExplorerServiceOptions {
   readonly schedule?: (callback: () => void) => void
   readonly newId?: () => string
   readonly limits?: Partial<ExplorerServiceLimits>
+  /** The wall clock (epoch ms) a listing's freshness is stamped with. */
+  readonly now?: () => number
 }
 
-/** How a first page replaces the children: `keep` reuses static folders (and their state), `replace` collapses everything. */
-type PageMode = 'keep' | 'replace' | 'more'
-interface Running { readonly task: LoadTask; readonly mode: PageMode }
+/**
+ * How a first page replaces the children: `keep` reuses static folders (and their state); `reconcile` keeps every child
+ * that is still there, by refKey, with its own children, expansion and selection.
+ */
+type PageMode = 'keep' | 'reconcile' | 'more'
+type FirstMode = Exclude<PageMode, 'more'>
+/** `deep`: a reconcile that reloads the expanded nodes below the node as well. */
+interface Running { readonly task: LoadTask; readonly mode: PageMode; readonly deep: boolean }
+/**
+ * A reconcile whose folder pages on: its children are the rows this reconcile's pages brought, then the old rows no page
+ * has brought back yet, which stay until the last page (or the folder cap) shows they are gone.
+ */
+interface Reconciling {
+  /** The children before the reconcile, in order. Pages usually list them in the same order, so they are matched in turn. */
+  readonly old: readonly TreeNode[]
+  /** `old[next]` is the row the next page row is compared with first. */
+  next: number
+  /** Old rows before `old[next]` that no page row matched yet: they still wait. */
+  readonly skipped: Set<TreeNode>
+  /** Old rows from `old[next]` on that the index matched out of turn. */
+  readonly takenAhead: Set<TreeNode>
+  /** Built at the first row that is not a few rows on: the waiting rows by name (folders by folder id), matched by refKey. */
+  index?: { readonly objects: Map<string, TreeNode | TreeNode[]>; readonly folders: Map<string, TreeNode> }
+  /** This reconcile's rows so far: the children start with them, and the waiting old rows follow. */
+  readonly rows: TreeNode[]
+  added: number
+  readonly deep: boolean
+}
 /** How far a folder's rows had got when a refresh began: put back if the refresh stops or fails. */
-interface HeldPaging { readonly cursor: string | undefined; readonly capped: boolean; readonly total: number | undefined }
+/** A reconcile still paging is held too: continuing its cursor must go on matching the rows it left waiting. */
+interface HeldPaging { readonly cursor: string | undefined; readonly capped: boolean; readonly total: number | undefined; readonly reconciling: Reconciling | undefined }
 /** What the service remembers about a node beyond what rows show. */
-interface NodeState { pendingMode?: 'keep' | 'replace'; retryMode?: 'keep' | 'replace'; budgetExempt?: boolean; loadingTimer?: unknown; held?: HeldPaging }
+interface NodeState { pendingMode?: FirstMode; retryMode?: FirstMode; deep?: boolean; budgetExempt?: boolean; loadingTimer?: unknown; held?: HeldPaging; reconciling?: Reconciling }
+/** What `reconcile` does besides reloading the node. */
+export interface ReconcileOptions {
+  /** Selects (and reveals) the child with this identity once a page brings it; the node itself if none does. */
+  readonly select?: ExplorerNodeRef
+  /** Reloads the expanded nodes below too, and has collapsed ones reload when next expanded (Refresh does). */
+  readonly deep?: boolean
+  /**
+   * A reconcile nobody asked for (a probe saw a change): it loads behind the user's own loads and emits no
+   * `explorer.refreshed`, so the query bars' database lists are not reloaded for it.
+   */
+  readonly background?: boolean
+}
 
 const serverRef: ExplorerNodeRef = { type: 'object', object: { kind: 'server' } }
 const numbers = new Intl.NumberFormat('en-US')
 const count = (value: number) => numbers.format(value)
+/** How many old rows past the next one a page row is looked for before the name index: a few dropped objects stay cheap. */
+const reconcileLookahead = 16
 const databaseFolders: ReadonlySet<string> = new Set<FolderId>(['databases', 'systemDatabases', 'databaseSnapshots'])
 /** The object a node is, or the object a folder hangs below. */
 const objectOf = (ref: ExplorerNodeRef): ObjectRef => ref.type === 'object' ? ref.object : ref.owner
@@ -79,6 +132,18 @@ const targetOf = (node: TreeNode): ExplorerTarget =>
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
   return connection.productVersion ? `(SQL Server ${connection.productVersion}${connection.login ? ' - ' + connection.login : ''})` : `(SQL Server ${connection.serverVersion})`
+}
+/**
+ * What the server row shows instead: the major and minor version, then the login ("16.0 · sa"). A Windows login loses its
+ * domain or machine ("CONTOSO\dba" shows as "dba"), which would otherwise fill the narrow pane and look the same on every
+ * server; the name and tooltip keep it.
+ */
+export function serverBrief(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
+  // "16.0.4135.4" from the profile, or "16.00.4135" as SqlClient reports it.
+  const [major, minor] = (connection.productVersion || connection.serverVersion).split('.').map(part => /^\d+$/.test(part) ? String(Number(part)) : part)
+  const version = minor === undefined ? major : `${major}.${minor}`
+  const login = connection.productVersion ? connection.login?.slice(connection.login.lastIndexOf('\\') + 1) : undefined
+  return [version, login].filter(Boolean).join(' · ')
 }
 
 /**
@@ -127,8 +192,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private readonly contextStore = new (class extends SnapshotStore<ExplorerContextState> { set(value: ExplorerContextState) { this.publish(value) } clear() { this.clearListeners() } })(noExplorerContext)
   private readonly dialogStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
   private readonly renameStore = new (class extends SnapshotStore<number | undefined> { set(value: number | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
-  /** The child refreshAndSelect selects when its folder's first page arrives. */
-  private pendingSelect?: { readonly folder: number; readonly key: string }
+  // Published at once, not with the next tick's rows, so the box shows each key as it is typed.
+  private readonly quickFilterStore = new (class extends SnapshotStore<QuickFilterState> { set(value: QuickFilterState) { this.publish(value) } clear() { this.clearListeners() } })({ input: '', focus: 0 })
+  /** The filter the rows were last flattened with, so a change of filter is announced once. */
+  private filtered = ''
+  private focusTaken = 0
+  private readonly now: () => number
+  /** The child `reconcile` selects when a page of its folder brings it. */
+  private pendingSelect?: { readonly folder: number; readonly key: string; readonly name: string | undefined }
   private readonly unsubscribe: () => void
   /** The selected node's context keys; it publishes only when one changes, and synchronously on `select`. */
   readonly context: ExternalStore<ExplorerContextState> = this.contextStore
@@ -140,6 +211,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.timers = options.timers ?? browserTimers
     this.schedule = options.schedule ?? (callback => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => callback()); else queueMicrotask(callback) })
     this.limits = { ...explorerLimits, ...options.limits }
+    this.now = options.now ?? Date.now
     this.loader = new ExplorerLoader({ api: options.api, timers: this.timers, newId: options.newId, limits: this.limits, onPendingChange: () => this.updateContext() })
     this.unsubscribe = this.connections.subscribe(() => this.guard(() => this.syncConnections()))
     this.syncConnections()
@@ -202,18 +274,43 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
 
   /**
-   * Reloads a row's node (a leaf's parent), or every server without one. Old rows stay until the first page arrives;
-   * descendants come back collapsed, and the selection stays when its node reappears.
+   * Refresh: reconciles a row's node (a leaf's parent), or every server without one, deeply. Old rows stay until the first
+   * page arrives; rows that are still there keep their node, expansion and selection, and expanded nodes below reload too.
    */
   refresh(id?: number): void {
-    if (id === undefined) { for (const root of [...this.roots]) this.refreshNode(this.nodes.get(root)); this.invalidate(); return }
+    if (id === undefined) { for (const root of [...this.roots]) this.reconcileNode(this.nodes.get(root), { deep: true }); this.invalidate(); return }
     let node = this.nodes.get(rowOwner(id))
     if (node && node.kind !== 'folder' && !node.hasChildren && node.parent) node = this.nodes.get(node.parent)
-    this.refreshNode(node)
+    this.reconcileNode(node, { deep: true })
+    this.invalidate()
+  }
+  /**
+   * Reloads a node's children in place and diffs them by refKey: a child that is still there keeps its node (with its
+   * children, expansion, selection and Rename box) and takes the new label and state; new children are inserted, and
+   * those that are gone are removed once the folder's last page has arrived. The changes are announced ("Tables: 1 added,
+   * 1 removed"). A collapsed node reconciles when it is next expanded. Used after Varia's own DDL and by Refresh.
+   */
+  reconcile(nodeId: number, options: ReconcileOptions = {}): void {
+    const node = this.nodes.get(nodeId)
+    if (!node || node.lost || !this.attached(node)) return
+    if (options.select) {
+      const object = options.select.type === 'object' ? options.select.object : undefined
+      this.pendingSelect = { folder: node.id, key: refKey(node.connectionId, options.select), name: object?.name }
+    }
+    this.reconcileNode(node, options, options.background ? 'background' : 'user')
+    this.invalidate()
+  }
+  /** Sets or clears another service's note on a node (shown after its sublabel and in its tooltip); reconciles keep it. */
+  setNote(nodeId: number, note: NodeNote | undefined): void {
+    const node = this.nodes.get(nodeId)
+    if (!node || (node.note?.label === note?.label && node.note?.sentence === note?.sentence)) return
+    node.note = note
+    node.rev++
     this.invalidate()
   }
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
   stop(): void {
+    this.pendingSelect = undefined
     for (const [id, running] of [...this.running]) { this.running.delete(id); this.loader.abort(running.task); this.reverted(id, running, 'stop') }
     for (const id of this.stalled) {
       const node = this.nodes.get(id)
@@ -241,12 +338,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       if (node.expanded) this.loadMore(node, 'user')
     } else if (node.load === 'error' && (kind === RowKind.Error || kind === RowKind.Node)) {
       if (node.error?.action === 'refreshParent') { this.refresh(this.missingParent(node).id); return }
-      const mode = this.state(node).retryMode ?? 'keep'
+      const state = this.state(node), mode = state.retryMode ?? 'keep'
       node.error = undefined
       node.load = 'none'
-      if (mode === 'replace') this.holdPaging(node)
+      if (mode === 'reconcile') this.holdPaging(node)
       node.rev++
-      this.loadFirst(node, mode, 'user')
+      this.loadFirst(node, mode, 'user', !!state.deep)
     }
     this.invalidate()
   }
@@ -272,12 +369,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.lastUsed = ++this.clock
     const reveal = !!options?.reveal
     if (this.selected === id && !reveal) return
+    // A selection the user made wins over one a reconcile still waits to make.
+    this.pendingSelect = undefined
     this.selected = id
     if (reveal) this.reveals++
     this.evictable = true
     if (this.dirty) this.flush()
     else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id, ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
+  }
+  /**
+   * The snapshot, with rows a change left for the next frame published now. The tree's keys read it, so a key that
+   * arrives before that frame (typed fast, or queued behind a long task) acts on what the key before it did.
+   */
+  settle(): ExplorerSnapshot {
+    if (this.dirty) this.guard(() => this.flush())
+    return this.getSnapshot()
   }
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
@@ -330,6 +437,39 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   closeFilter(): void { this.dialogStore.set(undefined) }
 
+  /** The Filter loaded objects box (unlike Filter Settings, it narrows the rows already loaded and asks for nothing). */
+  get quickFilter(): ExternalStore<QuickFilterState> { return this.quickFilterStore }
+  /** Narrows the rows to the loaded nodes whose label contains the text; clearing it shows the selection again. */
+  setQuickFilter(input: string): void {
+    const value = input.slice(0, this.limits.quickFilter), current = this.quickFilterStore.getSnapshot()
+    if (value === current.input) return
+    this.quickFilterStore.set({ ...current, input: value })
+    if (!filterText(value) && this.filtered) this.reveals++
+    this.invalidate()
+  }
+  /** Filter Loaded Objects: the box takes focus once it is shown. */
+  focusQuickFilter(): void {
+    const current = this.quickFilterStore.getSnapshot()
+    this.quickFilterStore.set({ ...current, focus: current.focus + 1 })
+  }
+  /** Whether the box should take focus now: once per request, so a box mounted later (the pane was hidden) still takes it. */
+  takeQuickFilterFocus(): boolean {
+    const { focus } = this.quickFilterStore.getSnapshot()
+    if (focus === this.focusTaken) return false
+    this.focusTaken = focus
+    return true
+  }
+  /**
+   * The listing a row belongs to, for the footer's "Updated 4 s ago": an expanded node that has loaded its children, else
+   * the node it is listed under. Undefined before that listing's first page arrived.
+   */
+  listingFreshness(rowId: number | undefined): ListingFreshness | undefined {
+    let node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
+    if (node && rowId! > 0 && !(node.expanded && node.updatedAt !== undefined) && node.parent) node = this.nodes.get(node.parent)
+    if (!node || node.updatedAt === undefined || !this.attached(node)) return undefined
+    return { label: node.label, updatedAt: node.updatedAt, ...(node.staleSince !== undefined ? { staleSince: node.staleSince } : {}) }
+  }
+
   /** The node whose label is an inline Rename box. */
   get renaming(): ExternalStore<number | undefined> { return this.renameStore }
   /**
@@ -350,17 +490,6 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   listingFolderOf(nodeId: number): number | undefined {
     const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
     return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
-  }
-  /**
-   * Reloads a folder and selects the child whose identity is `ref` once its first page arrives (a renamed object under its
-   * new name); when it never appears, the folder stays selected.
-   */
-  refreshAndSelect(folderNodeId: number, ref: ExplorerNodeRef): void {
-    const folder = this.nodes.get(folderNodeId)
-    if (!folder || folder.kind !== 'folder' || !this.attached(folder)) return
-    this.pendingSelect = { folder: folderNodeId, key: refKey(folder.connectionId, ref) }
-    this.refresh(folderNodeId)
-    if (!folder.expanded) this.expand(folderNodeId)
   }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
@@ -392,8 +521,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.generation++
     this.abortWithin(new Set([node.id]), 'detach')
     this.detach(node, node.children?.filter(child => child.kind !== 'folder') ?? [])
-    Object.assign(node, { total: undefined, cursor: undefined, more: 'none', error: undefined, load: 'none', hasChildren: true, expanded: true })
-    this.state(node).held = undefined
+    // The listing the footer dated is gone; the filtered one is dated when its first page arrives.
+    Object.assign(node, { total: undefined, cursor: undefined, more: 'none', error: undefined, load: 'none', hasChildren: true, expanded: true, updatedAt: undefined, staleSince: undefined })
+    const state = this.state(node)
+    state.held = state.reconciling = state.pendingMode = state.deep = undefined
+    // The filtered list is not the one a reconcile was to select a child from.
+    if (this.pendingSelect?.folder === node.id) this.pendingSelect = undefined
     node.lastUsed = ++this.clock
     node.rev++
     this.loadFirst(node, 'keep', 'user')
@@ -401,12 +534,43 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
 
+  /**
+   * The objects already loaded in the tree, in tree order, each with the path of the server, folders and objects above
+   * it, for the header's search. Folders are left out (their names repeat under every database), and so is anything not
+   * loaded: listing them never queries a server. At most `limit` nodes.
+   */
+  loadedObjects(limit: number): { readonly id: number; readonly label: string; readonly path: string; readonly icon: TreeNode['icon'] }[] {
+    const found: { id: number; label: string; path: string; icon: TreeNode['icon'] }[] = []
+    const walk = (node: TreeNode, path: string): boolean => {
+      if (found.length >= limit) return false
+      if (node.kind !== 'folder') found.push({ id: node.id, label: node.label, path, icon: node.icon })
+      const below = path ? `${path} › ${node.label}` : node.label
+      for (const child of node.children ?? []) if (!walk(child, below)) return false
+      return true
+    }
+    for (const id of this.roots) { const root = this.nodes.get(id); if (root && this.attached(root) && !walk(root, '')) break }
+    return found
+  }
+  /**
+   * Shows a loaded node: expands its collapsed ancestors, outermost first, as clicks on them would (so a folder whose
+   * loading a collapse interrupted carries on loading), then selects it and scrolls it into view.
+   */
+  reveal(id: number): boolean {
+    const node = this.nodes.get(id)
+    if (!node || !this.attached(node)) return false
+    const ancestors: TreeNode[] = []
+    for (let parent = node.parent ? this.nodes.get(node.parent) : undefined; parent; parent = parent.parent ? this.nodes.get(parent.parent) : undefined) ancestors.unshift(parent)
+    for (const parent of ancestors) if (!parent.expanded) this.expand(parent.id)
+    this.select(id, { reveal: true })
+    return true
+  }
+
   /** The text of a synthetic row, as shown: names and server messages in it get `displayText`'s markers. */
   rowText(rowId: number): string { return displayText(this.syntheticText(rowId)) }
   private syntheticText(rowId: number): string {
     const node = this.nodes.get(rowOwner(rowId))
     if (!node) return ''
-    const loaded = node.children?.length ?? 0, total = Math.max(node.total ?? 0, loaded)
+    const loaded = this.loadedCount(node), total = Math.max(node.total ?? 0, loaded)
     const message = node.error?.message ?? ''
     switch (rowKindOf(rowId)) {
       case RowKind.Loading: return 'Loading…'
@@ -416,7 +580,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       case RowKind.Paused: return `Loading paused: Object Explorer holds ${count(this.limits.nodeBudget)} items. Collapse other folders or filter this one. Press Enter to continue.`
       case RowKind.MoreError: return `Could not load more: ${message} Press Enter to retry.`
       case RowKind.Error: {
-        const prefix = this.states.get(node.id)?.retryMode === 'replace' ? 'Refresh failed: ' : ''
+        const prefix = this.states.get(node.id)?.retryMode === 'reconcile' ? 'Refresh failed: ' : ''
         if (node.error?.action === 'refreshParent') return `${prefix}${message} Press Enter to refresh ${this.missingParent(node).label}.`
         return `${prefix}${message}${node.error?.retryable ? ' Press Enter to retry.' : ''}`
       }
@@ -452,6 +616,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.contextStore.clear()
     this.dialogStore.clear()
     this.renameStore.clear()
+    this.quickFilterStore.clear()
   }
 
   // Connections
@@ -486,8 +651,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.invalidate()
   }
   private addRoot(connection: LiveConnection): number {
-    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'svg:server')
+    const node = this.createNode(0, connection.id, serverRef, 'server', undefined, 0, connection.displayName || connection.server, 'server')
     node.sublabel = serverSublabel(connection)
+    node.brief = serverBrief(connection)
     const facts = [connection.displayName ? connection.server : '', connection.engineEdition !== undefined && (cloudEngineEditions as readonly number[]).includes(connection.engineEdition) ? 'Only databases can be browsed on this edition.' : '']
     node.detail = facts.filter(Boolean).join(' · ') || undefined
     node.hasChildren = !connection.lost
@@ -508,7 +674,10 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private markLost(root: TreeNode): void {
     this.abortWhere(task => task.connectionId === root.connectionId)
     this.detach(root, root.children ?? [])
-    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0 })
+    Object.assign(root, { lost: true, hasChildren: false, expanded: false, children: undefined, load: 'none', more: 'none', cursor: undefined, total: undefined, error: undefined, connectionError: undefined, staticCount: 0, updatedAt: undefined, staleSince: undefined })
+    // A lost root never loads again (reconnecting adds a new one); this only lets go of the rows a reconcile held.
+    const state = this.state(root)
+    state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
     root.rev++
     if (this.selected !== undefined && this.within(rowOwner(this.selected), root.id)) this.selected = root.id
   }
@@ -517,7 +686,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
 
   private ensureLoading(node: TreeNode, priority: LoadPriority): void {
     if (!node.expanded || this.running.has(node.id)) return
-    if (node.load === 'none' || node.load === 'loading') this.loadFirst(node, this.state(node).pendingMode ?? 'keep', priority)
+    if (node.load === 'none' || node.load === 'loading') { const state = this.state(node); this.loadFirst(node, state.pendingMode ?? 'keep', priority, !!state.deep) }
     else if (node.more === 'auto' && node.cursor) this.capOrContinue(node)
   }
   private resumeStalled(): void {
@@ -533,13 +702,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const filter = node.kind === 'folder' ? this.filters.get(node.connectionId)?.get(refKey(node.connectionId, node.ref)) : undefined
     return { node: node.ref, ...(node.ref.type === 'object' && node.subtype ? { subtype: node.subtype } : {}), ...(cursor ? { cursor } : {}), ...(filter ? { filter } : {}) }
   }
-  private loadFirst(node: TreeNode, mode: 'keep' | 'replace', priority: LoadPriority): void {
+  private loadFirst(node: TreeNode, mode: FirstMode, priority: LoadPriority, deep = false): void {
     const previous = this.running.get(node.id)
     if (previous) { this.running.delete(node.id); this.loader.abort(previous.task) }
     const state = this.state(node)
     state.pendingMode = mode
+    state.deep = deep || undefined
     const running: Running = {
-      mode, task: this.loader.enqueue({ connectionId: node.connectionId, nodeId: node.id, generation: node.generation, params: this.params(node) }, priority, outcome => this.guard(() => this.settled(node.id, running, outcome)))
+      mode, deep, task: this.loader.enqueue({ connectionId: node.connectionId, nodeId: node.id, generation: node.generation, params: this.params(node) }, priority, outcome => this.guard(() => this.settled(node.id, running, outcome)))
     }
     this.running.set(node.id, running)
     if (node.load !== 'loading') { node.load = 'loading'; node.rev++ }
@@ -556,14 +726,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   private loadMore(node: TreeNode, priority: LoadPriority): void {
     if (!node.cursor || this.running.has(node.id)) return
     const running: Running = {
-      mode: 'more', task: this.loader.enqueue({ connectionId: node.connectionId, nodeId: node.id, generation: node.generation, params: this.params(node, node.cursor) }, priority, outcome => this.guard(() => this.settled(node.id, running, outcome)))
+      mode: 'more', deep: false, task: this.loader.enqueue({ connectionId: node.connectionId, nodeId: node.id, generation: node.generation, params: this.params(node, node.cursor) }, priority, outcome => this.guard(() => this.settled(node.id, running, outcome)))
     }
     this.running.set(node.id, running)
   }
   /** Continues a folder in the background while it is expanded, below the folder cap and within the node budget. */
   private capOrContinue(node: TreeNode): void {
     if (!node.cursor) { node.more = 'none'; return }
-    if ((node.children?.length ?? 0) >= this.limits.folderCap) { node.cursor = undefined; node.more = 'capped'; return }
+    if (this.loadedCount(node) >= this.limits.folderCap) { node.cursor = undefined; node.more = 'capped'; return }
     node.more = 'auto'
     if (!node.expanded || this.running.has(node.id)) return
     if (!this.state(node).budgetExempt && this.size >= this.limits.nodeBudget && !this.evict()) {
@@ -584,7 +754,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (outcome.ok && !outcome.result.error) {
       if (root?.connectionError) { root.connectionError = undefined; root.rev++ }
       if (running.mode === 'more') this.appendPage(node, outcome.result.nodes, outcome.result.cursor)
-      else this.firstPage(node, outcome.result.nodes, outcome.result.cursor, outcome.result.total, running.mode)
+      else if (running.mode === 'reconcile') this.reconcileFirst(node, outcome.result.nodes, outcome.result.cursor, outcome.result.total, running.deep)
+      else this.firstPage(node, outcome.result.nodes, outcome.result.cursor, outcome.result.total)
     } else {
       const error: NodeError = outcome.ok ? outcome.result.error! : outcome.error
       this.failed(node, error, running.mode, outcome.ok ? outcome.result.nodes : [])
@@ -595,20 +766,12 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.enforceBudget()
     this.invalidate()
   }
-  private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined, mode: PageMode): void {
-    const selectedKey = mode === 'replace' && this.selected !== undefined && this.selected !== node.id && this.within(rowOwner(this.selected), node.id) ? this.keyOf(rowOwner(this.selected)) : undefined
-    const truncated = this.replaceChildren(node, wires, mode === 'replace' ? 'replace' : 'keep')
+  private firstPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined): void {
+    const truncated = this.replaceChildren(node, wires)
     const state = this.state(node)
-    state.pendingMode = state.retryMode = state.held = undefined
-    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none' })
+    state.pendingMode = state.retryMode = state.deep = state.held = state.reconciling = undefined
+    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
     node.rev++
-    if (selectedKey !== undefined) this.selected = node.children!.find(child => refKey(child.connectionId, child.ref) === selectedKey)?.id ?? node.id
-    if (this.pendingSelect?.folder === node.id) {
-      const { key } = this.pendingSelect
-      this.pendingSelect = undefined
-      this.selected = node.children!.find(child => refKey(child.connectionId, child.ref) === key)?.id ?? node.id
-      this.reveals++
-    }
     if (!node.children!.length) {
       node.hasChildren = false
       node.expanded = false
@@ -617,12 +780,178 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!truncated) this.capOrContinue(node)
   }
   private appendPage(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined): void {
-    const truncated = this.addChildren(node, wires)
+    const reconciling = this.states.get(node.id)?.reconciling
+    const truncated = reconciling ? this.reconcileRows(node, reconciling, wires, cursor) : this.addChildren(node, wires)
     node.cursor = truncated ? undefined : cursor
     node.error = undefined
     node.rev++
     if (truncated) node.more = 'capped'
     else this.capOrContinue(node)
+  }
+  /** A reconcile's first page: the old children wait to be matched by this page and the folder's later ones. */
+  private reconcileFirst(node: TreeNode, wires: readonly WireNode[], cursor: string | undefined, total: number | undefined, deep: boolean): void {
+    const reconciling: Reconciling = { old: node.children ?? [], next: 0, skipped: new Set(), takenAhead: new Set(), rows: [], added: 0, deep }
+    const state = this.state(node)
+    state.pendingMode = state.retryMode = state.deep = state.held = undefined
+    state.reconciling = reconciling
+    node.staticCount = wires.reduce((sum, wire) => sum + (wire.ref.type === 'folder' ? 1 : 0), 0)
+    const truncated = this.reconcileRows(node, reconciling, wires, cursor)
+    Object.assign(node, { total, cursor: truncated ? undefined : cursor, load: 'loaded', error: undefined, more: truncated ? 'capped' : 'none', updatedAt: this.now(), staleSince: undefined })
+    node.rev++
+    if (!node.children!.length) {
+      node.hasChildren = false
+      node.expanded = false
+      this.announce(`${node.label}: no items`)
+    }
+    if (!truncated) this.capOrContinue(node)
+  }
+  /**
+   * Matches a page against the old children still waiting: a match keeps its node, the rest are created after the rows
+   * already matched, and the waiting rows stay after them. The folder's last page, or its cap, removes the rows still
+   * waiting and announces what changed. True when rows were cut at the cap.
+   */
+  private reconcileRows(node: TreeNode, reconciling: Reconciling, wires: readonly WireNode[], cursor: string | undefined): boolean {
+    const { rows } = reconciling, reused: TreeNode[] = []
+    const select = this.pendingSelect?.folder === node.id ? this.pendingSelect : undefined
+    let created = 0, truncated = false, selected: TreeNode | undefined
+    for (const wire of wires) {
+      if (rows.length >= this.limits.folderCap) { truncated = true; break }
+      const old = this.takeMatch(reconciling, node, wire)
+      const child = old ?? this.createChild(node, wire)
+      if (old) { reused.push(old); this.updateChild(old, wire) } else created++
+      rows.push(child)
+      if (select && !selected && wire.ref.type === 'object' && wire.ref.object.name === select.name && refKey(node.connectionId, wire.ref) === select.key) selected = child
+    }
+    const { old, next, skipped, takenAhead } = reconciling
+    const rest = takenAhead.size ? old.slice(next).filter(child => !takenAhead.has(child)) : old.slice(next)
+    const waiting = skipped.size ? [...skipped, ...rest] : rest
+    reconciling.added += created
+    this.addDescendants(node, created)
+    const done = truncated || !cursor || rows.length >= this.limits.folderCap
+    if (done) {
+      this.state(node).reconciling = undefined
+      node.children = rows
+      if (waiting.length) this.detach(node, waiting, false)
+      const changes = [reconciling.added ? `${count(reconciling.added)} added` : '', waiting.length ? `${count(waiting.length)} removed` : ''].filter(Boolean)
+      if (changes.length && rows.length) this.announce(`${node.label}: ${changes.join(', ')}`)
+    } else node.children = waiting.length ? rows.concat(waiting) : rows.slice()
+    if (select && (selected || done)) {
+      this.pendingSelect = undefined
+      this.selected = selected?.id ?? node.id
+      this.reveals++
+    }
+    for (const child of reused) this.reconcileBelow(child, reconciling.deep)
+    return truncated
+  }
+  /**
+   * Takes the waiting old child whose refKey is the page row's, if any: the next old row, or one a few rows on (the rows
+   * passed keep waiting), else any waiting row with that name.
+   */
+  private takeMatch(reconciling: Reconciling, parent: TreeNode, wire: WireNode): TreeNode | undefined {
+    const { old, takenAhead } = reconciling, ref = wire.ref
+    while (reconciling.next < old.length && takenAhead.delete(old[reconciling.next])) reconciling.next++
+    let key: string | undefined
+    const same = (candidate: TreeNode) => candidate.ref.type === ref.type
+      && (ref.type === 'folder' ? candidate.folder === ref.folder : candidate.ref.type === 'object' && candidate.ref.object.name === ref.object.name)
+      && refKey(candidate.connectionId, candidate.ref) === (key ??= refKey(parent.connectionId, ref))
+    for (let at = reconciling.next, end = Math.min(old.length, at + reconcileLookahead); at < end; at++) {
+      const candidate = old[at]
+      if (takenAhead.has(candidate) || !same(candidate)) continue
+      for (let pass = reconciling.next; pass < at; pass++) if (!takenAhead.delete(old[pass])) reconciling.skipped.add(old[pass])
+      reconciling.next = at + 1
+      if (reconciling.index) this.unindex(reconciling.index, candidate)
+      return candidate
+    }
+    const index = reconciling.index ?? (reconciling.index = this.indexOf(reconciling))
+    const bucket = ref.type === 'folder' ? index.folders.get(ref.folder) : index.objects.get(ref.object.name ?? '')
+    const found = Array.isArray(bucket) ? bucket.find(same) : bucket && same(bucket) ? bucket : undefined
+    if (!found) return undefined
+    this.unindex(index, found)
+    if (!reconciling.skipped.delete(found)) takenAhead.add(found)
+    return found
+  }
+  /** The old rows still waiting, by name, and folders by folder id. */
+  private indexOf(reconciling: Reconciling): NonNullable<Reconciling['index']> {
+    const objects = new Map<string, TreeNode | TreeNode[]>(), folders = new Map<string, TreeNode>()
+    const add = (child: TreeNode) => {
+      const ref = child.ref
+      if (ref.type === 'folder') { folders.set(ref.folder, child); return }
+      const name = ref.object.name ?? '', bucket = objects.get(name)
+      if (!bucket) objects.set(name, child)
+      else if (Array.isArray(bucket)) bucket.push(child)
+      else objects.set(name, [bucket, child])
+    }
+    for (const child of reconciling.skipped) add(child)
+    const { old, takenAhead } = reconciling
+    for (let at = reconciling.next; at < old.length; at++) if (!takenAhead.has(old[at])) add(old[at])
+    return { objects, folders }
+  }
+  private unindex(index: NonNullable<Reconciling['index']>, node: TreeNode): void {
+    const ref = node.ref
+    if (ref.type === 'folder') { if (index.folders.get(ref.folder) === node) index.folders.delete(ref.folder); return }
+    const name = ref.object.name ?? '', bucket = index.objects.get(name)
+    if (bucket === node) index.objects.delete(name)
+    else if (Array.isArray(bucket)) {
+      const at = bucket.indexOf(node)
+      if (at >= 0) bucket.splice(at, 1)
+      if (!bucket.length) index.objects.delete(name)
+    }
+  }
+  /** A child that is still there takes the page's label and state; a new subtype, or no children any more, drops its children. */
+  private updateChild(node: TreeNode, wire: WireNode): void {
+    let changed = false
+    if (node.label !== wire.label) { node.label = wire.label; node.lower = wire.label.toLocaleLowerCase(); changed = true }
+    if (node.sublabel !== wire.sublabel) { node.sublabel = wire.sublabel; changed = true }
+    if (node.detail !== wire.detail) { node.detail = wire.detail; changed = true }
+    if (node.icon !== wire.icon) { node.icon = wire.icon; changed = true }
+    if (node.status !== wire.status) { node.status = wire.status; changed = true }
+    if (node.created !== wire.created) { node.created = wire.created; changed = true }
+    // The subtype picks the folders below (a table's history row), so they are listed again.
+    const subtype = node.subtype !== wire.subtype
+    if (subtype) { node.subtype = wire.subtype; changed = true }
+    // A row that never had a chevron has nothing to drop (most rows of a big folder of leaves), and walking every pending
+    // load for each of them would make a reconcile's pages as slow as the queue is long.
+    if (subtype || (!wire.hasChildren && (node.hasChildren || node.children !== undefined))) this.forget(node)
+    if (node.hasChildren !== wire.hasChildren) {
+      node.hasChildren = wire.hasChildren
+      // An empty folder gets its chevron back and lists its rows again when expanded.
+      if (!wire.hasChildren) node.expanded = false
+      else if (!node.children?.length) node.load = 'none'
+      changed = true
+    }
+    if (changed) node.rev++
+  }
+  /** Drops a node's children, paging and loads, so it lists them again when expanded. */
+  private forget(node: TreeNode): void {
+    node.generation++
+    this.abortWithin(new Set([node.id]), 'detach')
+    this.detach(node, node.children ?? [])
+    Object.assign(node, { children: undefined, total: undefined, cursor: undefined, staticCount: 0, load: 'none', more: 'none', error: undefined, updatedAt: undefined, staleSince: undefined })
+    const state = this.state(node)
+    state.pendingMode = state.retryMode = state.deep = state.budgetExempt = state.held = state.reconciling = undefined
+    node.rev++
+  }
+  /**
+   * Below a child a reconcile kept: an expanded one that lost its rows loads them again, one that could not load drops
+   * its error and loads again (what failed may be fixed: access granted, MULTI_USER set), and a deep reconcile reloads
+   * expanded ones too (in the background, after the user's loads) and has collapsed ones reconcile when next expanded.
+   */
+  private reconcileBelow(child: TreeNode, deep: boolean): void {
+    // A first page asked for while the reconcile waited (the user expanded the row) is new enough: it keeps its place in
+    // the queue and its priority.
+    const running = this.running.get(child.id)
+    if (running && running.mode !== 'more') return
+    const failed = child.load === 'error'
+    if (deep && (child.expanded || child.children?.length)) this.reconcileNode(child, { deep: true }, 'background')
+    else if (failed && child.children?.length) this.reconcileNode(child, {}, 'background')
+    else {
+      if (failed) { child.error = undefined; child.load = 'none'; this.state(child).retryMode = undefined; child.rev++ }
+      if (child.expanded && child.load === 'none') this.ensureLoading(child, 'background')
+    }
+  }
+  /** Children shown that a load brought: during a reconcile, not the old rows still waiting. */
+  private loadedCount(node: TreeNode): number {
+    return this.states.get(node.id)?.reconciling?.rows.length ?? node.children?.length ?? 0
   }
   private failed(node: TreeNode, error: NodeError, mode: PageMode, partial: readonly WireNode[]): void {
     const state = this.state(node)
@@ -630,12 +959,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       node.more = 'error'
     } else {
       // A refresh keeps its old rows; other loads show the static folders that did not need the failed query.
-      if (mode === 'keep' && partial.length) this.replaceChildren(node, partial, 'keep')
+      if (mode === 'keep' && partial.length) this.replaceChildren(node, partial)
       state.retryMode = mode
       state.pendingMode = undefined
       node.load = 'error'
       node.more = 'none'
-      if (mode === 'replace') this.restorePaging(node)
+      if (mode === 'reconcile') this.restorePaging(node)
+      // The rows a refresh kept are as old as their listing; the footer says so until a load succeeds.
+      if (mode === 'reconcile' && node.children?.length && node.updatedAt !== undefined) node.staleSince ??= this.now()
     }
     node.error = error
     node.rev++
@@ -643,11 +974,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.pendingSelect?.folder === node.id && mode !== 'more') { this.pendingSelect = undefined; this.selected = node.id }
   }
 
-  /** Replaces a node's children with a first page; `keep` reuses existing static folders with the same id. */
-  private replaceChildren(node: TreeNode, wires: readonly WireNode[], mode: 'keep' | 'replace'): boolean {
+  /** Replaces a node's children with a first page, reusing existing static folders with the same id. */
+  private replaceChildren(node: TreeNode, wires: readonly WireNode[]): boolean {
     const old = node.children ?? []
     const reuse = new Map<FolderId, TreeNode>()
-    if (mode === 'keep') for (const child of old) if (child.folder) reuse.set(child.folder, child)
+    for (const child of old) if (child.folder) reuse.set(child.folder, child)
     const children: TreeNode[] = [], kept = new Set<TreeNode>()
     let statics = 0, truncated = false
     for (const wire of wires) {
@@ -783,25 +1114,43 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     return node.kind === 'folder' ? node.folder === 'columns' && this.columnsLoaded(node) : kindSpecs[node.kind].insert !== 'none'
   }
 
-  private refreshNode(node: TreeNode | undefined): void {
+  /**
+   * Starts a reconcile: an expanded node (or one `select` opens) loads its first page while its old rows stay; a collapsed
+   * one keeps its rows and reconciles when next expanded. A reconcile the user started (not one below it) says so.
+   */
+  private reconcileNode(node: TreeNode | undefined, options: ReconcileOptions, priority: LoadPriority = 'user'): void {
     if (!node || node.lost || !this.attached(node)) return
     node.generation++
     this.abortWithin(new Set([node.id]), 'detach')
-    const state = this.state(node)
-    state.budgetExempt = undefined
+    const state = this.state(node), deep = !!options.deep
+    state.budgetExempt = state.retryMode = undefined
+    // Rows a reconcile in progress had not matched yet are still children: this one matches them again (held, its state
+    // comes back if this one stops before its first page).
     this.holdPaging(node)
     node.error = undefined
     if (node.load === 'error') node.load = node.children?.length ? 'loaded' : 'none'
-    if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
-    if (node.expanded) this.loadFirst(node, 'replace', 'user')
-    else {
-      this.detach(node, node.children ?? [])
-      Object.assign(node, { children: undefined, total: undefined, staticCount: 0, load: 'none' })
-      state.pendingMode = state.retryMode = state.held = undefined
+    // A node that listed nothing has no expander. Varia's own change opens the folder on what it made; a background
+    // reconcile (a probe saw a change) never opens anything: the node only gets its expander back, and lists when opened.
+    if (options.background && !node.hasChildren && node.children !== undefined) { node.hasChildren = true; node.load = 'none' }
+    else if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
+    if (options.select && node.hasChildren) node.expanded = true
+    // A node never listed (one that could not load, say) has its first load, with nothing to announce as added. A background
+    // reconcile of an expanded node that a collapsed one above hides waits until it shows, as a collapsed one does.
+    if (node.expanded && options.background && !this.visible(node)) {
+      node.load = 'none'
+      state.pendingMode = node.children !== undefined ? 'reconcile' : 'keep'
+      state.deep = deep || undefined
+      this.stalled.add(node.id)
+    } else if (node.expanded) this.loadFirst(node, node.children !== undefined || this.pendingSelect?.folder === node.id ? 'reconcile' : 'keep', priority, deep)
+    else if (node.children?.length) {
+      node.load = 'none'
+      state.pendingMode = 'reconcile'
+      state.deep = deep || undefined
     }
     node.rev++
+    if (priority !== 'user') return
     const scope: RefreshScope = node.kind === 'server' ? 'server' : node.folder && databaseFolders.has(node.folder) ? 'databases' : 'other'
-    try { this.events.emit({ type: 'explorer.refreshed', connectionId: node.connectionId, scope }) } catch (error) { onUnexpectedError(error) }
+    try { this.events.emit({ type: 'explorer.refreshed', connectionId: node.connectionId, scope, nodeId: node.id }) } catch (error) { onUnexpectedError(error) }
   }
 
   /**
@@ -829,7 +1178,9 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   }
   /** A refresh hides how far the old rows had got (cursor, cap) until its first page replaces them. */
   private holdPaging(node: TreeNode): void {
-    if (node.children?.length && (node.cursor || node.more === 'capped')) this.state(node).held = { cursor: node.cursor, capped: node.more === 'capped', total: node.total }
+    const state = this.state(node)
+    if (node.children?.length && (node.cursor || node.more === 'capped')) state.held = { cursor: node.cursor, capped: node.more === 'capped', total: node.total, reconciling: state.reconciling }
+    state.reconciling = undefined
     Object.assign(node, { cursor: undefined, more: 'none' })
   }
   /** A refresh that stopped or failed: the old rows say again how far they had got, stopped rather than loading. */
@@ -839,7 +1190,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     state.held = undefined
     if (!node.children?.length) return
     node.total = held.total
-    if (held.cursor) { node.cursor = held.cursor; node.more = 'stopped' } else if (held.capped) node.more = 'capped'
+    if (held.cursor) { node.cursor = held.cursor; node.more = 'stopped'; state.reconciling = held.reconciling } else if (held.capped) node.more = 'capped'
   }
   private abortWhere(predicate: (task: LoadTask) => boolean): void { this.abortWithin(undefined, 'detach', predicate) }
   /** A node whose load was aborted: a first page is needed again (old rows stay), or a stopped folder says so. */
@@ -861,7 +1212,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
    * Takes `children` of `node` out of the tree now and deletes their subtrees in slices. A flag on each child (no set,
    * no per-child state) keeps a refresh of a 100,000-row folder within one frame.
    */
-  private detach(node: TreeNode, children: readonly TreeNode[]): void {
+  private detach(node: TreeNode, children: readonly TreeNode[], listed = true): void {
     if (!children.length) return
     let removed = 0
     for (const child of children) {
@@ -869,7 +1220,8 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       child.detached = true
     }
     this.abortDetached()
-    if (node.children) node.children = node.children.length === children.length ? [] : node.children.filter(child => !child.detached)
+    // Unless the caller took them out of the children already (`listed` false).
+    if (listed && node.children) node.children = node.children.length === children.length ? [] : node.children.filter(child => !child.detached)
     this.addDescendants(node, -removed)
     const selected = this.selected === undefined ? undefined : this.nodes.get(rowOwner(this.selected))
     if (selected && !this.attached(selected) && this.within(selected.id, node.id)) this.selected = node.id
@@ -931,14 +1283,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     candidates.sort((a, b) => a.lastUsed - b.lastUsed)
     for (const node of candidates) {
       if (this.size <= target) break
-      if (!this.attached(node)) continue
-      node.generation++
-      this.abortWithin(new Set([node.id]), 'detach')
-      this.detach(node, node.children ?? [])
-      Object.assign(node, { children: undefined, total: undefined, cursor: undefined, staticCount: 0, load: 'none', more: 'none', error: undefined })
-      const state = this.state(node)
-      state.pendingMode = state.retryMode = state.budgetExempt = state.held = undefined
-      node.rev++
+      if (this.attached(node)) this.forget(node)
     }
     if (this.size > target) this.evictable = false
     return this.size < this.limits.nodeBudget
@@ -958,14 +1303,22 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (!this.dirty || this.disposed) return
     this.dirty = false
     const previous = this.getSnapshot()
-    const rows = flatten(this.nodes, this.roots, previous.rows.count + 64)
+    const filter = filterText(this.quickFilterStore.getSnapshot().input)
+    const filtered = filter ? flattenFiltered(this.nodes, this.roots, filter, previous.rows.count + 64, this.selected === undefined ? undefined : rowOwner(this.selected)) : undefined
+    const rows = filtered?.rows ?? flatten(this.nodes, this.roots, previous.rows.count + 64)
+    // Spoken once per change of filter, not again as later pages bring more matches.
+    if (filter !== this.filtered) {
+      this.filtered = filter
+      if (filtered) this.announce(filtered.matches ? `Filter: ${count(filtered.matches)} loaded ${filtered.matches === 1 ? 'item matches' : 'items match'}` : 'Filter: no loaded items match')
+      else this.announce('Filter cleared')
+    }
     const renaming = this.renameStore.getSnapshot(), renamed = renaming === undefined ? undefined : this.nodes.get(renaming)
     if (renaming !== undefined && (!renamed || renamed.lost || !this.attached(renamed) || this.rootOf(renamed)?.lost)) this.renameStore.set(undefined)
     // A synthetic row can disappear (a load finished); its owner is selected instead.
     if (this.selected !== undefined && this.selected < 0 && rowIndex(rows, this.selected) < 0) this.selected = rowOwner(this.selected)
     if (this.selected !== undefined && !this.nodes.has(rowOwner(this.selected))) this.selected = undefined
     this.publish({ version: ++this.version, rows, ...(this.selected !== undefined ? { selected: this.selected } : {}), ...(this.announcement ? { announcement: this.announcement } : {}),
-      ...(this.reveals ? { reveal: this.reveals } : {}) })
+      ...(this.reveals ? { reveal: this.reveals } : {}), ...(filtered ? { filter: { text: filter, matches: filtered.matches, partial: filtered.partial } } : {}) })
     this.updateContext()
   }
   private updateContext(): void {
@@ -981,6 +1334,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
       ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
       ...actionContextValues(actionMenuState(node && { kind: node.kind, subtype: node.subtype })),
+      ...ssisVerbContextValues(ssisVerbMenuState(node?.kind)),
       explorerLoading: this.loader.pending > 0
     }
     const current = this.contextStore.getSnapshot()

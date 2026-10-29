@@ -1,12 +1,15 @@
 import { createContext, forwardRef, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
-import { emptyLayoutState, paneIds, paneTitles, parseWorkspaceLayout, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
+import { DockviewDefaultTab, DockviewReact, themeDark, themeLight, type DockviewApi, type DockviewReadyEvent, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from 'dockview-react'
+import { dockReference, emptyLayoutState, hidesHeader, paneIds, paneTitles, parseWorkspaceLayout, withoutHeaderState, type LayoutLoad, type LayoutState, type PaneId, type WorkspaceLayout } from '../../shared/layouts'
 import type { ThemeType } from '../../shared/theme/types'
 import { DockingGuides } from './docking-guides'
+import Icon from './Icon'
 import { useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useMenuTarget } from './menus/useMenuTarget'
+import EmptyState from './kit/EmptyState'
 import type { PaneLocation } from './services/panes'
+import type { DockSide } from './contributions/shell'
 
 interface PaneHosts { hosts: Record<PaneId, HTMLElement>; parking: RefObject<HTMLDivElement | null> }
 interface PaneCommands { close(id: PaneId): void; float(id: PaneId): void; toggle(id: PaneId): void; reveal(id: PaneId): void }
@@ -34,7 +37,7 @@ function paneHost(id: PaneId) { const host = document.createElement('div'); host
 function EmptyWorkspace() {
   const commands = useContext(PaneCommandContext)!, restored = useContext(RestoredContext)
   if (!restored) return null
-  return <div className="dock-empty"><p>All panels are closed.</p><p>Open a panel from the Window menu.</p><button onClick={() => commands.reveal('editor')}>Open Query editor</button></div>
+  return <EmptyState className="dock-empty" icon="layout" title="All panels are closed." detail="Open a panel from the Window menu." actions={[{ label: 'Open Query editor', run: () => commands.reveal('editor') }]} />
 }
 function PaneTab(props: IDockviewPanelHeaderProps) {
   const commands = useContext(PaneCommandContext)!, element = useRef<HTMLDivElement>(null)
@@ -45,26 +48,6 @@ function PaneTab(props: IDockviewPanelHeaderProps) {
   return <div ref={ref} className="pane-tab" data-pane-tab={props.api.id}><DockviewDefaultTab {...props}
     closeActionOverride={() => commands.close(props.api.id as PaneId)} title="Drag to dock; Ctrl-drag to float; Ctrl-double-click to toggle docking"
     onDoubleClick={event => { if (event.ctrlKey && !(event.target as HTMLElement).closest('button')) commands.toggle(props.api.id as PaneId) }} /></div>
-}
-function PaneActions({ activePanel, containerApi }: IDockviewHeaderActionsProps) {
-  const commands = useContext(PaneCommandContext)!
-  if (!activePanel) return null
-  const available = paneIds.filter(id => id !== activePanel.id && containerApi.getPanel(id))
-  return <select className="dock-move" aria-label={'Move ' + activePanel.title} value="" onChange={event => {
-    const action = event.target.value
-    const reference = containerApi.getPanel(activePanel.id === 'editor' ? 'explorer' : 'editor') ?? containerApi.getPanel(available[0])
-    if (action === 'float') commands.float(activePanel.id as PaneId)
-    else if (action === 'close') commands.close(activePanel.id as PaneId)
-    else if (action.startsWith('tab:')) activePanel.api.moveTo({ group: containerApi.getPanel(action.slice(4))!.group, position: 'center' })
-    else if (action && reference) activePanel.api.moveTo({ group: reference.group, position: action as 'left' | 'right' | 'top' | 'bottom' })
-    else if (action) activePanel.group.api.moveTo({ position: action as 'left' | 'right' | 'top' | 'bottom' })
-  }} title="Move or float this panel">
-    <option value="">Move…</option>
-    <option value="left">Dock left</option><option value="right">Dock right</option><option value="top">Dock top</option><option value="bottom">Dock bottom</option>
-    {available.map(id => <option key={id} value={'tab:' + id}>Tab with {paneTitles[id]}</option>)}
-    <option value="float">Float inside window</option>
-    <option value="close">Close panel</option>
-  </select>
 }
 function value<T>(result: { ok: true; value: T } | { ok: false; error: string }): T { if (!result.ok) throw new Error(result.error); return result.value }
 const message = (error: unknown) => error instanceof Error ? error.message : 'The layout operation failed.'
@@ -80,12 +63,19 @@ export interface WorkspaceHandle {
   float(id: PaneId): void
   /** Returns a floating panel to where it was docked. */
   dock(id: PaneId): void
+  /** Docks a panel at a side of the query editor (of Object Explorer, for the editor itself). */
+  dockAt(id: PaneId, side: DockSide): void
+  /** Moves a panel into another panel's group, as a tab beside it. */
+  tabWith(id: PaneId, other: PaneId): void
   flush(): Promise<void>
 }
 
 const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(function DockWorkspace(panes, ref) {
-  const { theme, panes: shown } = useWorkbench()
+  const { theme, panes: shown, shellOptions } = useWorkbench()
   const themeType = useServiceSnapshot(theme).active.type
+  const { panelTabs } = useServiceSnapshot(shellOptions)
+  const panelTabsRef = useRef(panelTabs)
+  panelTabsRef.current = panelTabs
   const [state, setState] = useState<LayoutState>(emptyLayoutState)
   const stateRef = useRef(state)
   const apiRef = useRef<DockviewApi | null>(null)
@@ -142,6 +132,27 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid'
   }
   function dock(id: PaneId) { if (location(id) === 'floating') toggle(id) }
+  function dockAt(id: PaneId, side: DockSide) {
+    const api = apiRef.current, panel = api?.getPanel(id)
+    if (!api || !panel) return
+    const reference = dockReference(id, api.panels.map(item => ({ id: item.id, location: item.api.location.type, panel: item })))?.panel
+    if (reference) { panel.api.moveTo({ group: reference.group, position: side }); return }
+    // Nothing else is docked: a group of its own at the grid's edge, leaving any panels it floated with behind.
+    const group = api.addGroup({ direction: side === 'top' ? 'above' : side === 'bottom' ? 'below' : side })
+    panel.api.moveTo({ group, position: 'center' })
+  }
+  function tabWith(id: PaneId, other: PaneId) {
+    const panel = apiRef.current?.getPanel(id), target = apiRef.current?.getPanel(other)
+    if (panel && target && id !== other) panel.api.moveTo({ group: target.group, position: 'center' })
+  }
+  /** Hides the header of each docked group that holds one panel, unless Window › Panel Tabs shows them; the panel's own header has its ⋯ menu. */
+  function syncHeaders(api: DockviewApi) {
+    for (const group of api.groups) {
+      const hidden = hidesHeader({ location: group.api.location.type, panels: group.panels.length }, panelTabsRef.current)
+      // Dockview caches the header's height for the content below it; relayout measures it again at once rather than a frame later.
+      if (group.header.hidden !== hidden) { group.header.hidden = hidden; group.relayout() }
+    }
+  }
   function float(id: PaneId) { rememberDock(id); const panel = apiRef.current?.getPanel(id); if (panel) apiRef.current!.addFloatingGroup(panel, { width: 520, height: 360, x: 60, y: 60 }) }
   function toggle(id: PaneId) {
     const panel = apiRef.current?.getPanel(id)
@@ -194,7 +205,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   }
 
   function cancelTimer() { if (timer.current) clearTimeout(timer.current); timer.current = null }
-  function snapshot() { return parseWorkspaceLayout(apiRef.current!.toJSON()) }
+  function snapshot() { return withoutHeaderState(parseWorkspaceLayout(apiRef.current!.toJSON())) }
   function update(next: LayoutState) { stateRef.current = next; setState(next) }
   async function persist(next = stateRef.current) {
     cancelTimer()
@@ -227,6 +238,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
     try {
       // Reuse live panels so layout changes never recreate Monaco or lose its undo history.
       api.fromJSON(validated, { reuseExistingPanels: true })
+      syncHeaders(api)
       api.layout(width, height)
     } catch (error) {
       api.fromJSON(previous, { reuseExistingPanels: true })
@@ -243,16 +255,18 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   useImperativeHandle(ref, () => ({ manage, flush, reset: () => {
     if (!defaultRef.current) return
     try { apply(defaultRef.current) } catch (error) { setError(message(error)) }
-  }, reveal, close, location, float, dock }))
+  }, reveal, close, location, float, dock, dockAt, tabWith }))
   /** Showing: open, its tab selected in a visible group, and not behind another maximized group. */
   function publishVisibility(api: DockviewApi) {
     const showing = (id: PaneId) => {
       const panel = api.getPanel(id)
       return !!panel && panel.group.activePanel?.id === id && panel.group.api.isVisible && (!api.hasMaximizedGroup() || panel.group.api.isMaximized())
     }
-    shown.set({ explorer: showing('explorer'), editor: showing('editor'), output: showing('output') })
+    const where = (id: PaneId): PaneLocation => { const panel = api.getPanel(id); return !panel ? 'closed' : panel.api.location.type === 'floating' ? 'floating' : 'grid' }
+    shown.set({ explorer: showing('explorer'), editor: showing('editor'), output: showing('output') }, { explorer: where('explorer'), editor: where('editor'), output: where('output') })
   }
   useEffect(() => () => { cancelTimer(); subscription.current?.dispose(); guides.current?.dispose(); ready.current = false; apiRef.current = null }, [])
+  useEffect(() => { if (apiRef.current) syncHeaders(apiRef.current) }, [panelTabs])
   useEffect(() => {
     if (!showManager) return
     return () => { if (previousFocus.current?.isConnected) previousFocus.current.focus() }
@@ -283,8 +297,10 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       if (loaded.state.current) { try { apply(loaded.state.current) } catch (error) { setError('Could not restore the saved workspace layout: ' + message(error)) } }
       if (loaded.warning) setError(loaded.warning)
       ready.current = true
-      const layout = api.onDidLayoutChange(() => { changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
-      subscription.current = { dispose: () => { layout.dispose(); maximized.dispose() } }
+      const layout = api.onDidLayoutChange(() => { syncHeaders(api); changed(); publishVisibility(api) }), maximized = api.onDidMaximizedGroupChange(() => publishVisibility(api))
+      const panels = [api.onDidAddPanel(() => syncHeaders(api)), api.onDidRemovePanel(() => syncHeaders(api)), api.onDidAddGroup(() => syncHeaders(api))]
+      subscription.current = { dispose: () => { layout.dispose(); maximized.dispose(); panels.forEach(item => item.dispose()) } }
+      syncHeaders(api)
       publishVisibility(api)
       guides.current = new DockingGuides(api, root.current!, ids => ids.forEach(id => rememberDock(id as PaneId)), error => setError(message(error)))
       api.updateOptions({ dropPositionResolver: guides.current })
@@ -303,12 +319,12 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
   // Pane commands only read refs, so stable identities keep dockview from re-applying options on every render.
   const paneCommands = useMemo<PaneCommands>(() => ({ close, float, toggle, reveal }), [])
   return <>
-    {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}>×</button></div>}
+    {error && <div className="global-error layout-error" role="alert"><span>{error}</span><button aria-label="Dismiss layout error" onClick={() => setError('')}><Icon name="close" /></button></div>}
     <PaneContext.Provider value={paneHosts}><PaneCommandContext.Provider value={paneCommands}><RestoredContext.Provider value={restored}>
       <div hidden ref={parking} />
       {paneIds.map(id => createPortal(panes[id], paneHosts.hosts[id], id))}
       <div className="workbench" ref={root}><DockviewReact className="dock-workbench" theme={dockThemes[themeType]} components={components} defaultTabComponent={PaneTab} watermarkComponent={EmptyWorkspace}
-        rightHeaderActionsComponent={PaneActions} defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
+        defaultRenderer="always" floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar"
         dndStrategy="pointer" proportionalLayout={false} onReady={onReady} /></div>
     </RestoredContext.Provider></PaneCommandContext.Provider></PaneContext.Provider>
     {showManager && <div className="modal-backdrop" onKeyDown={event => {
@@ -321,7 +337,7 @@ const DockWorkspace = forwardRef<WorkspaceHandle, Record<PaneId, ReactNode>>(fun
       }
     }}>
       <section ref={dialog} className="layout-dialog" role="dialog" aria-modal="true" aria-labelledby="layout-title">
-        <div className="dialog-heading"><h2 id="layout-title">Workspace layouts</h2><button aria-label="Close layout manager" disabled={busy} onClick={() => setShowManager(false)}>×</button></div>
+        <div className="dialog-heading"><h2 id="layout-title">Workspace layouts</h2><button aria-label="Close layout manager" disabled={busy} onClick={() => setShowManager(false)}><Icon name="close" /></button></div>
         <p className="field-note">Drag panel headers to dock or tab them together. Splitters and floating panels resize by dragging their edges. Your current layout is remembered automatically.</p>
         <label htmlFor="layout-name">Layout name</label>
         <div className="layout-row"><input id="layout-name" autoFocus maxLength={64} value={name} placeholder="e.g. Query analysis" disabled={busy} onChange={event => setName(event.target.value)} />
