@@ -1,5 +1,5 @@
 import React from 'react'
-import type { Root } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import * as monaco from 'monaco-editor/editor/editor.api.js'
 import 'monaco-editor/languages/definitions/sql/register.js'
 // XML, JSON and plan values open from the results grid in their own tabs.
@@ -23,6 +23,8 @@ import { WorkbenchProvider } from './core/WorkbenchContext'
 import { domThemeTarget, ThemeService } from './services/theme'
 import { SettingsService } from './settings/SettingsService'
 import { ShellErrorBoundary, ShellFaultProbe } from './ShellFailure'
+import Tile from './kit/Tile'
+import { LiveChart } from './live/LiveChart'
 import { liveTestHooks } from './live/test-hooks'
 import { mountTestGrid } from './live/test-grid'
 import 'dockview-react/dist/styles/dockview.css'
@@ -51,8 +53,15 @@ export async function start(root: Root): Promise<void> {
       },
       // AutoRecover's save now, rather than in five minutes (files-smoke.mjs).
       __variaRecovery: { flush: () => workbench.recovery.flush() },
-      // Live views on the synthetic source, and the window's visibility (live-smoke.mjs).
-      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table, state) => mountTestGrid(workbench, handle, probe, table, state))
+      // Live views on the synthetic source, charts and grids of them, and the window's visibility (live-smoke.mjs,
+      // chart-smoke.mjs, live-grid-smoke.mjs).
+      __variaLive: liveTestHooks(workbench.live, workbench.documents, workbench.panes, (handle, probe, table, state) => mountTestGrid(workbench, handle, probe, table, state), container => {
+        const chart = createRoot(container)
+        return {
+          render: (props, tile) => chart.render(<WorkbenchProvider workbench={workbench}>{tile ? <Tile caption={tile}><LiveChart {...props} /></Tile> : <LiveChart {...props} />}</WorkbenchProvider>),
+          unmount: () => chart.unmount()
+        }
+      })
     })
   }
   root.render(<React.StrictMode><ShellErrorBoundary><WorkbenchProvider workbench={workbench}><ShellFaultProbe /><App /></WorkbenchProvider></ShellErrorBoundary></React.StrictMode>)

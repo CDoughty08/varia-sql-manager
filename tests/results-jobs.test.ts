@@ -321,7 +321,7 @@ describe('ResultsJobHost over the fake backend', () => {
     const { control, jobs, clipboard, execute, choose } = await workbench()
     const summary = await execute('-- varia-fake: sets=W1*3000,N1*10,M1*3 messages=2 errors=1\nSELECT 1')
     expect(summary.resultSets.map(set => [set.columns.length, set.rowsAvailable, set.state])).toEqual([[8, 3000, 'complete'], [7, 10, 'complete'], [1, 1, 'complete'], [1, 1, 'complete'], [1, 1, 'complete']])
-    expect(summary.messages).toEqual([{ text: 'Message 1', kind: 'info' }, { text: 'Message 2', kind: 'info' }, { text: 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.', kind: 'error' }])
+    expect(summary.messages).toEqual([{ text: 'Message 1', kind: 'print' }, { text: 'Message 2', kind: 'print' }, { text: 'Msg 50000, Level 16, State 1, Line 1\nFake error 1.', kind: 'error' }])
     expect(summary).toMatchObject({ status: 'completedWithErrors', error: { code: 'SQL_ERROR' }, completedAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{7}\+00:00$/) })
     const [w1, n1] = summary.resultSets
     expect(await jobs.copy(copyRequest({ resultId: w1.resultId, headers: true, parts: [{ rows: [[0, 1], [2999, Number.MAX_SAFE_INTEGER]], columns: [[0, 1]] }] }))).toMatchObject({ rows: 3, partial: false })

@@ -1,8 +1,9 @@
 // Renders docs/object-explorer.md from the catalogue; tests/explorer-catalog.test.ts keeps the file in sync.
 import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
-  subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
+  statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
+import { statusChipDocs } from './status.ts'
 import { glyphSizes } from '../theme/metrics.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -28,6 +29,7 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   typeAheadMs: 'Type-ahead buffer reset, in ms',
   typeAheadMax: 'Type-ahead buffer length',
   rowHeight: 'Row height, in px',
+  serverRowHeight: 'Height of a server row, in px',
   indent: 'Indentation per level, in px',
   overscan: 'Rows rendered beyond each edge of the viewport',
   deleteSlice: 'Nodes removed per task when a subtree is dropped',
@@ -35,7 +37,9 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   label: 'Characters in a node label',
   sublabel: 'Characters in a sublabel',
   detail: 'Characters in tooltip details',
-  message: 'Characters in an error message'
+  message: 'Characters in an error message',
+  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128',
+  quickFilter: 'Characters in the Filter loaded objects box'
 }
 
 const lists = (id: FolderId) => {
@@ -64,15 +68,20 @@ function folderRows(owner: 'server' | 'database', parent?: FolderId, path = ''):
 const folderTable = (owner: 'server' | 'database') => table(['Folder', 'Id', 'Since', 'Cloud editions', 'Lists (query)', 'Filters'], folderRows(owner))
 
 const folderLabels = (ids: readonly FolderId[]) => ids.map(id => folderSpecs[id].label).join(', ')
+/** A kind's static folders, then the rows it lists itself (`KindSpec.list`). */
+const childLabels = (spec: KindSpec, folders: readonly FolderId[]) => {
+  const rows = spec.list ? `${(spec.rows ?? []).map(kind => kindSpecs[kind].title).join(', ')} rows (${code(spec.list)})` : undefined
+  return [folderLabels(folders), rows].filter(Boolean).join(', then ')
+}
 function childRows(spec: KindSpec): string[][] {
-  if (!spec.folders.length && !spec.subtypeFolders) return []
+  if (!spec.folders.length && !spec.subtypeFolders && !spec.list) return []
   const special = Object.keys(spec.subtypeFolders ?? {}) as NodeSubtype[]
   const history = spec.historyLookup ?? []
   const others = (spec.subtypes ?? []).filter(subtype => !special.includes(subtype) && !history.includes(subtype))
-  const rows = [[code(spec.kind), others.length ? `none, ${codes(others)}` : 'any', folderLabels(spec.folders)]]
-  if (history.length) rows.push([code(spec.kind), codes(history), `Its history table first, then ${folderLabels(spec.folders)}`])
+  const rows = [[code(spec.kind), others.length ? `none, ${codes(others)}` : 'any', childLabels(spec, spec.folders)]]
+  if (history.length) rows.push([code(spec.kind), codes(history), `Its history table first, then ${childLabels(spec, spec.folders)}`])
   const groups = new Map<string, NodeSubtype[]>()
-  for (const subtype of special) { const key = folderLabels(spec.subtypeFolders![subtype]!); groups.set(key, [...groups.get(key) ?? [], subtype]) }
+  for (const subtype of special) { const key = childLabels(spec, spec.subtypeFolders![subtype]!); groups.set(key, [...groups.get(key) ?? [], subtype]) }
   for (const [labels, subtypes] of groups) rows.push([code(spec.kind), codes(subtypes), labels])
   return rows
 }
@@ -113,7 +122,8 @@ export function renderExplorerDocs(): string {
     '',
     '## Object children',
     '',
-    'Child folders list their rows by name, except Columns and Parameters, which keep the object\'s order. Every other kind is a leaf.',
+    'Child folders list their rows by name, except Columns and Parameters, which keep the object\'s order, and an SSIS project\'s Packages,',
+    'which list in deployment order (`package_id`: a package name can be longer than a sysname cursor key). Every other kind is a leaf.',
     '',
     table(['Kind', 'Subtypes', 'Children'], nodeKinds.filter(kind => kind !== 'server' && kind !== 'database').flatMap(kind => childRows(kindSpecs[kind]))),
     '',
@@ -133,9 +143,11 @@ export function renderExplorerDocs(): string {
     '',
     'A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry',
     'names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,',
-    'used verbatim (never trimmed), without U+0000.',
+    `used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to ${explorerLimits.maxName}, if it`,
+    'owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).',
+    'SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.',
     '',
-    table(['Scope', 'Requires', 'Forbids', 'Kinds'], kindScopes.map(scope => [code(scope), fields(scopeFields[scope].required), fields(scopeFields[scope].forbidden), codes(kindsOfScope(scope))])),
+    table(['Scope', 'Requires', 'Forbids', 'Kinds'], kindScopes.map(scope => [code(scope), fields(scopeFields[scope].required), fields(scopeFields[scope].forbidden), fields(kindsOfScope(scope))])),
     '',
     table(['Child kind', 'Parent kinds'], childKinds.map((kind: NodeKind) => [code(kind), codes(childParentKinds(kind))])),
     '',
@@ -145,6 +157,26 @@ export function renderExplorerDocs(): string {
     'Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.',
     '',
     table(['Status', 'Badge'], Object.entries(statusBadges).map(([status, badge]) => [code(status), code(badge)])),
+    '',
+    '## Live status',
+    '',
+    'While Object Explorer shows (and Environment › Live Data › Show live status in Object Explorer is on), each connected',
+    'server has one background live view of the `explorer` source ([docs/live.md](live.md)) per login, shared by every',
+    'connection to that server with that login, on one session of its own in master (so it never holds the database a',
+    'connection opened in), paused while the pane or the window is hidden. Its samples become chips at the end of the rows',
+    'below; they never reload the tree. While chips show, a database row\'s state comes from them rather than its sublabel',
+    '(the state when the list loaded), and its tooltip says when the two differ. A probe that fails, is unavailable (no',
+    'permission, or an edition without the feature) or has no sample yet shows nothing, and the row shows its sublabel again;',
+    'so does a database past the 1,000 the probe lists, by name. A running-tone chip turns its glyph only while a restore or',
+    'recovery reports progress. Refresh (F5) samples the view at once and opens again one that ended (a sign-in that',
+    'failed). A window runs at most 8 such views and gives their slots to views the user opens, when the window\'s 16 are',
+    'taken or the backend refuses one at its 8 a server ([docs/ipc.md](ipc.md#live-subscriptions)), so a server can be',
+    'without chips until a slot frees. The chips are the only part of a row\'s end that gives way: the environment tag, item',
+    'count and connection dot keep their size, and the label gives up the row\'s empty space first.',
+    '',
+    table(['Kind', 'Probes'], (Object.keys(statusChipKinds) as (keyof typeof statusChipKinds)[]).map(kind => [code(kind), codes(statusChipKinds[kind])])),
+    '',
+    table(['Node', 'Chip', 'Tone', 'When'], statusChipDocs.map(doc => [doc.kind, doc.chip, doc.tone, doc.when])),
     '',
     '## Limits',
     '',

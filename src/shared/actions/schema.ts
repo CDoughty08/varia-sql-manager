@@ -25,9 +25,16 @@ export interface DatabaseChanges {
   readonly options?: Readonly<Record<string, string>>
   readonly scoped?: Readonly<Record<string, string>>
 }
+/**
+ * The database Database Properties read: its database_id and its create_date as the describe writes it. A document stays
+ * open while Object Explorer renames, drops or restores databases, so the preflight refuses a database that has taken the
+ * name since rather than change it in place of the one that was read.
+ */
+export interface DatabaseIdentity { readonly id: number; readonly created: string }
 /** Database Properties' OK and Script. `closeConnections` (WITH ROLLBACK IMMEDIATE) only with a change SSMS closes connections for. */
 export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
+  readonly identity?: DatabaseIdentity
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
@@ -64,6 +71,8 @@ export interface DatabaseGeneral {
   readonly collation?: string
   readonly memoryAllocatedMb?: number
   readonly memoryUsedMb?: number
+  /** sys.databases database_id: with `created`, which database was read (DatabaseIdentity). */
+  readonly id?: number
 }
 export interface DatabaseFile {
   readonly name: string
@@ -180,7 +189,9 @@ export const plannedStatements = (changes: DatabaseChanges) => Object.keys(chang
 // One schema per action, one per line, so later actions append cleanly.
 const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident }).strict()
 const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
-const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema }).strict()
+// create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
+const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
+const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,

@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree', toasts = 'notifications'
+const tree = 'the Object Explorer tree'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -26,9 +26,9 @@ const groups = {
     'descriptionForeground': ['V', '$textMuted', 'Secondary text: hints, captions, and explanations.', 'css'],
     'disabledForeground': ['V', '$textMuted', 'Text of disabled controls, such as unavailable commands in the command palette, and dimmed Object Explorer labels.', 'css monaco'],
     'errorForeground': ['V', '$error', 'Error text.', 'css monaco'],
-    'warningForeground': ['X', '$warning', 'Warning text.', ''],
+    'warningForeground': ['X', '$warning', 'Warning text, and the results head\'s icon for a run that completed with errors or was cancelled.', 'css'],
     'successForeground': ['X', '$success', 'Success text, such as the Execute button and confirmations.', 'css'],
-    'infoForeground': ['X', '$info', 'Information text.', '', { reserved: toasts }],
+    'infoForeground': ['X', '$info', 'Information text.', ''],
     'focusBorder': ['V', '$focus', 'Focus ring around the focused control.', 'css monaco'],
     'icon.foreground': ['V', '$icon', 'Default glyph color.', 'css monaco'],
     'widget.shadow': ['V', '$shadow', 'Shadow of dialogs, floating dock groups, and editor widgets.', 'css monaco'],
@@ -47,6 +47,10 @@ const groups = {
     'titleBar.border': ['V', '$border', 'Line below the title bar.', 'css'],
     'titleBar.iconForeground': ['X', '$accent', 'Application icon in the title bar.', 'css'],
     'titleBar.controlsForeground': ['X', '$text', 'Minimize, maximize, and close symbols on Windows and Linux. Replaced by black or white when it is unreadable.', 'native', { opaqueOver: 'titleBar.activeBackground' }],
+    'commandCenter.background': ['V', '$raised', 'Search box in the title bar (the command centre).', 'css'],
+    'commandCenter.foreground': ['V', '$textTertiary', 'Search box text, icon and key.', 'css'],
+    'commandCenter.activeBackground': ['V', '$active', 'Search box while hovered.', 'css'],
+    'commandCenter.border': ['V', '$controlBorder/45', 'Outline of the search box.', 'css'],
     'menubar.selectionBackground': ['V', '$active', 'Open title-bar menu.', 'css'],
     'menubar.selectionForeground': ['V', '$textStrong', 'Label of the open title-bar menu.', 'css'],
     'menubar.selectionBorder': ['V', '$accent/0', 'Outline of the open, hovered, or focused title-bar menu; none by default.', 'css'],
@@ -82,26 +86,30 @@ const groups = {
   },
   'Side bar, lists, and Object Explorer': {
     'sideBar.background': ['V', '$sideBar', 'Object Explorer.', 'css'],
-    'sideBarTitle.foreground': ['V', '$textTertiary', 'Side bar section titles.', '', { reserved: 'side bar section titles' }],
+    'sideBarTitle.foreground': ['V', '$textTertiary', 'Section titles of side panels, such as the Object Explorer header.', 'css'],
     'sideBarSectionHeader.border': ['V', '$borderSubtle', 'Lines around the Object Explorer toolbar and footer.', 'css'],
     'list.hoverBackground': ['V', '$hover', 'Hovered list row (command palette rows included).', 'css monaco'],
     'list.activeSelectionBackground': ['V', '$selectionStrong', 'Selected row of a focused list.', 'css monaco'],
     'list.activeSelectionForeground': ['V', '$text', 'Text of the selected row of a focused list.', 'css monaco'],
-    'list.inactiveSelectionBackground': ['V', '$selection', 'Selected row of an unfocused list, and the selected result set.', 'css monaco'],
+    'list.inactiveSelectionBackground': ['V', '$selection', 'Selected row of an unfocused list, the selected result set, and the selected view (Results, Messages, Execution plan) in the results head.', 'css monaco'],
     'list.inactiveSelectionForeground': ['V', '$text', 'Text of the selected row of an unfocused list.', 'css monaco'],
     'list.focusOutline': ['V', '@focusBorder', 'Outline of the focused list row, such as the selected Object Explorer row while the tree has focus.', 'css'],
     'list.highlightForeground': ['V', '$accent', 'Characters that match a filter, such as in the command palette.', 'css monaco'],
     'list.focusHighlightForeground': ['V', '@quickInputList.focusForeground', 'Matching characters on the focused row of the editor\'s suggestions. The row\'s own text color by default, as the command palette\'s active row does: the match color is faint on that fill.', 'monaco'],
     'list.filterMatchBackground': ['V', '$accent/20', 'Rows that match a filter.', '', { reserved: searchable }],
     'tree.indentGuidesStroke': ['V', '$borderSubtle', 'Tree indent guides.', '', { reserved: tree }],
-    'objectExplorer.activeConnectionBackground': ['X', '$accentSurface', 'Row of the active query\'s server.', 'css'],
+    'objectExplorer.activeConnectionBackground': ['X', '$sideBar', 'Row of the active query\'s server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection).', 'css'],
+    'objectExplorer.activeConnectionForeground': ['X', '$accent', 'Glyph at the end of the active query\'s server row.', 'css'],
     'objectExplorer.headingForeground': ['X', '$text', 'Folder row labels.', 'css'],
     'objectExplorer.sublabelForeground': ['X', '$textSecondary', 'Text after a row\'s label, such as a column\'s type or a database\'s state.', 'css'],
-    'objectExplorer.countForeground': ['X', '$textMuted', 'The (filtered) marker and loading progress next to folder labels.', 'css'],
+    'objectExplorer.countForeground': ['X', '$textMuted', 'Item counts at the end of folder rows, the (filtered) marker and loading progress.', 'css'],
     'objectExplorer.chevronForeground': ['X', '$iconMuted', 'Expand and collapse chevrons.', 'css'],
     'objectExplorer.folderIconForeground': ['X', '$iconFolder', 'Folder glyphs.', 'css'],
     'objectExplorer.objectIconForeground': ['X', '$icon', 'Glyphs of tables and other objects.', 'css'],
-    'objectExplorer.actionForeground': ['X', '$textTertiary', 'Object Explorer toolbar icons.', 'css']
+    'objectExplorer.actionForeground': ['X', '$textTertiary', 'Object Explorer toolbar icons.', 'css'],
+    'objectExplorer.connectedIndicator': ['X', '$success', 'Dot at the end of a connected server\'s row.', 'css'],
+    'objectExplorer.connectionErrorIndicator': ['X', '@errorForeground', 'Ring at the end of a server\'s row while its connection fails to load.', 'css'],
+    'objectExplorer.disconnectedIndicator': ['X', '$textMuted', 'Ring at the end of a server\'s row once its connection was lost with the SQL backend.', 'css']
   },
   'Dock and docking compass': {
     'editorGroupHeader.tabsBackground': ['V', '$chrome', 'Tab strip of dock groups, including floating groups.', 'css'],
@@ -109,7 +117,7 @@ const groups = {
     'tab.inactiveBackground': ['V', '@editorGroupHeader.tabsBackground', 'Hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveBackground': ['V', '$canvas', 'Visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveBackground': ['V', '@tab.inactiveBackground', 'Hidden tabs of an unfocused dock group.', 'css'],
-    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group.', 'css'],
+    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group, and the title in the header of a document.', 'css'],
     'tab.inactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveForeground': ['V', '$textTertiary', 'Label of the visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of an unfocused dock group.', 'css'],
@@ -138,8 +146,8 @@ const groups = {
     'documentTabs.closeForeground': ['X', '$textMuted', 'Close buttons of query tabs.', 'css'],
     'documentTabs.iconForeground': ['X', '$textTertiary', 'SQL badge of query tabs.', 'css'],
     'documentTabs.modifiedIndicator': ['X', '$textMuted', 'Dot that marks a query with unsaved changes.', 'css'],
-    'breadcrumb.foreground': ['V', '$textMuted', 'The bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
-    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Unused since the query status bar replaced the query context line; themes that set it stay valid.', '']
+    'breadcrumb.foreground': ['V', '$textMuted', 'The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
+    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'The chevrons between the steps of the location in a document header.', 'css']
   },
   'Editor, widgets, and empty states': {
     'editor.background': ['V', '$canvas', 'Editor and application background; also the native window background.', 'css monaco native', { opaqueOver: 'base' }],
@@ -167,10 +175,10 @@ const groups = {
   'Output panel and results grid': {
     'panel.background': ['V', '$panel', 'Output panel.', 'css'],
     'panel.border': ['V', '$border', 'Lines inside the output panel.', 'css'],
-    'panelTitle.background': ['X', '$panel', 'Output panel tab bar.', 'css'],
-    'panelTitle.activeForeground': ['V', '$textStrong', 'Active output tab, and the selected tab of the connection dialog.', 'css'],
-    'panelTitle.inactiveForeground': ['V', '$textMuted', 'Inactive output tabs.', 'css'],
-    'panelTitle.activeBorder': ['V', '$accent', 'Underline of the active output tab.', 'css'],
+    'panelTitle.background': ['X', '$panel', 'The results head: the bar with the Results, Messages and Execution plan views and the run summary.', 'css'],
+    'panelTitle.activeForeground': ['V', '$textStrong', 'Text of the selected Results, Messages or Execution plan view, and of the selected tab of the connection dialog.', 'css'],
+    'panelTitle.inactiveForeground': ['V', '$textMuted', 'Text of the views not selected in the results head.', 'css'],
+    'panelTitle.activeBorder': ['V', '$accent', 'Underline of the selected tab of the connection dialog (History or Browse, Connection Properties or Connection String). The results head marks its selected view with list.inactiveSelectionBackground instead.', 'css'],
     'badge.background': ['V', '$active', 'Count badges on output tabs.', 'css'],
     'badge.foreground': ['V', '$textSecondary', 'Count badge text.', 'css'],
     'resultsGrid.background': ['X', '@panel.background', 'Results grid.', 'css'],
@@ -233,12 +241,12 @@ const groups = {
     'dialog.labelForeground': ['X', '$textSecondary', 'Field labels in dialogs.', 'css'],
     'dialog.descriptionForeground': ['X', '$textTertiary', 'Secondary text in dialogs.', 'css'],
     'settings.headerForeground': ['V', '$textStrong', 'Section headings in dialogs.', 'css'],
-    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts.', '', { reserved: toasts }],
-    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', '', { reserved: toasts }],
-    'notifications.border': ['V', '@widget.border', 'Notification border.', '', { reserved: toasts }],
-    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', '', { reserved: toasts }],
-    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', '', { reserved: toasts }],
-    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', '', { reserved: toasts }],
+    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts, above the status bar at the bottom right.', 'css'],
+    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', 'css'],
+    'notifications.border': ['V', '@widget.border', 'Notification border.', 'css'],
+    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', 'css'],
+    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', 'css'],
+    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', 'css'],
     'quickInput.background': ['V', '@editorWidget.background', 'Command palette and pickers (quick input).', 'css'],
     'quickInput.foreground': ['V', '@editorWidget.foreground', 'Command palette text.', 'css'],
     'quickInputTitle.background': ['V', '$raised', 'Title row of pickers that have one.', 'css'],
@@ -285,6 +293,17 @@ const groups = {
     'connection.purple': ['X', '$purple', 'Purple connection color.', 'script'],
     'connection.default': ['X', '$neutral', 'Swatch of connections without a color.', 'script'],
     'connection.favoriteForeground': ['X', '$yellow', 'Favorite star in the connection dialog.', 'css']
+  },
+  'Charts': {
+    'charts.foreground': ['V', '$textTertiary', 'Chart labels, legends, and the crosshair.', 'css script'],
+    'charts.lines': ['V', '$border', 'Chart grid lines and baseline.', 'script'],
+    'charts.blue': ['V', '$chart1', 'First series of a chart; series take blue, orange, green, yellow, then purple.', 'script'],
+    'charts.orange': ['V', '$chart2', 'Second series of a chart.', 'script'],
+    'charts.green': ['V', '$chart3', 'Third series of a chart.', 'script'],
+    'charts.yellow': ['V', '$chart4', 'Fourth series of a chart.', 'script'],
+    'charts.purple': ['V', '$chart5', 'Fifth series of a chart.', 'script'],
+    'charts.red': ['V', '$error', 'A status mark on a chart, such as a failed execution on a timeline; never the color of a series.', 'script'],
+    'charts.gray': ['X', '$neutral', '"Other" in a stacked chart: everything the named series leave out.', 'script']
   }
 } as const satisfies Record<string, Record<string, Entry>>
 

@@ -4,6 +4,7 @@
 // made outside, drops, and AutoRecover across a renderer crash, a reload and a killed app. Native dialogs are stubbed in main, as
 // electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
+import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -11,7 +12,7 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import electronPath from 'electron'
 import { codePageName, legacyCodePage } from '../src/main/text-encoding.ts'
-import { activeDocument, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, banner as bannerOf, caretStatus, documentTab, documentTabs, encodingStatus, inputModeStatus, lineEndingStatus, outputStatus, part, queryFact, queryFacts, queryStatus, readOnlyMark, readOnlyStatus, statusBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'files-profile-'))
@@ -73,7 +74,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
 
@@ -265,8 +266,10 @@ try {
   await expect(toolbarButton(page, 'Save All')).toBeDisabled()
   console.log('Files checks: Save All saves every changed query in tab order, asking for each untitled one\'s file in turn.')
 
-  // 9. The query status bar: below the query, SSMS's state sentence, then server (version), login (SPID), database,
-  // elapsed time and rows; the Options place it on top and switch segments off.
+  // 9. The query's facts: the connection's state, then server (version), login (SPID) and database, in the window's
+  // status bar; how the run went, its time and rows are the results head's, shown once. Options bring SSMS's query window
+  // status bar back below the query, with SSMS's state sentence, elapsed time and rows, place it on top, and switch
+  // segments off.
   await toolbarButton(page, 'Connect').click()
   await page.getByLabel('Server Name', { exact: true }).fill('server-a')
   await page.getByLabel('Authentication', { exact: true }).selectOption('windows')
@@ -278,29 +281,43 @@ try {
   await page.keyboard.press(mac ? 'Meta+A' : 'Control+A')
   await page.keyboard.insertText('-- varia-fake: sets=W1*10')
   await page.keyboard.press('F5')
-  await expect(queryBar().locator(part.queryStatusText)).toHaveText('Query executed successfully.')
+  await expect(outputStatus(page)).toContainText(/^Completed · 10 rows · /)
+  await expect(queryBar().locator(part.queryStatusText)).toHaveText('Connected.')
   await expect(queryBar()).toHaveAttribute('data-tone', 'ready')
   await expect(queryFact(page, 'server')).toHaveText('Server: server-a (16.0)')
   await expect(queryFact(page, 'login')).toHaveText(/^Login: fake \(\d+\)$/)
   await expect(queryFact(page, 'database')).toHaveText('Database: master')
+  await expect(queryFact(page, 'time')).toHaveCount(0)
+  await expect(queryFact(page, 'rows')).toHaveCount(0)
+  const order = () => page.getByRole('main').evaluate((main, part) => [...main.children].map(child => child.matches(part.queryStatus) ? 'bar' : child.matches(part.editorPane) ? 'editor' : child.matches(part.queryBar) ? 'query bar' : 'tabs'), part)
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor'])
+  expect(await queryBar().evaluate((bar, status) => !!bar.parentElement?.matches(status), part.statusBar)).toBe(true)
+  await statusBar(page).screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': true }))).toMatchObject({ ok: true })
+  await expect(queryBar()).toHaveAttribute('data-location', 'bottom')
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor', 'bar'])
+  await expect(queryBar().locator(part.queryStatusText)).toHaveText('Query executed successfully.')
+  // The results head's icon for the same outcome.
+  await expect(queryBar().locator(part.queryState).locator('[data-icon="pass"]')).toHaveCount(1)
   await expect(queryFact(page, 'time')).toHaveText(/^Elapsed time: \d\d:\d\d:\d\d$/)
   await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
-  const order = () => page.getByRole('main').evaluate((main, part) => [...main.children].map(child => child.matches(part.queryStatus) ? 'bar' : child.matches(part.editorPane) ? 'editor' : 'tabs'), part)
-  expect(await order()).toEqual(['tabs', 'editor', 'bar'])
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.location': 'top', 'textEditor.statusBar.showRowCount': false, 'textEditor.statusBar.showLogin': false }))).toMatchObject({ ok: true })
   await expect(queryBar()).toHaveAttribute('data-location', 'top')
-  expect(await order()).toEqual(['tabs', 'bar', 'editor'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'bar', 'editor'])
   await expect(queryBar().locator(part.querySegment)).toHaveCount(3)
   await expect(queryFact(page, 'rows')).toHaveCount(0)
   expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.location': null, 'textEditor.statusBar.showRowCount': null, 'textEditor.statusBar.showLogin': null }))).toMatchObject({ ok: true })
   await expect(queryBar().locator(part.querySegment)).toHaveCount(5)
-  expect(await order()).toEqual(['tabs', 'editor', 'bar'])
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor', 'bar'])
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status.png') })
-  await statusBar(page).screenshot({ path: resolve('artifacts', 'files-status-bar.png') })
-  console.log('Files checks: the query status bar shows SSMS\'s segments below the query, and its Options move it and switch segments off.')
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': null }))).toMatchObject({ ok: true })
+  expect(await order()).toEqual(['tabs', 'query bar', 'editor'])
+  await expect(queryFact(page, 'rows')).toHaveCount(0)
+  await expect(queryFact(page, 'database')).toHaveText('Database: master')
+  console.log('Files checks: the status bar shows the query\'s connection facts, and Options bring back the query window status bar, move it and switch segments off.')
 
   // 10. In a small window a long server name gives way first, and the database stays whole; a 127-character database
-  // name gives way too (both whole in the tooltip), while the time and rows always stay whole inside the bar.
+  // name gives way too (both whole in the tooltip), while every segment stays inside the bar.
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 700))
   await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024)
   const longServer = 'sqlprod-analytics-warehouse-cluster-01.' + 'reporting-'.repeat(6) + 'corp.contoso.com\\INSTANCE01', longDatabase = 'Warehouse_'.repeat(12) + 'Archive'
@@ -316,7 +333,7 @@ try {
     await textbox().focus()
     await page.keyboard.insertText('-- varia-fake: sets=W1*10')
     await page.keyboard.press('F5')
-    await expect(queryFact(page, 'rows')).toHaveText('Rows: 10 rows')
+    await expect(outputStatus(page)).toContainText(/^Completed · 10 rows · /)
     await expect(queryBar()).toHaveAttribute('title', new RegExp(`\\| ${database || 'master'}(\\n|$)`))
   }
   /** Which segments lie inside the bar, and which show their whole text. */
@@ -326,14 +343,14 @@ try {
     const segment = name => document.querySelector(segments[name])
     const inside = element => { const box = element.getBoundingClientRect(); return box.left >= bar.left - 0.5 && box.right <= bar.right + 0.5 }
     const whole = element => element.scrollWidth <= element.clientWidth
-    return { inside: ['state', 'server', 'login', 'database', 'time', 'rows'].every(name => inside(segment(name))), whole: ['server', 'login', 'database', 'time', 'rows'].filter(name => whole(segment(name))), page: document.documentElement.scrollWidth <= innerWidth }
+    return { inside: ['state', 'server', 'login', 'database'].every(name => inside(segment(name))), whole: ['server', 'login', 'database'].filter(name => whole(segment(name))), page: document.documentElement.scrollWidth <= innerWidth }
   }, [part, queryFacts])
   await connectAndRun('')
-  expect(await layout()).toEqual({ inside: true, whole: ['login', 'database', 'time', 'rows'], page: true })
+  expect(await layout()).toEqual({ inside: true, whole: ['login', 'database'], page: true })
   await connectAndRun(longDatabase)
-  expect(await layout()).toEqual({ inside: true, whole: ['time', 'rows'], page: true })
+  expect(await layout()).toEqual({ inside: true, whole: [], page: true })
   await queryBar().screenshot({ path: resolve('artifacts', 'files-query-status-small.png') })
-  console.log('Files checks: in a small window the server, then the login and database, give way in the query status bar, and the time and rows stay whole.')
+  console.log('Files checks: in a small window the server, then the login and database, give way in the status bar, inside it.')
 
   // 11. A second instance, started with a file, hands it to this one and quits; the file opens here.
   const second = join(folder, 'second.sql')
@@ -470,12 +487,12 @@ try {
   expect(await keptWith('SELECT 15 AS recovered')).toBe(1)
   await prompts()
   await queue('answers', 0)
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+  await crashRenderer(application)
   await expect.poll(prompts, { timeout: 15000 }).toEqual([{
     title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', buttons: ['Reload', 'Close'],
     detail: 'Queries saved by AutoRecover can be recovered after reloading; changes from the last 5 minutes may be lost. Connections were closed and uncommitted transactions were rolled back.'
   }])
-  await expect.poll(() => js(`document.body.innerText.includes('fake · Ready') && !!document.querySelector(${JSON.stringify('[role="dialog"] ' + part.recoveryGrid)})`), { timeout: 30000 }).toBe(true)
+  await expect.poll(() => js(`!!document.querySelector(${JSON.stringify(part.statusBar + ' [title^="SQL backend: fake"]')}) && !!document.querySelector(${JSON.stringify('[role="dialog"] ' + part.recoveryGrid)})`), { timeout: 30000 }).toBe(true)
   const rows = await js(`[...document.querySelectorAll(${JSON.stringify(part.recoveryGrid + ' tbody tr')})].map(row => [...row.cells].slice(1).map(cell => cell.textContent))`)
   expect(rows).toHaveLength(kept)
   const row = rows.find(cells => cells[0] === recovered)
@@ -508,7 +525,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await stubDialogs()
   await expect(recoverDialog()).toBeVisible({ timeout: 30000 })
   await expect(recoverDialog().locator('tbody tr')).toHaveCount(kept)

@@ -123,8 +123,8 @@ describe('settings catalogue', () => {
     const fixtures: SettingDef[] = [{ ...base, key: 'fixture.everywhere' }, { ...base, key: 'fixture.windows', platforms: ['win32'] }, { ...base, key: 'fixture.hidden', hidden: true }]
     expect(visibleSettings('win32', fixtures).map(def => def.key)).toEqual(['fixture.everywhere', 'fixture.windows'])
     expect(visibleSettings('darwin', fixtures).map(def => def.key)).toEqual(['fixture.everywhere'])
-    // View White Space is a persisted Edit › Advanced toggle: SSMS's Options has no row for it.
-    expect(settingDefs.filter(def => !visibleSettings('linux').includes(def)).map(def => def.key)).toEqual(['textEditor.sql.viewWhiteSpace'])
+    // View White Space and Panel Tabs are persisted menu toggles (Edit › Advanced, Window): SSMS's Options has no row for them.
+    expect(settingDefs.filter(def => !visibleSettings('linux').includes(def)).map(def => def.key)).toEqual(['environment.layout.panelTabs', 'textEditor.sql.viewWhiteSpace'])
   })
   it('names a key or modifier in a description shown on every platform only with what macOS uses', () => {
     // macOS has no Alt+Z for Word Wrap, and its Monaco copies a drag with Option, not Ctrl.

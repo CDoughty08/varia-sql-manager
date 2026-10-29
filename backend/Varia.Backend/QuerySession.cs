@@ -12,6 +12,9 @@ internal sealed class QuerySession(string connectionId, SqlConnection connection
     /// <summary>The session's SPID and login, read once when it opened, as SSMS shows them from the connection.</summary>
     public int? Spid { get; set; }
     public string? Login { get; set; }
+    /// <summary>A commit sent in this session never answered (the deadline or a cancel ended its request): SQL Server may
+    /// have committed or rolled back, so a loss found later must not say that nothing was committed.</summary>
+    public bool CommitInDoubt { get; set; }
 
     public bool TryEnter()
     {

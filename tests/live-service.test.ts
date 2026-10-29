@@ -5,7 +5,11 @@ import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type Liv
 import type { LiveEnd, LiveEvent, LiveSubscribeParams, LiveTick, LiveUpdateResult } from '../src/shared/live/schema'
 import { defaultSettings, type SettingsValues } from '../src/shared/settings/catalog'
 import { documentOwner, LiveService, liveServiceLimits, type LiveCatalog, type LiveOwner, type LiveSpec, type PageVisibility } from '../src/renderer/src/live/LiveService'
+import { bindChart, ChartView, probeCurrent } from '../src/renderer/src/live/ChartView'
 import { ringGap } from '../src/renderer/src/live/ring'
+import { formatClock } from '../src/renderer/src/live/chart-format'
+import { resolveBuiltin } from '../src/shared/theme/resolve'
+import { FakeCanvas, FakeChartEnvironment, fakeOwner } from './fixtures/fake-canvas'
 import { liveIndicator } from '../src/renderer/src/live/status'
 import type { LivePatch, LiveStream, ResultHandle } from '../src/renderer/src/results/ResultClient'
 import type { ResultKey } from '../src/renderer/src/results/worker-protocol'
@@ -111,9 +115,9 @@ const connectionId = '6f1e3a52-8a8b-4d63-9a43-2c1e1e0d7c11'
 const otherConnection = '0b6f2f8e-0b0e-4f6a-9d61-6d8c2b7f1e22'
 const allProbes: LiveProbeId[] = ['debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status']
 const spec = (probes: LiveProbeId[] = allProbes, extra: Partial<LiveSpec> = {}): LiveSpec => ({ connectionId, source: 'debug.synthetic', probes: probes.map(probe => ({ probe })), ...extra })
-function makeService(o: { settings?: Partial<SettingsValues>; catalog?: LiveCatalog } = {}) {
+function makeService(o: { settings?: Partial<SettingsValues>; catalog?: LiveCatalog; serverOf?: (connectionId: string) => string | undefined } = {}) {
   settings = settingsStore(o.settings)
-  service = new LiveService({ client, settings, page, schedule: callback => callback(), ...o.catalog ? { catalog: o.catalog } : {} })
+  service = new LiveService({ client, settings, page, schedule: callback => callback(), ...o.catalog ? { catalog: o.catalog } : {}, ...o.serverOf ? { serverOf: o.serverOf } : {} })
   return service
 }
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve() }
@@ -268,6 +272,22 @@ describe('LiveService', () => {
     await settle()
     expect(fake.updates.at(-1)).toEqual({ paused: true })
     expect(handle.getSnapshot().pausedBy).toBe('hidden')
+  })
+
+  it('tells charts when the window hides or shows, the test override included', () => {
+    makeService()
+    let calls = 0
+    const stop = service.page.subscribe(() => { calls++ })
+    expect(service.page.hidden()).toBe(false)
+    page.set(true)
+    expect([service.page.hidden(), calls]).toEqual([true, 1])
+    service.setPageHidden(false)
+    expect([service.page.hidden(), calls]).toEqual([false, 2])
+    service.setPageHidden(undefined)
+    expect([service.page.hidden(), calls]).toEqual([true, 3])
+    stop()
+    page.set(false)
+    expect(calls).toBe(3)
   })
 
   it('follows a tab: active and in the editor area, or hidden; closing the tab ends the view', async () => {
@@ -961,6 +981,204 @@ describe('LiveService', () => {
     expect(wrong.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'INVALID_PARAMS' } })
   })
 
+  it('runs at most 8 background views, gives their slots to views that open when the window is full, and hands slots back as views close', async () => {
+    makeService()
+    client.holdCancel = true
+    const background = () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value)
+    const chips = Array.from({ length: 8 }, background)
+    // The ninth waits for a slot rather than failing, and runs nothing, even when its owner hides and shows again.
+    const ninth = owner()
+    chips.push(service.open(spec(['debug.synthetic.status'], { background: true }), ninth.value))
+    expect(client.streams).toHaveLength(liveServiceLimits.background)
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    chips[8].refresh()
+    ninth.show(false)
+    ninth.show(true)
+    await settle()
+    expect(client.streams).toHaveLength(8)
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    // Views the user opens fill the other 8 slots, then take background slots, newest first.
+    const views = Array.from({ length: liveServiceLimits.handles - liveServiceLimits.background }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    expect(client.streams).toHaveLength(16)
+    const extra = service.open(spec(['debug.synthetic.status']), owner().value)
+    expect(chips[7].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(client.streams[7].cancelled).toBe(true)
+    // The new view subscribes only once the stream it replaces has ended, so main never sees a 17th stream.
+    expect(client.streams).toHaveLength(16)
+    expect(extra.getSnapshot().status).toBe('connecting')
+    client.streams[7].end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(client.last.ended).toBe(false)
+    expect(chips.slice(0, 7).every(chip => chip.getSnapshot().waiting === undefined)).toBe(true)
+    // With every slot taken by views the user opened and no background view left running, one more is refused.
+    for (let i = 0; i < 7; i++) service.open(spec(['debug.synthetic.status']), owner().value)
+    for (const fake of client.streams.filter(fake => fake.cancelled && !fake.ended)) fake.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(chips.every(chip => chip.getSnapshot().waiting)).toBe(true)
+    expect(service.open(spec(['debug.synthetic.status']), owner().value).getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'TOO_MANY_REQUESTS' } })
+    const running = () => client.streams.filter(fake => !fake.ended && !fake.cancelled).length
+    expect(running()).toBe(16)
+    // A closed view's slot goes to the oldest waiting background view, after the closed view's stream has ended.
+    const streams = client.streams.length
+    views[0].dispose()
+    expect(chips[0].getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(streams)
+    client.streams.find(fake => fake.cancelled && !fake.ended)!.end({ ok: true, value: { ended: 'cancelled', ticks: 0, elapsedMs: 0 } })
+    await settle()
+    expect(client.streams).toHaveLength(streams + 1)
+    expect(client.last.params.subscriptionId).not.toBe(chips[0].id)
+    expect(chips[0].getSnapshot().status).toBe('connecting')
+    expect(chips.slice(1).every(chip => chip.getSnapshot().waiting)).toBe(true)
+  })
+
+  it('never takes over an ended background view, which its owner disposes', async () => {
+    makeService()
+    const chips = Array.from({ length: liveServiceLimits.background }, () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value))
+    client.streams[7].end({ ok: false, error: 'Too many live views are reading this server.', code: 'TOO_MANY_REQUESTS' })
+    await settle()
+    expect(chips[7].getSnapshot().status).toBe('ended')
+    for (let i = 0; i < liveServiceLimits.handles - liveServiceLimits.background; i++) service.open(spec(['debug.synthetic.status']), owner().value)
+    service.open(spec(['debug.synthetic.status']), owner().value)
+    expect(chips[7].getSnapshot()).toMatchObject({ status: 'ended' })
+    expect(chips[7].getSnapshot().waiting).toBeUndefined()
+    expect(chips[6].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+  })
+
+  it('passes a freed slot over a waiting background view that has since lost its connection', async () => {
+    makeService()
+    const views = Array.from({ length: liveServiceLimits.handles }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    const gone = owner({ connectionId }), next = owner({ connectionId })
+    const first = service.open(spec(['debug.synthetic.status'], { background: true }), gone.value)
+    const second = service.open(spec(['debug.synthetic.status'], { background: true }), next.value)
+    // Waiting is not a pause: nothing hid the view.
+    expect(first.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(first.getSnapshot().pausedBy).toBeUndefined()
+    gone.move(undefined)
+    expect(first.getSnapshot().status).toBe('ended')
+    views[0].dispose()
+    await settle()
+    expect(first.getSnapshot().status).toBe('ended')
+    expect(second.getSnapshot().status).toBe('connecting')
+    expect(client.last.params.subscriptionId).toBe(second.id)
+  })
+
+  it('keeps a hidden background view dormant when a slot frees, and subscribes it when it shows', async () => {
+    makeService()
+    const views = Array.from({ length: liveServiceLimits.handles }, () => service.open(spec(['debug.synthetic.status']), owner().value))
+    const chip = owner({ visible: false })
+    const handle = service.open(spec(['debug.synthetic.status'], { background: true }), chip.value)
+    expect(handle.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    views[3].dispose()
+    await settle()
+    expect(handle.getSnapshot().waiting).toBeUndefined()
+    expect(handle.getSnapshot().status).toBe('dormant')
+    expect(client.streams).toHaveLength(16)
+    chip.show(true)
+    await settle()
+    expect(client.streams).toHaveLength(17)
+    expect(handle.getSnapshot().status).toBe('connecting')
+  })
+
+  it('gives a freed slot to a waiting background view only while fewer than 8 background views run', async () => {
+    makeService()
+    const chips = Array.from({ length: liveServiceLimits.background + 1 }, () => service.open(spec(['debug.synthetic.status'], { background: true }), owner().value))
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    view.dispose()
+    await settle()
+    expect(chips[8].getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(client.streams).toHaveLength(liveServiceLimits.background + 1)
+    chips[0].dispose()
+    await settle()
+    expect(chips[8].getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(liveServiceLimits.background + 2)
+  })
+
+  it('gives a background view\'s slot on the same server to a view the backend refuses at its per-server cap', async () => {
+    const servers: Record<string, string> = { [connectionId]: 'sql01', [otherConnection]: 'sql01', third: 'sql02' }
+    makeService({ serverOf: id => servers[id] })
+    const busy = (fake: FakeStream) => fake.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    const elsewhere = service.open(spec(['debug.synthetic.status'], { background: true, connectionId: 'third' }), owner({ connectionId: 'third' }).value)
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    deliver(client.streams[0], opened(client.streams[0]))
+    deliver(client.streams[1], opened(client.streams[1]))
+    // A view the user opens on the same server, through another connection, is refused: the chips there give way, the
+    // other server's stay, and the view subscribes again once the chips' stream has ended.
+    const view = service.open(spec(['debug.synthetic.status'], { connectionId: otherConnection }), owner({ connectionId: otherConnection }).value)
+    busy(client.last)
+    await settle()
+    expect(client.streams[1].cancelled).toBe(true)
+    expect(client.streams[0].cancelled).toBe(false)
+    expect(chip.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(elsewhere.getSnapshot().waiting).toBeUndefined()
+    expect(client.streams).toHaveLength(4)
+    expect(client.last.params).toMatchObject({ connectionId: otherConnection, source: 'debug.synthetic' })
+    expect(view.getSnapshot().status).toBe('connecting')
+    deliver(client.last, opened(client.last))
+    expect(view.getSnapshot().status).toBe('live')
+    // Closing it hands the slot back to the chips.
+    view.dispose()
+    await settle()
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+    expect(client.last.params.connectionId).toBe(connectionId)
+  })
+
+  it('ends a view the backend refuses again, or that has no background view on its server to take over', async () => {
+    const servers: Record<string, string> = { [connectionId]: 'sql01', [otherConnection]: 'sql02' }
+    makeService({ serverOf: id => servers[id] })
+    const busy = (fake: FakeStream) => fake.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    const second = service.open(spec(['debug.synthetic.status'], { background: true }), owner({ connectionId }).value)
+    deliver(client.streams[0], opened(client.streams[0]))
+    deliver(client.streams[1], opened(client.streams[1]))
+    const other = service.open(spec(['debug.synthetic.status'], { connectionId: otherConnection }), owner({ connectionId: otherConnection }).value)
+    busy(client.last)
+    await settle()
+    expect(other.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+    // On the same server, one background view gives way; a second refusal ends the view rather than take another.
+    const view = service.open(spec(['debug.synthetic.status']), owner({ connectionId }).value)
+    busy(client.last)
+    await settle()
+    expect(second.getSnapshot().waiting).toBe(true)
+    busy(client.last)
+    await settle()
+    expect(view.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+  })
+
+  it('takes over no background view that is dormant, which holds no subscription the backend counts', async () => {
+    makeService({ serverOf: () => 'sql01' })
+    const hidden = owner()
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), hidden.value)
+    deliver(client.last, opened(client.last))
+    hidden.show(false)
+    vi.advanceTimersByTime(defaultSettings['liveData.stopAfterHiddenMinutes'] * 60_000 + 1000)
+    await settle()
+    expect(chip.getSnapshot().status).toBe('dormant')
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    client.last.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    await settle()
+    expect(view.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'BUSY' } })
+    expect(chip.getSnapshot().waiting).toBeUndefined()
+  })
+
+  it('keeps a background view the backend refuses waiting, and tries it again when a view closes', async () => {
+    makeService()
+    const chip = service.open(spec(['debug.synthetic.status'], { background: true }), owner().value)
+    client.last.end({ ok: false, error: 'Too many live views are open for this server. Close one and retry.', code: 'BUSY' })
+    await settle()
+    expect(chip.getSnapshot()).toMatchObject({ status: 'dormant', waiting: true })
+    expect(chip.getSnapshot().error).toBeUndefined()
+    const view = service.open(spec(['debug.synthetic.status']), owner().value)
+    view.dispose()
+    await settle()
+    expect(client.streams).toHaveLength(3)
+    expect(client.last.params.subscriptionId).not.toBe(chip.id)
+    expect(chip.getSnapshot().status).toBe('connecting')
+  })
+
   it('never pauses hidden views while Pause live views that are hidden is off, and applies the setting at once', async () => {
     makeService({ settings: { 'liveData.pauseWhenHidden': false } })
     const view = owner()
@@ -1127,5 +1345,146 @@ describe('LiveService', () => {
     const late = service.open(spec(['debug.synthetic.status']), owner().value)
     expect(late.getSnapshot()).toMatchObject({ status: 'ended', error: { code: 'PORT_CLOSED' } })
     expect(client.streams).toHaveLength(2)
+  })
+})
+
+// A chart of a view, as LiveChart binds it: whether its newest sample reads "now" follows the probe's state and the
+// interval the backend runs, never the spacing of the samples in the ring.
+describe('charts of a live view', () => {
+  const metrics = 'debug.synthetic.metrics'
+  function chartOf(handle: ReturnType<LiveService['open']>) {
+    const owner = fakeOwner(), env = new FakeChartEnvironment()
+    env.time = Date.now()
+    const canvas = new FakeCanvas(owner, 400, 100)
+    const view = new ChartView({
+      canvas: canvas as unknown as HTMLCanvasElement, root: owner.createElement('div') as unknown as HTMLElement, ring: () => handle.ring(metrics), title: 'Wave',
+      series: [{ index: 1, label: 'Wave', color: 'charts.blue' }], scale: { unit: 'percent', max: 100 }, window: { spanMs: 600_000, end: 'live' }, colors: resolveBuiltin('dark').colors, env, labels: 'axes',
+      current: probeCurrent(handle.getSnapshot(), metrics, Date.now())
+    })
+    const bound = bindChart(view, handle, metrics)
+    let told = 0
+    view.subscribe(() => { told++ })
+    const draw = () => { env.time = Date.now(); env.flush() }
+    return { view, env, canvas, bound, told: () => told, newest: () => view.table(1).rows[0]?.time, axisEnd: () => { canvas.context.reset(); view.setTitle('Wave'); draw(); return canvas.context.texts.at(-1)?.text }, draw }
+  }
+  /** A tick with one metrics sample, run at the given interval. */
+  const sample = (fake: FakeStream, effectiveIntervalMs: number, gap?: 'resumed'): LiveTick => ({
+    type: 'live.tick', seq: ++seq, sampledAt: Date.now(),
+    samples: fake.params.probes.map(probe => ({ probe: probe.probe, costMs: 1, effectiveIntervalMs, ...gap ? { gap } : {}, ...probe.probe === metrics ? { metrics: [seq, 50, null] } : {} }))
+  } as LiveTick)
+  function openMetrics(intervalMs: number, others: LiveProbeId[] = []) {
+    makeService()
+    const handle = service.open({ connectionId, source: 'debug.synthetic', probes: [{ probe: metrics, intervalMs }, ...others.map(probe => ({ probe }))] }, owner().value)
+    const fake = client.last
+    deliver(fake, opened(fake))
+    return { handle, fake }
+  }
+  const state = (handle: ReturnType<LiveService['open']>) => handle.getSnapshot().probes[metrics].state
+
+  it('keeps "now" through an interval raised from 2 s to 10 s, and turns to clock times only when the probe goes stale', async () => {
+    const { handle, fake } = openMetrics(2000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 5; at++) { deliver(fake, sample(fake, 2000)); vi.advanceTimersByTime(2000) }
+    fake.answer = () => ({ ok: true, value: { applied: true, probes: [{ probe: metrics, intervalMs: 10_000, effectiveIntervalMs: 10_000, paused: false }] } })
+    handle.setProbe(metrics, { intervalMs: 10_000 })
+    vi.advanceTimersByTime(150)
+    await settle()
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(5000)
+    // Five seconds after a 10 s probe's sample, the probe is fresh and the chart still says so.
+    expect(state(handle)).toBe('fresh')
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    expect(chart.axisEnd()).toBe('now')
+    deliver(fake, sample(fake, 10_000))
+    const last = Date.now()
+    vi.advanceTimersByTime(19_999)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // Twice the interval without a sample: stale, and the chart reads clock times without a tick.
+    vi.advanceTimersByTime(1)
+    expect(state(handle)).toBe('stale')
+    expect(chart.newest()).toBe(formatClock(last))
+    expect(chart.axisEnd()).toBe(formatClock(last))
+    // Told when the first sample made it current, when the new interval resized its ring, and when it went stale.
+    expect(chart.told()).toBe(3)
+  })
+
+  it('keeps "now" after an off-schedule refresh sample, a back-off and a first slow sample', () => {
+    const { handle, fake } = openMetrics(10_000, ['debug.synthetic.status'])
+    const chart = chartOf(handle)
+    // A 10 s probe's first sample: 15 s on (one and a half intervals) it is still current.
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(15_000)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // A Refresh sample 3 s after a regular one, then the next regular sample 7 s later.
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(3000)
+    handle.refresh()
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(7000)
+    deliver(fake, sample(fake, 10_000))
+    vi.advanceTimersByTime(7000)
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // Backed off to 40 s (the cost doubled it twice): 30 s after a sample, three times the interval asked, it is current.
+    for (let at = 0; at < 3; at++) {
+      deliver(fake, sample(fake, 40_000))
+      vi.advanceTimersByTime(30_000)
+      // The view's other probe ticks: the chart hears of the view's state again, and still reads it as current.
+      deliver(fake, { type: 'live.tick', seq: ++seq, sampledAt: Date.now(), samples: [{ probe: 'debug.synthetic.status', costMs: 1, effectiveIntervalMs: 1000, status: [{ id: 'samples', value: seq }] }] } as LiveTick)
+      chart.draw()
+      expect(chart.newest()).toBe('now')
+      vi.advanceTimersByTime(10_000)
+    }
+    // Current from the first sample on, never stale.
+    expect(chart.told()).toBe(1)
+  })
+
+  it('reads clock times at once when paused, and "now" again with the first sample after the resume', async () => {
+    const { handle, fake } = openMetrics(1000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 5; at++) { deliver(fake, sample(fake, 1000)); vi.advanceTimersByTime(1000) }
+    const last = Date.now() - 1000
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    handle.setUserPaused(true)
+    await settle()
+    expect(chart.newest()).toBe(formatClock(last))
+    vi.advanceTimersByTime(60_000)
+    // Resumed, the probe is fresh again before its first sample: the pre-pause sample is still a minute old.
+    handle.setUserPaused(false)
+    await settle()
+    expect(state(handle)).toBe('fresh')
+    expect(chart.newest()).toBe(formatClock(last))
+    deliver(fake, sample(fake, 1000, 'resumed'))
+    chart.draw()
+    expect(chart.newest()).toBe('now')
+    // The first sample, the pause, the first sample after the resume.
+    expect(chart.told()).toBe(3)
+  })
+
+  it('redraws a paused view\'s chart and lists its table again when the history setting shrinks its ring', async () => {
+    const { handle, fake } = openMetrics(1000)
+    const chart = chartOf(handle)
+    for (let at = 0; at < 400; at++) { deliver(fake, sample(fake, 1000)); vi.advanceTimersByTime(1000) }
+    handle.setUserPaused(true)
+    await settle()
+    chart.draw()
+    const draws = chart.view.stats.draws, told = chart.told()
+    expect(chart.view.table().total).toBe(400)
+    settings.set({ 'liveData.historyMinutes': 5 })
+    expect(handle.ring(metrics)!.capacity).toBe(300)
+    chart.draw()
+    expect(chart.view.stats.draws).toBe(draws + 1)
+    expect(chart.told()).toBe(told + 1)
+    expect(chart.view.table().total).toBe(300)
+    // A resize that changes nothing tells nobody.
+    service.rebalance()
+    expect(chart.told()).toBe(told + 1)
+    chart.bound.dispose()
+    settings.set({ 'liveData.historyMinutes': 2 })
+    expect(chart.told()).toBe(told + 1)
   })
 })

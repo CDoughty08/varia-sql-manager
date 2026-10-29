@@ -143,9 +143,11 @@ properties are omitted, as in JSON; `undefined` in an array is an error. The C# 
 
 The backend transcodes REQUEST params to a `JsonElement` and results from System.Text.Json output (`JsonBridge`), so the
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
-become float64, which TypeScript accepts. Requests that carry a password (`connections.connect`, `.databases`,
-`.preview`) are encoded into buffers that are zeroed after use on both sides; the JavaScript and .NET strings they came
-from cannot be zeroed.
+become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
+`.databases`, `.preview`, and `ssis.execute`) are encoded into buffers that are zeroed after use on both sides; the
+JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
+`sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
+`tests/validation.test.ts` keeps the two lists equal.
 
 ## Handshake
 
@@ -193,10 +195,15 @@ backend schedules it: `control` runs at once, `metadata` waits for one of 8 slot
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot. `live` takes no slot either: a
-live subscription samples on its own task, and its statements, like those of any unary method on lane `live` (none yet;
+for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
+runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s, then `BUSY`), so it never queues behind a
+DROP that may be waiting on the very session it kills. `live` takes no slot either: a live subscription samples on its
+own task, and its statements, like those of a unary method on lane `live` (`activity.details`, through
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
-statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names never pile up).
+statement's budget, and for Details at most its 10 s budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
+never pile up).
+`ssis` runs SSIS Catalog reads and writes at once under the SSIS services' own gates (reads 2 per connection and 4 in all,
+writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds a metadata slot either.
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -224,6 +231,10 @@ statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, 
 | `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
+| `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent |
+| `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
+| `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
@@ -314,25 +325,114 @@ cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: 
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire.
 
+**Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
+serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
+and environments, whose refs carry `ssisFolder` and `ssisProject` (docs/object-explorer.md). Those listings run on the SSIS
+read pool (the program name plus " - Integration Services", Initial Catalog the catalog's database), never the Object
+Explorer pool, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`; packages page by `package_id` (`@kb`), since their names
+(≤ 260) can be longer than a sysname cursor key. On SQL Server on Linux, and on Azure SQL Database without a visible
+catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog node whose database is gone answers
+`NOT_FOUND`, one whose database is offline, restoring or single-user in use `DATABASE_UNAVAILABLE` (retryable), and one the
+login may not open `NO_DB_ACCESS`. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
+target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
+`{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database
+runs RCSI and READ UNCOMMITTED otherwise, read once more after error 601. `model.view` names it: the catalog's profile
+(`band`, `cloud`, `hostPlatform`, `auth`: sql, integrated or entra, `rcsi`, `features`, `roles`: `sysadmin`, `admin` for
+sysadmin or ssis_admin, and `ssisAdmin` and `ssisLogreader`, read only for logins that are not sysadmin), its folder count and,
+for ssis_admin and sysadmin, `properties`; a folder's row and counts; a project's row, packages, parameters and
+references; a package's row and parameters; an environment's row and variables. Lists hold at most 2,048 rows and the
+answer about 4,000,000 bytes, past which `truncated` is set; values are text of at most 4,000 characters, and a sensitive
+parameter or variable never has one. `revision` (64 hex characters) is a SHA-256 of what a later write depends on: names,
+descriptions, a project's `object_version_lsn` and last deployment, parameter values, references, variables and catalog
+properties, never validation results, counts or the profile, which change without a write; a truncated answer has none,
+because it does not cover the rows it left out. The first request on a
+connection reads its SSIS profile, cached until disconnect, with the role checks at `LOCK_TIMEOUT 1000` (`IS_MEMBER`
+waits on a pending change to a role's members; a sysadmin's are not evaluated). Failures are `result.error` values:
+`CATALOG_MISSING`, `NO_DB_ACCESS`, `DATABASE_UNAVAILABLE`, `BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`, `NOT_FOUND`, `NOT_SUPPORTED` (before 2016,
+and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENTRA` and `SQL_ERROR`. **SSIS cancellation**
+works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
+routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.
+
+**SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId }, revision? }`
+(`operationId` 1 to 2^53 − 1; `revision`, 64 lowercase hex characters, only for a verb that takes one, which Stop Operation
+does not; the verbs, their steps and the procedures they may call are `ssisActions` in `src/shared/ssis/catalog.ts`) answers
+`{ steps: { status: done | failed | skipped | cancelled, message? }[], elapsedMs, error? }`. Its policy is sensitive, so the
+frame is zeroed once written, because later verbs carry sensitive values. Before it connects, the backend refuses a server
+older than 2016 or on Linux (`NOT_SUPPORTED`) and, for a verb SSISDB refuses to SQL Server logins (error 27123, every verb
+that changes the catalog), a connection that signed in with SQL Server authentication to a box server
+(`WINDOWS_AUTH_REQUIRED`; Azure SQL Database and Managed Instance excepted). It then takes the SSIS write gates (1 per
+connection, 2 in all; 64 registered) and opens a connection of its own: unpooled, never retried, no command timeout,
+Initial Catalog the catalog's database, under the program name plus " - Integration Services Actions". There it runs the
+verb's preflight at READ COMMITTED with `LOCK_TIMEOUT 10000` (`BLOCKED`) within 25 s (`TIMEOUT`), then its steps in
+order, each one constant template from `SsisSql` with values as parameters, waiting for locks as SSMS does
+(`LOCK_TIMEOUT -1`), with no outer transaction. Stop Operation's preflight reads `catalog.operations`: no row answers
+`NOT_FOUND`, a type other than an execution or validation (200, 300, 301) `NOT_SUPPORTED`, an ended or stopping one
+`ALREADY_FINAL` (information, not a failure), and a created execution nobody started (it never runs) `NOT_STARTED` (not
+retryable); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or 27126 the operation is read again:
+`ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it is pending, and the catalog's own
+refusal, with the step failed, if that second look fails. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission
+error `PERMISSION_DENIED` naming the action. A connection lost before the step is sent answers `CONNECTION_LOST` saying
+nothing changed; lost during the step, that the outcome is unknown. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
+answer to the handler (`IRequestDispatcher.AnswersStop`, as for `actions.execute`), which waits up to 10 s for SQL Server to
+end the statement and answers `CANCELLED` with the step `cancelled`, or, before any step, "stopped before it changed
+anything"; past the grace the outcome is unknown. `catalog.stop_operation` commits its own Stop operation (type 202,
+Running) before its transaction, and a cancelled statement never reaches its error path, so Stop during Stop Operation's
+step rolls the stop back but may leave that row Running until SQL Server restarts; the `CANCELLED` message says so (SSMS
+never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a connection's writes. Nothing is logged.
+
+**Activity Monitor session actions** (docs/activity-monitor.md, Session actions) name a session by its id and its login
+time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters; main checks the form, and the backend also
+refuses a time outside `datetime`'s range, 1753-01-01 to 9999-12-31T23:59:59.997, as `INVALID_PARAMS`), since SQL Server
+reuses session ids. `activity.details { connectionId, requestId, sessionId: 1–32,767, loginTime, text?: statement |
+batch | inputBuffer, locks?: bool }` (not `text` with `locks`) reads on the Activity Monitor's pool (" - Activity Monitor",
+READ UNCOMMITTED, LOCK_TIMEOUT 1000) under one live gate, within 10 s in all, and answers `{ sessionId, state: present |
+ended | changed | unknown (with `error`), session?, statement?, batch?, inputBuffer?, waits? (≤ 20), transactions? (≤ 50), transactionsTruncated?,
+tempdb?, locks? (≤ 1,000, only with `locks`), locksTruncated?, sectionErrors?: { section, code, message }[], readAt?,
+elapsedMs, error? }`. `changed` (another session has the id) reads nothing more. Each section is its own statement, so a
+permission or a lock that stops one is a `sectionErrors` entry and the others come back; texts are `{ text, chars,
+truncated }`, cut at 65,536 characters unless `text` asks for one of them, which then comes back alone, whole up to
+1,000,000. Every read checks the statement's columns against its declaration. Closing Details cancels the read
+(`ActivityRequests`, `varia:activity-cancel`, 1–16 ids, 64 tombstones for 60 s; 32 running): a CANCEL frame (reason 1),
+an attention in SQL Server, `CANCELLED`, and a pooled connection cancelled or broken mid-statement never goes back to its
+pool. `activity.kill { connectionId, sessions: { sessionId, loginTime, hostProcessId: int | null }[1..64] }` (distinct ids)
+opens the object actions' own connection (" - Object Actions": unpooled, never retried, in master) and runs, per session in
+order, one batch (`SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;`, then `ActivitySql`'s kill template) that checks the id is not
+its own session's, exists, is a user session, still has the row's login time and host process id, and is not one of this
+backend's pool sessions (its host process id, and a program name among the pool names of every connection of this backend,
+whatever Application Name each set), and only then runs `KILL`, built on the server from the int
+parameter. It answers `{ results: { sessionId, outcome: killed | ended | changed | own | system | varia | denied |
+failed, message? (≤ 2,000) }[], elapsedMs, error? }`: SQL Server's refusals map to outcomes (6102 `denied`, 6104 `own`,
+6106 `ended`, 6107 `system`), a session not in `results` was not tried, and `error` says why (`CONNECTION_LOST`, `TIMEOUT`
+past its 25 s budget, a sign-in failure); a session whose batch was cut off by either is `failed` with an unknown outcome.
+Failures the user can act on are values with the live layer's codes (`BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`,
+`CONNECTION_LOST`, `DATABASE_UNAVAILABLE`, `LOGIN_FAILED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `NOT_SUPPORTED` for a server the
+monitor does not serve, `SQL_ERROR`); envelope errors are only `INVALID_PARAMS`, `NOT_CONNECTED`, `BUSY`, `CANCELLED`,
+`TIMEOUT` at the header deadline, and `BACKEND_ERROR` for a statement whose columns differ from its declaration (a bug).
+Neither logs a session id, login, host, SQL text or message.
+
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
-`{ databaseProperties: { general, options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
+`{ databaseProperties: { general (with `id`, the database_id, and `created`), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
 (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel,
 pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }, elapsedMs }`, where `options` and
 `scoped` map the catalogue's option keys (docs/object-actions.md) to tokens. `actions.script` and `actions.execute` take
-`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? } }`:
+`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? }, identity?: { id, created } }`:
 only changed values, at least one and at most 512 statements, each key a settable option with one of its tokens (an
 integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
-Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
+Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. `identity` is the database the document read (database_id ≥ 1 and create_date as the describe writes it,
+`yyyy-MM-ddTHH:mm:ss.fff`): the preflight answers `NOT_FOUND` for a database that has taken the name since (renamed,
+dropped or restored meanwhile), before anything runs, for Script too. Script always
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
 Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
 connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and
-the dialog asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
+the Database Properties document asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
 whose sessions SQL Server can still list for a few milliseconds, a count above zero is taken again every 50 ms for up to a
 second first. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only database (the owner,
 scoped configurations, Target Recovery Time, Delayed Durability, FILESTREAM Non-Transacted Access) answers `NOT_SUPPORTED` before
 anything runs, for Script too.
-A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
+The document's Script drawer previews with `actions.script` only while it is open, one request once typing has paused
+for 300 ms, and cancels a preview an edit overtook (`varia:actions-cancel`), so typing never queues requests on the
+metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
@@ -460,7 +560,12 @@ left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or th
 transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
 lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
 `SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
-committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+committed. Check the data before running the work again." A commit the deadline or a cancel interrupts answers `TIMEOUT` or
+`CANCELLED` and leaves the session open, its outcome unknown: the session remembers it, and when a later commit or state
+read finds it lost it answers `SESSION_LOST` with "The SQL session was lost after a commit that did not finish (it was
+cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work
+again." A severity 20 error ends the session even while its connection still reads open (managed SNI closes it later):
+the state read, the commit and an execution all take it for lost. `'rollback'` is a plain close: SQL Server rolls back what a
 closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
@@ -517,7 +622,7 @@ when no port is open).
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 | `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
@@ -623,7 +728,7 @@ messages get "Column ‘{name}’ ({type}): some values could not be read and ar
 
 ## Messages
 
-The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'error' }`, in order, under
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' | 'error' }`, in order, under
 the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped. Past the caps,
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
@@ -631,12 +736,17 @@ after a flood of PRINT output or row counts. An event carries at most 1,000 entr
 stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
-- **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
+- **Print:** what the script printed: PRINT (message number 0) and RAISERROR with severity 0 – 10 (number 50000, or a
+  user message's number above it). They read like info entries; the renderer opens the Messages strip under the results
+  when one arrives, as it does for an error.
+- **Server:** SQL Server's other severity 0 – 10 messages: warnings such as 8153 ("Null value is eliminated by an
+  aggregate…"), SET STATISTICS IO and TIME output, and the messages of DBCC and sp_rename. They read like info entries and
+  show in the Messages strip without opening it. As in SSMS, "Changed database context to …" (5701) and "Changed language
+  setting to …" (5703) are left out, whether from USE, a session's login, or the toolbar's database.
+- **Info:** Varia's own lines: row counts as SSMS writes them ("(1 row affected)", "({n} rows
   affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
   after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session
-  closed. …" when a session that had opened closed (not for one that failed to open). As in SSMS, "Changed database
-  context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
-  the toolbar's database.
+  closed. …" when a session that had opened closed (not for one that failed to open).
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
   the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
   message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
@@ -728,7 +838,8 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now) and Object Explorer's `explorer` (the
+status chips: database states, restore progress, running Agent jobs, availability group health). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -1000,10 +1111,21 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 - **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
-  connection, and closes with the tab. At most 16 views are open in a window, first come, whoever owns them; another, or
-  one naming probes its source does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or
-  `INVALID_PARAMS` as a value, never an exception, and runs nothing. An owner of many background views (a status chip per
-  connected server) should share handles rather than take one each, or the documents a user opens find none left.
+  connection, and closes with the tab. At most 16 views hold a slot in a window (main's 16 streams on the port). A
+  `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server and login, owned by the
+  pane, which `ExplorerStatusService` opens, moves to the next connection of the same server and login when its own goes,
+  and disposes once it ends, opening it again on Refresh) takes only a slot no other view wants, at most 8 of them: one
+  opened without a free slot waits (`status: 'dormant'`, `waiting: true`, running nothing), and a view that opens when all
+  16 are taken takes the newest running background view's slot, which stops and waits again; the new view subscribes once
+  that stream's end has arrived, as after a Reconnect, so main never sees a 17th. A view that closes hands its slot to the
+  oldest waiting background view, which subscribes after the closed view's stream has ended (or, hidden, stays dormant
+  until it shows). With every slot held by other views, another view, or one naming probes its source does not have, is a
+  handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an exception, and runs
+  nothing. The backend's 8 per server and 32 per backend count background views too, so they give way there as well: a
+  view the backend refuses with `BUSY` before it opens takes the newest running background view's slot on the same server
+  (`serverOf`: the server the connection names, as typed; without it, the same connection) and subscribes again once that
+  stream has ended, once (a second refusal ends it with `BUSY`; with no such background view it ends at once). A
+  background view the backend refuses waits instead of ending, and tries again when a view of the window closes.
 - **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
   tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
   then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.
@@ -1043,6 +1165,51 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
   Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
   32 MiB in all, keeping the newest samples. It lives in renderer memory only, so it survives a backend restart.
+- **Charts.** `ChartView` (`live/ChartView.ts`, imperative like `GridView`) draws one probe's ring on a canvas, and
+  `LiveChart` (`live/LiveChart.tsx`) mounts it with its legend and "View as table"; React renders nothing per point.
+  Series are lines, a line over a faint area, or stacked bands parted by a one-pixel line of the surface; a chart is a
+  full chart (labels for the scale's top, or value and time axes) or a sparkline (one trace, no text). The window is the
+  last `spanMs` up to the newest sample, or up to a fixed time. A draw happens at most once an animation frame (a tick,
+  a ring resized by `LiveService` (`onRings`), a resize, a theme, forced-colors or color-scheme change asks for one), only
+  if the ring's revision, the window, the size, the pixel ratio, the theme, the forced palette or the crosshair changed (a crosshair or a color alone repaints from the columns, bands and layout the last draw reduced the window to, without reading its samples again), and only while the canvas is on screen (`IntersectionObserver`) and the
+  page is visible (`live.page`, test mode's `setPageHidden` included). Each series is reduced to the smallest and largest
+  value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
+  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks a line, and a lone
+  sample between gaps shows as a one-pixel tick. Stacked bands break at a gap flag or at a sample with no stacked value at
+  all; a series missing from a sample that has other stacked values counts as 0 in it (a column's band is the mean over
+  every such sample in the column), so its band drops onto the one below rather than breaking every band above it. A
+  series whose `index` the ring does not have reads as no value, never as a neighbour's. Colors come only from the
+  active theme's `charts.*` keys and the surface the chart sits on (series
+  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
+  status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
+  draws in `CanvasText`, `Canvas` and `GrayText` as the DOM resolves them at each draw (from a hidden element styled with
+  them), since a canvas keeps its own stale reading of those keywords when the contrast theme changes while forced colors
+  stay on; it draws without fills, and each series after the first takes the dash of its place in the chart, as the legend
+  shows it. A chart sits on `editor.background`, `panel.background` (the default), `editorWidget.background` or
+  `tile.background`: its end markers are ringed and its bands parted in that color, and series and text are checked
+  against all four. A tile's sparkline goes in the states kit's `Tile` chart slot (`<Tile><LiveChart variant="sparkline"
+  surface="tile.background" …/></Tile>`), 32 px tall. A change of device pixel ratio alone (a move to a display of another scale)
+  redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s and never while the canvas has
+  focus (a screen reader would read the whole name again at each change; it catches up on blur),
+  `aria-roledescription="chart"`, and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  the crosshair (or against the plot's right edge when neither side has room; one wider than the plot wraps between its
+  parts); a pointer held still keeps the crosshair under it as a live window moves, on the sample now nearest it; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
+  or a blur hides it (a keyboard crosshair whose sample a live window moves past stays on the window's oldest sample), and each step is announced through a polite status region (these are the chart's own keys, as the
+  grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
+  and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
+  plot's place, at its size and scrolling there (a focusable region named "<title> table", its header kept in view),
+  newest first, at most 120 rows or `tableRows` (a longer window is sampled evenly), a row marked when any sample since
+  the row before it follows a gap (never the oldest row: the flag of a view's first, baseline sample parts it from nothing shown); the table, `latest()` and the keys read the window,
+  not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
+  `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
+  from its catalogue; it draws at most 12 series (`chartLimits.series`), and its legend and table list the same ones.
+  A live window ends at the newest sample, so history stays in view when collection stops. Whether that sample reads as
+  "now" comes from the view, not from the spacing of the ring's samples (which a refresh, a back-off or a new interval
+  would mislead): `bindChart` follows the handle's snapshot, and the times read "now" and "ago" only while the probe is
+  `fresh` or `limited` and its newest sample came within twice its effective interval (so a resumed view is not "now"
+  until its first sample). Otherwise (paused, stale, failing, lost, ended) they read as clock times at once, and the name,
+  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
@@ -1109,8 +1276,6 @@ follow tail.
   once rows come back is read from the grid) and the active row's key once known (`activeKey`), for a details pane, Kill
   or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
   Save's command and the context menu are the owning view's (later PRs).
-
-Later: `ChartView` (L4) and `LiveGrid` (L5) on these views.
 
 ## Results port and results worker
 
@@ -1318,7 +1483,9 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads | backend |
+| Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048 | zod and backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; snapshot revisions ≤ 10,000 rows, append segments 200,000 rows or 32 MiB (2 segments' worth kept, at most 8 results a table), ≤ 10,000 new append rows a tick; 64 MiB of tables per subscription, all live tables ≤ 25 % of the result budget; facets 7 columns × 100 values × 128 characters, ≤ 32 KiB of facet text a tick; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
@@ -1332,11 +1499,21 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
-`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
-**Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does for both. They are
-`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
-server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
-Main refuses (as a contained violation) details with any other member or out of these bounds.
+`details` comes with a failed `connections.connect` or `connections.databases` open, and with `BACKEND_ERROR`. The Connect
+dialog shows them in **Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does
+for both. They are `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256, reason?: 'certificate',
+exception?: str ≤ 512 }`: SqlClient's first error and the server that answered (the server typed when SqlClient names
+none), and `reason` 'certificate' when the TLS handshake failed because the server's certificate is not trusted, by its
+chain or its name (SqlClient's error number `SEC_E_UNTRUSTED_ROOT` or `SEC_E_WRONG_PRINCIPAL`, which the managed SNI on
+Linux and macOS also uses for any certificate its validation rejects, `CERT_E_UNTRUSTEDROOT` or `CERT_E_CHAINING`, which
+Windows' SNI reports once Host Name in Certificate is set, or an `AuthenticationException` about the certificate; never
+`CERT_E_WRONG_USAGE`, a pinned certificate that does not match); the Connect dialog then offers **Trust server
+certificate and connect**, except under Strict encryption, which ignores that setting, and when the connection pins a
+Server Certificate or a Host Name in Certificate, which trusting would skip: there it explains instead. `BACKEND_ERROR` for an exception the backend did not expect carries only `exception`: the types
+and HRESULTs from the outer exception inwards, at most four (`System.InvalidOperationException (0x80131509) >
+System.DllNotFoundException (0x80131524)`), for **Copy details**, because its sentence is generic; never the exceptions'
+messages, which can hold paths, names or SQL text. Details never hold the connection string or the password. Main
+refuses (as a contained violation) details with any other member or out of these bounds.
 
 Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
 be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the
@@ -1368,7 +1545,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | --- | --- |
 | Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `INVALID_SCRIPT`, `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN` |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
-| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
+| Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
 
 | Code | Sentence |
@@ -1395,7 +1572,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Surface | Text |
 | --- | --- |
-| Status bar | "Starting SQL backend…", "{runtime} · Ready", "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
+| Status bar | "Starting SQL backend…", "Ready" (its tooltip names the runtime and the SMO and SqlClient versions), "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
 | Banner: not responding | "The SQL backend is not responding. You can keep waiting, or restart it; restarting closes all connections and rolls back uncommitted transactions." **Restart now** |
 | Banner: unexpected restart | "The SQL backend stopped unexpectedly and was restarted. {n} connection(s) were lost and {m} running script(s) were stopped; nothing was re-run." **Reconnect…** **Dismiss** |
 | Banner: manual restart | "The SQL backend was restarted. {n} connection(s) were closed." **Reconnect…** **Dismiss** |
@@ -1403,7 +1580,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
-| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 
@@ -1529,7 +1706,17 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
   update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
   memory, the track lists a sample may answer), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the
-  indicator text. `tests/live-grid.test.ts` covers `LiveGrid` against a stand-in grid and view (the swap's row map and
+  indicator text.
+  `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
+  pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
+  from the theme (the DOM's system colors, followed through a palette change, and dashes under forced colors), stacked
+  bands and where they break, crosshair dots on the bands, the 5 s accessible name held while focused, the keyboard and
+  pointer crosshair (a keyboard one kept on the oldest sample and a pointer's under the pointer as a live window moves, a
+  move repainted without reading the window again), the tooltip inside a narrow plot, series indexes the ring lacks,
+  stacked gaps, lone samples and missing values, the 12-series cap, linked charts, the table and `probeCurrent`'s bound;
+  `tests/live-service.test.ts` binds a chart to a view and checks that "now" follows the probe's state through an
+  interval change, a refresh, a back-off, a pause and a resume, and that a ring resize redraws a paused view's chart.
+  `tests/live-grid.test.ts` covers `LiveGrid` against a stand-in grid and view (the swap's row map and
   selection, the tone column, tracked keys and how many linger, pinned keys a revision has not answered, prepare, follow
   tail and new rows, remounts over kept state, the selection, lost and released state it publishes, per-table sort, Copy), and `tests/results-jobs.test.ts` and `tests/results-port.test.ts` a Save of a live revision retired while
   its dialog is open.
@@ -1538,8 +1725,13 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
   runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
   hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
-  closing, and a killed backend reported lost and back after Reconnect. `scripts/live-grid-smoke.mjs` mounts
-  `LiveGridPane` (`window.__variaLive.mountGrid`) over the real backend's synthetic grid and log: tones and the hidden tone
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/chart-smoke.mjs` mounts charts of such
+  a view and reads their canvas pixels: the series in the theme's chart color, redrawn as ticks arrive and not while the
+  window is hidden, the accessible name (held while focused), the keyboard and pointer crosshair (a pointer held still near either edge
+  keeps its tooltip as the window moves; a narrow two-series chart keeps its tooltip inside the plot), the table (its caption,
+  header, focus ring and row cap), a legend of two series and none for one, a tile's sparkline (which takes no focus), a switch to Light, and
+  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them.
+  `scripts/live-grid-smoke.mjs` mounts `LiveGridPane` (`window.__variaLive.mountGrid`) over the real backend's synthetic grid and log: tones and the hidden tone
   column, the selected item kept across revisions, muted once it leaves and then moved to a neighbour (with its key
   reported), Copy without the tone, a Save whose dialog stays open across samples, the sort hook, follow tail and "n new
   rows", a log mounted again over its kept state opening where it was, a stopped view's overlay and Copy, and a killed
@@ -1551,7 +1743,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -1584,7 +1776,9 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
-  planning, and the shared window cache (full, so every insert evicts).
+  planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
+  times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
+  with axes, into a context that only counts calls: what a live chart costs a frame at most.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
@@ -1618,6 +1812,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |

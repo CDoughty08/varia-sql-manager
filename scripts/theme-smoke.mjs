@@ -1,8 +1,8 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { activeMenuItem, backendReady, dockShell, documentTabs, editorText as editorTextOf, movePane, openMenus, paneTab, part, searchBox, statusBar, themeNotice, toolbar, queryBarButton, queryDatabase, queryServer, toolbarButton } from './fixtures/ui.mjs'
 import { glyphSizes, glyphUse } from '../src/shared/theme/metrics.ts'
-import { activeMenuItem, dockShell, documentTabs, movePane, editorText as editorTextOf, openMenus, part, statusBar, themeNotice, toolbar, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'theme-profile-'))
@@ -23,7 +23,7 @@ async function launch(options = {}) {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.
@@ -50,7 +50,9 @@ const backgroundOf = selector => page.locator(selector).first().evaluate(element
 const editorText = () => editorTextOf(page)
 const themeState = () => page.evaluate(async () => (await window.varia.getThemeState()).value)
 // Dockview draws the dock tab focus ring on ::after; programmatic focus counts as keyboard focus here.
-const dockTabFocusRing = () => page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] })
+// A key press first: Chromium shows a focus ring for programmatic focus only after keyboard input, not after the clicks
+// that moved panels through their ⋯ menus.
+const dockTabFocusRing = async () => { await page.keyboard.press('Shift'); return page.locator('.dv-tab').first().evaluate(tab => { tab.focus(); return [tab.matches(':focus-visible'), getComputedStyle(tab, '::after').outlineColor] }) }
 // The neutral status bar shares Object Explorer's fill; without a connection color its own top line sets it apart.
 const statusBarEdge = () => statusBar(page).evaluate(bar => { const style = getComputedStyle(bar); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
 const contextMenuBorder = () => openMenus(page).evaluate(menu => { const style = getComputedStyle(menu); return `${style.borderTopWidth} ${style.borderTopStyle} ${style.borderTopColor}` })
@@ -96,6 +98,23 @@ try {
   expect(await page.evaluate(() => [document.documentElement.style.colorScheme, document.documentElement.dataset.themeType])).toEqual(['dark', 'dark'])
   await expect(themeNotice(page)).toHaveCount(0)
   await expect(statusBar(page)).toHaveAttribute('data-state', 'disconnected')
+  // The header's search box has its own colours (commandCenter.*) on the title bar's.
+  expect(await searchBox(page).evaluate(box => { const style = getComputedStyle(box); return [style.backgroundColor, style.color] })).toEqual([await colorOf('commandCenter.background'), await colorOf('commandCenter.foreground')])
+  // Hovered, the search box takes its own hover fill, and a primary button (Execute) keeps its text colour: the plain
+  // hover rule would give it the secondary buttons' hover text.
+  const paint = locator => locator.evaluate(element => { const style = getComputedStyle(element); return [style.backgroundColor, style.color] })
+  await searchBox(page).hover()
+  expect(await paint(searchBox(page))).toEqual([await colorOf('commandCenter.activeBackground'), await colorOf('commandCenter.foreground')])
+  const execute = queryBarButton(page, 'Execute')
+  await expect(execute).toBeEnabled()
+  await execute.hover()
+  expect(await paint(execute)).toEqual([await colorOf('button.hoverBackground'), await colorOf('button.foreground')])
+  await page.mouse.move(0, 500)
+  // The query bar's lists have the pill's opaque fill and the input text colour: Chromium draws an open list's options on
+  // the list's background, and a transparent one left Dark's light text on white.
+  const listsPainted = async () => [await paint(queryServer(page)), await paint(queryDatabase(page))]
+  const inputPaint = async () => [await colorOf('input.background'), await colorOf('input.foreground')]
+  expect(await listsPainted()).toEqual([await inputPaint(), await inputPaint()])
   console.log('Theme checks: fresh profile paints Varia Dark in CSS, Monaco, Dockview, and the native window.')
 
   // The metric tokens resolve, no workbench text is under the 11 px floor, and smoke runs start with reduced motion.
@@ -108,15 +127,15 @@ try {
   expect(await page.evaluate(() => [...document.querySelectorAll('body *')].filter(element => !element.closest('.monaco-editor') && [...element.childNodes].some(node => node.nodeType === Node.TEXT_NODE && node.nodeValue.trim())
     && parseFloat(getComputedStyle(element).fontSize) < 11).map(element => element.className || element.tagName))).toEqual([])
   // Monaco's codicon spinners (the query status bar's, the tree's Loading rows) stop too, not only Varia's own.
-  const spinners = () => page.evaluate(({ queryState, explorerIcon }) => Object.fromEntries([['status', queryState, 'codicon codicon-loading codicon-modifier-spin'], ['tree', explorerIcon, 'codicon codicon-loading']].map(([name, host, icon]) => {
+  const spinners = () => page.evaluate(hosts => Object.fromEntries([['status', hosts[0], 'codicon codicon-loading codicon-modifier-spin'], ['tree', hosts[1], 'codicon codicon-loading']].map(([name, host, icon]) => {
     const probe = document.body.appendChild(document.createElement('span'))
-    probe.className = host.replaceAll('.', ' ').trim()
+    probe.className = host.slice(1)
     const glyph = probe.appendChild(document.createElement('span'))
     glyph.className = icon
     const animation = getComputedStyle(glyph).animationName
     probe.remove()
     return [name, animation]
-  })), part)
+  })), [part.queryState, part.explorerIcon])
   expect(await spinners()).toEqual({ status: 'none', tree: 'none' })
   console.log('Theme checks: metric tokens apply, with no text under 11 px and no spinner turning under reduced motion.')
 
@@ -147,16 +166,16 @@ try {
     if (await has('cascadiamono.ttf')) expect([fonts.mono === fonts.cascadia, fonts.mono === fonts.consolas, fonts.cascadia === fonts.serif]).toEqual([true, false, false])
   }
   // Icons come from the registry: Varia's SVGs and codicons share the 16 px grid, and a document tab shows an icon, not a badge.
-  const icons = await page.evaluate(({ titleBarBrand, documentTabs, tabIcon }) => {
+  const icons = await page.evaluate(p => {
     const box = element => { const rect = element?.getBoundingClientRect(); return rect && [rect.width, rect.height] }
-    const brand = document.querySelector(titleBarBrand + ' [data-icon]'), tab = document.querySelector(documentTabs + ' ' + tabIcon)
+    const brand = document.querySelector(p.titleBarBrand + ' [data-icon]'), tab = document.querySelector(p.documentTabs + ' ' + p.tabIcon)
     return { brand: [brand?.tagName.toLowerCase(), brand?.dataset.icon, box(brand), brand && getComputedStyle(brand.querySelector('path')).strokeLinecap], tab: [tab?.dataset.icon, box(tab), tab?.closest('[role="tab"]')?.textContent] }
   }, part)
   expect(icons).toEqual({ brand: ['svg', 'varia', [16, 16], 'round'], tab: ['database', [16, 16], expect.stringMatching(/^SQLQuery\d+\.sql$/)] })
   // Under forced colours an svg keeps a colour set on itself (Chromium's preserve-parent-color), so the tab's kind icon
   // would stay the theme's pale amber on the system's Canvas; it takes the tab text's system colour instead.
   await page.emulateMedia({ forcedColors: 'active' })
-  const forcedTab = await documentTabs(page).getByRole('tab').first().evaluate((tab, { tabIcon, tabName }) => [getComputedStyle(tab.querySelector(tabIcon + ' path')).stroke, getComputedStyle(tab.querySelector(tabName)).color], part)
+  const forcedTab = await documentTabs(page).getByRole('tab').first().evaluate((tab, p) => [getComputedStyle(tab.querySelector(p.tabIcon + ' path')).stroke, getComputedStyle(tab.querySelector(p.tabName)).color], part)
   await page.emulateMedia({ forcedColors: null })
   expect(forcedTab[0]).toBe(forcedTab[1])
   // Every glyph size rule wins over Monaco's codicon.css (16px/1 codicon), so each icon glyphUse names is drawn at its size.
@@ -187,6 +206,9 @@ try {
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   console.log('Theme checks: floating groups use the theme colors.')
 
+  // Panels alone in their group hide their dock tabs; Window › Panel Tabs shows them, for the focus ring checks here and below.
+  await menu('window.togglePanelTabs')
+  await expect(paneTab(page, 'explorer')).toBeVisible()
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(143, 156, 255)'])
   // The editor's context menu is the workbench's: its border and highlighted item use the menu colors.
   await page.locator('.monaco-editor .view-lines').click({ button: 'right' })
@@ -236,6 +258,7 @@ try {
   expect(await dockTabFocusRing()).toEqual([true, 'rgb(68, 83, 208)'])
   await expect.poll(bracketColors).toEqual(['rgb(122, 92, 0)', 'rgb(131, 56, 180)'])
   expect(await statusBarEdge()).toBe('1px solid rgb(227, 230, 235)')
+  expect(await listsPainted()).toEqual([await inputPaint(), await inputPaint()])
   await page.screenshot({ path: resolve('artifacts', 'theme-light.png') })
   console.log('Theme checks: switching to Light updates CSS, Monaco, Dockview, native chrome, and the preference without a reload.')
 
@@ -297,31 +320,31 @@ try {
   // Without the smoke runs' reduced motion, a hovered button and menus take the 80 and 120 ms of the motion tokens (none if
   // the system asks for reduced motion), and the spinners turn.
   await toolbar(page).locator('button:not(:disabled)').first().hover()
-  const motion = await page.evaluate(({ toolbar, menu }) => {
+  const motion = await page.evaluate(menuClass => {
     const probe = document.body.appendChild(document.createElement('div'))
-    probe.className = menu.replaceAll('.', ' ').trim()
-    const entrance = getComputedStyle(probe).animationDuration
+    probe.className = menuClass.slice(1)
+    const menu = getComputedStyle(probe).animationDuration
     probe.remove()
-    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector(toolbar + ' button:hover')).transitionDuration, menu: entrance }
-  }, part)
+    return { reduced: matchMedia('(prefers-reduced-motion: reduce)').matches, button: getComputedStyle(document.querySelector('button:hover')).transitionDuration, menu }
+  }, part.menu)
   await page.mouse.move(0, 0)
   expect(motion).toEqual(motion.reduced ? { reduced: true, button: '0s, 0s, 0s', menu: '0s' } : { reduced: false, button: '0.08s, 0.08s, 0.08s', menu: '0.12s' })
   expect(await spinners()).toEqual(motion.reduced ? { status: 'none', tree: 'none' } : { status: 'codicon-spin', tree: 'codicon-spin' })
   // Only hover fades: a tree row moved to with the keys, the current dialog page and a menu-bar button opened from the
   // keyboard take their colours at once, as in SSMS. A row given a transition of its own shows that this would see one.
-  const states = await page.evaluate(({ explorerTreeBox, explorerRow, dialogPages, titleBarMenus }) => {
-    const element = (parent, tag, selector, attributes = {}) => {
+  const states = await page.evaluate(p => {
+    const element = (parent, tag, className, attributes = {}) => {
       const child = parent.appendChild(document.createElement(tag))
-      if (selector) child.className = selector.replaceAll('.', ' ').trim()
+      if (className) child.className = className
       for (const [name, value] of Object.entries(attributes)) child.setAttribute(name, value)
       return child
     }
     const colour = key => { const probe = element(document.body, 'div', '', { style: `background: var(--varia-${key})` }); const value = getComputedStyle(probe).backgroundColor; probe.remove(); return value }
     const host = element(document.body, 'div', '', { style: 'position: fixed; right: 0; bottom: 0; width: 240px' })
-    const tree = element(host, 'div', explorerTreeBox, { tabindex: '-1', style: 'height: 80px' })
-    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', explorerRow, { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
-    const current = element(element(host, 'div', dialogPages), 'button', '', { type: 'button' })
-    const menu = element(element(host, 'div', titleBarMenus), 'button', '', { type: 'button' })
+    const tree = element(host, 'div', p.explorerTreeView.slice(1), { tabindex: '-1', style: 'height: 80px' })
+    const [first, second, control] = ['0', '22px', '44px'].map((top, index) => element(tree, 'div', p.explorerRow.slice(1), { role: 'treeitem', 'aria-selected': String(index === 0), style: `top: ${top}${index === 2 ? '; transition: background-color 1s' : ''}` }))
+    const current = element(element(host, 'div', p.dialogPages.slice(1)), 'button', '', { type: 'button' })
+    const menu = element(element(host, 'div', p.titleBarMenus.slice(1)), 'button', '', { type: 'button' })
     tree.focus()
     for (const target of [first, second, control, current, menu]) getComputedStyle(target).backgroundColor
     first.setAttribute('aria-selected', 'false')

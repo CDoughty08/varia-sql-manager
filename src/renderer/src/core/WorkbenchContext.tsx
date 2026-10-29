@@ -11,7 +11,8 @@ export function useWorkbench(): Workbench {
   if (!workbench) throw new Error('WorkbenchProvider is missing.')
   return workbench
 }
-export function useServiceSnapshot<T>(store: ExternalStore<T>): T { return useSyncExternalStore(store.subscribe, store.getSnapshot) }
+// The same snapshot serves server rendering, so the markup tests can draw a component that reads the workbench.
+export function useServiceSnapshot<T>(store: ExternalStore<T>): T { return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot) }
 /** A stored connection color as CSS for the active theme; the component re-renders when the theme changes. */
 export function useConnectionAccent(color: string | undefined): string | undefined {
   const { theme } = useWorkbench()
