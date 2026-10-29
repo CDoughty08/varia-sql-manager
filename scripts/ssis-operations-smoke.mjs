@@ -53,6 +53,14 @@ const verb = name => frame().getByRole('group', { name: `${title} actions`, exac
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText())
 
+/** Clicks operation `id`'s row until the grid's active row is that operation: an arrival can move the row down between
+ * finding it and the click landing, which then selects the operation that took its place. */
+async function selectOperation(id) {
+  await expect(async () => {
+    await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: new RegExp(`^${id}$`) }) }).locator(gridPart.cell).nth(2).click()
+    await expect.poll(activeId, { timeout: 1000 }).toBe(id)
+  }).toPass({ timeout: 20000 })
+}
 async function size(width, height) { await app.evaluate(({ BrowserWindow }, dimensions) => { BrowserWindow.getAllWindows()[0].setContentSize(...dimensions) }, [width, height]) }
 /** Whether the header shows the server's crumb whole: its text is not cut. */
 const serverCrumbWhole = () => documentCrumbs(frame()).first().evaluate(item => { const text = item.firstElementChild; return !!text && text.clientWidth > 0 && text.scrollWidth <= text.clientWidth })
@@ -108,8 +116,7 @@ try {
 
   step = 'in place'
   // A new execution arrives at the top; the selection stays on the same operation as its row moves down.
-  await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^107$/ }) }).locator(gridPart.cell).nth(2).click()
-  await expect.poll(activeId).toBe('107')
+  await selectOperation('107')
   const first = (await rows()).findIndex(row => row.id === '107')
   await expect.poll(async () => (await rows()).findIndex(row => row.id === '107'), { timeout: 20000 }).toBeGreaterThan(first)
   expect(await activeId()).toBe('107')
@@ -120,8 +127,7 @@ try {
 
   step = 'stop'
   // Stop Operation from the grid's menu asks first; Escape keeps it running and sends nothing.
-  await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^108$/ }) }).locator(gridPart.cell).nth(2).click()
-  await expect.poll(activeId).toBe('108')
+  await selectOperation('108')
   // The grid's active row is read back before the verb offers itself: a running execution can be stopped.
   await expect(verb('Stop Operation')).toBeEnabled()
   await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^108$/ }) }).locator(gridPart.cell).nth(2).click({ button: 'right' })
@@ -187,7 +193,7 @@ try {
 
   step = 'verbs'
   // F5 in the document refreshes it; Pause stops reading and says so; Copy with Headers copies the selected rows.
-  await grid().locator(gridPart.row, { has: page.locator(gridPart.cell, { hasText: /^103$/ }) }).locator(gridPart.cell).nth(2).click()
+  await selectOperation('103')
   await page.keyboard.press('F5')
   await expect.poll(async () => (await operationsUpdates()).some(update => update.refresh)).toBe(true)
   await verb('Pause').click()
