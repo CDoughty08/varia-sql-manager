@@ -352,6 +352,54 @@ describe('ExplorerService: loading', () => {
   })
 })
 
+describe('ExplorerService: search', () => {
+  it('lists the loaded objects with their paths, leaves folders and unloaded objects out, and stops at the limit', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases')
+    const sent = f.calls().length
+    expect(f.explorer.loadedObjects(100).map(item => [item.label, item.path, item.icon])).toEqual([
+      ['server-a.example', '', 'server'], ['AppData', 'server-a.example › Databases', 'database'], ['Locked', 'server-a.example › Databases', 'database'], ['Offline', 'server-a.example › Databases', 'database']])
+    expect(f.explorer.loadedObjects(2).map(item => item.label)).toEqual(['server-a.example', 'AppData'])
+    expect(f.calls()).toHaveLength(sent)
+  })
+  it('reveals a loaded node under collapsed folders by expanding them and selecting it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const databases = await f.open('Databases')
+    const appData = f.find('AppData')
+    f.explorer.collapse(databases)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
+    const reveals = f.explorer.getSnapshot().reveal ?? 0
+    expect(f.explorer.reveal(appData)).toBe(true)
+    expect(f.labels()).toContain('    AppData')
+    expect(f.explorer.getSnapshot()).toMatchObject({ selected: appData, reveal: reveals + 1 })
+    expect(f.explorer.reveal(987_654)).toBe(false)
+  })
+  it('opens a found object\'s folders as clicks would: listing sends nothing, but a folder a collapse interrupted carries on loading', async () => {
+    const f = fixture()
+    f.state.tables = Array.from({ length: 5 }, (_, index) => `dbo.T${index}`)
+    f.state.pageSize = 2
+    f.connect()
+    await settle()
+    f.hold(isPage('tables'))
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.explorer.collapse(tables)
+    await settle()
+    f.unhold()
+    const sent = f.calls().length
+    const t0 = f.explorer.loadedObjects(100).find(item => item.label === 'dbo.T0')!
+    expect(t0.path).toBe('server-a.example › Databases › AppData › Tables')
+    expect(f.calls()).toHaveLength(sent)
+    expect(f.explorer.reveal(t0.id)).toBe(true)
+    await settle()
+    expect(f.calls().slice(sent).map(params => params.cursor)).toEqual(['v1.tables.2', 'v1.tables.4'])
+    expect(f.explorer.getSnapshot().selected).toBe(t0.id)
+  })
+})
+
 describe('ExplorerService: errors', () => {
   it('shows a folder error as a row, keeps static folders, and retries with Enter', async () => {
     const f = fixture()

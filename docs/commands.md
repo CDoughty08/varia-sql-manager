@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (155)
+## Commands (164)
 
 ### File
 
@@ -85,9 +85,18 @@ keys it uses are listed below.
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
 | Focus Notifications | `notifications.focus` | — | — | — | `hasNotifications` | — |
 | Clear All Notifications | `notifications.clearAll` | — | — | — | `hasNotifications` | — |
+| Dock Left (not in the palette) | `pane.dockLeft` | — | — | — | Always | Panel tab context menu › Dock Left |
+| Dock Right (not in the palette) | `pane.dockRight` | — | — | — | Always | Panel tab context menu › Dock Right |
+| Dock Top (not in the palette) | `pane.dockTop` | — | — | — | Always | Panel tab context menu › Dock Top |
+| Dock Bottom (not in the palette) | `pane.dockBottom` | — | — | — | Always | Panel tab context menu › Dock Bottom |
+| Tab with Object Explorer (not in the palette) | `pane.tabWithExplorer` | — | — | — | Always | Panel tab context menu › Tab with Object Explorer |
+| Tab with Query Editor (not in the palette) | `pane.tabWithEditor` | — | — | — | Always | Panel tab context menu › Tab with Query Editor |
+| Tab with Query Output (not in the palette) | `pane.tabWithOutput` | — | — | — | Always | Panel tab context menu › Tab with Query Output |
 | Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
 | Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
 | Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
+| Toggle Panel Tabs | `window.togglePanelTabs` | — | — | — | Always; checked when `panelTabsVisible` | Window › Panel Tabs; Panel tab context menu › Show Panel Tabs |
+| Search… | `workbench.search` | Ctrl+Q | — | — | Always | View › Search… |
 
 ### Query
 
@@ -331,6 +340,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | --- | --- | --- | --- |
 | `0_palette` | **C**ommand Palette… | `workbench.showCommands` | Always |
 | `0_palette` | **G**o to Query… | `workbench.quickOpen` | Always |
+| `0_palette` | Se**a**rch… | `workbench.search` | Always |
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
@@ -387,6 +397,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_panes` | Query **E**ditor | `window.editor` | Always |
 | `1_panes` | Q**u**ery Output | `window.output` | Always |
 | `1_panes` | S**h**ow Results Pane | `view.toggleResultsPane` | Always |
+| `1_panes` | Panel **T**abs | `window.togglePanelTabs` | Always |
 | `2_documents` | **N**ext Query | `document.next` | Always |
 | `2_documents` | **P**revious Query | `document.previous` | Always |
 | `2_documents` | C**l**ose All Documents | `file.closeAll` | Always |
@@ -594,9 +605,17 @@ Right-click a panel's tab (Object Explorer, Query editor, or Query output), or p
 
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
+| `0_move` | Dock **L**eft | `pane.dockLeft` | Always |
+| `0_move` | Dock **R**ight | `pane.dockRight` | Always |
+| `0_move` | Dock **T**op | `pane.dockTop` | Always |
+| `0_move` | Dock **B**ottom | `pane.dockBottom` | Always |
+| `0_tab` | Tab with **O**bject Explorer | `pane.tabWithExplorer` | `pane != 'explorer'` |
+| `0_tab` | Tab with Query **E**ditor | `pane.tabWithEditor` | `pane != 'editor'` |
+| `0_tab` | Tab with Q**u**ery Output | `pane.tabWithOutput` | `pane != 'output'` |
 | `1_dock` | **F**loat | `pane.float` | `!paneFloating` |
 | `1_dock` | **D**ock | `pane.dock` | `paneFloating` |
 | `2_close` | **C**lose | `pane.close` | Always |
+| `3_tabs` | **S**how Panel Tabs | `window.togglePanelTabs` | Always |
 
 #### Text field context menu (`input.context`)
 
@@ -612,7 +631,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (83)
+## Context keys (85)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -658,6 +677,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `hasResults` | boolean | state | The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped. |
 | `anyDocumentConnected` | boolean | state | Some open query's server is connected. |
 | `outputPaneVisible` | boolean | state | The Query Output panel is open and showing: its tab is selected, and no other panel is maximized. |
+| `panelTabsVisible` | boolean | state | Window › Panel Tabs is on: a panel alone in its dock group shows its tab. |
 | `editorWordWrap` | boolean | state | Word wrap is on in the query editor. |
 | `editorWhitespace` | boolean | state | View White Space is on in the query editor. |
 | `editorLineNumbers` | boolean | state | Line numbers show in the query editor. |
@@ -703,7 +723,8 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
-| `paneFloating` | boolean | target | The panel whose tab the menu is for is floating. |
+| `pane` | `'explorer'`, `'editor'`, `'output'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output. |
+| `paneFloating` | boolean | target | The panel the menu is for is floating. |
 
 ## Reserved keys
 

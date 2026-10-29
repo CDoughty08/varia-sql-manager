@@ -8,7 +8,7 @@ import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
 import { expandExplorerPath, explorerRow } from './explorer-tree.mjs'
-import { anyResultGrid, editorTextbox, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
+import { anyResultGrid, backendReady, editorTextbox, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -113,7 +113,7 @@ async function launch(launchOptions, name) {
   // A blocked unload is Electron's to answer (main's reload prompt). Playwright reports it as a dialog too, and with no
   // listener would try to answer it as well, after Electron has.
   page.on('dialog', () => {})
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const cleanup = async () => {
     await Promise.race([application.close(), wait(10000)]).catch(() => {})
@@ -168,7 +168,7 @@ export async function dialogLifecycle(launchOptions) {
     const spawns = async () => (await readFile(join(control, 'spawns.jsonl'), 'utf8')).trim().split('\n').length
     const before = await spawns()
     expect(await page.evaluate(() => Promise.all([window.varia.restartBackend(), window.varia.restartBackend()]))).toEqual([{ ok: true, value: true }, { ok: true, value: true }])
-    await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+    await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
     await wait(500)
     expect({ prompts: await shown(application), spawned: await spawns() - before }).toEqual({ prompts: ['Restart SQL backend'], spawned: 1 })
     await mockDialogs(application, scriptFile)
@@ -201,7 +201,7 @@ export async function dialogLifecycle(launchOptions) {
     await expect.poll(() => shown(application), { timeout: 15000 }).toEqual(['Save Grid Results', 'Workbench stopped'])
     // Reload: the new page's File › Open opens at once, alone; no file is written for the page that crashed.
     const js = source => application.evaluate(({ BrowserWindow }, code) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript(code).catch(error => 'error: ' + error.message), source)
-    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await expect.poll(() => js("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     await js('void window.varia.openSqlFiles(); 0')
     await expect.poll(() => shown(application)).toEqual(['Save Grid Results', 'Workbench stopped', 'Open SQL query'])
     await wait(500)
@@ -214,7 +214,7 @@ export async function dialogLifecycle(launchOptions) {
     expect(await spawns() - beforeCrash).toBe(1)
     // A message box the page asked for is closed when the page crashes (a file chooser cannot be): the crash prompt
     // follows at once instead of waiting for an answer that page can no longer use.
-    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await expect.poll(() => js("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     await mockDialogs(application, scriptFile, ['Unsaved query'])
     await js("void window.varia.confirmClose('Query 1.sql'); 0")
     await expect.poll(() => shown(application)).toEqual(['Unsaved query'])
@@ -223,7 +223,7 @@ export async function dialogLifecycle(launchOptions) {
     expect(await application.evaluate(() => ({ dialogs: globalThis.variaDialogs, aborted: globalThis.variaAborted }))).toEqual({
       dialogs: [{ title: 'Unsaved query', open: 1 }, { title: 'Workbench stopped', open: 1 }], aborted: ['Unsaved query']
     })
-    await expect.poll(() => js("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
+    await expect.poll(() => js("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')"), { timeout: 30000 }).toBe(true)
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 
@@ -249,7 +249,7 @@ export async function dialogLifecycle(launchOptions) {
     await reload()
     await expect.poll(marked, { timeout: 15000 }).toBe(false)
     expect(await shown(application)).toEqual(['Reload workbench', 'Reload workbench'])
-    await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+    await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
     await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
     await mockDialogs(application, scriptFile)
     await connect(page)
@@ -301,7 +301,7 @@ const windowIdsOf = application => application.evaluate(({ BrowserWindow }) => B
 const workbenchReady = application => application.evaluate(({ BrowserWindow }) => {
   const contents = BrowserWindow.getAllWindows()[0]?.webContents
   if (!contents || contents.isCrashed() || !globalThis.variaCommandsReady) return false
-  const script = contents.executeJavaScript("document.body.innerText.includes('fake · Ready') && !!document.querySelector('.monaco-editor')").catch(() => false)
+  const script = contents.executeJavaScript("!!document.querySelector('[title^=\"SQL backend: fake\"]') && !!document.querySelector('.monaco-editor')").catch(() => false)
   return Promise.race([script, new Promise(resolve => setTimeout(resolve, 1000, false))])
 })
 /** Fences one crash before another can target its recovered renderer; keeps native state if main misses the loss. */

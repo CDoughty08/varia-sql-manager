@@ -2,11 +2,13 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
-  closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner, explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection,
-  objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow, renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment,
-  toolbarButton, unsavedMark, warningBanner as warningBannerOf
+  backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
+  warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -67,7 +69,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await application.evaluate(installActionsStub, actionsStubData())
   await connect('server-a')
   // A row moves when a folder above it finishes loading, as Views does when Tables' rows arrive. Here Views' row moves
@@ -223,7 +225,8 @@ try {
   })
   const tabCount = await tabs().count()
   // A 1280 × 800 window, where the sections column is about 770 px wide: descriptions and file paths must still read whole.
-  const windowSize = size => application.evaluate(({ BrowserWindow }, [width, height]) => { BrowserWindow.getAllWindows()[0].setSize(width, height) }, size)
+  // The page's resize event closes menus and can land after the next one opens, so each change waits for it.
+  const windowSize = ([width, height]) => resizeWindow(application, page, width, height)
   const restoreSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
   await windowSize([1280, 800])
   /** Whether any of the elements cuts its text: wider or taller content than its box. */

@@ -18,7 +18,8 @@ button:hover:not(:disabled) { background: var(--varia-button-secondaryHoverBackg
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 button:disabled { opacity: .4; cursor: default; }
 button.primary { color: var(--varia-button-foreground); background: var(--varia-button-background); font-weight: 600; }
-button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackground); }
+/* The plain hover rule would otherwise give a primary button the secondary hover text colour. */
+button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackground); color: var(--varia-button-foreground); }
 /* Varia's SVG icons are 1em square, so font-size sizes them as it sizes codicons (src/shared/icons.ts). */
 .icon { display: block; width: 1em; height: 1em; flex: 0 0 1em; font-size: var(--varia-glyph-md); }
 /* Chromium gives svg preserve-parent-color, which keeps a colour set on the svg itself (a tab's kind icon) under forced
@@ -27,9 +28,10 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 @media (forced-colors: active) { :root svg.icon { color: inherit; } }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 4px; }
 .app { display: flex; flex-direction: column; height: 100vh; min-width: 900px; }
-.title-bar { height: 34px; flex-shrink: 0; background: var(--varia-titleBar-activeBackground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; }
-.title-bar-content { display: flex; align-items: center; height: 100%; min-width: 0; padding: 0 6px; -webkit-app-region: drag; }
-.title-bar[data-overlay="true"] { height: env(titlebar-area-height, 34px); }
+/* The header: one row of menus, the search box and the Standard toolbar, beside the native window controls. */
+.title-bar { height: var(--varia-header); flex-shrink: 0; background: var(--varia-titleBar-activeBackground); border-bottom: 1px solid var(--varia-titleBar-border); user-select: none; }
+.title-bar-content { display: flex; align-items: center; gap: 8px; height: 100%; min-width: 0; padding: 0 8px 0 6px; -webkit-app-region: drag; }
+.title-bar[data-overlay="true"] { height: env(titlebar-area-height, var(--varia-header)); }
 .title-bar[data-overlay="true"] .title-bar-content { margin-left: env(titlebar-area-x, 0px); width: env(titlebar-area-width, 100%); }
 .title-bar[data-platform="darwin"] .title-bar-content { padding-left: 80px; }
 .title-bar-left { display: flex; align-items: center; flex-shrink: 0; }
@@ -40,8 +42,29 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .title-bar-menus button.active, .title-bar-menus button[aria-expanded="true"], .title-bar-menus button:focus-visible { transition: none; }
 /* A resting pointer highlights its button only while no other one is open or keyboard-focused. */
 .title-bar-menus:has(button[aria-expanded="true"], button:focus-visible) button:hover:not(.active, [aria-expanded="true"], :focus-visible) { background: transparent; color: var(--varia-button-secondaryForeground); outline: none; }
-.title-bar-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; padding: 0 20px; font-size: var(--varia-size-xs); color: var(--varia-titleBar-activeForeground); pointer-events: none; }
-.title-bar-spacer { width: 24px; flex-shrink: 0; }
+/* macOS only, where the native menu bar leaves the header room for the document's name. */
+.title-bar-caption { max-width: 320px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; font-size: var(--varia-size-xs); color: var(--varia-titleBar-activeForeground); pointer-events: none; }
+.title-bar-left { min-width: 0; }
+/* A size container, so the search box shows as much of its label as fits in the room the toolbar leaves it. */
+.title-bar-center { flex: 1 1 0; min-width: var(--varia-control); display: flex; justify-content: center; container-type: inline-size; }
+.title-bar-actions { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; }
+.command-centre { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 440px; min-width: var(--varia-control); height: var(--varia-control); padding: 0 8px; overflow: hidden; background: var(--varia-commandCenter-background); color: var(--varia-commandCenter-foreground); border: 1px solid var(--varia-commandCenter-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); -webkit-app-region: no-drag; }
+.command-centre:hover:not(:disabled) { background: var(--varia-commandCenter-activeBackground); color: var(--varia-commandCenter-foreground); }
+.command-centre-text, .command-centre-short { flex: 1; min-width: 0; overflow: hidden; text-align: start; }
+.command-centre kbd { color: inherit; border-color: var(--varia-commandCenter-border); }
+.header-toolbar { display: flex; align-items: center; gap: 2px; min-width: 0; -webkit-app-region: no-drag; }
+.header-context { display: flex; align-items: center; gap: 4px; min-width: 0; margin: 0 4px; }
+.header-context select { flex: 0 1 160px; width: 160px; min-width: 88px; height: var(--varia-control); padding: 0 6px; }
+.header-toolbar .execute { display: inline-flex; align-items: center; gap: 6px; height: var(--varia-control); padding: 0 10px; }
+/* Narrow windows keep every control: Execute keeps its icon, and the lists give up width first. The search box shows its
+   whole label where it fits (Segoe UI needs about 300 px; the rest is room for wider fonts), else "Search", else only its
+   icon, never a label cut short. */
+@media (max-width: 1100px) { .header-toolbar .execute-label { display: none; } }
+.command-centre-text { display: none; }
+@container (min-width: 320px) { .command-centre-text { display: block; } .command-centre-short { display: none; } }
+@container (max-width: 159px) { .command-centre-short, .command-centre kbd { display: none; } .command-centre { justify-content: center; } }
+/* Forced colours keep the search box apart from the title bar by its outline. */
+@media (forced-colors: active) { .command-centre { border-color: CanvasText; } }
 :root[data-window-focus="inactive"] .title-bar { background: var(--varia-titleBar-inactiveBackground); }
 :root[data-window-focus="inactive"] .title-bar-caption, :root[data-window-focus="inactive"] .title-bar-menus button:not(:hover, :focus-visible, .active) { color: var(--varia-titleBar-inactiveForeground); }
 /* Access keys are underlined only while the keyboard drives the menus, as in Windows. */
@@ -76,12 +99,14 @@ button.primary:hover:not(:disabled) { background: var(--varia-button-hoverBackgr
 .status-dot, .dirty-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
 .status-dot { background: var(--varia-statusBar-idleIndicator); }
 .dirty-dot { background: var(--varia-documentTabs-modifiedIndicator); }
+/* Forced colours would paint the dot Canvas on Canvas, and the X it stands in for is hidden. */
+@media (forced-colors: active) { .dirty-dot { background: CanvasText; forced-color-adjust: none; } }
 .status-dot.online { background: var(--varia-statusBar-onlineIndicator); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-height: 44px; padding: 7px 12px; background: var(--varia-toolbar-background); border-bottom: 1px solid var(--varia-toolbar-border); flex-shrink: 0; }
 .toolbar-actions { display: flex; align-items: center; gap: 4px; }
 .toolbar-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 8px; }
 .toolbar-divider { height: 20px; width: 1px; background: var(--varia-toolbar-separatorBackground); margin: 0 5px; }
-.execute { color: var(--varia-successForeground); }
+.execute:not(.primary) { color: var(--varia-successForeground); }
 kbd { padding: 0 4px; color: var(--varia-keybindingLabel-foreground); font: var(--varia-size-xs)/14px var(--varia-font-ui); border: 1px solid var(--varia-keybindingLabel-border); border-radius: var(--varia-radius-sm); }
 .toolbar-context { display: grid; grid-template-columns: auto minmax(120px, 170px) auto minmax(100px, 150px); align-items: center; gap: 8px; margin-left: auto; }
 .context-field { color: var(--varia-toolbar-labelForeground); font-size: var(--varia-size-xs); line-height: 16px; white-space: nowrap; }
@@ -132,10 +157,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .docking-guide-cell.active { background: var(--varia-dock-guideActiveBackground); border-color: var(--varia-dock-guideActiveBorder); box-shadow: 0 0 0 2px var(--varia-dock-guideActiveRing); }
 .docking-guide-cell svg { width: 100%; height: 100%; }
 .docking-preview { position: fixed; background: var(--varia-dock-previewBackground); border: 2px solid var(--varia-dock-previewBorder); box-shadow: inset 0 0 0 1px var(--varia-dock-previewInnerBorder); }
-.dock-move { height: 24px; padding: 0 3px; margin-right: 4px; font-size: var(--varia-size-xs); width: 68px; border-color: transparent; background: transparent; }
-.dock-move:focus-visible { outline-offset: -2px; }
 .explorer { width: 100%; height: 100%; min-height: 0; background: var(--varia-sideBar-background); display: flex; flex-direction: column; }
-.explorer-toolbar { height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 1px; padding: 0 6px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* A panel alone in its dock group has no dock tab, so its own header names it and holds its ⋯ menu. */
+.explorer-header { height: var(--varia-bar); flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Sentence case, not Calm Pro's capitals: "Object Explorer" then fits beside SSMS's six buttons at the default width. */
+.pane-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-xs); font-weight: 600; color: var(--varia-sideBarTitle-foreground); }
+.explorer-header .icon-button { width: 24px; }
+.explorer-toolbar { flex-shrink: 0; display: flex; align-items: center; gap: 1px; }
+.pane-menu { flex-shrink: 0; }
+.pane-menu:focus-visible { outline-offset: -2px; }
+.explorer-header .pane-menu { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -277,8 +308,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-tree:focus .explorer-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
 }
 .workspace { flex: 1; height: 100%; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-.query-tabs { display: flex; flex-shrink: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
-.query-tab { display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
+.document-strip { display: flex; align-items: center; flex-shrink: 0; min-width: 0; background: var(--varia-documentTabs-background); }
+.document-strip > .pane-menu { margin: 0 4px; }
+.query-tabs { display: flex; flex: 1 1 auto; min-width: 0; height: var(--varia-bar); background: var(--varia-documentTabs-background); overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.query-tab { position: relative; display: flex; align-items: center; flex-shrink: 0; border-right: 1px solid var(--varia-documentTabs-border); border-top: 2px solid transparent; color: var(--varia-documentTabs-inactiveForeground); }
 .query-tab.active { background: var(--varia-documentTabs-activeBackground); border-top-color: var(--varia-tab-activeBorderTop); color: var(--varia-documentTabs-activeForeground); }
 .tab-select { display: flex; align-items: center; gap: 8px; height: calc(var(--varia-bar) - 3px); border: 0; border-radius: 0; padding: 0 10px 0 13px; color: inherit; }
 .tab-select:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
@@ -288,6 +321,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tab-close .codicon { font-size: var(--varia-glyph-sm); }
 .tab-close:focus-visible { outline-offset: -2px; }
 .tab-icon { color: var(--varia-documentTabs-iconForeground); }
+/* Running turns a spinner after the name; unsaved changes are a dot in the close button's place, which the pointer or
+   keyboard focus on Close turns back into the X. */
+.tab-select .tab-running { font-size: var(--varia-glyph-sm); margin-left: -4px; }
+.query-tab .dirty-dot { position: absolute; top: calc(50% - 3px); right: 15px; pointer-events: none; }
+.query-tab[data-dirty] .tab-close .codicon { visibility: hidden; }
+/* Transparent rather than hidden, so screen readers still hear that the query has unsaved changes. */
+.query-tab[data-dirty]:hover .dirty-dot, .query-tab[data-dirty]:has(.tab-close:focus-visible) .dirty-dot { opacity: 0; }
+.query-tab[data-dirty]:hover .tab-close .codicon, .query-tab[data-dirty] .tab-close:focus-visible .codicon { visibility: visible; }
 /* SSMS's query window status bar: the run's state, then server (version), login (SPID), database, time and rows. The
    server gives way first when the bar is narrow; the tooltip holds the whole text. A value's document names its kind. */
 .query-status-bar { display: flex; align-items: center; gap: 16px; height: var(--varia-status); padding: 0 12px; flex-shrink: 0; overflow: hidden; white-space: nowrap; font-size: var(--varia-size-xs); font-variant-numeric: tabular-nums; line-height: 16px; background: var(--varia-queryStatusBar-background); color: var(--varia-queryStatusBar-foreground); }
@@ -413,13 +454,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .status-bar[data-state="executing"] { background: var(--varia-statusBar-executingBackground); color: var(--varia-statusBar-executingForeground); }
 .status-bar[data-state="disconnected"] { background: var(--varia-statusBar-disconnectedBackground); color: var(--varia-statusBar-disconnectedForeground); }
 .status-bar[data-state="error"] { background: var(--varia-statusBar-errorBackground); color: var(--varia-statusBar-errorForeground); }
-.status-bar > span:first-child { display: flex; align-items: center; gap: 8px; }
-.status-bar > span:nth-child(2) { margin-left: auto; }
+.status-bar > .backend-status { display: flex; align-items: center; gap: 8px; }
 /* The outer segments keep their size. Scripting, in the middle, takes the space left over down to a floor that keeps
    Cancel and the start of its text; past that the server and database give way. The bar itself never widens the page.
    The segment clips what still does not fit, and its padding and full height leave room for a focus ring. */
 .status-bar > :not(.status-scripting) { flex-shrink: 0; white-space: nowrap; }
-.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin: 0 12px; }
+/* The active query's facts, after the backend's state: its run, then server, login (SPID) and database, time and rows. */
+.status-bar > .query-status { display: flex; align-items: center; gap: 12px; flex-shrink: 1; min-width: 0; overflow: hidden; margin-left: 16px; }
+.query-status .query-status-segments { margin-left: 0; }
+/* The editor's facts are short and keep their size: the query's facts give way (and ellipsize) first. */
+.status-bar > .editor-status { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin: 0 12px; }
 .editor-status-position { display: flex; gap: 10px; }
 .editor-status > * + *::before { content: '|'; margin-right: 12px; color: var(--varia-statusBar-separatorForeground); }
 .editor-status-readonly { display: flex; align-items: center; gap: 4px; }
@@ -761,8 +805,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
 .query-status-environment { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; margin-right: 10px; }
-/* Apart from the backend's state, which it does not describe. */
+/* Apart from the backend's state, which it does not describe: beside it, outside its tooltip. */
 .status-environment { display: flex; align-items: center; min-width: 0; padding-left: 8px; border-left: 1px solid var(--varia-statusBar-border); }
+.status-bar > .status-environment { margin-left: 8px; }
 .environment-preview { display: inline-flex; align-items: center; gap: var(--varia-space-1); min-width: 0; max-width: 100%; white-space: nowrap; }
 .environment-preview .environment-tag { flex: 0 1 auto; }
 .connection-choice-title { display: flex; align-items: center; min-width: 0; }

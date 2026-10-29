@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { activeDocument, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -26,12 +26,12 @@ const watchdog = setTimeout(() => { console.error('Connection suite timed out.')
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
 // Environment labels' phase: the fake backend behind main's real request, history and library handlers.
 const environmentProfile = await mkdtemp(resolve('artifacts', 'connections-environments-'))
-async function launch(options = launchOptions, ready = /\.NET 10\..*Ready/) {
+async function launch(options = launchOptions, runtime) {
   app = await electron.launch(options)
   page = await app.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(ready)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, runtime)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 async function open() {
@@ -565,8 +565,8 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(queryStatus(page)).toContainText('Development')
-  // The query status bar sits below the query by default, so the connection's colour is its top edge, facing the query.
-  expect(await queryStatus(page).evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
+  // The active query's connection colour is the status bar's top edge.
+  expect(await statusBar(page).evaluate(element => getComputedStyle(element).borderTopColor)).toBe('rgb(230, 103, 103)')
   // Object Explorer shows the server by its name and color, expanded to its folders.
   const serverRow = await explorerRow(page, 'Development')
   await expect(serverRow).toHaveAttribute('aria-expanded', 'true')
@@ -726,7 +726,7 @@ async function rememberPassword() {
     return dialog
   }
 
-  await launch(options, 'fake · Ready')
+  await launch(options, 'fake')
   // (1) Typed and remembered, then (2) only ciphertext under the history entry's id.
   let dialog = await open()
   await fill(dialog, marker)
@@ -760,7 +760,7 @@ async function rememberPassword() {
   await noSecrets()
   // (6) Kept across a restart.
   await app.close(); app = undefined
-  await launch(options, 'fake · Ready')
+  await launch(options, 'fake')
   dialog = await remembered()
   await connected(dialog)
   // (6b) An untrusted certificate: trusting it changes the certificate settings the remembered password was saved for, and
@@ -848,7 +848,7 @@ async function rememberPassword() {
   await expect.poll(cancels).toEqual(['connections.databases', 'connections.connect', 'connections.databases'])
   await app.close(); app = undefined
   // (12) Without the test cipher: Windows (DPAPI) and macOS (Keychain) offer it; Linux needs a keyring.
-  await launch({ ...launchOptions, env: seamless }, 'fake · Ready')
+  await launch({ ...launchOptions, env: seamless }, 'fake')
   const backend = await app.evaluate(({ safeStorage }) => process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : 'os')
   dialog = await open()
   await dialog.getByLabel('Authentication', { exact: true }).selectOption('sql')
@@ -878,14 +878,20 @@ async function environmentLabels() {
   await mkdir(control, { recursive: true })
   const connectionsFile = join(userData, 'connections.json')
   const fake = { ...env, VARIA_TEST_USER_DATA: userData, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
-  await launch({ ...launchOptions, env: fake }, 'fake · Ready')
+  await launch({ ...launchOptions, env: fake }, 'fake')
   const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server.toLowerCase() === 'prod-server')?.options.environment
   const tag = place => environmentPill(page, place)
+  // The active query's facts are in the window's status bar, after the backend's state and its tag: the tag shows there
+  // once, not again before the server.
   async function shows(text, tone) {
-    for (const place of ['explorer', 'tab', 'query', 'status']) {
+    for (const place of ['explorer', 'tab', 'status']) {
       await expect(tag(place), place).toHaveText(text)
       await expect(tag(place), place).toHaveAttribute('data-tone', tone)
     }
+    await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
+    await expect(tag('query')).toHaveCount(0)
+    // Beside the backend's state, not in it: its tooltip and text stay the backend's.
+    await expect(backendReady(page, 'fake')).toHaveText('Ready')
   }
   const serverMenu = async row => {
     await explorerLabel(row).click({ button: 'right' })
@@ -1003,8 +1009,8 @@ async function environmentLabels() {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(activeDocument(page).locator(part.statusPill)).toHaveText('STAGING')
-  await expect(tag('query')).toHaveText('STAGING')
   await expect(tag('status')).toHaveText('STAGING')
+  await expect(tag('query')).toHaveCount(0)
   expect(await saved()).toBe('Staging')
   // A connect without a label (the history not loaded yet) keeps the entry's, and main says which, so it is shown.
   const typed = await page.evaluate(async () => {
@@ -1013,10 +1019,10 @@ async function environmentLabels() {
   })
   expect(typed).toBe('Staging')
   expect(await saved()).toBe('Staging')
-  // The status bars say what the tag labels.
-  await expect(queryStatus(page).locator(part.queryEnvironment)).toHaveText('Environment: STAGING')
+  // The status bar says what the tag labels.
+  await expect(queryStatus(page).locator(part.queryEnvironment)).toHaveCount(0)
   await expect(statusBar(page).locator(part.statusEnvironment)).toHaveText('Active connection environment: STAGING')
-  // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bars keep
+  // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bar keep
   // their room; the full label stays in the tooltip.
   const long = 'W'.repeat(32)
   labelling = await serverMenu(row)
@@ -1039,11 +1045,11 @@ async function environmentLabels() {
       return name.getBoundingClientRect().width >= Math.min(name.scrollWidth, outer.width * 0.25) - 0.5 && pill.right <= outer.right + 0.5 && pill.width <= outer.width * 0.4 + 0.5
     })
     const tabTag = document.querySelector(`${part.activeDocumentTab} ${part.environmentTag}`), tab = document.querySelector(part.activeDocumentTab).getBoundingClientRect().width
-    const sized = ['query', 'status'].map(place => { const element = document.querySelector(`${part.environmentTag}[data-place="${place}"]`); return element.querySelector(part.statusPill).getBoundingClientRect().width <= 12 * em(element) + 0.5 })
+    const sized = ['status'].map(place => { const element = document.querySelector(`${part.environmentTag}[data-place="${place}"]`); return element.querySelector(part.statusPill).getBoundingClientRect().width <= 12 * em(element) + 0.5 })
     const label = document.querySelector(`${part.environmentTag}[data-place="status"] ${part.statusPillLabel}`)
     return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth }
   }, part)
-  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true })
+  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true], ellipsis: true })
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label.png') })
   // A long name and a long label in history: the name gives way and the tag stays inside the row, as PROD does.
   dialog = await open()

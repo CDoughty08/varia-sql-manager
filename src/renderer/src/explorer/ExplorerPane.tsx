@@ -5,6 +5,7 @@ import type { CommandArgs, CommandId } from '../core/types'
 import type { IconId } from '../../../shared/icons'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
+import PaneMenuButton from '../PaneMenuButton'
 import EmptyState from '../kit/EmptyState'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
@@ -102,7 +103,7 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     wasEmpty.current = empty
   }, [empty])
   return <>
-    <ExplorerToolbar tools={tools} />
+    <div className="explorer-header pane-header"><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>

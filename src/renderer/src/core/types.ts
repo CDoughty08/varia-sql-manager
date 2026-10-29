@@ -16,6 +16,8 @@ export interface CommandContext {
   readonly target?: MenuTarget
   /** The results grid cell a click or Enter opens (Open Value in New Tab), in the query tab `tabId`. */
   readonly cell?: { readonly resultIndex: number; readonly row: number; readonly column: number }
+  /** What the widget a command opens is placed below: the header's search box, for the Search it opens. */
+  readonly anchor?: Element
 }
 export type CommandArgs = CommandContext
 export type WorkbenchEvent =

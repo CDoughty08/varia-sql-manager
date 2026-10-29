@@ -198,7 +198,7 @@ describe('default keybindings', () => {
       expect(defaultRules(platform).map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAll', 'file.close', 'file.close', 'window.close', 'edit.undo', 'edit.redo', 'edit.redo', ...clipboard,
         'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane', 'query.execute', 'query.execute', 'query.execute', 'query.cancel', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu',
         'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'tableDesigner.properties', 'ssis.refreshProperties',
-        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...display, ...output])
+        'query.changeDatabase', 'document.next', 'document.next', 'document.previous', 'document.previous', 'editor.toggleWordWrap', 'editor.toggleOvertype', ...native, ...editing, ...display, ...output, ...platform === 'win32' ? ['workbench.search'] : []])
     }
     expect(defaultRules('darwin').map(rule => rule.command)).toEqual(['file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', 'file.close', 'edit.undo', 'edit.redo', ...clipboard, 'window.explorer', 'view.toggleResultsPane', 'window.switchPane', 'window.switchPane',
       'query.execute', 'query.execute', 'workbench.showCommands', 'workbench.showCommands', 'workbench.showContextMenu', 'workbench.quickOpen', 'explorer.refresh', 'explorer.rename', 'explorer.delete', 'explorer.delete', 'explorer.properties', 'tableDesigner.properties', 'ssis.refreshProperties', 'query.changeDatabase',
@@ -238,13 +238,15 @@ describe('default keybindings', () => {
     const palette: Readonly<Record<string, CommandId>> = { p: 'workbench.quickOpen', 'shift+p': 'workbench.showCommands', u: 'query.changeDatabase', r: 'view.toggleResultsPane' }
     // Go To Line is Ctrl+G in the editor; Make Uppercase and Lowercase need its text focused, which editorFocus alone is not.
     const added: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { e: 'query.execute', g: 'edit.goToLine' }, linux: { e: 'query.execute', g: 'edit.goToLine' }, darwin: {} }
+    // SSMS's search box key; Linux and macOS quit with it.
+    const search: Readonly<Record<Platform, Readonly<Record<string, CommandId>>>> = { win32: { q: 'workbench.search' }, linux: {}, darwin: {} }
     for (const platform of platforms) {
       const primary = platform === 'darwin' ? 'metaKey' : 'ctrlKey'
       for (const character of 'abcdefghijklmnopqrstuvwxyz') for (const shiftKey of [false, true]) {
         const input = event(shiftKey ? character.toUpperCase() : character, letter(character), { [primary]: true, shiftKey })
         const name = `${shiftKey ? 'shift+' : ''}${character}`
-        expect(commandFor(input, platform), `${platform} ${name}`).toBe(name === 'shift+s' ? saveKeys[platform] : legacy[name] ?? palette[name])
-        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? added[platform][name])
+        expect(commandFor(input, platform), `${platform} ${name}`).toBe(name === 'shift+s' ? saveKeys[platform] : legacy[name] ?? palette[name] ?? search[platform][name])
+        if (!shiftKey) expect(commandFor(input, platform, { editorFocus: true }), `${platform} ${name} in the editor`).toBe(legacy[name] ?? palette[name] ?? search[platform][name] ?? added[platform][name])
         for (const extra of ['altKey', platform === 'darwin' ? 'ctrlKey' : 'metaKey']) {
           // ⌥⌘S is Save All on macOS.
           const saveAll = platform === 'darwin' && extra === 'altKey' && character === 's' && !shiftKey ? 'file.saveAll' : undefined

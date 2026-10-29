@@ -9,6 +9,7 @@ import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
 import { EditorOptionsService } from '../services/editor-options'
+import { ShellOptionsService } from '../services/shell-options'
 import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
@@ -102,6 +103,7 @@ export interface Workbench extends Disposable {
   readonly recovery: RecoveryService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  readonly shellOptions: ShellOptionsService
   /** Edit › Bookmarks: each open query's bookmarks, for this session. */
   readonly bookmarks: BookmarkService
   /** The query editor's dialogs (Go To Line). */
@@ -158,7 +160,7 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 }
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService): Workbench {
   const platform = toPlatform(api.platform)
-  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
   const notifications = new NotificationService()
@@ -212,6 +214,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     backend,
     editorOptions,
     panes,
+    shell: shellOptions,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
@@ -269,6 +272,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     targets,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     editorStatus,
@@ -320,6 +324,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       dialogs.dispose()
       connections.dispose()
       editorOptions.dispose()
+      shellOptions.dispose()
       bookmarks.dispose()
       editorDialogs.dispose()
       editorStatus.dispose()
