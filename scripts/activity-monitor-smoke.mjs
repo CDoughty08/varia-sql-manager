@@ -10,7 +10,7 @@
 // probe fills the tiles, and Pause stops it.
 import { electron, expect } from './fixtures/smoke.mjs'
 import {
-  activityBanner, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, livePill, staleBadge, statusBar, tileCaptions, toolbarButton
+  activityBanner, backendReady, bannerGlyph, documentActions, documentContent, documentFrame, documentTabs, documentTitle, explorerTree, livePill, staleBadge, tileCaptions, toolbarButton
 } from './fixtures/ui.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -102,7 +102,7 @@ async function glyphInset() {
 }
 
 try {
-  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
 
   step = 'open without a connection'
   // With no server connected, the monitor asks for one, then opens on it: no query tab comes with it.
@@ -341,7 +341,7 @@ try {
     page = await app.firstWindow()
     page.setDefaultTimeout(15000)
     page.on('pageerror', error => failures.push(error.message))
-    await expect(statusBar(page)).toContainText(/Ready/, { timeout: 60000 })
+    await expect(backendReady(page)).toBeVisible({ timeout: 60000 })
     const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await toolbarButton(page, 'Connect').click()
     await expect(dialog.getByText('Loading saved connections…')).toHaveCount(0)
