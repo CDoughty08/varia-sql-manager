@@ -1,7 +1,10 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { backendReady, closePaneButton, editorText, layoutError, movePane, pane as paneOf, paneMenuButton, paneTab, part, dockEmpty, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, primaryAction } from './fixtures/ui.mjs'
+import {
+  backendReady, closePaneButton, dockEmpty, editorText, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, layoutError, movePane, pane as paneOf, paneMenuButton, paneTab,
+  part, primaryAction
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'layout-profile-'))

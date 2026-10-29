@@ -22,7 +22,13 @@
     <EmbeddedResource Include="Scripting/scripting-catalog.json" LogicalName="Varia.Backend.Scripting.scripting-catalog.json" />
     <!-- Generated from src/shared/actions/catalog.ts by tests/object-actions-catalog.test.ts. -->
     <EmbeddedResource Include="Actions/actions-catalog.json" LogicalName="Varia.Backend.Actions.actions-catalog.json" />
+    <!-- Generated from src/shared/ssis/catalog.ts by tests/ssis-catalog.test.ts. -->
+    <EmbeddedResource Include="Ssis/ssis-catalog.json" LogicalName="Varia.Backend.Ssis.ssis-catalog.json" />
     <!-- Generated from src/shared/designer/catalog.ts by tests/table-designer-catalog.test.ts. -->
     <EmbeddedResource Include="Designer/designer-catalog.json" LogicalName="Varia.Backend.Designer.designer-catalog.json" />
+    <!-- Generated from src/shared/activity/catalog.ts by tests/activity-catalog.test.ts. -->
+    <EmbeddedResource Include="Activity/activity-catalog.json" LogicalName="Varia.Backend.Activity.activity-catalog.json" />
+    <!-- Generated from src/shared/live/catalog.ts by tests/live-catalog.test.ts. -->
+    <EmbeddedResource Include="Live/live-catalog.json" LogicalName="Varia.Backend.Live.live-catalog.json" />
   </ItemGroup>
 </Project>

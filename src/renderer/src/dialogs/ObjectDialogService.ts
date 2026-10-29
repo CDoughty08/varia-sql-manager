@@ -1,4 +1,4 @@
-import { actionLimits, dialogSpecs, dialogTitle, unknownOutcomeMessage, type DialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -18,7 +18,7 @@ export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 's
 export interface OpenObjectDialog {
   /** Changes with every dialog, so the frame remounts. */
   readonly id: number
-  readonly dialog: DialogId
+  readonly dialog: ModalDialogId
   readonly connectionId: string
   /** The tree node it was opened for, which focus returns to. */
   readonly nodeId: number
@@ -43,7 +43,7 @@ export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; refresh(id?: number): void }
+  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number): void }
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
@@ -59,7 +59,7 @@ export const dialogMessages = {
 const error = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: true })
 
 /**
- * The object dialogs (SSMS's Delete Object, and later Database Properties): at most one open. Opening describes the
+ * The modal object dialogs (SSMS's Delete Object; Database Properties is a document, DatabasePropertiesService): at most one open. Opening describes the
  * object in the backend; OK builds the definition's request and executes it, closing on success; the Script button
  * scripts the same request to a new query, a file or the clipboard and leaves the dialog open, as SSMS does. Stop
  * cancels a running action in SQL Server. Failures are values in the snapshot; nothing throws into React.
@@ -81,8 +81,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   get current(): OpenObjectDialog | undefined { return this.getSnapshot().open }
 
   /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. */
-  open(dialog: DialogId, node: ExplorerMenuNode): void {
+  open(dialog: ModalDialogId, node: ExplorerMenuNode): void {
     if (this.disposed) return
+    if (!isModalDialog(dialog)) throw new Error('That dialog opens as a document.')
     if (this.current) throw new Error('Close the open dialog first.')
     const target = node.ref.type === 'object' ? node.ref.object : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
@@ -226,7 +227,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
   private refreshListing(open: OpenObjectDialog): void {
     const folder = this.options.explorer.listingFolderOf(open.nodeId)
-    if (folder !== undefined) this.options.explorer.refresh(folder)
+    if (folder !== undefined) this.options.explorer.reconcile(folder)
   }
   /** A server that disconnects leaves only Close; its request is cancelled. */
   private connectionsChanged(): void {

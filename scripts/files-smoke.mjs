@@ -4,6 +4,7 @@
 // made outside, drops, and AutoRecover across a renderer crash, a reload and a killed app. Native dialogs are stubbed in main, as
 // electron-smoke does; files live under artifacts/.
 import { electron, expect } from './fixtures/smoke.mjs'
+import { crashRenderer } from './fixtures/dialog-lifecycle.mjs'
 import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -479,7 +480,7 @@ try {
   expect(await keptWith('SELECT 15 AS recovered')).toBe(1)
   await prompts()
   await queue('answers', 0)
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
+  await crashRenderer(application)
   await expect.poll(prompts, { timeout: 15000 }).toEqual([{
     title: 'Workbench stopped', message: 'The workbench stopped unexpectedly.', buttons: ['Reload', 'Close'],
     detail: 'Queries saved by AutoRecover can be recovered after reloading; changes from the last 5 minutes may be lost. Connections were closed and uncommitted transactions were rolled back.'

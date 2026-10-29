@@ -24,8 +24,8 @@ interface Props {
 /**
  * The query's state sentence and its facts (server, login and SPID, database, time, rows), as SSMS's query window status
  * bar shows them; a value opened from the results names its kind only. Elapsed time and rows change while a query runs,
- * so only the state sentence is announced. In the classic bar the connection's environment tag (PROD) leads the server
- * segment; in the window's status bar the tag has a segment of its own.
+ * so only the state sentence is announced. In the bar, the connection's environment tag (PROD) leads the server segment;
+ * as a segment it is left out, because the window's status bar already shows it just before, after the backend's state.
  */
 export default function QueryStatusBar({ tab, connection, versions, variant = 'segment' }: Props) {
   const { settings, queries, results } = useWorkbench()

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
-import { documentKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
+import { documentKind, isCustomKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
@@ -15,6 +15,7 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import TableDesigner from './designer/TableDesigner'
+import DatabaseProperties from './properties/DatabaseProperties'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -34,6 +35,7 @@ import { environmentTag } from '../../shared/environments'
 import ThemeNotice from './ThemeNotice'
 import QuickInput from './quickinput/QuickInput'
 import MenuLayer from './menus/MenuLayer'
+import Toasts from './kit/Toasts'
 import { useMenuTarget } from './menus/useMenuTarget'
 import { connectionDefaults } from '../../shared/connections'
 
@@ -71,6 +73,7 @@ export default function App() {
   const { open: recoveryOpen } = useServiceSnapshot(workbench.recovery)
   const { values: settings } = useServiceSnapshot(workbench.settings)
   const shell = useServiceSnapshot(workbench.shellOptions)
+  const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
   const [options, setOptions] = useState<ConnectionOptions>(() => connectionDefaults(workbench.platform))
@@ -85,9 +88,11 @@ export default function App() {
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
-  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer has
-  // a server and database, but they are its own: neither has a query bar, and the classic toolbar's lists do not change them.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner'
+  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
+  // Database Properties have a server and database, but they are their own: none has a query bar, and the classic
+  // toolbar's lists do not change them.
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties'
+  const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -101,7 +106,7 @@ export default function App() {
   // The active query's facts are in the window's status bar. Options can bring back SSMS's query window status bar, below
   // the query unless it puts it above. Either way the tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const queryStatus = active.id && !isDesigner ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} /> : null
+  const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} /> : null
   const statusBar = shell.queryStatusBar ? queryStatus : null
 
   function activate(id: string) { documents.activate(id) }
@@ -226,6 +231,9 @@ export default function App() {
 
   async function disconnect(id: string) {
     if (queries.isConnectionRunning(id)) return
+    // A document's Apply or Save on it would be cancelled partway without asking (its menu item is greyed for the same reason).
+    const busy = documents.connectionBusy(id)
+    if (busy) { setExplorerError(busy); return }
     try {
       await documents.runTask(async () => {
         // Its queries' open transactions are asked about once, then each is committed or rolled back in its own session;
@@ -269,9 +277,10 @@ export default function App() {
           {/* The query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
           {isQuery && !shell.classicToolbar && <QueryBar />}
           {statusTop && statusBar}
-          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer shows. */}
-          <div className="editor-container" hidden={isDesigner}><QueryEditor /></div>
+          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or Database Properties shows. */}
+          <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
+          {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
@@ -288,6 +297,7 @@ export default function App() {
     <ObjectDialog />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
+    <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />
     <QuickInput />
     <MenuLayer />
   </div>

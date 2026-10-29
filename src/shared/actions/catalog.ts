@@ -146,14 +146,56 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
 }
 
+/** The Database Properties document's header verbs: catalogue commands, so the palette offers them too. */
+export type PropertiesCommandId = 'databaseProperties.apply' | 'databaseProperties.discard' | 'databaseProperties.refresh' | 'databaseProperties.stop'
+export interface PropertiesCommandEntry {
+  readonly title: string
+  readonly category: 'Database Properties'
+  readonly icon: 'check' | 'discard' | 'refresh' | 'debug-stop'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+}
+/**
+ * Apply is SSMS's OK without closing: the document stays open and reads the database again. File › Save (Ctrl+S) and
+ * the close prompt's Save apply too, as a document's save does. Stop has no documentBusy, so it works while the close
+ * prompt's Save holds the document task.
+ */
+export function propertiesCommandEntries(): { readonly [K in PropertiesCommandId]: PropertiesCommandEntry } {
+  return {
+    'databaseProperties.apply': {
+      title: 'Apply Changes', category: 'Database Properties', icon: 'check', keywords: ['ok', 'save', 'alter', 'database', 'options'],
+      precondition: 'activeDocumentIsProperties && propertiesApplicable', unavailableHint: 'Change a database property first.'
+    },
+    'databaseProperties.discard': {
+      title: 'Discard Changes', category: 'Database Properties', icon: 'discard', keywords: ['revert', 'undo', 'cancel'],
+      precondition: 'activeDocumentIsProperties && propertiesChanged && !propertiesApplying', unavailableHint: 'There are no changes to discard.'
+    },
+    'databaseProperties.refresh': {
+      title: 'Refresh', category: 'Database Properties', icon: 'refresh', keywords: ['reload', 'read'],
+      precondition: 'activeDocumentIsProperties && propertiesRefreshable', unavailableHint: 'Apply or discard the changes first, on a connected server.'
+    },
+    'databaseProperties.stop': {
+      title: 'Stop', category: 'Database Properties', icon: 'debug-stop', keywords: ['cancel', 'apply'],
+      precondition: 'activeDocumentIsProperties && propertiesApplying', unavailableHint: 'The changes are not being applied.'
+    }
+  }
+}
+
 export type PageId =
   | 'general'
   | 'files'
   | 'filegroups'
   | 'options'
 export interface DialogPageSpec { readonly id: PageId; readonly title: string; readonly icon: 'settings-gear' }
+/**
+ * Where a dialog opens: 'modal' over the workbench (Delete Object, a confirmation), or 'document', a non-modal tab whose
+ * pages are sections in one scrolling column (Database Properties), as U1 D2 asks instead of SSMS's "Select a page".
+ */
+export type DialogSurface = 'modal' | 'document'
 export interface DialogSpec {
   readonly title: string
+  readonly surface: DialogSurface
   /** 'withName': SSMS's "Database Properties - AppData". */
   readonly titleFormat: 'plain' | 'withName'
   readonly size: 'compact' | 'large'
@@ -162,16 +204,21 @@ export interface DialogSpec {
   readonly pages: readonly DialogPageSpec[]
 }
 const page = (id: PageId, title: string): DialogPageSpec => ({ id, title, icon: 'settings-gear' })
-/** SSMS's dialogs: a "Select a page" list, Connection and Progress boxes, a Script button, and OK and Cancel. SSMS's
+/** SSMS's dialogs. A modal one has a "Select a page" list, Connection and Progress boxes, a Script button, and OK and
+ *  Cancel; a document has its pages as sections, a Script drawer, and Apply (DatabasePropertiesService). SSMS's
  *  later Database Properties pages (Change Tracking, Permissions, Extended Properties, Mirroring, Transaction Log
  *  Shipping, Query Store) are listed once they exist. */
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = {
-  deleteObject: { title: 'Delete Object', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')] },
+  deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')] },
   databaseProperties: {
-    title: 'Database Properties', titleFormat: 'withName', size: 'large', action: 'properties',
+    title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
   }
 }
+/** The dialogs that open over the workbench (ObjectDialogService); the others are documents. */
+export type ModalDialogId = 'deleteObject'
+export type DocumentDialogId = Exclude<DialogId, ModalDialogId>
+export const isModalDialog = (dialog: DialogId): dialog is ModalDialogId => dialogSpecs[dialog].surface === 'modal'
 /** A dialog's title bar: its title, and for 'withName' dialogs the object as Object Explorer shows it. */
 export const dialogTitle = (dialog: DialogId, label: string): string => dialogSpecs[dialog].titleFormat === 'withName' ? `${dialogSpecs[dialog].title} - ${label}` : dialogSpecs[dialog].title
 /** The Script button's destinations, as SSMS words them; delivery is Script As's (deliverScript). */

@@ -17,7 +17,7 @@ export interface ColorKeyInfo {
 
 type Entry = readonly [origin: 'V' | 'X', fallback: ColorDefault, description: string, consumers: string, extra?: { reserved?: string; opaqueOver?: string }]
 const pair = (dark: string, light: string) => ({ dark, light })
-const tree = 'the Object Explorer tree', toasts = 'notifications'
+const tree = 'the Object Explorer tree'
 const searchable = 'the command palette and the Object Explorer tree'
 
 const groups = {
@@ -28,7 +28,7 @@ const groups = {
     'errorForeground': ['V', '$error', 'Error text.', 'css monaco'],
     'warningForeground': ['X', '$warning', 'Warning text.', ''],
     'successForeground': ['X', '$success', 'Success text, such as the Execute button and confirmations.', 'css'],
-    'infoForeground': ['X', '$info', 'Information text.', '', { reserved: toasts }],
+    'infoForeground': ['X', '$info', 'Information text.', ''],
     'focusBorder': ['V', '$focus', 'Focus ring around the focused control.', 'css monaco'],
     'icon.foreground': ['V', '$icon', 'Default glyph color.', 'css monaco'],
     'widget.shadow': ['V', '$shadow', 'Shadow of dialogs, floating dock groups, and editor widgets.', 'css monaco'],
@@ -113,7 +113,7 @@ const groups = {
     'tab.inactiveBackground': ['V', '@editorGroupHeader.tabsBackground', 'Hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveBackground': ['V', '$canvas', 'Visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveBackground': ['V', '@tab.inactiveBackground', 'Hidden tabs of an unfocused dock group.', 'css'],
-    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group.', 'css'],
+    'tab.activeForeground': ['V', '$textStrong', 'Label of the visible tab of the focused dock group, and the title in the header of a document.', 'css'],
     'tab.inactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of the focused dock group.', 'css'],
     'tab.unfocusedActiveForeground': ['V', '$textTertiary', 'Label of the visible tab of an unfocused dock group.', 'css'],
     'tab.unfocusedInactiveForeground': ['V', '$textMuted', 'Labels of hidden tabs of an unfocused dock group.', 'css'],
@@ -142,8 +142,8 @@ const groups = {
     'documentTabs.closeForeground': ['X', '$textMuted', 'Close buttons of query tabs.', 'css'],
     'documentTabs.iconForeground': ['X', '$textTertiary', 'SQL badge of query tabs.', 'css'],
     'documentTabs.modifiedIndicator': ['X', '$textMuted', 'Dot that marks a query with unsaved changes.', 'css'],
-    'breadcrumb.foreground': ['V', '$textMuted', 'The bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
-    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'Unused since the query status bar replaced the query context line; themes that set it stay valid.', '']
+    'breadcrumb.foreground': ['V', '$textMuted', 'The location in a document header (the server, its folders and database), and the bar that names an XML, JSON or execution plan document opened from the results.', 'css'],
+    'breadcrumb.separatorForeground': ['X', '@breadcrumb.foreground', 'The chevrons between the steps of the location in a document header.', 'css']
   },
   'Editor, widgets, and empty states': {
     'editor.background': ['V', '$canvas', 'Editor and application background; also the native window background.', 'css monaco native', { opaqueOver: 'base' }],
@@ -229,12 +229,12 @@ const groups = {
     'dialog.labelForeground': ['X', '$textSecondary', 'Field labels in dialogs.', 'css'],
     'dialog.descriptionForeground': ['X', '$textTertiary', 'Secondary text in dialogs.', 'css'],
     'settings.headerForeground': ['V', '$textStrong', 'Section headings in dialogs.', 'css'],
-    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts.', '', { reserved: toasts }],
-    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', '', { reserved: toasts }],
-    'notifications.border': ['V', '@widget.border', 'Notification border.', '', { reserved: toasts }],
-    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', '', { reserved: toasts }],
-    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', '', { reserved: toasts }],
-    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', '', { reserved: toasts }],
+    'notifications.background': ['V', '@editorWidget.background', 'Notification toasts, above the status bar at the bottom right.', 'css'],
+    'notifications.foreground': ['V', '@editorWidget.foreground', 'Notification text.', 'css'],
+    'notifications.border': ['V', '@widget.border', 'Notification border.', 'css'],
+    'notificationsErrorIcon.foreground': ['V', '@errorForeground', 'Error notification icon.', 'css'],
+    'notificationsWarningIcon.foreground': ['V', '@warningForeground', 'Warning notification icon.', 'css'],
+    'notificationsInfoIcon.foreground': ['V', '@infoForeground', 'Information notification icon.', 'css'],
     'quickInput.background': ['V', '@editorWidget.background', 'Command palette and pickers (quick input).', 'css'],
     'quickInput.foreground': ['V', '@editorWidget.foreground', 'Command palette text.', 'css'],
     'quickInputTitle.background': ['V', '$raised', 'Title row of pickers that have one.', 'css'],

@@ -120,6 +120,8 @@ export class GridView {
   private pendingLeft: number | undefined
   /** Whether a scroll event came since the last frame, and the scroller's offsets that frame left (offsetsDropped). */
   private scrolled = false
+  /** The panes changed since the last frame (panesChanged), so offsets found at 0 may be a DOM move's reset. */
+  private moved = false
   private lastTop = 0
   private lastLeft = 0
   private viewportWidth = 0
@@ -250,6 +252,15 @@ export class GridView {
     this.schedule()
   }
   invalidate(): void { this.schedule() }
+  /**
+   * The panes around the grid changed: closing and opening its pane within one frame moves the grid without resizing it,
+   * and the move resets the scroller's offsets to 0 without a scroll event. Until the next frame writes the saved offsets
+   * back, a press must take a reset to 0 for that move, not for a native scroll to the top.
+   */
+  panesChanged(): void {
+    this.moved = true
+    this.schedule()
+  }
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -421,6 +432,23 @@ export class GridView {
     return hitTest(x, y, { viewport: { top: this.o.state.virtualTop, left: this.o.state.scrollLeft, width: this.viewportWidth, height: this.viewportHeight }, rows: this.rows(), layout: this.layout, rowHeader: this.rowHeader, clamp })
   }
 
+  /** Native scrolling (including a cell's scrollIntoView) can precede its scroll event and our next frame. A press must
+   *  use the offsets and size now on screen, or it can select a neighbouring link and open the wrong value. */
+  private syncPointerFrame(): void {
+    const width = this.scroller.clientWidth, height = this.scroller.clientHeight
+    const top = this.scroller.scrollTop, left = this.scroller.scrollLeft
+    const scrolled = top !== this.lastTop || left !== this.lastLeft
+    if (!scrolled && width === this.viewportWidth && height === this.viewportHeight) return
+    this.viewportWidth = width
+    this.viewportHeight = height
+    // Even a native scroll back to 0 is real here: its queued scroll event has not marked it yet. Offsets at 0 after the
+    // panes changed are the move's reset instead, which the frame restores (offsetsDropped).
+    this.scrolled ||= scrolled && !(this.moved && top === 0 && left === 0)
+    this.cancelFrame?.()
+    this.cancelFrame = undefined
+    this.runFrame()
+  }
+
   /** Presses inside the cells keep focus on the grid itself, not its scroller, and select no text. */
   private mouseDown(event: MouseEvent): void {
     this.clicks = event.detail
@@ -431,8 +459,10 @@ export class GridView {
 
   private pointerDown(event: PointerEvent): void {
     const press = pressButton(event, this.o.platform)
+    if (!press) return
+    this.syncPointerFrame()
     const point = this.point(event)
-    if (!press || !point.inside) return
+    if (!point.inside) return
     let hit = this.hitAt(point.x, point.y)
     if (!hit) return
     if (hit.kind === 'resize') {
@@ -728,6 +758,7 @@ export class GridView {
     // A scroller that lost its offsets shows the saved ones again, as a grid built afresh does.
     const restore = !previous || offsetsDropped({ scrolled: this.scrolled, scrollTop, scrollLeft, lastTop: this.lastTop, lastLeft: this.lastLeft })
     this.scrolled = false
+    this.moved = false
     const model = scrollModel(rows, height, this.cap)
     let virtualTop: number
     if (this.pendingTop !== undefined) virtualTop = this.pendingTop
