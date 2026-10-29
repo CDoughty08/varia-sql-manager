@@ -3,6 +3,7 @@ import PaneMenuButton from '../PaneMenuButton'
 import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import ResultsStack from '../grid/ResultsStack'
+import EmptyState from '../kit/EmptyState'
 import MessagesView from './MessagesView'
 import type { ResultJob, TabResults } from './ResultsService'
 import { formatCount, plural, statusSentence } from './status'
@@ -80,9 +81,9 @@ function OutputPane({ tabId, query, connected, hint }: Props) {
       {tab?.jobNotice && <div className="job-strip job-notice">{tab.jobNotice}</div>}
       <PaneMenuButton pane="output" />
     </div>
-    {!tab ? <div className="output-empty"><strong>Query results</strong><p>{!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')}</p></div>
+    {!tab ? <EmptyState className="output-empty" icon="table" title="Query results" detail={!query ? 'Query results appear here for query tabs.' : hint ?? (connected ? 'Execute a query to view results and messages.' : 'Connect this query to a server to execute it.')} />
       : <div className="output-view" role="tabpanel" id={panelId} aria-labelledby={tabIds[view ?? 'messages']}>
-        {view === 'results' ? tab.status === 'closed' ? <div className="output-empty"><p>Results were closed to free memory. Execute the query again to see them.</p></div> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
+        {view === 'results' ? tab.status === 'closed' ? <EmptyState className="output-empty" detail="Results were closed to free memory. Execute the query again to see them." /> : <ResultsStack key={tab.queryId} tabId={tabId} tab={tab} />
           : <MessagesView tabId={tabId} tab={tab} />}
       </div>}
     <Announcer key={tabId} text={tab?.announcement ?? ''} announced={tab?.announced ?? 0} />

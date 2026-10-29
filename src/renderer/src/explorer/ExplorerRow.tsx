@@ -1,6 +1,8 @@
 import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type RefCallback, type SyntheticEvent } from 'react'
 import { explorerLimits, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import { environmentTag } from '../../../shared/environments'
+import EnvironmentTag from '../EnvironmentTag'
 import { codiconClass } from '../../../shared/icons'
 import Icon from '../Icon'
 import { useConnectionAccent } from '../core/WorkbenchContext'
@@ -40,6 +42,8 @@ export interface RowProps {
   readonly active: boolean
   /** The connection's color, for a server row. */
   readonly color: string | undefined
+  /** The connection's environment label, for a server row: a tag at the row's end, also in its name and tooltip. */
+  readonly environment?: string
   readonly actions: RowActions
   readonly menuTarget: RefCallback<HTMLDivElement>
   /** The label is the inline Rename box. */
@@ -134,7 +138,7 @@ function RenameBox({ rowId, name, title, actions }: { rowId: number; name: strin
 }
 
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, actions, menuTarget, renaming }: RowProps) {
+function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, environment, actions, menuTarget, renaming }: RowProps) {
   const style = { transform: `translateY(${index * explorerLimits.rowHeight}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
@@ -151,10 +155,11 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0
   const toggle = (event: MouseEvent) => { event.stopPropagation(); if (expandable) actions.toggle(rowId) }
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
+  const tag = root ? environmentTag(environment) : undefined
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={rowName(node)} aria-description={rowDescription(node)} title={rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={tag ? `${rowName(node)}, ${tag.description}` : rowName(node)} aria-description={rowDescription(node)} title={tag ? clip(`${rowTooltip(node)}\n${tag.description}`) : rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
@@ -166,6 +171,7 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
       : <bdi className="oe-label">{displayText(node.label)}</bdi>}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {node.lost ? <span className="oe-sublabel">(connection lost)</span> : node.sublabel && <span className="oe-sublabel">{displayText(node.sublabel)}</span>}
+    {tag && <EnvironmentTag environment={environment} place="explorer" />}
     {node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}
   </div>
 }

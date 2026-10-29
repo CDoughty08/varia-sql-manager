@@ -1,4 +1,5 @@
 import { sqlScopes, type ColorKey, type SqlScope } from './registry'
+import { statusTones, toneKeys } from './tones'
 
 /**
  * A foreground drawn on a stack of backgrounds (bottom first). Translucent layers are composited over the layer below;
@@ -31,6 +32,11 @@ const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBac
 /** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
   'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
+const tile: ColorKey[] = ['tile.background']
+/** Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar state and tiles. */
+const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile]
+/** Chips, live labels and tiles sit in documents, panels, side bars and dialogs. */
+const contentSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, dock, tile]
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
   foregrounds.flatMap(foreground => backgrounds.map(background => ({ foreground, background, minimum })))
 const text = (foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]) => pairs(4.5, foregrounds, ...backgrounds)
@@ -87,7 +93,11 @@ export const contrastPairs: readonly ContrastPair[] = [
     ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
-  ...text(['notifications.foreground'], ['notifications.background']),
+  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
+  // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
+  ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
+  ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
@@ -167,7 +177,42 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['input.border'], input, widget, toolbar, panel),
   ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
-  ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground'])
+  ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
+
+  // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
+  // Environment tags (PROD, STAGING, TEST) also label the Connect dialog's history rows, the selected one included.
+  ...(['critical', 'info', 'neutral'] as const).flatMap(tone => text([toneKeys(tone).foreground], [...activeSelection, toneKeys(tone).background])),
+  // Empty states and inline errors: the title and line, the error glyph and message, and their outlined actions.
+  ...text(['emptyState.titleForeground', 'emptyState.foreground', 'descriptionForeground', 'foreground', 'errorForeground', 'button.secondaryForeground'], ...contentSurfaces),
+  ...graphic(['button.border'], ...contentSurfaces),
+  // Filter chips, off and on; the outline of an on chip marks its state with the fill and the check mark.
+  ...text(['chip.foreground'], ...contentSurfaces.map(surface => [...surface, 'chip.background'] as ColorKey[])),
+  ...text(['chip.activeForeground'], ...contentSurfaces.map(surface => [...surface, 'chip.activeBackground'] as ColorKey[])),
+  ...graphic(['chip.activeBorder'], ...contentSurfaces),
+  ...text(['button.secondaryHoverForeground'], ...contentSurfaces.map(surface => hovered(...surface))),
+  // Live views: the dot (also on document tabs), the paused label, and the stale badge.
+  ...graphic(['live.indicator'], ...contentSurfaces, strip, ['documentTabs.background', 'documentTabs.activeBackground']),
+  ...text(['live.pausedForeground'], ...contentSurfaces),
+  // The stale badge also goes in the status bar (every state) and on Object Explorer rows.
+  ...text(['live.staleForeground'], ...kitSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
+  // A tile's threshold outline and glyph.
+  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile),
+
+  // The document frame (src/renderer/src/kit): the current section in its list, its accent edge (beside it, or under it
+  // in a narrow document), a section's problem glyph and the focus ring on it; the Script drawer's splitter, hovered or focused.
+  // A pressed header verb takes the current section's colours; a danger verb keeps its words in the error colour when hovered.
+  // The document's title is in the strong text of the focused tab, as Calm Pro draws it.
+  ...text(['tab.activeForeground'], editor),
+  ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
+  ...text(['errorForeground'], hovered(...editor)),
+  ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
+  ...graphic(['sash.hoverBorder'], panel),
+  // Property sheets in a document (Database Properties): a switch's outline and track, on and off, and its thumb in each
+  // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
+  ...graphic(['input.border', 'button.background'], editor),
+  ...graphic(['descriptionForeground'], input),
+  ...graphic(['button.foreground'], [...editor, 'button.background'])
 ]
 
 /**
@@ -181,7 +226,9 @@ export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
   // The search box stands out from the title bar by its outline, and shows the pointer by a fill that changes from its own.
   ...pairs(1.2, ['commandCenter.border'], titleBar),
-  ...pairs(1.2, ['commandCenter.activeBackground'], titleBar, ['titleBar.activeBackground', 'commandCenter.background'])
+  ...pairs(1.2, ['commandCenter.activeBackground'], titleBar, ['titleBar.activeBackground', 'commandCenter.background']),
+  // Loading placeholders say only that something is coming, so they are held to the same floor.
+  ...pairs(1.2, ['skeleton.background'], ...contentSurfaces)
 ]
 
 /** Foreground keys that are deliberately not checked, with the reason. */

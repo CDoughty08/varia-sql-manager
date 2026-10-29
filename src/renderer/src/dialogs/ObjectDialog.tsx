@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type KeyboardEvent } from 'react'
-import { dialogSpecs, scriptActionTitles, type DialogId } from '../../../shared/actions/catalog.ts'
+import { dialogSpecs, scriptActionTitles, type ModalDialogId } from '../../../shared/actions/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { scriptDestinations, type ScriptDestination } from '../../../shared/scripting/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
@@ -7,18 +7,14 @@ import Icon from '../Icon'
 import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
-import FilegroupsPage from './pages/database/FilegroupsPage'
-import FilesPage from './pages/database/FilesPage'
-import GeneralPage from './pages/database/GeneralPage'
-import OptionsPage from './pages/database/OptionsPage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
-/** Each dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). */
-export const dialogPages: { readonly [D in DialogId]: Readonly<Record<string, ComponentType<PageProps>>> } = {
-  deleteObject: { general: DeleteObjectPage },
-  databaseProperties: { general: GeneralPage, files: FilesPage, filegroups: FilegroupsPage, options: OptionsPage }
+/** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
+ *  document instead (src/renderer/src/properties). */
+export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Record<string, ComponentType<PageProps>>> } = {
+  deleteObject: { general: DeleteObjectPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {

@@ -2,6 +2,8 @@ import type { CSSProperties } from 'react'
 import { documentKind, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useTicker } from './core/useTicker'
+import { environmentTag } from '../../shared/environments'
+import EnvironmentTag from './EnvironmentTag'
 import Icon from './Icon'
 import { queryStatusModel } from './results/query-status'
 import type { LiveConnection } from './services/connections'
@@ -22,7 +24,8 @@ interface Props {
 /**
  * The query's state sentence and its facts (server, login and SPID, database, time, rows), as SSMS's query window status
  * bar shows them; a value opened from the results names its kind only. Elapsed time and rows change while a query runs,
- * so only the state sentence is announced.
+ * so only the state sentence is announced. In the bar, the connection's environment tag (PROD) leads the server segment;
+ * as a segment it is left out, because the window's status bar already shows it just before, after the backend's state.
  */
 export default function QueryStatusBar({ tab, connection, versions, variant = 'segment' }: Props) {
   const { settings, queries, results } = useWorkbench()
@@ -42,7 +45,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values })
   return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
     <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
-    <span className="query-status-segments">{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
+    <span className="query-status-segments">{bar && environmentTag(connection?.options.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={connection?.options.environment} place="query" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
       <span className="visually-hidden">{segment.label}: </span>{segment.key === 'login' ? <span className="status-session">{segment.text}</span> : segment.text}
     </span>)}</span>
   </div>

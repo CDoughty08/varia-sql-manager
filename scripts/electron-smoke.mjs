@@ -2,7 +2,11 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton,
+  unsavedMark, workspaceEmpty
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -11,6 +15,7 @@ const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
 const control = await mkdtemp(resolve('artifacts', 'electron-control-'))
 await mkdir(join(control, 'hold'))
 await mkdir(join(control, 'allow'))
+await mkdir(join(control, 'extra'))
 const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
 const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
 delete env.ELECTRON_RUN_AS_NODE
@@ -354,6 +359,13 @@ try {
     await expect(documentTabs(page).getByRole('tab', { name, exact: true })).toHaveCount(0)
   }
   await expect(page.getByText('No open queries', { exact: true })).toBeVisible()
+  // The empty workspace is the states kit's empty state: a title, a glyph, and one filled action.
+  const emptyWorkspace = emptyState(workspaceEmpty(page))
+  await expect(emptyStateTitle(emptyWorkspace)).toHaveText('No open queries')
+  await expect(emptyStateIcon(emptyWorkspace)).toHaveAttribute('data-icon', 'file-code')
+  await expect(emptyWorkspace.getByRole('button', { name: 'Open SQL file', exact: true })).toBeVisible()
+  await expect(primaryAction(emptyWorkspace)).toHaveText(['New query'])
+  await page.screenshot({ path: artifact('empty-workspace.png') })
   await nativeKey('N', ['control'])
   await expect(documentTabs(page).getByRole('tab')).toHaveCount(1)
   await expect(page.locator('.monaco-editor')).toBeVisible()
@@ -447,7 +459,8 @@ try {
   const tree = explorerTree(page)
   const loads = async () => (await calls()).filter(call => call.method === 'explorer.children').map(call => [call.params.connectionId === idA ? 'a' : 'b', call.params.node.type === 'folder' ? call.params.node.folder : call.params.node.object.kind])
   expect(await loads()).toEqual([['a', 'server'], ['b', 'server']])
-  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]'])
+  await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]',
+    '1 server-b [true]', '2 Databases [false]', '2 Security [false]', '2 Server Objects [false]', '2 Integration Services Catalogs [false]'])
   // The keyboard: one tab stop whose active descendant is the selected row; arrows, Home and End move, Right and Left
   // expand and step in and out, Enter toggles, Numpad minus and plus collapse and expand, and typing selects by name.
   const selectedLabel = () => tree.evaluate((element, label) => element.querySelector('#' + CSS.escape(element.getAttribute('aria-activedescendant') ?? ''))?.querySelector(label)?.textContent ?? null, part.explorerLabel)
@@ -468,8 +481,27 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Databases')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('End')
-  await expect.poll(selectedLabel).toBe('Server Objects')
-  await expect(await explorerRow(page, 'server-b', 'Server Objects')).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(selectedLabel).toBe('Integration Services Catalogs')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-selected', 'true')
+  // The SSIS Catalog (S1b): the catalog lists its folders directly, a folder its Projects and Environments, a project its
+  // Packages; every SSIS ref crosses main's schemas with its folder and project.
+  for (const path of [['Integration Services Catalogs'], ['Integration Services Catalogs', 'SSISDB'], ['Integration Services Catalogs', 'SSISDB', 'Finance'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects'], ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads'],
+    ['Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages']]) {
+    const row = await explorerRow(page, 'server-b', ...path)
+    await row.click()
+    await page.keyboard.press('ArrowRight')
+    await expect(row).toHaveAttribute('aria-expanded', 'true')
+  }
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Environments')).toBeVisible()
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Daily.dtsx')).toBeVisible()
+  const child = await explorerRow(page, 'server-b', 'Integration Services Catalogs', 'SSISDB', 'Finance', 'Projects', 'Loads', 'Packages', 'Child.dtsx')
+  await expect(child.locator('.codicon-symbol-file')).toHaveCount(1)
+  const packagesLoad = (await calls()).find(call => call.method === 'explorer.children' && call.params.node.type === 'folder' && call.params.node.folder === 'ssisPackages')
+  expect(packagesLoad?.params.node.owner).toEqual({ kind: 'ssisProject', ssisFolder: 'Finance', name: 'Loads' })
+  await (await explorerRow(page, 'server-b', 'Integration Services Catalogs')).click()
+  await page.keyboard.press('ArrowLeft')
+  await expect(await explorerRow(page, 'server-b', 'Integration Services Catalogs')).toHaveAttribute('aria-expanded', 'false')
   await page.keyboard.press('Home')
   await page.keyboard.press('NumpadSubtract')
   await expect(await explorerRow(page, 'server-a')).toHaveAttribute('aria-expanded', 'false')
@@ -529,13 +561,16 @@ try {
   await page.keyboard.press('Enter')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Audits', 'LoginAudit')).toBeVisible()
   await expect(denied).toHaveCount(0)
-  // F5 refreshes the selected folder only; its old rows stay until the new ones replace them.
-  const stale = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  // F5 reconciles the selected folder only: a role created meanwhile appears, and the rows still there keep theirs.
+  const kept = await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')
+  await writeFile(join(control, 'extra', 'serverRoles'), '')
   await (await explorerRow(page, 'server-a', 'Security', 'Server Roles')).click()
   await page.keyboard.press('F5')
   await expect.poll(async () => (await loads()).filter(([, node]) => node === 'serverRoles').length).toBe(2)
-  await expect.poll(async () => (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).not.toBe(stale)
+  await expect(await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'VariaAuditors')).toBeVisible()
+  expect(await (await explorerRow(page, 'server-a', 'Security', 'Server Roles', 'sysadmin')).getAttribute('id')).toBe(kept)
   expect((await loads()).filter(([, node]) => node === 'logins')).toHaveLength(1)
+  await rm(join(control, 'extra', 'serverRoles'))
   // The other server's tree loads through its own connection.
   await toggle('server-a', 'Security')
   await toggle('server-b', 'Security')

@@ -35,7 +35,7 @@ The server row expands on connect; its folders stay collapsed.
 | PolyBase | — | 2019 (15) | — | Planned | — |
 | Always On High Availability | — | — | — | Planned | — |
 | Management | — | — | — | Planned: Policy Management, Data Collection, Resource Governor, Extended Events, Maintenance Plans, SQL Server Logs, Database Mail, Distributed Transaction Coordinator, Legacy | — |
-| Integration Services Catalogs | — | — | — | Planned | — |
+| Integration Services Catalogs | `integrationServicesCatalogs` | 2016 (13) | Yes | Integration Services Catalog (`ssisCatalogs`) | — |
 | SQL Server Agent | — | — | — | Planned | — |
 | XEvent Profiler | — | — | — | Planned | — |
 
@@ -108,7 +108,8 @@ A database expands only while it is online (or in emergency mode). Expanding one
 
 ## Object children
 
-Child folders list their rows by name, except Columns and Parameters, which keep the object's order. Every other kind is a leaf.
+Child folders list their rows by name, except Columns and Parameters, which keep the object's order, and an SSIS project's Packages,
+which list in deployment order (`package_id`: a package name can be longer than a sysname cursor key). Every other kind is a leaf.
 
 | Kind | Subtypes | Children |
 | --- | --- | --- |
@@ -121,6 +122,9 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | `function` | none, `scalar`, `clrScalar`, `aggregate` | Parameters |
 | `function` | `inline`, `tableValued`, `clrTableValued` | Columns, Parameters |
 | `tableType` | any | Columns, Keys, Constraints, Indexes |
+| `ssisCatalog` | any | Folder rows (`ssisFolders`) |
+| `ssisFolder` | any | Projects, Environments |
+| `ssisProject` | any | Packages |
 
 | Folder | Id | Below | Lists (query) |
 | --- | --- | --- | --- |
@@ -131,8 +135,11 @@ Child folders list their rows by name, except Columns and Parameters, which keep
 | Indexes | `indexes` | `table`, `view`, `tableType` | Index (`indexes`) |
 | Statistics | `statistics` | `table`, `view` | Statistic (`statistics`) |
 | Parameters | `parameters` | `procedure`, `function` | Parameter, Return value (`parameters`) |
+| Projects | `ssisProjects` | `ssisFolder` | Project (`ssisProjects`) |
+| Environments | `ssisEnvironments` | `ssisFolder` | Environment (`ssisEnvironments`) |
+| Packages | `ssisPackages` | `ssisProject` | Package (`ssisPackages`) |
 
-## Node kinds (51)
+## Node kinds (56)
 
 Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
@@ -190,22 +197,33 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `statistic` | Statistic | `child` | `graph` | Statistic | Yes | `[name]` |
 | `parameter` | Parameter | `child` | `symbol-parameter` | Parameter | No | the name as is (`@name`) |
 | `returnValue` | Return value | `childUnnamed` | `arrow-left` | — | No | — |
+| `ssisCatalog` | Integration Services Catalog | `ssisCatalog` | `database` | — | No | — |
+| `ssisFolder` | Folder | `ssisFolder` | `folder-library` | — | No | — |
+| `ssisProject` | Project | `ssisFolderObject` | `project` | — | No | — |
+| `ssisPackage` | Package | `ssisProjectObject` | `package`; `child` → `symbol-file` | — | No | — |
+| `ssisEnvironment` | Environment | `ssisFolderObject` | `symbol-variable` | — | No | — |
 
 ## Node identity
 
 A node is an object ref, or a folder below its nearest object (the server, a database, or a parent object). Refs carry
 names, never paths or object ids, and each scope fixes which fields a ref has. Names are 1 to 128 UTF-16 code units,
-used verbatim (never trimmed), without U+0000.
+used verbatim (never trimmed), without U+0000; a kind may allow a longer name of its own, up to 260, if it
+owns no folders, history row or rows (those name their owner as a sysname, so the backend refuses such a catalogue).
+SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject`) by name instead of a database.
 
 | Scope | Requires | Forbids | Kinds |
 | --- | --- | --- | --- |
-| `server` | — | `database`, `schema`, `name`, `parent` | `server` |
-| `serverObject` | `name` | `database`, `schema`, `parent` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
-| `database` | `name` | `database`, `schema`, `parent` | `database` |
-| `databaseObject` | `database`, `name` | `schema`, `parent` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
-| `schemaObject` | `database`, `schema`, `name` | `parent` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
-| `child` | `database`, `parent`, `name` | `schema` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
-| `childUnnamed` | `database`, `parent` | `schema`, `name` | `returnValue` |
+| `server` | — | `database`, `schema`, `name`, `parent`, `ssisFolder`, `ssisProject` | `server` |
+| `serverObject` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `login`, `serverRole`, `credential`, `cryptographicProvider`, `audit`, `serverAuditSpecification`, `backupDevice`, `linkedServer`, `serverTrigger` |
+| `database` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `database` |
+| `databaseObject` | `database`, `name` | `schema`, `parent`, `ssisFolder`, `ssisProject` | `user`, `databaseRole`, `applicationRole`, `schema`, `assembly`, `asymmetricKey`, `certificate`, `symmetricKey`, `columnMasterKey`, `columnEncryptionKey`, `databaseAuditSpecification`, `databaseTrigger`, `externalDataSource`, `externalFileFormat`, `fullTextCatalog`, `fullTextStoplist`, `partitionScheme`, `partitionFunction`, `searchPropertyList`, `planGuide` |
+| `schemaObject` | `database`, `schema`, `name` | `parent`, `ssisFolder`, `ssisProject` | `table`, `view`, `synonym`, `procedure`, `function`, `sequence`, `type`, `tableType`, `xmlSchemaCollection`, `rule`, `default`, `securityPolicy` |
+| `child` | `database`, `parent`, `name` | `schema`, `ssisFolder`, `ssisProject` | `column`, `key`, `constraint`, `trigger`, `index`, `statistic`, `parameter` |
+| `childUnnamed` | `database`, `parent` | `schema`, `name`, `ssisFolder`, `ssisProject` | `returnValue` |
+| `ssisCatalog` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisCatalog` |
+| `ssisFolder` | `name` | `database`, `schema`, `parent`, `ssisFolder`, `ssisProject` | `ssisFolder` |
+| `ssisFolderObject` | `ssisFolder`, `name` | `database`, `schema`, `parent`, `ssisProject` | `ssisProject`, `ssisEnvironment` |
+| `ssisProjectObject` | `ssisFolder`, `ssisProject`, `name` | `database`, `schema`, `parent` | `ssisPackage` |
 
 | Child kind | Parent kinds |
 | --- | --- |
@@ -257,3 +275,4 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 | `sublabel` | 200 | Characters in a sublabel |
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
+| `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |

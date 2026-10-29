@@ -124,7 +124,7 @@ internal static class DatabaseProperties
         return new ScriptPreflight.Row(values);
     }
 
-    private static string Iso(object? value) => value is DateTime date ? date.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) : "";
+    internal static string Iso(object? value) => value is DateTime date ? date.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) : "";
     private static double Mb(long pages) => Math.Round(pages * 8 / 1024.0, 2);
 
     /// <summary>Splits physical_name at its last separator: the folder (with no trailing separator) and the file.</summary>
@@ -239,7 +239,8 @@ internal static class DatabaseProperties
         var known = memory is not null && memory.Bool("known");
         var general = new DatabaseGeneralDto(row.Name("name"), row.Text("state_desc") ?? "", row.Bool("is_in_standby"), row.Name("owner_name") is { Length: > 0 } owner ? owner : null,
             Iso(RawValue(row, "create_date")), Mb(row.Long("size_pages") ?? 0), pages is { } total && used is { } inUse ? Mb(total - inUse) : null, users, lastBackup, lastLog,
-            row.Text("collation"), known ? Math.Round((memory!.Long("allocated_kb") ?? 0) / 1024.0, 2) : null, known ? Math.Round((memory!.Long("used_kb") ?? 0) / 1024.0, 2) : null);
+            row.Text("collation"), known ? Math.Round((memory!.Long("allocated_kb") ?? 0) / 1024.0, 2) : null, known ? Math.Round((memory!.Long("used_kb") ?? 0) / 1024.0, 2) : null,
+            row.Int("database_id"));
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         return (new DatabasePropertiesDto(general, options, scoped, levels, collations, logins, listed, files.Count > Limit("files"), groups, filegroups.Count > Limit("filegroups"), server,
             sessions, ReadOnlyReason(row, database)), null);

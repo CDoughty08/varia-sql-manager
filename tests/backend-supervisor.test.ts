@@ -9,6 +9,7 @@ import { FrameKind, encodeFrame } from '../src/shared/ipc/wire/frames'
 import { encodeControl } from '../src/shared/ipc/wire/msgpack'
 import { BackendSupervisor, type SupervisorDeps } from '../src/main/backend/supervisor'
 import { BackendError, sentences } from '../src/main/backend/errors'
+import type { LiveEvent } from '../src/shared/live/schema'
 import { backendSpawnSpec } from '../src/main/backend/spawn-spec'
 import { fakeSpawn, manualClock, settle, type FakeBackend } from './fixtures/fake-process'
 
@@ -495,5 +496,83 @@ describe('BackendSupervisor results', () => {
     const descriptor = { resultId: 4, index: 0, batchNumber: 1, iteration: 1, kind: 'rows', columns: [], rowsRead: 1, rowsStored: 1, rowsAvailable: 1, bytesStored: 1, truncatedCells: 0, state: 'complete', incomplete: false }
     last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: descriptor })
     expect(await synthetic).toEqual({ ...descriptor, generation: 1 })
+  })
+})
+
+describe('BackendSupervisor live subscriptions', () => {
+  const subscription = (o: { probes?: string[]; args?: Record<string, number> } = {}) => ({
+    subscriptionId: crypto.randomUUID(), connectionId: crypto.randomUUID(), source: 'debug.synthetic' as const,
+    probes: (o.probes ?? ['debug.synthetic.table']).map(probe => ({ probe: probe as 'debug.synthetic.table', intervalMs: 1000 })), args: { tickMs: 20, ...o.args }
+  })
+  it('validates live events, stamps the generation on their tables, and acknowledges through credit', async () => {
+    const value = supervisor('workbench')
+    const events: LiveEvent[] = []
+    let id = 0
+    const end = await value.request('live.subscribe', subscription({ args: { endAfterTicks: 3 } }), {
+      credit: 65_536, onSent: sent => { id = sent },
+      onLive: (event, bytes) => { events.push(event); value.credit(1, id, bytes) }
+    })
+    expect(end).toMatchObject({ ended: 'sourceEnded', ticks: 3, kept: [3] })
+    expect(events.map(event => event.seq)).toEqual([0, 1, 2, 3])
+    const tables = events.flatMap(event => event.type === 'live.tick' ? event.samples.flatMap(sample => sample.tables ?? []) : [])
+    expect(tables.map(table => [table.descriptor.resultId, table.descriptor.generation, table.revision, table.retired])).toEqual([[1, 1, 1, undefined], [2, 1, 2, undefined], [3, 1, 3, [1]]])
+  })
+  it('fails a live stream whose events skip a sequence number or break the schema', async () => {
+    // Acknowledged, so only the sequence is wrong.
+    const gap = supervisor('live-seq-gap')
+    let id = 0
+    const seqs: number[] = []
+    expect(await failure(gap.request('live.subscribe', subscription({ probes: ['debug.synthetic.status'] }), { onSent: sent => { id = sent }, onLive: (event, bytes) => { seqs.push(event.seq); gap.credit(1, id, bytes) } }))).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(seqs).toEqual([0])
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const live = failure(value.request('live.subscribe', subscription(), { onLive: () => {} }))
+    await settle(8)
+    // A metrics sample on the table probe: the catalogue says it has no series.
+    last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 1000, state: 'ok' }] })
+    last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, { type: 'live.tick', seq: 1, sampledAt: 1, samples: [{ probe: 'debug.synthetic.table', costMs: 0, effectiveIntervalMs: 1000, metrics: [1] }] })
+    expect(await live).toMatchObject({ code: 'STREAM_PROTOCOL' })
+  })
+  it('fails a live stream whose events name another source or probes it did not subscribe to', async () => {
+    // The echo backend reports the probes asked for and samples the status probe: fine for a status subscription.
+    const echo = supervisor('echo')
+    let id = 0
+    const ok = await echo.request('live.subscribe', subscription({ probes: ['debug.synthetic.status'] }), { onSent: sent => { id = sent }, onLive: (_event, bytes) => echo.credit(1, id, bytes) })
+    expect(ok).toMatchObject({ ended: 'sourceEnded', ticks: 3 })
+    // A table subscription: its ticks sample a probe it never asked for, though the catalogue allows them on the source.
+    const seqs: number[] = []
+    expect(await failure(echo.request('live.subscribe', subscription(), { onSent: sent => { id = sent }, onLive: (event, bytes) => { seqs.push(event.seq); echo.credit(1, id, bytes) } }))).toMatchObject({ code: 'STREAM_PROTOCOL' })
+    expect(seqs).toEqual([0])
+    const send = async (events: Record<string, unknown>[], probes?: string[]) => {
+      const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+      value.start()
+      await settle(8)
+      const received: number[] = []
+      const live = failure(value.request('live.subscribe', subscription({ probes }), { onLive: event => { received.push(event.seq) } }))
+      await settle(8)
+      for (const event of events) last().send(FrameKind.EVENT, last().requests.at(-1)!.id, 0, event)
+      return { error: await live, received }
+    }
+    const openedFor = (probes: string[]) => ({ type: 'live.opened', seq: 0, source: 'debug.synthetic', probes: probes.map(probe => ({ probe, intervalMs: 1000, minIntervalMs: 1000, maxIntervalMs: 1000, state: 'ok' })) })
+    // An opened frame that leaves out a subscribed probe, or adds one.
+    expect(await send([openedFor(['debug.synthetic.table'])], ['debug.synthetic.table', 'debug.synthetic.status'])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [] })
+    expect(await send([openedFor(['debug.synthetic.table', 'debug.synthetic.status'])])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [] })
+    // An error value for a probe the subscription does not have.
+    const error = { type: 'live.tick', seq: 1, sampledAt: 1, samples: [], errors: [{ probe: 'debug.synthetic.metrics', code: 'SQL_ERROR', message: 'Failed.', retryInMs: 1000, terminal: false }] }
+    expect(await send([openedFor(['debug.synthetic.table']), error])).toMatchObject({ error: { code: 'STREAM_PROTOCOL' }, received: [0] })
+  })
+  it('ends live streams with BACKEND_LOST when their generation is lost, and checks their answers', async () => {
+    const { value, last } = simulated({ configure: backend => { backend.answer = false } })
+    value.start()
+    await settle(8)
+    const live = failure(value.request('live.subscribe', subscription(), { onLive: () => {} }))
+    const update = failure(value.request('live.update', { subscriptionId: crypto.randomUUID(), source: 'debug.synthetic', paused: true }))
+    await settle(8)
+    // An update answered with something that is not an update result.
+    last().send(FrameKind.RESPONSE, last().requests.at(-1)!.id, 0, { result: { applied: false } })
+    expect(await update).toMatchObject({ code: 'BACKEND_ERROR', message: sentences.invalid })
+    last().exit(1)
+    expect(await live).toMatchObject({ code: 'BACKEND_LOST' })
   })
 })

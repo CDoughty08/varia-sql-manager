@@ -67,12 +67,23 @@ internal static class ExplorerLabels
     private static string TitleCase(string text) => string.Join(" ", text.Split(['_', ' '], StringSplitOptions.RemoveEmptyEntries)
         .Select(word => char.ToUpperInvariant(word[0]) + word[1..].ToLowerInvariant()));
 
+    /// <summary>An SSIS project's deployment, in the catalog's own offset: "(Deployed 2026-10-21 14:05)".</summary>
+    public static string? Deployed(DateTimeOffset? deployed) => deployed is { } value ? "(Deployed " + value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + ")" : null;
+
+    /// <summary>An SSIS environment's variable count: "(1 variable)", "(3 variables)".</summary>
+    public static string Variables(int count) => "(" + count.ToString("N0", CultureInfo.InvariantCulture) + (count == 1 ? " variable)" : " variables)");
+
     /// <summary>sys.databases.state text, or null for ONLINE.</summary>
     public static string? DatabaseState(int state) => state switch
     {
         0 => null, 1 => "Restoring...", 2 => "In Recovery", 3 => "Recovery Pending", 4 => "Suspect", 5 => "Emergency", 6 or 10 => "Offline", 7 => "Copying",
         _ => "State " + state.ToString(CultureInfo.InvariantCulture)
     };
+
+    /// <summary>Why a database the login could not open (4060) is unavailable to everyone, from sys.databases: its state when it
+    /// is not online, or single-user mode, which another session holds; null when it is online and open to others, so the
+    /// login itself has no access.</summary>
+    public static string? Unavailable(int state, int userAccess) => state != 0 ? DatabaseState(state) : userAccess == 1 ? "Single User, in use by another session" : null;
 
     /// <summary>A database's sublabel, status and whether it expands: state, read-only (or standby) and user access, in
     /// one pair of parentheses. One the login cannot open still expands, as in SSMS, so expanding it explains why.</summary>

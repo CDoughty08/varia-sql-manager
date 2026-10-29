@@ -71,7 +71,7 @@ export interface TableDesignerServiceOptions {
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'setDirty' | 'activate' | 'getSnapshot'>
   readonly files: { saveCopy(name: string, content: string): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { refreshAndSelect(folderNodeId: number, ref: ExplorerNodeRef): void }
+  readonly explorer: { reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
   /** Focuses a designer's grid (the app's DOM); tests leave it out. */
   readonly focus?: (id: string) => void
   readonly newId?: () => string
@@ -87,6 +87,7 @@ const error = (result: ApiResult<unknown>) => result.ok ? undefined : result.err
  */
 export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'tableDesigner' as const
+  readonly inSaveAll = true
   private readonly newId: () => string
   private readonly registration: Disposable
   private readonly unsubscribe: () => void
@@ -350,7 +351,7 @@ export class TableDesignerService extends SnapshotStore<DesignerSnapshot> implem
       this.patch(id, { phase: 'saved', dirty: false, error: undefined, notice: designerStrings.saved(label), selected: [] })
       this.options.documents.setDirty(id, false)
       if (state.folderNodeId !== undefined) {
-        try { this.options.explorer.refreshAndSelect(state.folderNodeId, { type: 'object', object: { kind: 'table', database: state.database, schema: design.schema, name: design.name } }) }
+        try { this.options.explorer.reconcile(state.folderNodeId, { select: { type: 'object', object: { kind: 'table', database: state.database, schema: design.schema, name: design.name } } }) }
         catch (failure) { onUnexpectedError(failure) }
       }
       return true
