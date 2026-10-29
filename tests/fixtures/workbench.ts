@@ -47,6 +47,7 @@ import { scriptingContribution } from '../../src/renderer/src/contributions/scri
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
+import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
@@ -256,6 +257,10 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
+    catalogSetupSsis: vi.fn<VariaApi['catalogSetupSsis']>(async () => ({ ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: false,
+      backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', message: 'Restore the catalog database' }], elapsedMs: 1 } })),
     // No catalog unless a test says otherwise.
     describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
@@ -298,6 +303,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
@@ -380,6 +386,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers,
     ssisProperties,
     properties,
@@ -435,6 +442,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting.dispose()
     actions.dispose()
     dialogs.dispose()
+    ssisCatalog.dispose()
     designers.dispose()
     ssisProperties.dispose()
     activity.dispose()
@@ -467,6 +475,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scripting,
     actions,
     dialogs,
+    ssisCatalog,
     designers,
     ssisProperties,
     properties,

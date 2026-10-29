@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { validateRequest, requestSchemas } from '../src/main/validation'
-import { ssisCancelSchema, ssisDescribeSchema, ssisExecuteSchema } from '../src/shared/ssis/schema'
+import { ssisCancelSchema, ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../src/shared/ssis/schema'
 import { describeTargets, describeViews } from '../src/shared/ssis/catalog'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 
@@ -76,5 +76,36 @@ describe('ssis.execute requests', () => {
     expect(valid(stop(1, { revision: 'a'.repeat(64) }))).toBe(false)
     expect(valid({ ...stop(1), connectionId: 'server-a' })).toBe(false)
     expect(() => validateRequest('ssis.execute', stop(0))).toThrow('Invalid request')
+  })
+})
+
+describe('Create Catalog requests', () => {
+  const quoted = "Pa'ss]--w0rd"
+  const create = (action: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) => ({ ...ids(), action: { verb: 'createCatalog', password: quoted, enableClr: true, startupProcedure: false, ...action }, ...extra })
+  const valid = (value: unknown) => ssisExecuteSchema.safeParse(value).success
+  it('accepts the password verbatim, quotes and all, up to 128 UTF-16 code units, with both choices', () => {
+    for (const password of ['x', quoted, 'p'.repeat(128), '𝒜'.repeat(64), ' leading and trailing ']) {
+      const request = create({ password })
+      expect(valid(request), password).toBe(true)
+      expect(validateRequest('ssis.execute', request)).toEqual(request)
+    }
+    expect(valid(create({ enableClr: false, startupProcedure: true }))).toBe(true)
+  })
+  it('refuses an empty, long, NUL or lone-surrogate password, a missing choice, members of other verbs, and a revision', () => {
+    for (const password of ['', 'p'.repeat(129), '𝒜'.repeat(64) + 'a', 'a\u0000b', '\uD800abc', 'abc\uDC00', '\uDC00\uD800', 42, null]) expect(valid(create({ password })), String(password)).toBe(false)
+    expect(valid(create({ enableClr: undefined }))).toBe(false)
+    expect(valid(create({ startupProcedure: 'yes' }))).toBe(false)
+    expect(valid(create({ operationId: 1 }))).toBe(false)
+    expect(valid(create({ catalog: 'Other' }))).toBe(false)
+    expect(valid(create({}, { revision: 'a'.repeat(64) }))).toBe(false)
+    expect(valid({ ...ids(), action: { verb: 'stopOperation', operationId: 1, password: 'x' } })).toBe(false)
+    // Main's error never repeats what was sent.
+    expect(() => validateRequest('ssis.execute', create({ password: 'secret-marker'.repeat(20) }))).toThrow(/^Invalid request\. Check the connection or query settings\.$/)
+  })
+  it('reads the dialog setup with ids only', () => {
+    expect(requestSchemas['ssis.catalogSetup']).toBe(ssisCatalogSetupSchema)
+    const request = ids()
+    expect(validateRequest('ssis.catalogSetup', request)).toEqual(request)
+    for (const value of [{ ...ids(), extra: 1 }, { connectionId: randomUUID() }, { ...ids(), requestId: 'x' }]) expect(ssisCatalogSetupSchema.safeParse(value).success).toBe(false)
   })
 })

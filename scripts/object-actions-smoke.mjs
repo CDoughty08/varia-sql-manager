@@ -455,6 +455,80 @@ try {
   await windowSize(restoreSize)
   console.log('Object action checks: Database Properties opens as a document with facts as text, switches and segments, Tab into the section chosen, a whole description on focus and hover, a Script preview that carries only the changes to the clipboard, a file and a query window, its frame and draft kept across tabs, Select Database Owner over it, Enter that never applies, Open Connections before Apply, and the close prompt.')
 
+  // 7. Create Catalog (S9a), from Integration Services Catalogs: SSMS's form (until CLR integration is checked nothing else
+  // can change; the passwords must match), the password reaching only the request, then SSISDB in the folder; once it
+  // exists the dialog says so; a failure lists its steps with the removal; Stop waits for the answer and says Stopped.
+  const catalogs = ['server-a', 'Integration Services Catalogs']
+  const createDialog = () => page.getByRole('dialog', { name: 'Create Catalog', exact: true })
+  // Databases may still be reloading after Database Properties' OK, moving the rows below it, so the press repeats until the
+  // folder's own menu opens.
+  const openCreate = async () => {
+    await expect(async () => {
+      if (await explorerMenu().count()) await closeMenu()
+      expect(await menuOf(...catalogs)).toEqual(['Create Catalog…', 'Refresh'])
+    }).toPass()
+    await explorerMenu().getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click(fast)
+    await expect(createDialog()).toBeVisible()
+  }
+  await openCreate()
+  const clr = createDialog().getByLabel('Enable CLR Integration', { exact: true })
+  const password = createDialog().getByLabel('Password', { exact: true }), retype = createDialog().getByLabel('Retype Password', { exact: true })
+  await expect(clr).not.toBeChecked()
+  await expect(clr).toBeEnabled()
+  await expect(password).toBeDisabled()
+  const startup = createDialog().getByLabel('Enable automatic execution of Integration Services stored procedure at SQL Server startup', { exact: true })
+  await expect(startup).toBeDisabled()
+  await expect(createDialog().getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(createDialog().getByText(String.raw`C:\Program Files\Microsoft SQL Server\170\DTS\Binn\SSISDBBackup.bak`, { exact: true })).toBeVisible()
+  await expect(createDialog().getByRole('list', { name: 'This changes the server', exact: true }).getByRole('listitem')).toHaveText(['Enable CLR integration', 'Restore the catalog database', 'Create the master key',
+    'Register the Integration Services assembly and startup procedure', 'Create the maintenance job'])
+  await clr.check()
+  await expect(password).toBeEnabled()
+  // The startup box as the user leaves it reaches the request.
+  await expect(startup).not.toBeChecked()
+  await startup.check()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-create-catalog-dark.png') })
+  const secret = "Pa'ss]--w0rd ünï"
+  await password.fill(secret)
+  await retype.fill(secret + 'x')
+  await retype.press('Enter')
+  await expect(createDialog().getByRole('alert')).toHaveText('Passwords you have typed do not match. Retype the password.')
+  expect(await stubCalls('ssis.execute')).toEqual([])
+  await retype.fill(secret)
+  await createDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(createDialog()).toHaveCount(0)
+  expect(await stubCalls('ssis.execute')).toEqual([expect.objectContaining({ action: { verb: 'createCatalog', password: secret, enableClr: true, startupProcedure: true } })])
+  await expect(explorerTree(page)).toBeFocused()
+  await expandExplorerPath(page, ...catalogs)
+  await expect(await explorerRow(page, ...catalogs, 'SSISDB')).toBeVisible()
+  // The dialog's form leaves nothing behind in the page once it closes.
+  expect(await page.evaluate(marker => document.documentElement.outerHTML.includes(marker), 'w0rd')).toBe(false)
+  await openCreate()
+  await expect(createDialog().getByRole('alert')).toHaveText('There already exists a catalog (SSISDB), and only one catalog is supported on a server.')
+  await expect(createDialog().getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(createDialog()).toHaveCount(0)
+  await application.evaluate(() => { globalThis.variaStub.catalog = false })
+  await openCreate()
+  await clr.check()
+  await password.fill('Weak')
+  await retype.fill('Weak')
+  await createDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(createDialog().getByRole('alert')).toContainText('Msg 15118: Password validation failed.')
+  await expect(createDialog().getByRole('alert')).toContainText('Varia removed what Create Catalog had created')
+  expect(await createDialog().getByRole('list', { name: 'This changes the server', exact: true }).getByRole('listitem').evaluateAll(items => items.map(item => item.getAttribute('data-status')))).toEqual(['done', 'done', 'failed', 'skipped', 'skipped', 'done'])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-create-catalog-failed-dark.png') })
+  await password.fill('Held')
+  await retype.fill('Held')
+  await createDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(createDialog().getByRole('status')).toContainText('Creating the catalog')
+  await createDialog().getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(createDialog().getByRole('status').filter({ hasText: 'Create Catalog was stopped' })).toBeVisible()
+  expect((await application.evaluate(() => globalThis.variaStub.cancels)).length).toBeGreaterThan(0)
+  await createDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(createDialog()).toHaveCount(0)
+  console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
+
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
   await expect(async () => {

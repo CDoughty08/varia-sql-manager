@@ -189,13 +189,13 @@ Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123a
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
     "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
-        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "SSISDB" }.Any(ScratchDatabase.Sweepable)
+        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "SSISDB" }.Any(ScratchDatabase.Sweepable)
     && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis and _ssisref and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
 {
     // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
     const string rs = "VariaScratch_20261018120000_0123abcd_rs";
@@ -503,6 +503,7 @@ try
     await ActivityLiveChecks.RunAsync(Check, service, info);
     await ActivitySourceLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActivityActionLiveChecks.RunAsync(Check, service, info, Live, json);
+    await SsisCreateLiveChecks.RunAsync(Check, service, info, Live, json);
     await EntraChecks.LiveAsync(Check, Live("master"), json);
     Console.WriteLine("Passed " + passed + " total .NET checks including live SQL batches, statistics variants, isolation, failure, cancellation, timeout, and cleanup.");
 }

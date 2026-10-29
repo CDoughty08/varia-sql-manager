@@ -16,14 +16,26 @@ export const ssisDescribeSchema = z.object({ connectionId: z.uuid(), requestId: 
 
 /** Stop Operation: the operation's id (`catalog.operations.operation_id`, a bigint; ids past 2^53 - 1 cannot cross JSON exactly). */
 export interface SsisStopOperation { readonly verb: 'stopOperation'; readonly operationId: number }
+/** Create Catalog: the master key's encryption password (a secret: the request is sensitive, and nothing stores or logs it),
+ *  whether the user agreed to enable CLR integration (needed only when it is off), and whether `sp_ssis_startup` runs at
+ *  SQL Server startup (SSMS's "Enable automatic execution of Integration Services stored procedure at SQL Server startup"). */
+export interface SsisCreateCatalog { readonly verb: 'createCatalog'; readonly password: string; readonly enableClr: boolean; readonly startupProcedure: boolean }
 /** What ssis.execute runs, by verb (src/shared/ssis/catalog.ts `ssisActions`); later verbs join the union. */
-export type SsisAction = SsisStopOperation
+export type SsisAction = SsisStopOperation | SsisCreateCatalog
 /** `revision` is a describe's, for a verb that changes what a document showed (`ssisActions[verb].revision`); others refuse it. */
 export interface SsisExecuteRequest { readonly connectionId: string; readonly requestId: string; readonly action: SsisAction; readonly revision?: string }
 
 const operationId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER)
+/** Whether text is well-formed UTF-16 (every surrogate in a pair). The wire encodes UTF-8, which turns a lone surrogate into
+ *  U+FFFD, so a password holding one would create a master key whose password is not the one typed. */
+export const wellFormed = (value: string): boolean => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(value)
+// UTF-16 code units, as C# counts them (zod's max() counts code points). A NUL would end the password early in some client
+// libraries; SQL Server's own policy decides the rest.
+const catalogPassword = z.string().min(1).refine(value => value.length <= ssisLimits.catalogPassword, `At most ${ssisLimits.catalogPassword} UTF-16 code units.`).refine(value => !value.includes('\0'), 'The password cannot contain a NUL character.')
+  .refine(wellFormed, 'The password holds a broken character (half of a surrogate pair).')
 export const ssisActionSchema = z.discriminatedUnion('verb', [
-  z.object({ verb: z.literal('stopOperation'), operationId }).strict()
+  z.object({ verb: z.literal('stopOperation'), operationId }).strict(),
+  z.object({ verb: z.literal('createCatalog'), password: catalogPassword, enableClr: z.boolean(), startupProcedure: z.boolean() }).strict()
 ]) satisfies z.ZodType<SsisAction>
 export const ssisExecuteSchema = z.object({
   connectionId: z.uuid(), requestId: z.uuid(), action: ssisActionSchema, revision: z.string().length(ssisLimits.revision).regex(/^[0-9a-f]+$/).optional()
@@ -31,6 +43,10 @@ export const ssisExecuteSchema = z.object({
   const verb: SsisActionVerb = request.action.verb
   if (request.revision !== undefined && !ssisActions[verb].revision) context.addIssue({ code: 'custom', path: ['revision'], message: `${ssisActions[verb].title} takes no revision.` })
 }) satisfies z.ZodType<SsisExecuteRequest>
+
+/** What the Create Catalog dialog reads before it opens (`ssis.catalogSetup`). */
+export interface SsisCatalogSetupRequest { readonly connectionId: string; readonly requestId: string }
+export const ssisCatalogSetupSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid() }).strict() satisfies z.ZodType<SsisCatalogSetupRequest>
 
 export const ssisCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(ssisLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
@@ -138,6 +154,27 @@ export type SsisModel = SsisCatalogModel | SsisFolderModel | SsisProjectModel | 
 export interface SsisDescribeResult {
   readonly model?: SsisModel
   readonly revision?: string
+  readonly elapsedMs: number
+  readonly error?: SsisError
+}
+/** What Create Catalog will do on this server, as its dialog shows it. */
+export interface SsisCatalogSetup {
+  /** The catalog's database: SSISDB (SSMS fixes the name). */
+  readonly catalog: string
+  /** `clr enabled` is in use. When it is not, the dialog asks before Create Catalog enables it. */
+  readonly clrEnabled: boolean
+  /** SSMS's default for the startup procedure: the server's `scan for startup procs` setting. */
+  readonly startupDefault: boolean
+  /** The Integration Services catalog backup Create Catalog restores, on the server. */
+  readonly backupFile: string
+  /** Where the catalog's files go: the master database's folder, as SSMS puts them. */
+  readonly dataFile: string
+  readonly logFile: string
+}
+/** `setup`, or `error` when Create Catalog cannot run here (`NOT_SUPPORTED`, `PERMISSION_DENIED` without sysadmin,
+ *  `CATALOG_EXISTS`, or a read's failure). */
+export interface SsisCatalogSetupResult {
+  readonly setup?: SsisCatalogSetup
   readonly elapsedMs: number
   readonly error?: SsisError
 }

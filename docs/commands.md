@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (174)
+## Commands (175)
 
 ### File
 
@@ -134,6 +134,7 @@ keys it uses are listed below.
 | Filter Settings… | `explorer.filter` | — | — | — | `hasConnection` | Object Explorer context menu › Filter Settings… |
 | Filter Loaded Objects | `explorer.filterLoaded` | — | — | — | `hasConnection` | — |
 | Remove Filter | `explorer.removeFilter` | — | — | — | `hasConnection` | Object Explorer context menu › Remove Filter |
+| Create Catalog… | `explorer.createCatalog` | — | — | — | `backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'` | Object Explorer context menu › Create Catalog… |
 | Stop | `explorer.stop` | — | — | — | `explorerLoading` | — |
 | Collapse All | `explorer.collapseAll` | — | — | — | `hasConnection` | — |
 | New Query | `explorer.newQuery` | — | — | — | `!documentBusy` | Object Explorer context menu › New Query |
@@ -464,6 +465,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
+| `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |

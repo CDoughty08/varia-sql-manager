@@ -11,6 +11,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Database Properties describes AppData (two files, PRIMARY, one session) and master; Script returns `propertiesScript`.
  * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
  * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
+ * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
+ * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
+ * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -23,7 +26,7 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map() }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -38,7 +41,8 @@ export function installActionsStub({ ipcMain }, { statics }) {
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
-    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })]
+    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })],
+    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : []
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -92,6 +96,26 @@ export function installActionsStub({ ipcMain }, { statics }) {
     if (design.schema === 'dbo') stub.tables = [...stub.tables, design.name]
     return ok({ steps: titles.map(message => ({ status: 'done', message })), messages: [], elapsedMs: 1 })
   }
+  /** Create Catalog's dialog read: a 2025 server without the catalog, CLR off; or the catalog's refusal once it exists. */
+  function catalogSetup() {
+    if (stub.catalog) return ok({ elapsedMs: 1, error: { code: 'CATALOG_EXISTS', message: 'There already exists a catalog (SSISDB), and only one catalog is supported on a server.', retryable: false } })
+    return ok({ setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: false, backupFile: String.raw`C:\Program Files\Microsoft SQL Server\170\DTS\Binn\SSISDBBackup.bak`,
+      dataFile: String.raw`C:\Data\SSISDB.mdf`, logFile: String.raw`C:\Data\SSISDB.ldf` }, elapsedMs: 1 })
+  }
+  /** Create Catalog: "Weak" fails at the master key and removes what it made, "Held" waits for Stop, anything else creates SSISDB. */
+  function createCatalog({ action, requestId }) {
+    const titles = ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+    if (action.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', message: titles[0] }], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'Create Catalog was stopped at "Enable CLR integration"; SQL Server cancelled that statement, so CLR integration may or may not be enabled. Nothing else changed.', retryable: true } }))))
+    if (action.password === 'Weak') {
+      const message = 'Msg 15118: Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
+      return ok({ steps: [{ status: 'done', message: titles[0] }, { status: 'done', message: titles[1] }, { status: 'failed', message }, { status: 'skipped', message: titles[3] }, { status: 'skipped', message: titles[4] },
+        { status: 'done', message: 'Remove the incomplete catalog' }], elapsedMs: 1,
+        error: { code: 'SQL_ERROR', message: message + ' Varia removed what Create Catalog had created, so the catalog does not exist. CLR integration stays enabled.', retryable: true } })
+    }
+    stub.catalog = true
+    return ok({ steps: titles.map(message => ({ status: 'done', message })), elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
     if (params.action === 'createTable') return createTable(params)
@@ -136,8 +160,16 @@ export function installActionsStub({ ipcMain }, { statics }) {
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)
+      case 'ssis.catalogSetup': return catalogSetup()
+      case 'ssis.execute': return createCatalog(params)
       default: return { ok: false, error: 'Unsupported stub operation.' }
     }
+  })
+  ipcMain.removeHandler('varia:ssis-cancel')
+  ipcMain.handle('varia:ssis-cancel', async (_event, { requestIds }) => {
+    stub.cancels.push(...requestIds)
+    for (const id of requestIds) { stub.blocked.get(id)?.(); stub.blocked.delete(id) }
+    return ok({ cancelled: requestIds.length })
   })
   ipcMain.removeHandler('varia:actions-cancel')
   ipcMain.handle('varia:actions-cancel', async (_event, { requestIds }) => {

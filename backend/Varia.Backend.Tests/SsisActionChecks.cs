@@ -35,9 +35,9 @@ internal static class SsisActionChecks
     {
         var catalog = SsisCatalog.Current;
         var stop = catalog.Action("stopOperation");
-        check(catalog.Actions.Select(action => action.Verb).SequenceEqual(["stopOperation"]) && stop is { Title: "Stop Operation", Revision: false, WindowsAuthOnBox: true }
+        check(catalog.Actions.Select(action => action.Verb).SequenceEqual(["stopOperation", "createCatalog"]) && stop is { Title: "Stop Operation", Revision: false, WindowsAuthOnBox: true, Server: false }
             && stop.Steps.SequenceEqual(["Stop the operation"]) && stop.Procedures.SequenceEqual(["stop_operation"]) && catalog.Action("startExecution") is null,
-            "the embedded catalogue's ssis.execute verbs: Stop Operation, one step calling catalog.stop_operation, no revision, Windows authentication on a box server");
+            "the embedded catalogue's ssis.execute verbs: Stop Operation, one step calling catalog.stop_operation, no revision, Windows authentication on a box server; then Create Catalog (SsisCreateChecks)");
         check(catalog.StoppableOperationTypes.Order().SequenceEqual([200, 300, 301]) && catalog.FinalStatuses.Order().SequenceEqual([3, 4, 6, 7, 9]) && catalog.OpenStatuses.Order().SequenceEqual([1, 2, 5, 8])
             && !catalog.Retryable("WINDOWS_AUTH_REQUIRED") && !catalog.Retryable("ALREADY_FINAL") && !catalog.Retryable("NOT_STARTED") && catalog.Retryable("NOT_RUNNING") && catalog.Retryable("CANCELLED"),
             "Stop Operation applies to executions and validations; the catalogue's open and final statuses and the write error codes come from the catalogue");
@@ -49,8 +49,8 @@ internal static class SsisActionChecks
 
     private static void Lint(Action<bool, string> check)
     {
-        var problems = SsisCatalog.Current.Actions.SelectMany(spec => SsisSql.WriteTemplates(spec.Verb).SelectMany(text => SsisSql.LintWrite(text, spec.Procedures).Select(problem => spec.Verb + ": " + problem))).ToList();
-        var templates = SsisCatalog.Current.Actions.ToDictionary(spec => spec.Verb, spec => SsisSql.WriteTemplates(spec.Verb).Count);
+        var problems = SsisCatalog.Current.Actions.Where(spec => !spec.Server).SelectMany(spec => SsisSql.WriteTemplates(spec.Verb).SelectMany(text => SsisSql.LintWrite(text, spec.Procedures).Select(problem => spec.Verb + ": " + problem))).ToList();
+        var templates = SsisCatalog.Current.Actions.Where(spec => !spec.Server).ToDictionary(spec => spec.Verb, spec => SsisSql.WriteTemplates(spec.Verb).Count);
         check(problems.Count == 0 && templates.All(pair => pair.Value == SsisCatalog.Current.Action(pair.Key)!.Steps.Count),
             "every verb's write templates pass the write lint, one per step: " + string.Join("; ", problems));
         check(SsisSql.All(SsisCatalog.Current.Views).Any(item => item.Id == "operationPreflight" && item.Text == SsisSql.OperationPreflight && SsisSql.Lint(item.Text, item.List).Count == 0)

@@ -715,7 +715,7 @@ app.whenReady().then(async () => {
       // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
       // with a requestId is registered before it is sent, so its cancel channel can always find it.
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'activity.details']['params']).requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
       let result: unknown
       let outcome: Settled
       try {

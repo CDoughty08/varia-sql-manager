@@ -9,13 +9,13 @@ import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
   catalogDatabase, catalogProbeRetryMs, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
   parameterObjectTypes, permissionTypes, securableTypes, ssisActions, ssisActionVerbs, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits,
-  stoppableOperationTypes, systemParameters,
+  stoppableOperationTypes, systemParameters, createCatalog, catalogBackupFile,
   isSsisDocumentKind, ssisCommandEntries, ssisDocumentKinds, ssisDocumentName, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs, ssisVerbSpecs, validationStatuses
 } from '../src/shared/ssis/catalog'
 import { commandDescriptor } from '../src/shared/commands/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
 import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
-import { methodPolicies } from '../src/shared/ipc/methods'
+import { createCatalogDrainMs, methodPolicies } from '../src/shared/ipc/methods'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
 const docsPath = join('docs', 'integration-services.md')
@@ -85,14 +85,23 @@ describe('SSIS catalogue', () => {
     // Stop Operation on an ended operation, or on a created one nobody started (it never runs), is information, and a SQL Server
     // login cannot fix itself by retrying.
     expect(ssisErrorRetryable).toMatchObject({ WINDOWS_AUTH_REQUIRED: false, ALREADY_FINAL: false, NOT_STARTED: false })
+    // Create Catalog's refusals need the user to change something first: the existing catalog, or the CLR agreement.
+    expect(ssisErrorRetryable).toMatchObject({ CATALOG_EXISTS: false, CLR_REQUIRED: false })
   })
   it('declares each ssis.execute verb with its steps, procedures and gates, Stop Operation first', () => {
-    expect(ssisActionVerbs).toEqual(['stopOperation'])
-    expect(ssisActions.stopOperation).toEqual({ title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true })
+    expect(ssisActionVerbs).toEqual(['stopOperation', 'createCatalog'])
+    expect(ssisActions.stopOperation).toEqual({ title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true, scope: 'catalog' })
+    // Create Catalog runs in master and calls none of the catalog's procedures (they do not exist yet); a sysadmin SQL Server
+    // login may run it, as in SSMS.
+    expect(ssisActions.createCatalog).toEqual({
+      title: 'Create Catalog', procedures: [], revision: false, windowsAuthOnBox: false, scope: 'server',
+      steps: ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
+    })
     for (const verb of ssisActionVerbs) {
       const spec = ssisActions[verb]
       expect(spec.steps.length, verb).toBeGreaterThan(0)
       for (const name of spec.procedures) expect(name, verb).toMatch(/^[a-z_]+$/)
+      if (spec.scope === 'catalog') expect(spec.procedures.length, verb).toBe(spec.steps.length)
     }
     // Executions and validations, by the code table's own types.
     expect([...stoppableOperationTypes]).toEqual([200, 300, 301])
@@ -110,8 +119,21 @@ describe('SSIS catalogue', () => {
   it('keeps the write path\'s limits: one write per connection, two in all, no deadline, and a sensitive frame', () => {
     expect(ssisLimits).toMatchObject({ writePerConnection: 1, writeTotal: 2, registeredWrites: 64, preflightLockTimeoutMs: 10_000, preflightMs: 25_000, stopGraceMs: 10_000 })
     // A write waits for locks as SSMS does, so only Stop ends it; later verbs carry sensitive values, so the frame is zeroed once written.
-    expect(methodPolicies['ssis.execute']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    const { drainMs, ...policy } = methodPolicies['ssis.execute']
+    expect(policy).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 0, sensitive: true })
+    // A closing generation runs on while Create Catalog finishes or undoes itself (createDrainMs in the backend); Stop Operation needs no drain.
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'createCatalog', password: 'x', enableClr: true, startupProcedure: false } })).toBe(createCatalogDrainMs)
+    expect(drainMs?.({ connectionId: 'c', requestId: 'r', action: { verb: 'stopOperation', operationId: 1 } })).toBe(0)
+    expect(createCatalogDrainMs).toBeGreaterThan(ssisLimits.createDrainMs)
     expect(ssisLimits.registeredWrites).toBeLessThanOrEqual(ssisLimits.registered)
+  })
+  it('finds the catalog backup by version, as Integration Services names it, and bounds Create Catalog inputs', () => {
+    // SSMS 22's Catalog.Create names SSISDBBackup.bak for every version (docs/integration-services.md 14.12); SSISDB.bak is no installed file.
+    expect([13, 14, 15, 16, 17, 18].map(catalogBackupFile)).toEqual(Array(6).fill('SSISDBBackup.bak'))
+    expect(createCatalog.assemblyFile).toBe('Microsoft.SqlServer.IntegrationServices.Server.dll')
+    expect(ssisLimits).toMatchObject({ catalogPassword: 128, serverPath: 1024 })
+    // The dialog's read is a read: no secret, a describe's deadline.
+    expect(methodPolicies['ssis.catalogSetup']).toEqual({ kind: 'unary', lane: 'ssis', deadlineMs: 45_000 })
   })
   it('loads in plain Node 24, as the other catalogues do', () => {
     const files = ['catalog.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'ssis', name))

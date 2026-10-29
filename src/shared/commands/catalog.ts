@@ -316,6 +316,12 @@ export const commandCatalog = {
     // Environment… only its 'v' (tests/command-catalog.test.ts).
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'l', when: 'explorerFolderFiltered' }]
   },
+  // SSMS: right-click Integration Services Catalogs › Create Catalog… (S9a). The dialog says why a server cannot have one.
+  'explorer.createCatalog': {
+    title: 'Create Catalog…', category: 'Object Explorer', icon: 'database', keywords: ['ssis', 'ssisdb', 'integration', 'catalog', 'create'],
+    precondition: "backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'", unavailableHint: 'Select Integration Services Catalogs in Object Explorer.',
+    menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 't', when: "explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost" }]
+  },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   'explorer.newQuery': {
