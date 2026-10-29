@@ -245,11 +245,18 @@ internal static class DatabasePropertiesLiveChecks
             var stillWritable = (await Model()).Options["readOnly"];
             var rollback = await client.Execute(db, new DatabaseChangesDto(Options: new() { ["readOnly"] = "true" }), close: true);
             var readOnly = (await Model()).Options["readOnly"];
-            var sessions = (await sql("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(N'" + db + "');", "master", null)).Scalar;
+            // The closed session can stay in sys.dm_exec_sessions for a moment after the ALTER returns (a Linux CI run counted
+            // it once), so the count gets a few seconds to reach 0.
+            var sessions = "";
+            for (var settle = Stopwatch.StartNew(); ; await Task.Delay(250))
+            {
+                sessions = (await sql("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(N'" + db + "');", "master", null)).Scalar ?? "";
+                if (sessions == "0" || settle.ElapsedMilliseconds > 10_000) break;
+            }
             check(noWait is { Error.Code: "IN_USE", Steps.Count: 0 } && noWait.Error.Message == ActionErrors.OpenConnectionsAdvice
                 && stillWritable == "false" && Done(rollback) && readOnly == "true" && sessions == "0",
                 "with another session in the database, Read-Only without closing connections is IN_USE before any statement runs and changes nothing; WITH ROLLBACK IMMEDIATE it succeeds and closes that session ("
-                + noWait.Error?.Message + "; " + rollback.Error?.Message + ")");
+                + noWait.Error?.Message + "; " + rollback.Error?.Message + "; writable before " + stillWritable + ", read-only after " + readOnly + ", " + sessions + " sessions left)");
         }
         finally
         {

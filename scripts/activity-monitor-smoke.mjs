@@ -158,6 +158,8 @@ try {
   // The View menu and the palette open the same monitor: one per connection.
   await menu('activity.open')
   await page.keyboard.press('F1')
+  // Typing before the palette has focus loses the keys (a Windows CI run found no option).
+  await expect(page.getByRole('combobox', { name: 'Command Palette', exact: true })).toBeFocused()
   await page.keyboard.type('Activity Monitor')
   await expect(page.getByRole('option', { name: /^Tools: Activity Monitor/ }).first()).toBeVisible()
   await page.keyboard.press('Enter')
