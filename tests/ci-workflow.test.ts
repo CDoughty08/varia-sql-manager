@@ -50,6 +50,23 @@ describe('CI workflow', () => {
     expect(linux.find(step => step.name.startsWith('Prepare the Electron sandbox'))?.id).toBe('display')
     expect(linux.filter(smoke).every(step => step.if?.includes("steps.display.outcome == 'success'"))).toBe(true)
   })
+  it("leaves every job room for its timed steps, so a step's own limit is the one that ends it", () => {
+    const lines = readFileSync('.github/workflows/ci.yml', 'utf8').split('\n'), limits = new Map<string, { job: number; steps: number }>()
+    let job: { job: number; steps: number } | undefined, inJobs = false
+    for (const line of lines) {
+      if (/^jobs:\s*$/.test(line)) { inJobs = true; continue }
+      const name = inJobs && /^ {2}([\w-]+):\s*$/.exec(line)
+      if (name) { job = { job: 0, steps: 0 }; limits.set(name[1], job); continue }
+      const own = /^ {4}timeout-minutes: (\d+)/.exec(line), step = /^ {8}timeout-minutes: (\d+)/.exec(line)
+      if (job && own) job.job = Number(own[1])
+      if (job && step) job.steps += Number(step[1])
+    }
+    for (const name of ['linux', 'desktop']) {
+      const { job: own, steps } = limits.get(name)!
+      expect(own, name).toBeGreaterThan(steps)
+      expect(steps, name).toBeGreaterThan(0)
+    }
+  })
   it('runs every platform on every pull request, drafts included', () => {
     expect([...workflow.values()].map(job => job.if ?? '').filter(condition => /draft/.test(condition))).toEqual([])
     expect(workflow.get('desktop')!.if).toBe("github.event_name != 'workflow_dispatch' || inputs.regression-suite == 'none'")

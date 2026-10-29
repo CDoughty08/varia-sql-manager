@@ -23,9 +23,10 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-// Three app phases (the dialog, Remember password, environment labels with the query bar's narrow layouts) take about five
-// minutes on a Windows runner, so the bound that catches a hang leaves them room.
-const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 480000)
+// Ten minutes: the dialog, Remember password and environment labels with the query bar's narrow layouts took about five
+// on Windows and Linux runners once the Connect dialog's two-pane checks joined them, so the bound that catches a hang
+// leaves them room.
+const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 600000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
 // Environment labels' phase: the fake backend behind main's real request, history and library handlers.
