@@ -6,7 +6,7 @@ import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import type { IconId } from '../icons.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -85,6 +85,7 @@ const secondQuery = 'Open a second query first.'
 const noFile = 'Save this query to a file first.'
 const noBookmarks = 'No bookmarks are set.'
 const noDocumentBookmarks = 'This query has no bookmarks.'
+const openMonitor = 'Open the Activity Monitor first (Tools: Activity Monitor).'
 
 /**
  * Every command, with its keys, menu placements, and enablement. Main builds native menus from its own compiled copy,
@@ -207,7 +208,7 @@ export const commandCatalog = {
   // SSMS's F6: between the query editor and its results (the grid that last had focus, else the first, else Messages).
   'window.switchPane': {
     title: 'Switch Between Query and Results', category: 'View', icon: 'output', keywords: ['results', 'editor', 'focus'], precondition: 'activeDocumentIsText', unavailableHint: openFirst,
-    keybindings: [{ key: 'f6' }, { key: 'shift+f6' }]
+    keybindings: [{ key: 'f6', when: '!activityMonitorFocus' }, { key: 'shift+f6', when: '!activityMonitorFocus' }]
   },
   'layout.save': {
     title: 'Save Layout…', category: 'View', icon: 'layout',
@@ -310,7 +311,9 @@ export const commandCatalog = {
   },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',
-    menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'v', when: 'explorerFolderFiltered' }]
+    // 'l', not 'v': the menu's mnemonics are checked across every placement at once, and Activity Monitor's 't' leaves
+    // Environment… only its 'v' (tests/command-catalog.test.ts).
+    menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'l', when: 'explorerFolderFiltered' }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
@@ -474,6 +477,50 @@ export const commandCatalog = {
     title: 'Surround With…', category: 'Edit', icon: 'symbol-snippet', keywords: ['begin', 'if', 'while', 'snippet'], precondition: 'activeDocumentIsQuery && !documentBusy', unavailableHint: openFirst,
     keybindings: [{ key: 'mod+k mod+s', native: true, bridge: true }],
     menus: [{ menu: 'edit.intellisense', group: '1_snippets', order: 2, mnemonic: 's' }, { menu: 'editor.context', group: '0_snippets', order: 2, mnemonic: 's' }]
+  },
+  // SSMS's Activity Monitor (docs/activity-monitor.md): one per connection, opened from a server's menu, View or the
+  // palette. SSMS's Ctrl+Alt+A is AltGr on Windows and Linux layouts (reservedReason), so only macOS has its key, ⌥⌘A.
+  'activity.open': {
+    title: 'Activity Monitor', category: 'Tools', icon: 'pulse', keywords: ['activity', 'monitor', 'processes', 'sessions', 'blocking', 'waits', 'performance'],
+    precondition: 'backendReady && !documentBusy', unavailableHint: 'Wait for the backend to start and for the open document task to finish.', keybindings: [{ mac: 'alt+mod+a' }],
+    menus: [
+      // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
+      { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
+      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+    ]
+  },
+  // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.
+  'activity.togglePause': {
+    title: 'Pause', category: 'Activity Monitor', icon: 'debug-pause', keywords: ['resume', 'stop', 'live'], toggled: 'activityPaused',
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.refresh': {
+    title: 'Refresh Now', category: 'Activity Monitor', icon: 'refresh', keywords: ['sample', 'update'], precondition: 'activeDocumentIsActivityMonitor && !activityPaused',
+    unavailableHint: 'Open the Activity Monitor and resume it first.', keybindings: [{ key: 'f5', when: 'activityMonitorFocus' }]
+  },
+  'activity.setInterval': {
+    title: 'Set Refresh Interval…', category: 'Activity Monitor', icon: 'watch', keywords: ['interval', 'seconds', 'sample'], precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.setChartWindow': {
+    title: 'Set Chart Window…', category: 'Activity Monitor', icon: 'graph-line', keywords: ['chart', 'history', 'minutes', 'window'], precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  'activity.toggleSplit': {
+    title: 'Split View', category: 'Activity Monitor', icon: 'split-horizontal', keywords: ['pane', 'split', 'two'], toggled: 'activitySplit',
+    precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor
+  },
+  // SSMS's F6 and Shift+F6: the tiles, the charts and each pane in turn.
+  'activity.nextPane': {
+    title: 'Next Panel', category: 'Activity Monitor', palette: false, precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor,
+    keybindings: [{ key: 'f6', when: 'activityMonitorFocus' }]
+  },
+  'activity.previousPane': {
+    title: 'Previous Panel', category: 'Activity Monitor', palette: false, precondition: 'activeDocumentIsActivityMonitor', unavailableHint: openMonitor,
+    keybindings: [{ key: 'shift+f6', when: 'activityMonitorFocus' }]
+  },
+  // SSMS's Shift+Esc.
+  'activity.close': {
+    title: 'Close Activity Monitor', category: 'Activity Monitor', icon: 'close', precondition: 'activeDocumentIsActivityMonitor && !documentBusy', unavailableHint: openMonitor,
+    keybindings: [{ key: 'shift+escape', when: 'activityMonitorFocus' }]
   },
   // Not theme.*: PR1's theme menu items (theme.mode.*, theme.create, …) come from themeMenuModel and keep those ids.
   'preferences.colorTheme': {

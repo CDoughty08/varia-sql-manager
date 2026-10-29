@@ -14,7 +14,7 @@ import type { Disposable } from '../core/types'
 import { uiFontFamily } from '../fonts'
 import { chartLabel, formatAgo, formatChartValue, formatClock, formatSpanShort, niceCeiling, type SeriesSummary } from './chart-format'
 import type { LiveHandle, LiveSnapshot, PageVisibility } from './LiveService'
-import { ringGap, type MetricRing } from './ring'
+import { ringGap, type RingReader } from './ring'
 
 /** A line; a line over a faint fill (one series); or a band stacked on the series before it (waits by category). */
 export type ChartStyle = 'line' | 'area' | 'stacked'
@@ -63,7 +63,7 @@ export interface ChartViewOptions {
   /** A positioned element around the canvas: it gets the tooltip and the crosshair's announcement. */
   readonly root: HTMLElement
   /** The probe's history; undefined until the view opens. */
-  readonly ring: () => MetricRing | undefined
+  readonly ring: () => RingReader | undefined
   readonly title: string
   readonly series: readonly ChartSeries[]
   readonly scale: ChartScale
@@ -147,7 +147,7 @@ export function browserChartEnvironment(): ChartEnvironment {
   }
 }
 
-const inRing = (ring: MetricRing, series: ChartSeries) => Number.isInteger(series.index) && series.index >= 0 && series.index < ring.series
+const inRing = (ring: RingReader, series: ChartSeries) => Number.isInteger(series.index) && series.index >= 0 && series.index < ring.series
 
 /** The categorical color of the n-th series: blue, orange, green, yellow, purple, then round again. */
 export const chartColor = (index: number): ChartSeriesColor => chartCategorical[((index % chartCategorical.length) + chartCategorical.length) % chartCategorical.length]
@@ -218,7 +218,7 @@ export class ChartView implements Disposable {
   private drawn = ''
   /** What the layout, buckets and stack were last reduced from. */
   private reduced = ''
-  private lastRing?: MetricRing
+  private lastRing?: RingReader
   private readonly buckets = new Buckets()
   private stack = { sums: new Float64Array(0), samples: new Float64Array(0), has: new Uint8Array(0), breaks: new Uint8Array(0), tops: new Float64Array(0) }
   private label = ''
@@ -457,7 +457,7 @@ export class ChartView implements Disposable {
 
   /** The window over the ring as it is now. A live one ends at the newest sample, so history stays in view when collection
    *  stops; its times then read as clock times. */
-  private spanOf(ring: MetricRing | undefined): Span {
+  private spanOf(ring: RingReader | undefined): Span {
     const span = Math.max(1, this.window.spanMs)
     const end = this.window.end === 'live' ? ring?.lastTime ?? this.env.now() : this.window.end
     const start = end - span
@@ -467,7 +467,7 @@ export class ChartView implements Disposable {
 
   /** A keyboard crosshair whose sample a live window left moves to the window's oldest sample, so Home stays on it and
    *  the next step starts from what is shown. A pointer's stays under the pointer, on the sample now nearest it. */
-  private keepCrosshair(ring: MetricRing | undefined): void {
+  private keepCrosshair(ring: RingReader | undefined): void {
     const crosshair = this.crosshair
     if (!ring || (crosshair?.from !== 'key' && crosshair?.from !== 'pointer')) return
     const window = this.spanOf(ring)
@@ -486,7 +486,7 @@ export class ChartView implements Disposable {
   }
 
   /** The window and plot area for the canvas's current size, from the ring as it is now. */
-  private measure(ring: MetricRing | undefined, width: number, height: number, context: CanvasRenderingContext2D): Layout | undefined {
+  private measure(ring: RingReader | undefined, width: number, height: number, context: CanvasRenderingContext2D): Layout | undefined {
     if (!(width > 0) || !(height > 0)) return undefined
     const window = this.spanOf(ring), { first, count } = window
     const { min, max } = this.valueRange(ring, first, count)
@@ -502,7 +502,7 @@ export class ChartView implements Disposable {
     return { ...window, left, top, right: Math.max(left + 1, right), bottom: Math.max(top + 1, bottom), min, max }
   }
 
-  private valueRange(ring: MetricRing | undefined, first: number, count: number): { min: number; max: number } {
+  private valueRange(ring: RingReader | undefined, first: number, count: number): { min: number; max: number } {
     const min = this.scale.min ?? 0
     if (typeof this.scale.max === 'number' && this.scale.max > min) return { min, max: this.scale.max }
     let top = Number.NEGATIVE_INFINITY
@@ -531,16 +531,16 @@ export class ChartView implements Disposable {
 
   /** A series' value; NaN when the ring has no series of its index, which the ring's sample-major values would otherwise
    *  answer with another series' value (a consumer that miscounted, or a catalogue that dropped a series). */
-  private read(ring: MetricRing, index: number, series: ChartSeries): number {
+  private read(ring: RingReader, index: number, series: ChartSeries): number {
     return inRing(ring, series) ? ring.value(index, series.index) : Number.NaN
   }
-  private minMax(ring: MetricRing, series: ChartSeries, first: number, count: number): [number, number] {
+  private minMax(ring: RingReader, series: ChartSeries, first: number, count: number): [number, number] {
     return inRing(ring, series) ? ring.minMax(series.index, first, count) : [Number.NaN, Number.NaN]
   }
 
   /** `reduce`: the window's samples changed, or what they are reduced to (the size, the series); otherwise the layout,
    *  buckets and stack from the last draw still hold, and only the paint (a crosshair, colors) is redone. */
-  private draw(context: CanvasRenderingContext2D, ring: MetricRing | undefined, width: number, height: number, ratio: number, forced: boolean, reduce: boolean): void {
+  private draw(context: CanvasRenderingContext2D, ring: RingReader | undefined, width: number, height: number, ratio: number, forced: boolean, reduce: boolean): void {
     const pixelWidth = Math.max(1, Math.round(width * ratio)), pixelHeight = Math.max(1, Math.round(height * ratio))
     if (this.canvas.width !== pixelWidth) this.canvas.width = pixelWidth
     if (this.canvas.height !== pixelHeight) this.canvas.height = pixelHeight
@@ -613,7 +613,7 @@ export class ChartView implements Disposable {
   }
 
   /** Fills the buckets of the line and area series: min, max, first and last value per column, and the line's breaks. */
-  private bucket(ring: MetricRing, layout: Layout, lines: readonly ChartSeries[], columns: number): void {
+  private bucket(ring: RingReader, layout: Layout, lines: readonly ChartSeries[], columns: number): void {
     this.buckets.reset(columns, lines.length)
     if (!lines.length) return
     const pending = new Uint8Array(lines.length)
@@ -688,7 +688,7 @@ export class ChartView implements Disposable {
 
   /** Fills the stack: per column, each band's top (the means of the column's samples, each on the ones below), whether
    *  the column has a sample with a stacked value, and whether the bands break before it. */
-  private reduceStack(ring: MetricRing, layout: Layout, stacked: readonly ChartSeries[], columns: number): void {
+  private reduceStack(ring: RingReader, layout: Layout, stacked: readonly ChartSeries[], columns: number): void {
     const count = stacked.length
     if (this.stack.has.length !== columns || this.stack.tops.length !== columns * count) {
       this.stack = { sums: new Float64Array(columns * count), samples: new Float64Array(columns), has: new Uint8Array(columns), breaks: new Uint8Array(columns), tops: new Float64Array(columns * count) }
@@ -761,7 +761,7 @@ export class ChartView implements Disposable {
   }
 
   /** The newest sample's marker, ringed in the surface so it stands off the line. */
-  private drawEnd(context: CanvasRenderingContext2D, ring: MetricRing, layout: Layout, series: ChartSeries, x: (column: number) => number, y: (value: number) => number, columns: number, surface: string, forced: boolean): void {
+  private drawEnd(context: CanvasRenderingContext2D, ring: RingReader, layout: Layout, series: ChartSeries, x: (column: number) => number, y: (value: number) => number, columns: number, surface: string, forced: boolean): void {
     const index = layout.first + layout.count - 1, value = this.read(ring, index, series)
     if (!Number.isFinite(value)) return
     this.dot(context, x(this.column(ring.time(index), layout, columns)), y(value), this.variant === 'sparkline' ? 2 : 3, this.color(series.color, 'text', forced), surface)
@@ -781,7 +781,7 @@ export class ChartView implements Disposable {
     return Math.min(columns - 1, Math.max(0, Math.floor((time - layout.start) / layout.span * columns)))
   }
 
-  private drawCrosshair(context: CanvasRenderingContext2D, ring: MetricRing, layout: Layout, x: (column: number) => number, y: (value: number) => number, columns: number, surface: string, forced: boolean): void {
+  private drawCrosshair(context: CanvasRenderingContext2D, ring: RingReader, layout: Layout, x: (column: number) => number, y: (value: number) => number, columns: number, surface: string, forced: boolean): void {
     const crosshair = this.crosshair
     if (!crosshair || this.variant !== 'chart' || crosshair.time < layout.start || crosshair.time > layout.start + layout.span) { this.hideTip(); return }
     const index = this.nearest(ring, layout, crosshair.time), column = this.column(ring.time(index), layout, columns), left = x(column)
@@ -821,7 +821,7 @@ export class ChartView implements Disposable {
   private hideTip(): void { if (!this.tip.hidden) this.tip.hidden = true }
 
   /** The crosshair's sentence: "4:10 ago · 93 %", or "now · Read 12 MB/s · Write 5 MB/s". */
-  private describe(ring: MetricRing, layout: Span, index: number): string {
+  private describe(ring: RingReader, layout: Span, index: number): string {
     const values = this.series.map(series => {
       const value = formatChartValue(this.read(ring, index, series), this.scale.unit)
       return this.series.length > 1 ? `${series.label} ${value}` : value
@@ -829,11 +829,11 @@ export class ChartView implements Disposable {
     return [this.when(ring, layout, index), ...values].join(' · ')
   }
 
-  private when(ring: MetricRing, layout: Span, index: number): string {
+  private when(ring: RingReader, layout: Span, index: number): string {
     return layout.relative ? formatAgo(layout.start + layout.span - ring.time(index)) : formatClock(ring.time(index))
   }
 
-  private nearest(ring: MetricRing, layout: Span, time: number): number {
+  private nearest(ring: RingReader, layout: Span, time: number): number {
     const last = layout.first + layout.count - 1
     const after = Math.max(layout.first, Math.min(last, ring.indexAt(time)))
     const before = Math.max(layout.first, after - 1)
@@ -860,7 +860,7 @@ export class ChartView implements Disposable {
     this.invalidate()
   }
 
-  private updateLabel(ring: MetricRing | undefined, layout: Layout): void {
+  private updateLabel(ring: RingReader | undefined, layout: Layout): void {
     const summaries: SeriesSummary[] = this.series.map(series => {
       if (!ring || layout.count === 0) return { label: series.label, latest: Number.NaN, min: Number.NaN, max: Number.NaN }
       const [min, max] = this.minMax(ring, series, layout.first, layout.count)
@@ -898,8 +898,9 @@ export class ChartView implements Disposable {
   }
 }
 
-/** What a chart reads from its live view: the probe's ring, and the ticks, ring resizes and snapshots that change it. */
-export type ChartSource = Pick<LiveHandle, 'ring' | 'onTick' | 'onRings' | 'getSnapshot' | 'subscribe'>
+/** What a chart reads from its live view: the probe's ring (or a view of it, such as scaledRing), and the ticks, ring
+ *  resizes and snapshots that change it. */
+export type ChartSource = Pick<LiveHandle, 'onTick' | 'onRings' | 'getSnapshot' | 'subscribe'> & { ring(probe: LiveProbeId): RingReader | undefined }
 
 /** Whether a probe's newest sample is current: the probe is collecting on schedule (fresh, or limited but running) and
  *  that sample came within twice its effective interval. LiveService calls a probe stale once nothing arrived for twice

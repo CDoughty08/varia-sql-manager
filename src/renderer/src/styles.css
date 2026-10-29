@@ -1222,3 +1222,71 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   /* A toast keeps its outline, and its glyph says the severity as its role's label does. */
   .toast { border-color: CanvasText; }
 }
+/* The Activity Monitor (activity/ActivityMonitor.tsx) inside the document frame: tiles, expanded charts, then the panes,
+   which take the rest of the height. The frame is the size container, so the document's width decides the reflow. The
+   body is the document's height: the tiles keep theirs, the expanded charts give way down to a floor, and the panes keep
+   their own (D-am §3.2: a pane never needs expanding to show data); only a document too short for all three scrolls. */
+.activity-body { display: flex; flex-direction: column; gap: var(--varia-space-3); height: 100%; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.activity-cost { display: inline-flex; align-items: center; gap: var(--varia-space-0); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-select { height: var(--varia-control); padding: 0 6px; }
+/* The kit's InlineError, its own inset kept, in a box. */
+.activity-banner { flex: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
+.activity-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.activity-tiles { display: grid; flex: none; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--varia-space-2); }
+.activity-tile { position: relative; display: flex; min-width: 0; cursor: pointer; }
+.activity-tile > .tile { flex: 1; }
+/* Only the caption's first line gives way to the chart button (a float as wide as the button reaches into the caption,
+   one line high), so a word that cannot break ("Requests/sec") has the caption's whole width on the lines below, with
+   room to spare in wider fonts (Linux's DejaVu Sans) in the narrowest row of eight. SSMS's name wraps (to three lines at
+   most) rather than being cut; the secondary figures keep to one line, whole in the tile's tooltip and name, so the tiles
+   stay short. */
+.activity-tile .tile-caption-text { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.activity-tile .tile-caption-text::before { content: ''; float: right; width: calc(var(--varia-control) + var(--varia-space-1) - var(--varia-space-3)); height: var(--varia-line-xs); }
+.activity-tile .tile-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-tile-toggle { position: absolute; top: var(--varia-space-1); right: var(--varia-space-1); display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; color: var(--varia-descriptionForeground); }
+.activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
+.activity-sparkline { height: 28px; }
+.activity-charts { display: grid; flex: 0 1 auto; min-height: 150px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
+.activity-chart { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); }
+.activity-chart-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.activity-chart-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.activity-chart-close { display: inline-flex; padding: 2px; }
+.activity-chart-plot { flex: 1 1 auto; height: 180px; min-height: 0; }
+.activity-panes { display: grid; flex: 1 1 260px; min-height: 260px; }
+.activity-panes[data-orientation="column"][data-split] { grid-template-columns: minmax(0, 1fr); }
+.activity-panes[data-orientation="row"][data-split] { grid-template-rows: minmax(0, 1fr); }
+.activity-splitter { background: transparent; outline: none; }
+.activity-panes[data-orientation="row"] > .activity-splitter { width: 6px; cursor: col-resize; }
+.activity-panes[data-orientation="column"] > .activity-splitter { height: 6px; cursor: row-resize; }
+.activity-splitter:hover, .activity-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
+.activity-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); overflow: hidden; }
+.activity-pane-tabs { display: flex; flex: none; overflow-x: auto; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.activity-pane-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; flex: none; height: var(--varia-bar); padding: 0 var(--varia-space-3); border: 0; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); }
+.activity-pane-tabs [role="tab"][aria-selected="true"], .activity-pane-tabs [role="tab"][aria-selected="true"]:hover:not(:disabled) { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px 0 var(--varia-panelTitle-activeBorder); }
+.activity-pane-tabs [role="tab"]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.activity-pane-body { display: flex; flex: 1; min-height: 0; overflow: auto; }
+/* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
+   which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */
+@container (max-width: 960px) { .activity-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (max-width: 560px) { .activity-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* A narrow monitor shows its verbs as their icons, their names kept in the tooltip and for assistive technology, so the
+   title and its state keep their room in the one header row (a 1,280 px window's document included). */
+@container (max-width: 1040px) {
+  .document-frame[data-activity-monitor] .document-verb { position: relative; justify-content: center; width: var(--varia-control); padding: 0; }
+  .document-frame[data-activity-monitor] .document-verb-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+/* Narrower still (a 1,024 px window), the controls take a row of their own under the title, always, so the header's height
+   never follows the state's words. */
+@container (max-width: 800px) {
+  .document-frame[data-activity-monitor] .document-header { flex-wrap: wrap; }
+  .document-frame[data-activity-monitor] .document-actions { flex: 1 1 100%; margin-left: 0; }
+}
+/* Stacked (under 760 px of document), two expanded charts keep a chart's floor each. */
+@container (width < 760px) { .activity-charts:has(> .activity-chart + .activity-chart) { min-height: calc(2 * 150px + var(--varia-space-2)); } }
+@media (forced-colors: active) {
+  .activity-banner, .activity-pane, .activity-chart { border-color: CanvasText; }
+  .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .activity-pane-tabs [role="tab"][aria-selected="true"], .activity-pane-tabs [role="tab"][aria-selected="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .activity-splitter { background: CanvasText; forced-color-adjust: none; }
+  .activity-splitter:hover, .activity-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
+}

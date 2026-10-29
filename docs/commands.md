@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (160)
+## Commands (169)
 
 ### File
 
@@ -70,7 +70,7 @@ keys it uses are listed below.
 | Show Query Editor | `window.editor` | — | — | — | Always | Window › Query Editor |
 | Show Query Output | `window.output` | — | — | — | Always | Window › Query Output |
 | Toggle Results Pane | `view.toggleResultsPane` | Ctrl+R | Ctrl+R | ⌘R | Always; checked when `outputPaneVisible` | Window › Show Results Pane |
-| Switch Between Query and Results | `window.switchPane` | F6, Shift+F6 | F6, Shift+F6 | F6, ⇧F6 | `activeDocumentIsText` | — |
+| Switch Between Query and Results | `window.switchPane` | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), Shift+F6 (`!activityMonitorFocus`) | F6 (`!activityMonitorFocus`), ⇧F6 (`!activityMonitorFocus`) | `activeDocumentIsText` | — |
 | Save Layout… | `layout.save` | — | — | — | Always | View › Save Layout…; Window › Save Window Layout… |
 | Load Layout… | `layout.load` | — | — | — | Always | View › Load Layout…; Window › Load Window Layout… |
 | Reset Layout | `layout.reset` | — | — | — | Always | View › Reset Layout; Window › Reset Window Layout |
@@ -197,6 +197,25 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### Tools
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Activity Monitor | `activity.open` | — | — | ⌥⌘A | `backendReady && !documentBusy` | View › Activity Monitor; Object Explorer context menu › Activity Monitor |
+
+### Activity Monitor
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pause | `activity.togglePause` | — | — | — | `activeDocumentIsActivityMonitor`; checked when `activityPaused` | — |
+| Refresh Now | `activity.refresh` | F5 (`activityMonitorFocus`) | F5 (`activityMonitorFocus`) | F5 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !activityPaused` | — |
+| Set Refresh Interval… | `activity.setInterval` | — | — | — | `activeDocumentIsActivityMonitor` | — |
+| Set Chart Window… | `activity.setChartWindow` | — | — | — | `activeDocumentIsActivityMonitor` | — |
+| Split View | `activity.toggleSplit` | — | — | — | `activeDocumentIsActivityMonitor`; checked when `activitySplit` | — |
+| Next Panel (not in the palette) | `activity.nextPane` | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
+| Previous Panel (not in the palette) | `activity.previousPane` | Shift+F6 (`activityMonitorFocus`) | Shift+F6 (`activityMonitorFocus`) | ⇧F6 (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor` | — |
+| Close Activity Monitor | `activity.close` | Shift+Escape (`activityMonitorFocus`) | Shift+Escape (`activityMonitorFocus`) | ⇧⎋ (`activityMonitorFocus`) | `activeDocumentIsActivityMonitor && !documentBusy` | — |
 
 ### Preferences
 
@@ -335,6 +354,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **S**ave Layout… | `layout.save` | Always |
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
+| `2_monitor` | Activity **M**onitor | `activity.open` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
@@ -432,14 +452,15 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **D**isconnect | `connection.disconnect` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
-| `0_connect` | Environmen**t**… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
+| `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
+| `1_query` | Ac**t**ivity Monitor | `activity.open` | `explorerNode == 'server' && !explorerServerLost` |
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
-| `3_filter` | Remo**v**e Filter | `explorer.removeFilter` | `explorerFolderFiltered` |
+| `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
 | `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
@@ -618,7 +639,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (81)
+## Context keys (85)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -638,6 +659,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `outputGridFocus` | boolean | focus | Focus is in a results grid, which copies its selected cells rather than text. |
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
+| `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
 | `quickInputVisible` | boolean | state | The command palette or a picker is open. |
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
@@ -653,6 +675,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
 | `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
 | `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
+| `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
+| `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
 | `activeDocumentIsQuery` | boolean | state | The active document is a query, not an XML, JSON, or execution plan value opened from the results. |
 | `multipleDocuments` | boolean | state | Two or more queries are open. |
 | `documentBusy` | boolean | state | A document task is in progress: opening, saving, or closing a query, or changing its connection. |

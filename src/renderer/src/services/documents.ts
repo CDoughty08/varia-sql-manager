@@ -29,6 +29,8 @@ export interface CustomDocumentProvider {
   readonly kind: CustomDocumentKind
   /** Whether File › Save All saves it too (a table designer), or only its own Save does (Database Properties' Apply). */
   readonly inSaveAll: boolean
+  /** False for a document with nothing to save (an Activity Monitor): File › Save is not offered on it. */
+  readonly saves?: boolean
   save(id: string, saveAs: boolean): Promise<boolean>
   canClose(id: string): string | undefined
   revision(id: string): number
@@ -102,6 +104,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
   /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
   inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
+  /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
+  savable(id: string): boolean { return this.provider(id)?.saves !== false }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
   /**

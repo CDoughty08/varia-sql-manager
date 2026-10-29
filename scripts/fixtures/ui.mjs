@@ -136,6 +136,8 @@ export const part = {
   // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
+  /** The states kit's live label (kit/LivePill.tsx): "Live · every 2 s", "Paused", "Stopped · backend unavailable". */
+  livePill: '.live-pill',
   statusPillLabel: '.status-pill-label',
   /** A pill's number (StatusPill `value`: a percentage, a count), which never gives way to the label beside it. */
   statusPillValue: '.status-pill-value',
@@ -183,6 +185,12 @@ export const part = {
   propertyField: '.property-field',
   propertyFact: '.property-fact',
   fieldHint: '.field-hint',
+  /** The frame's scrolling content under the header and fact line. */
+  documentContent: '.document-content',
+  // The Activity Monitor (src/renderer/src/activity): a banner (the kit's InlineError in a box), and a tile's caption, which
+  // assistive technology hears in the tile's name instead.
+  activityBanner: '.activity-banner',
+  tileCaption: '.tile-caption-text',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -262,8 +270,9 @@ export const titleBar = page => page.locator(part.titleBar)
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
- * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All; with the classic
- * toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and database lists.
+ * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save, Save All and Activity Monitor;
+ * with the classic toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and
+ * database lists.
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
@@ -507,6 +516,17 @@ const exactly = text => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 export const propertyFact = (frame, label) => frame.locator(part.propertyFact).filter({ has: frame.page().getByRole('term').filter({ hasText: exactly(label) }) }).getByRole('definition')
 /** The strip under a property sheet's sections that shows the hovered or focused row's whole description. */
 export const fieldHint = frame => frame.locator(part.fieldHint)
+/** A live document's label of what its view is doing, in its header (kit/LivePill.tsx). */
+export const livePill = scope => scope.locator(part.livePill)
+/** A document's title, its one level 1 heading. */
+export const documentTitle = frame => frame.getByRole('heading', { level: 1 })
+/** The header's controls and verbs, a group named after the document's title. */
+export const documentActions = (frame, title) => frame.getByRole('group', named(title + ' actions'))
+export const documentContent = frame => frame.locator(part.documentContent)
+/** An Activity Monitor's banner, and its error glyph. */
+export const activityBanner = frame => frame.locator(part.activityBanner)
+export const bannerGlyph = banner => banner.locator(':scope > .codicon')
+export const tileCaptions = frame => frame.locator(part.tileCaption)
 
 // Menus and the quick input
 

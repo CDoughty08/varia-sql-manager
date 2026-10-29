@@ -245,7 +245,16 @@ export const contrastPairs: readonly ContrastPair[] = [
   // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
   ...graphic(['input.border', 'button.background'], editor),
   ...graphic(['descriptionForeground'], input),
-  ...graphic(['button.foreground'], [...editor, 'button.background'])
+  ...graphic(['button.foreground'], [...editor, 'button.background']),
+
+  // The Activity Monitor (src/renderer/src/activity): a count on a pane's tab strip (Blocking's blocked sessions), a tile's
+  // pressed chart button, the focus rings on tiles' buttons and pane tabs, and the panes' splitter, which shows its focus
+  // only by this fill, in the document.
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], [...panelTitle, toneKeys(tone).background])),
+  ...text(['list.inactiveSelectionForeground'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['panelTitle.activeBorder', 'focusBorder'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['focusBorder'], tile, panelTitle),
+  ...graphic(['sash.hoverBorder'], editor)
 ]
 
 /**

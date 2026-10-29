@@ -131,8 +131,8 @@ describe('document frame markup', () => {
       // So is the title, on one line where the header is narrow.
       + '<h1 class="document-title" id="doc-1-title" title="AdventureWorks">AdventureWorks</h1><span class="document-subtitle">Database</span><span class="status-pill">Unsaved changes</span></div>'
       + '<div class="document-actions" role="group" aria-label="AdventureWorks actions"><button type="button">Every 2 s</button>'
-      + '<button type="button" class="document-verb danger" title="Stop"><span class="codicon codicon-debug-stop" data-icon="debug-stop" aria-hidden="true"></span>Stop</button>'
-      + '<button type="button" class="document-verb outline" title="Refresh"><span class="codicon codicon-refresh" data-icon="refresh" aria-hidden="true"></span>Refresh</button>'
+      + '<button type="button" class="document-verb danger" title="Stop"><span class="codicon codicon-debug-stop" data-icon="debug-stop" aria-hidden="true"></span><span class="document-verb-label">Stop</span></button>'
+      + '<button type="button" class="document-verb outline" title="Refresh"><span class="codicon codicon-refresh" data-icon="refresh" aria-hidden="true"></span><span class="document-verb-label">Refresh</span></button>'
       + '<button type="button" class="document-verb" title="Split View">Split View</button>'
       // Only the first primary verb is filled.
       + '<button type="button" class="document-verb primary" title="Save (Ctrl+S)">Save</button>'

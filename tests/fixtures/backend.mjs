@@ -34,6 +34,11 @@
 // explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
 // jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
 // unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
+// The activity source (the Activity Monitor) runs no SQL either: its overview samples every series of the catalogue from
+// a slow wave (blocked sessions only with the control file activity-blocked; with activity-failing each sample fails as
+// BLOCKED, as a probe that waited out its lock timeout does), the resources probe opens unavailable as the
+// real one does until it is sampled, and on server 'no-permission' the overview opens unavailable (PERMISSION_DENIED);
+// a connection to that server reports its login, as the server profile does, so the monitor offers Copy GRANT statement.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -52,6 +57,7 @@ import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
 import { liveProbes } from '../../src/shared/live/catalog.ts'
+import { pendingProbes } from '../../src/shared/activity/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -558,8 +564,8 @@ const fixtures = {
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
   const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined
-  if ((params.source !== 'debug.synthetic' && !explorer) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (!explorer && params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if ((params.source !== 'debug.synthetic' && params.source !== 'activity' && !explorer) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !(params.source === 'activity' ? liveProbes[probe.probe]?.source === 'activity' : syntheticProbes.includes(probe.probe)))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
   if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
@@ -577,7 +583,13 @@ function liveSubscribe(id, credit, params) {
     respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, explorer ? explorerOpened([...live.probes.keys()]) : opened([...live.probes.keys()]))
+  if (params.source === 'activity') {
+    const denied = workbenchConnections.get(params.connectionId)?.server === 'no-permission'
+    const states = new Map([...live.probes.keys()].map(probe => [probe, pendingProbes[probe] ? { state: 'unavailable', reason: 'NOT_SUPPORTED', note: pendingProbes[probe] }
+      : denied && liveProbes[probe].permission === 'serverState' ? { state: 'unavailable', reason: 'PERMISSION_DENIED', note: 'The login lacks VIEW SERVER PERFORMANCE STATE.' } : { state: 'ok' }]))
+    for (const [probe, state] of states) if (state.state === 'unavailable') live.probes.get(probe).unavailable = true
+    sendLive(live, { type: 'live.opened', seq: 0, source: 'activity', probes: [...live.probes.values()].map(probe => ({ probe: probe.probe, intervalMs: probe.intervalMs, minIntervalMs: liveProbes[probe.probe].intervalMs.min, maxIntervalMs: liveProbes[probe.probe].intervalMs.max, ...states.get(probe.probe) })) })
+  } else sendLive(live, explorer ? explorerOpened([...live.probes.keys()]) : opened([...live.probes.keys()]))
   wakeLive(live)
 }
 const explorerOpened = probes => ({ type: 'live.opened', seq: 0, source: 'explorer', probes: probes.map(probe => ({ probe, intervalMs: liveProbes[probe].intervalMs.default, minIntervalMs: liveProbes[probe].intervalMs.min, maxIntervalMs: liveProbes[probe].intervalMs.max, state: 'ok' })) })
@@ -600,6 +612,17 @@ function explorerSample(live, probe) {
   live.kept.set(probe.probe, kept)
   return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
 }
+/** An overview sample: every series of the catalogue, a rate's first sample (and the first after a pause) without a value. */
+function overviewMetrics(n, first) {
+  const blocked = !!controlDirectory && existsSync(join(controlDirectory, 'activity-blocked'))
+  const wave = Math.sin(n / 3)
+  const values = {
+    cpuPercent: 35 + 20 * wave, schedulerDelay: 4 + wave, waitingTasks: 2_100 + 400 * wave, ioMegabytes: (3 + wave) * 1_048_576, readLatency: 4, writeLatency: 2, batchRequests: 950 + 50 * wave,
+    compilations: 12, recompilations: 1, blockedSessions: blocked ? 2 : 0, longestBlock: blocked ? 41_200 : 0, activeRequests: 12, userSessions: 87, logins: 3, runnablePerScheduler: 0.4,
+    workQueue: 0, grantsPending: 0, grantsOutstanding: 2, pageLifeExpectancy: 5_412, deadlocks: 0, lockWaits: 1
+  }
+  return liveProbes['activity.overview'].series.map(series => first && series.counter !== 'gauge' ? null : values[series.id] ?? null)
+}
 function sendLive(live, value) {
   const body = encodeControl(value)
   live.available -= body.length
@@ -609,7 +632,7 @@ const periodOf = (live, probe) => live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
-  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused)
+  const active = live.paused ? [] : [...live.probes.values()].filter(probe => !probe.paused && !probe.unavailable)
   if (active.length === 0) return
   const now = Date.now(), next = Math.min(...active.map(probe => probe.dueAt))
   if (next > now) { live.timer = setTimeout(() => wakeLive(live), next - now); return }
@@ -627,6 +650,9 @@ function wakeLive(live) {
     probe.resumed = false
     const n = ++probe.samples
     if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
+    else if (probe.probe === 'activity.overview' && controlDirectory && existsSync(join(controlDirectory, 'activity-failing'))) errors.push({ probe: probe.probe, code: 'BLOCKED', message: 'The overview waited too long for a lock and will try again.', retryInMs: probe.intervalMs, terminal: false })
+    else if (probe.probe === 'activity.overview') samples.push({ ...sample, metrics: overviewMetrics(n, sample.gap === 'baseline' || sample.gap === 'resumed') })
+    else if (live.source === 'activity') samples.push(sample)
     else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
@@ -703,7 +729,8 @@ async function workbench(id, method, params, credit) {
       }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
-      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
+      const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {},
+        ...params.server === 'no-permission' && params.username ? { login: params.username } : {} }
       workbenchConnections.set(info.id, info)
       return respond(id, info)
     }

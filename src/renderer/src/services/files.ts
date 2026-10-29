@@ -34,9 +34,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
-  canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
+  /** Save for the tab a command targets (a tab's menu names it), else the active one; never for a document with nothing to save. */
+  canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canClose(id) && this.documents.savable(id) }
   /** A query still executing can close too: main asks to cancel it first. */
-  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) }
+  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
   reportError(error: string, kind: FileSnapshot['kind'] = 'error'): void {
     const current = this.getSnapshot()
     if (!this.disposed && (error !== current.error || kind !== current.kind)) this.publish({ error, kind })

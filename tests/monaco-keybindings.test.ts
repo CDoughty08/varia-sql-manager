@@ -37,7 +37,8 @@ const monacoShadowAllowlist: Readonly<Record<string, string>> = {
   'delete': "Delete in Object Explorer's tree only (activePanel == 'explorer' && !textInputFocus); Monaco's deleteRight acts in editor text",
   'cmd+backspace': "Delete in Object Explorer's tree on macOS, as in Finder; Monaco's deleteWordLeft acts in editor text",
   'ctrl+g': 'Go To Line, as in SSMS (Windows and Linux); Monaco binds ⌘G (next match) only on macOS',
-  'f4': "The table designer's Properties (designerFocus): its grid is outside the editor, so Monaco's next reference keeps F4 in editor text"
+  'f4': "The table designer's Properties (designerFocus): its grid is outside the editor, so Monaco's next reference keeps F4 in editor text",
+  'shift+escape': "Close Activity Monitor (activityMonitorFocus), SSMS's key: the monitor is outside the editor, so Monaco's Shift+Escape (closing a widget, leaving a snippet) keeps it in editor text"
 }
 
 const keyNames: Readonly<Record<string, string>> = {

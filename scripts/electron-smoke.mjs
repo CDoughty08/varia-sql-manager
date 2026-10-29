@@ -172,7 +172,7 @@ try {
   expect(titleBar.height).toBe(40)
   // The header keeps the file commands; each query has its own bar under the tab strip, with Execute (the filled button)
   // and Cancel, then its server and database lists in the connection pill.
-  expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All'])
+  expect(await toolbar(page).getByRole('button').evaluateAll(buttons => buttons.map(button => button.getAttribute('aria-label')))).toEqual(['Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
   await expect(toolbar(page).getByRole('combobox')).toHaveCount(0)
   await expect(queryConnection(page).getByLabel('Query server', { exact: true })).toBeVisible()
   await expect(queryConnection(page).getByLabel('Query database', { exact: true })).toBeDisabled()

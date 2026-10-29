@@ -114,7 +114,8 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
     }
   }
   return {
-    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : handle(id)?.getSnapshot(),
+    // Any open view's snapshot, the Activity Monitor's included, not only the views these hooks opened.
+    snapshot: (id?: string) => id === undefined ? live.getSnapshot() : (handle(id) ?? live.get(id))?.getSnapshot(),
     frames: (id: string) => live.frames(id),
     setPageHidden: (hidden?: boolean) => live.setPageHidden(hidden),
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {

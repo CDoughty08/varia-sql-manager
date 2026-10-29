@@ -73,6 +73,9 @@ export interface LiveSpec {
    *  for one when none is free or the backend refuses it (BUSY), and gives its slot up, newest first, to a view that opens
    *  when every slot is taken, or that the backend refuses on the same server. */
   background?: true
+  /** Opens paused by the user, as setUserPaused(true) would, but before it subscribes: every probe goes paused, so no
+   *  sample runs until setUserPaused(false). A view that pauses after open could sample first. */
+  paused?: boolean
 }
 
 export type LiveStatus = 'connecting' | 'live' | 'paused' | 'dormant' | 'lost' | 'ended'
@@ -502,6 +505,7 @@ class Handle implements LiveHandle {
     this.args = spec.args
     this.whileHidden = spec.whileHidden
     this.background = !!spec.background
+    this.userPaused = !!spec.paused
     for (const probe of spec.probes) {
       const catalogue = service.catalog.probes[probe.probe]
       const interval = catalogue?.intervalMs ?? { default: limits.live.intervalMs.min, min: limits.live.intervalMs.min, max: limits.live.intervalMs.max }
