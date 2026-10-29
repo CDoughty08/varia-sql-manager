@@ -848,22 +848,24 @@ results port, and a backend whose HELLO lacks either is refused.
 
 ```ts
 live.subscribe { subscriptionId: uuid, connectionId: uuid, source, probes: { probe, intervalMs: 1,000..3,600,000, paused?,
-                 sort?: { column, descending }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
+                 sort?: { column, descending, table? }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
                  args?, resume?: base64url ≤ 256 }
 live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs optional, clear?: (sort | view | filter)[1..3])[1..8],
-                 refresh?: true, track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64] }[1..8], args? }
+                 refresh?: true, track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64], linger?: 0..keys }[1..8], args? }
 ```
 
 Every probe belongs to the source and is named once; the interval is then clamped to the probe's own minimum and maximum.
-Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties), a view must
-be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
+Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties); a key with
+`table` sorts only that snapshot table and must name one of its columns, a key without it sorts every snapshot table that has
+the column, and each column is named once per table (or once for all). A view must be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
 (`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
 errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }`, a sampling period below the 1 s
 minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
 error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. A source
 whose append tables can start elsewhere than their first row takes `start` (`liveStartSchema`): `'beginning'`,
 `{ tail: 1..200,000 }` (the last rows) or `{ before: 1..2^53−1 }` (the rows before an id, ending there). Tracking names a keyed
-snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F. A source without append
+snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F, and `linger` says how many
+of the first keys stay one revision when they leave (all of them when absent). A source without append
 tables has nothing to resume from and refuses `resume`; a token is base64url characters only (the backend matches the whole
 string, so a trailing newline is refused on both sides). An update must change something, and repeats the subscription's
 source; main and the backend check it matches. In an update, an absent setting keeps its value, so `clear` drops one: the
@@ -903,17 +905,24 @@ from its own state; the writers do the rest.
   k−1 and names it in `retired` (a revision that could not be stored names it in the next one that is). A revision applies the
   probe's view (a predicate the source gives for each view id it declares), then its filter (`filterMode: 'memory'`: the
   stored text contains the filter text, case-insensitively, in the named columns of that table, or in all of them; columns
-  of another of the probe's tables leave this one whole), sorts by the probe's sort (numbers as numbers, NULL first ascending,
-  text case-insensitively and then exactly), then by the key, so equal values never trade places, and stores at most the
+  of another of the probe's tables leave this one whole), sorts by the probe's sort keys for it (numbers as numbers, NULL
+  first ascending, text case-insensitively and then exactly), then by the key, so equal values never trade places (a table
+  that no key names keeps the source's order), and stores at most the
   table's row cap (`rowLimit` past it, the rows the source left out counted in `rowsRead`). `diff` counts keys added and
   removed and kept keys whose cells changed (a 64-bit hash of their texts); `tracked` gives each key of the latest track list
   its new row or −1. A key is its key cells' stored texts joined with U+001F, NULL as empty text, so it equals what the worker
   decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
-  revision, at the row it had, and lists it in `departed`; the next revision drops it. Facet columns carry their distinct
+  revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
+  keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
   values over every row the source gave (before the view and filter; NULL left out), most frequent first, at most 100 of at
   most 128 characters (values that differ only past them count together), and only when they changed since the table's last
   facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
   not fit is left out (`more`) for a later tick to send.
+- **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet, and that no sort or filter names; a filter over every column leaves it out, so its text never matches):
+  each cell is `error`, `warning`, `running`, `muted` or NULL. The stored result's column keeps the role
+  (`ResultColumn.role` `tone`), so the grid hides it and colours the row instead (LiveGrid, below), and Copy and Save
+  Results As leave it out of every part, header and JSON object whatever columns a request names (`ResultJobs` through
+  `ResultTextWriter.Hidden`; a part of only the tone copies no text).
 - **Append tables.** One result (a segment) grows by the rows a source reads above the table's settled id, ordered by its one
   key, an integer id. Ids are assigned at insert, not commit, so a lower id can become visible after a higher one (under READ
   COMMITTED, or for an instant under READ UNCOMMITTED): each read covers every unsettled id again (the source reads `@top` =
@@ -996,10 +1005,11 @@ overlaps itself; a source runs its due probes through an `ILiveSampler`. `debug.
 no SQL, and its tables go through the same writers as the SQL sources' (Tables, above): its metrics probe counts samples and
 draws a wave (the rate is null until a second sample); its table probe stores one snapshot per sample whose rows move on by
 one id each time, so rows leave at the top and arrive at the bottom; its status probe reports the phase and the sample
-count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows) and their groups,
+count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows, a row tone by group)
+and their groups,
 which come from the source's own state rather than a query, and with `errorEvery` fails the groups alone, as one failed
-statement of a batch would; its log probe grows an append table from an in-memory log, with late messages, a start, and a
-restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
+statement of a batch would; its log probe grows an append table from an in-memory log (toned by level), with late
+messages, a start, and a restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
 reporting the backend's gen2 collections. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
@@ -1139,8 +1149,9 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe` (there is no
   subscription-wide pause there) and unpauses them when it resumes. `setArgs` changes the source's `args` in place (the
   history and state carry on, and later subscriptions use them). Refresh sends `refresh: true` (a dormant view subscribes
-  again); `track` sends a keyed table's tracked keys with a new `seq` each time, and a new subscription sends them again
-  with new ones.
+  again); `track` sends a keyed table's tracked keys (and how many linger) with a new `seq` each time, and a new
+  subscription sends them again with new ones. `probeOptions(probe)` reads a probe's settings as the view wants them (a
+  copy), so a grid built again shows the sort its probe has.
 - **Ends.** A backend that went away (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost`
   with its history and its tables' handles (they read `lost`); nothing resubscribes by itself, since the connection went
   with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it
@@ -1206,8 +1217,65 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
+- **Tables.** `handle.table(probe, index)` is the table's latest result as a `ResultHandle`, with its revision, diff and
+  departed rows (snapshot) or segment, `rolledFrom` and `restarted` (append). `tracked` carries the rows the backend
+  found and, when the view still has it, the key list that `seq` answers: the view keeps every list it sent for the table
+  since the newest one a sample answered (at most 64), since many may go while one sample runs.
 
-Later: `LiveGrid` (L5) on these views.
+**LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
+`GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
+`GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
+the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
+follow tail.
+- **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
+  will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
+  empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the
+  selected rows (the active row and every block's anchor and focus rows), then the rows next to the active row and the first
+  row shown unless that is row 0 (at most 64): it reads their keys from the window cache's worker (`display: false` over
+  the key columns, in as few windows as fit), sends them with `track` only when the list changes, with `linger` counting
+  the selected rows' keys, so only a selected row that leaves stays one revision, and maps each row it knew to where the
+  backend says its key went; rows it did not know keep their index. A revision sampled under an older list may not answer a
+  selected row's key: the selection then stays at its index for now, but the grid keeps that key (pinned) for that row, sends
+  it, reports it as `activeKey`, and moves the selection once a revision places it; a click or key of the user's replaces
+  pinned keys, since the user chose by what they see. A block whose row is gone collapses to the active cell; an active row that is gone moves to
+  where the nearest surviving row went (below, then above, within 64 rows), passing over rows whose place the grid does
+  not know, and else stays at its index. A view scrolled to the very top stays at the top,
+  so rows that sort first are seen. Departed rows are muted for their one revision, whatever their tone. A grid that is disposed
+  (its pane unmounts) sends an empty list for its table, so the backend stops following, and keeping, the rows it selected.
+- **Tones.** The tone column (the result's last, role `tone`) is not shown: each row tile the grid reads also reads the tile
+  column that holds it, and each pooled row takes one class, `tone-error`, `tone-warning`, `tone-running` or
+  `tone-muted` (theme keys `resultsGrid.row{Error,Warning,Running,Muted}{Background,Foreground}`; a NULL in a toned row drops
+  its tint). Under forced colours a toned row's number gets a bar and a muted row dims. The owner may name tones for screen
+  readers (`toneLabel`, "blocked", "ended"), which the active cell's label then ends with.
+- **Append segments.** A segment grows in place. While the view is at its last row it stays there as rows arrive; scrolled
+  up, it stays where it is and the pane counts the rows that arrived since ("n new rows · Jump to latest", which scrolls
+  back and follows again; `newRowsLabel` names the rows another way). A roll swaps to the new segment and keeps
+  following; a restart (a new filter or args) keeps the view's intent: the tail if it followed, else the top of the new rows.
+- **Remounts.** An owner that unmounts the pane (a tab switch) keeps a `LiveGridState` and passes it again: GridView's scroll,
+  widths, selection and `following` (a follow-tail grid built over a state that had left the tail opens where it was), the
+  rows the segment had when the view left its tail, and the selected rows' keys (known in the same result, pinned in a newer
+  one). The grid reports the selection it restores as its snapshot's `selection` and `activeKey`.
+- **Sort, Copy, Save.** `sortBy(column, descending)` sets the probe's sort key for this grid's table (`table`, by catalogue
+  column id; never the tone; append tables are in id order), keeping the keys of the probe's other tables (a probe-wide key gives way on this table and becomes a key of each other
+  snapshot table with that column), and the next revision arrives sorted; the snapshot's `sort` is this table's keys in the probe's settings.
+  GridView has no header sort yet: header presses select columns, and a header-click sort with its indicator and
+  `aria-sort` is Activity Monitor's (AM2b) change to GridView. Copy acts on the revision the grid shows, through
+  `results.copy`, which leases it: the samples after it may retire it mid-copy and the copy still completes. Save names
+  that revision too, but a revision is retired two samples on, sooner than most save dialogs close, and the backend's
+  lease starts only with the export: so for a live snapshot table main saves the table's newest revision the renderer owns
+  once the file is chosen (`ResultsPortHost.liveNewest`, from the ticks it relays), the one the grid shows by then (which
+  may hold a departed row that stays its one revision); it fails `RESULT_UNAVAILABLE` only if the subscription ended
+  meanwhile without keeping the table (a source that ends keeps its newest revision, which is saved). When the view's rows are
+  gone (the table it holds now is lost or released) and a job failed because its result was, Copy and Save answer in the live
+  view's words, not a query's; a retired revision is not a stop, and any other failure (a file in use) keeps its own words. An append segment saves once it is complete (a roll
+  or the source's end).
+- **What the owner sees.** The grid's snapshot carries the table shown, the new-rows count, the sort, `lost` (the shown
+  result was lost with the backend), `released` (the view's subscription ended and released it: `dormant` while hidden
+  long enough to stop, which resumes when shown, else `stopped`; the pane shows an overlay for both and for `lost`), the selection the grid shows (a swap
+  that moves it reports it, as a click does; one to a revision with no rows clears it, and the first cell a frame selects
+  once rows come back is read from the grid) and the active row's key once known (`activeKey`), for a details pane, Kill
+  or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
+  Save's command and the context menu are the owning view's (later PRs).
 
 ## Results port and results worker
 
@@ -1637,7 +1705,8 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   core and `ResultClient`, and a `LiveService` view on it hidden, shown, lost with a restart and back after a Reconnect.
   `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
   update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
-  memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
+  memory, the track lists a sample may answer), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the
+  indicator text.
   `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
   pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
   from the theme (the DOM's system colors, followed through a palette change, and dashes under forced colors), stacked
@@ -1647,6 +1716,10 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   stacked gaps, lone samples and missing values, the 12-series cap, linked charts, the table and `probeCurrent`'s bound;
   `tests/live-service.test.ts` binds a chart to a view and checks that "now" follows the probe's state through an
   interval change, a refresh, a back-off, a pause and a resume, and that a ring resize redraws a paused view's chart.
+  `tests/live-grid.test.ts` covers `LiveGrid` against a stand-in grid and view (the swap's row map and
+  selection, the tone column, tracked keys and how many linger, pinned keys a revision has not answered, prepare, follow
+  tail and new rows, remounts over kept state, the selection, lost and released state it publishes, per-table sort, Copy), and `tests/results-jobs.test.ts` and `tests/results-port.test.ts` a Save of a live revision retired while
+  its dialog is open.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
@@ -1657,7 +1730,12 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   window is hidden, the accessible name (held while focused), the keyboard and pointer crosshair (a pointer held still near either edge
   keeps its tooltip as the window moves; a narrow two-series chart keeps its tooltip inside the plot), the table (its caption,
   header, focus ring and row cap), a legend of two series and none for one, a tile's sparkline (which takes no focus), a switch to Light, and
-  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them. `scripts/results-smoke.mjs` drives the grid on
+  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them.
+  `scripts/live-grid-smoke.mjs` mounts `LiveGridPane` (`window.__variaLive.mountGrid`) over the real backend's synthetic grid and log: tones and the hidden tone
+  column, the selected item kept across revisions, muted once it leaves and then moved to a neighbour (with its key
+  reported), Copy without the tone, a Save whose dialog stays open across samples, the sort hook, follow tail and "n new
+  rows", a log mounted again over its kept state opening where it was, a stopped view's overlay and Copy, and a killed
+  backend's overlay. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.

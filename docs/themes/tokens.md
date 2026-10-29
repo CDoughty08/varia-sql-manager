@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (250)
+## Color keys (258)
 
 ### Base
 
@@ -272,6 +272,14 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `resultsGrid.headerDescriptionForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (No column name) placeholder. |
 | `resultsGrid.gridlines` | Varia | `$borderSubtle` | `#1f2228` | `#eceef2` | Cell borders. |
 | `resultsGrid.alternateRowBackground` | Varia | `$text/2` | `#d9dce305` | `#1c1f2605` | Tint of every other row. |
+| `resultsGrid.rowErrorBackground` | Varia | `$error/12` | `#f39a9a1f` | `#b422291f` | Live grid rows toned error: a session blocked by another, a failed operation, an error message. |
+| `resultsGrid.rowErrorForeground` | Varia | `@resultsGrid.foreground` | `#d9dce3` | `#1c1f26` | Text of live grid rows toned error. |
+| `resultsGrid.rowWarningBackground` | Varia | `$warning/12` | `#e4bb6a1f` | `#8758001f` | Live grid rows toned warning: a session blocking others, a warning message. |
+| `resultsGrid.rowWarningForeground` | Varia | `@resultsGrid.foreground` | `#d9dce3` | `#1c1f26` | Text of live grid rows toned warning. |
+| `resultsGrid.rowRunningBackground` | Varia | `$accent/10` | `#8f9cff1a` | `#4453d01a` | Live grid rows toned running: a session rolling back, a running operation. |
+| `resultsGrid.rowRunningForeground` | Varia | `@resultsGrid.foreground` | `#d9dce3` | `#1c1f26` | Text of live grid rows toned running. |
+| `resultsGrid.rowMutedBackground` | Varia | `@resultsGrid.background` | `#16181d` | `#ffffff` | Live grid rows toned muted: a row that left its source and stays one more sample, a system session. |
+| `resultsGrid.rowMutedForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Text of live grid rows toned muted. |
 | `resultsGrid.rowNumberForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Row numbers. |
 | `resultsGrid.nullForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | NULL values, which are drawn in italics. |
 | `resultsGrid.nullBackground` | Varia | `$text/0` | `#d9dce300` | `#1c1f2600` | NULL cells; untinted by default, so NULL reads as muted italic text. |

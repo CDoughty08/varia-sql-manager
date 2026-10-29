@@ -33,6 +33,8 @@ export const gridLimits = {
   /** The space between a header's name and its SQL type (.rg-ct's margin). */
   typeGap: 6,
   selectionBlocks: 64, dragThreshold: 4, resizeZoneLeft: 4, resizeZoneRight: 3,
+  /** How far a live grid looks, either way, for a row that survived when the active row left its table (swap.ts). */
+  swapSearchRows: 64,
   /**
    * How far in from the edge a press on the scroller itself counts as a press on an overlay scroll bar (macOS). The bar is
    * 16 DIP whatever the page zoom, so 64 CSS px at Chromium's smallest zoom (25 %).

@@ -131,7 +131,7 @@ cycle, is reported; a built-in slot then keeps its built-in value, and a slot of
 
 ### Colors
 
-The 250 keys are listed in [`tokens.md`](tokens.md#color-keys-250) by area: title bar and menus, buttons and inputs,
+The 258 keys are listed in [`tokens.md`](tokens.md#color-keys-258) by area: title bar and menus, buttons and inputs,
 Object Explorer, the dock, query tabs, the editor, the output panel and results grid, the status bar, banners and
 dialogs, notifications, status pills, chips, live views and tiles, connection colors, and charts. The `charts.*` keys (VS Code's names) color live charts: their labels and legends
 (`charts.foreground`), grid lines (`charts.lines`), and series, which take `charts.blue`, `charts.orange`, `charts.green`,

@@ -491,6 +491,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-rows { position: absolute; top: 0; left: 0; }
 .rg-row { position: absolute; left: 0; height: 20px; contain: strict; }
 .rg-row.odd { background: var(--varia-resultsGrid-alternateRowBackground); }
+/* A live grid row's tone (LiveGrid): its own background instead of the stripe, and its text color; selected cells keep theirs. */
+.rg-row.tone-error { background: var(--varia-resultsGrid-rowErrorBackground); color: var(--varia-resultsGrid-rowErrorForeground); }
+.rg-row.tone-warning { background: var(--varia-resultsGrid-rowWarningBackground); color: var(--varia-resultsGrid-rowWarningForeground); }
+.rg-row.tone-running { background: var(--varia-resultsGrid-rowRunningBackground); color: var(--varia-resultsGrid-rowRunningForeground); }
+.rg-row.tone-muted { background: var(--varia-resultsGrid-rowMutedBackground); color: var(--varia-resultsGrid-rowMutedForeground); }
+/* On a toned row a NULL keeps its color but not its tint, which would leave it too faint to read. */
+.rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background: none; }
 /* Each row's own header is for screen readers; the numbers are drawn in one sticky column beside the rows. */
 .rg-rh { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rg-rhs { position: sticky; left: 0; z-index: 1; width: var(--rg-rhw); height: 0; }
@@ -516,6 +523,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
 .rg-strip.error { white-space: normal; color: var(--varia-errorForeground); }
 .rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+/* A live log scrolled up: rows that arrived since, and a way back to the tail (LiveGridPane). */
+.live-grid-new-rows { position: absolute; bottom: var(--varia-space-3); left: 50%; z-index: 5; transform: translateX(-50%); padding: var(--varia-space-0) var(--varia-space-3); border-radius: var(--varia-radius-pill); font: var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-ui); background: var(--varia-button-background); color: var(--varia-button-foreground); }
+.live-grid-new-rows:hover { background: var(--varia-button-hoverBackground); }
 .rg-overlay { position: absolute; inset: 22px 0 0; z-index: 4; display: grid; place-items: center; padding: 16px; text-align: center; font: var(--varia-size-sm) var(--varia-font-ui); color: var(--varia-emptyState-foreground); background: var(--varia-resultsGrid-background); }
 @media (forced-colors: active) {
   /* Forced colors drop the selection's backgrounds; the system's selection colors show which cells Copy takes. */
@@ -527,6 +537,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-c.is-link { color: LinkText; }
   /* NULL's tint is dropped too; dimmed text tells it from the text 'NULL'. */
   .rg-c.is-null:not(.is-sel) { color: GrayText; }
+  /* Forced colors drop row tones' backgrounds: a toned row's number gets a bar, and a muted row dimmed text. */
+  .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
+  .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
   .rs-splitter { background: CanvasText; forced-color-adjust: none; }
   .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }

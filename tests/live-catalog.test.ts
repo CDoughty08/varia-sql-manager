@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { limits } from '../src/shared/ipc/wire/protocol'
-import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
+import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveTones, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 
@@ -76,6 +76,27 @@ describe('live catalogue', () => {
       for (const view of probe.views ?? []) expect(view, id).toMatch(catalogId)
       expect((probe.series ?? []).length + tables.length + (probe.status ?? []).length, id).toBeGreaterThan(0)
     }
+  })
+  it('keeps a row tone column last, as text, and out of keys and facets', () => {
+    // The grid hides the last column when it is the tone (GridView), so a tone column anywhere else would show and shift
+    // every column after it.
+    let toned = 0
+    for (const id of liveProbeIds) {
+      for (const table of liveProbes[id].tables ?? []) {
+        const tones = table.columns.filter(column => column.role !== undefined)
+        expect(tones.every(column => column.role === 'tone' && column.dataType === 'nvarchar'), id).toBe(true)
+        expect(tones.length, id).toBeLessThanOrEqual(1)
+        if (tones.length === 0) continue
+        toned++
+        expect(table.columns.at(-1), id).toBe(tones[0])
+        expect(table.columns.length, id).toBeGreaterThan(1)
+        expect(table.key, id).not.toContain(tones[0].id)
+        expect(table.facets ?? [], id).not.toContain(tones[0].id)
+      }
+    }
+    // The synthetic grid and log carry one, so the renderer and smoke tests see tones in both table modes.
+    expect(toned).toBeGreaterThanOrEqual(2)
+    expect(liveTones).toEqual(['error', 'warning', 'running', 'muted'])
   })
   it('keeps a statusOnly source\'s hidden sampling to probes without tables', () => {
     for (const id of liveSourceIds) {

@@ -93,13 +93,15 @@ internal sealed record LiveSubscribeArgs(string SubscriptionId, string Connectio
 /// settings to drop (sort, view, filter): an absent member keeps its setting, so null cannot mean "none".</summary>
 internal sealed record LiveProbeArgs(string Probe, int? IntervalMs = null, bool? Paused = null, LiveSortArgs[]? Sort = null, string? View = null, LiveFilterArgs? Filter = null,
     string[]? Clear = null);
-internal sealed record LiveSortArgs(string Column, bool Descending);
+/// <summary>A sort key; Table (a snapshot table's index) limits it to that table, else it sorts every snapshot table with the column.</summary>
+internal sealed record LiveSortArgs(string Column, bool Descending, int? Table = null);
 internal sealed record LiveFilterArgs(string Text, string[]? Columns = null);
 /// <summary>live.update: Source repeats the subscription's.</summary>
 internal sealed record LiveUpdateArgs(string SubscriptionId, string Source, bool? Paused = null, LiveProbeArgs[]? Probes = null, bool? Refresh = null, LiveTrackArgs[]? Track = null,
     JsonElement? Args = null);
-/// <summary>The rows to follow across revisions of one keyed snapshot table: key texts joined with U+001F.</summary>
-internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] Keys);
+/// <summary>The rows to follow across revisions of one keyed snapshot table: key texts joined with U+001F. Linger: how many
+/// of the first keys stay one revision when they leave (a table that keeps departed rows); all of them when absent.</summary>
+internal sealed record LiveTrackArgs(string Probe, int Table, int Seq, string[] Keys, int? Linger = null);
 /// <summary>debug.synthetic's args (test hooks only). Start is a live start (Live/LiveStart.cs): "beginning", {tail} or {before}.</summary>
 internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, int? EndAfterTicks = null, int? ErrorEvery = null, int? LogRows = null, int? LogLevel = null,
     int? LateEvery = null, JsonElement? Start = null);

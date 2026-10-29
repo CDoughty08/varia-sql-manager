@@ -57,6 +57,10 @@ internal sealed class ResultTextWriter
     public long TruncatedCells { get; private set; }
     private ReadOnlySpan<byte> Eol => options.Crlf ? "\r\n"u8 : "\n"u8;
 
+    /// <summary>A column that is never text to copy or save: a live table's row tone (role tone), which the grid shows as the
+    /// row's colour. Copy and Save leave it out of their columns, headers and JSON keys alike.</summary>
+    public static bool Hidden(ResultColumn column) => column.Role == "tone";
+
     private static ValueKind Kind(ResultColumn column)
     {
         if (column.Wire == "binary") return ValueKind.Binary;
