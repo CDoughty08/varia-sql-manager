@@ -8,9 +8,12 @@ export const focusSamples: readonly { readonly name: string; readonly keys: Part
   { name: 'editorText', keys: { editorFocus: true, editorTextFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'editorFindInput', keys: { editorFocus: true, inputFocus: true, textInputFocus: true, activePanel: 'editor' } },
   { name: 'explorerTree', keys: { activePanel: 'explorer' } },
+  { name: 'activityMonitor', keys: { activePanel: 'editor', activityMonitorFocus: true } },
   { name: 'outputGrid', keys: { activePanel: 'output', outputGridFocus: true } },
   { name: 'outputMessages', keys: { activePanel: 'output' } },
   { name: 'toolbarSelect', keys: { inputFocus: true, textInputFocus: true } },
+  { name: 'queryBarButton', keys: { activePanel: 'editor', queryBarFocus: true } },
+  { name: 'queryBarSelect', keys: { activePanel: 'editor', queryBarFocus: true, inputFocus: true, textInputFocus: true } },
   { name: 'titleBar', keys: {} },
   { name: 'quickInput', keys: { inputFocus: true, textInputFocus: true } },
   { name: 'body', keys: {} }

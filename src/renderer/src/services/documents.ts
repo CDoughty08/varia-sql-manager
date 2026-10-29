@@ -2,7 +2,7 @@ import type { editor } from 'monaco-editor'
 import type { DocumentKind, LineEnding, VariaApi } from '../../../shared/contracts'
 import type { SessionEnd } from '../../../shared/sessions'
 import type { SettingsValues } from '../../../shared/settings/catalog'
-import { afterClose, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
+import { afterClose, isCustomKind, isQueryDocument, kindInfo, type CustomDocumentKind, type QueryDocument } from '../documents'
 import { EventBus } from '../core/events'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
@@ -27,6 +27,10 @@ type DocumentApi = Pick<VariaApi, 'saveSqlFile' | 'closeQuerySession'>
  */
 export interface CustomDocumentProvider {
   readonly kind: CustomDocumentKind
+  /** Whether File › Save All saves it too (a table designer), or only its own Save does (Database Properties' Apply). */
+  readonly inSaveAll: boolean
+  /** False for a document with nothing to save (an Activity Monitor): File › Save is not offered on it. */
+  readonly saves?: boolean
   save(id: string, saveAs: boolean): Promise<boolean>
   canClose(id: string): string | undefined
   revision(id: string): number
@@ -98,8 +102,23 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   revision(id: string): number { return this.entries.get(id)?.model.getVersionId() ?? this.provider(id)?.revision(id) ?? 0 }
   /** Whether a custom document moves to a reconnected connection on `server` (a designer only to its own server). */
   follows(id: string, server: string): boolean { return this.provider(id)?.follows(id, server) ?? false }
+  /** Whether File › Save All saves the document: every text document, and the custom ones whose provider says so. */
+  inSaveAll(id: string): boolean { return this.provider(id)?.inSaveAll ?? true }
+  /** Whether File › Save means anything for the document: every text document does, a custom one unless its provider says not. */
+  savable(id: string): boolean { return this.provider(id)?.saves !== false }
   /** Why the document cannot close now (a custom document saving), or undefined. */
   closeRefusal(id: string): string | undefined { return this.provider(id)?.canClose(id) }
+  /**
+   * Why a connection cannot be disconnected now: a custom document on it is running DDL (an Apply or a Save), which a
+   * disconnect would cancel partway without asking. Undefined when none is.
+   */
+  connectionBusy(connectionId: string): string | undefined {
+    for (const document of this.getSnapshot().documents) {
+      const refusal = document.connectionId === connectionId ? this.closeRefusal(document.id) : undefined
+      if (refusal) return refusal
+    }
+    return undefined
+  }
   /** Focus to the active document: the editor's text, or the custom document's own element. */
   focusActive(): void {
     const id = this.getSnapshot().activeId, provider = this.provider(id)
@@ -276,7 +295,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (!document || !model) return false
     model.pushStackElement()
     const content = model.getValue(), savedVersionId = model.getAlternativeVersionId()
-    const kind = document.kind === 'tableDesigner' ? undefined : document.kind
+    const kind = isCustomKind(document.kind) ? undefined : document.kind
     const result = await this.api.saveSqlFile({ fileId: document.file?.id, name: document.name, content, saveAs, ...kind ? { kind } : {} })
     if (!result.ok) throw new Error(result.error)
     if (!result.value || this.disposed || this.entries.get(id)?.model !== model) return false

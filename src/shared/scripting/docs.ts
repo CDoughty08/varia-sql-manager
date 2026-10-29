@@ -111,15 +111,17 @@ export function renderScriptingDocs(): string {
     `Each verb submenu holds the three destinations. Their commands are ${code('explorer.script<Verb>To<Destination>')}, from`,
     `${code(scriptCommandId('create', 'newQuery'))} to ${code(scriptCommandId('execute', 'clipboard'))}; they stay out of the palette, where Script As… lists the enabled ones.`,
     '',
-    table(['Destination', 'Menu title', 'Mnemonic', 'Icon', 'Waits for document tasks'], scriptDestinations.map(destination => {
+    table(['Destination', 'Menu title', 'Mnemonic', 'Icon', 'Waits for document tasks', 'Script drawer button'], scriptDestinations.map(destination => {
       const spec = scriptDestinationSpecs[destination]
-      return [code(destination), spec.title, spec.mnemonic, code(spec.icon), yesNo(spec.documentTask)]
+      return [code(destination), spec.title, spec.mnemonic, code(spec.icon), yesNo(spec.documentTask), spec.drawerTitle]
     })),
     '',
     'New Query Editor Window opens the script in a new query on the object\'s server and database (`master` for databases',
     'and server objects), not marked unsaved. File… suggests `<schema>.<name>.sql` (`<schema>.<table>.<name>.sql` for an',
     'index, key, constraint, statistic or trigger, `<name>.sql` without a schema), which main makes safe for every platform.',
     'Modify is ALTER To › New Query Editor Window for the kinds marked Mod below.',
+    'A document\'s Script drawer (the document frame) offers the same destinations as buttons with the same icons, named in the',
+    'last column; each takes the whole script, not the preview.',
     '',
     `A request that takes longer than ${scriptLimits.statusDelayMs} ms shows in the status bar with Cancel (also Object Explorer: Cancel`,
     `Scripting in the palette). At most ${scriptLimits.rendererJobs} run at once; a cancelled request, or one whose server disconnects, opens nothing.`,

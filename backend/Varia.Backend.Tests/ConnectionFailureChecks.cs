@@ -12,13 +12,17 @@ internal static class ConnectionFailureChecks
 {
     /// <summary>A SqlException as SqlClient builds one. Its constructors are internal; a SqlClient upgrade that changes them
     /// fails these checks here rather than silently testing something else.</summary>
-    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null)
+    /// <param name="cause">The SqlException's own InnerException, as SqlClient sets it for a network or TLS failure.</param>
+    internal static SqlException Sql(int number, byte state, byte level, string server, string message, string procedure = "", Exception? inner = null, Exception? cause = null)
     {
         var flags = BindingFlags.NonPublic | BindingFlags.Instance;
         var error = (SqlError)(typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
             ?? throw new Exception("SqlClient's SqlError constructor changed; update ConnectionFailureChecks.Sql")).Invoke([number, state, level, server, message, procedure, 0, inner]);
         var errors = (SqlErrorCollection)(typeof(SqlErrorCollection).GetConstructor(flags, Type.EmptyTypes) ?? throw new Exception("SqlErrorCollection's constructor changed")).Invoke([]);
         (typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed")).Invoke(errors, [error]);
+        if (cause is not null)
+            return (SqlException)(typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string), typeof(Guid), typeof(Exception)])
+                ?? throw new Exception("SqlException.CreateException changed")).Invoke(null, [errors, "17.00.1000", Guid.Empty, cause])!;
         var create = typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string)])
             ?? throw new Exception("SqlException.CreateException changed");
         return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;
@@ -91,6 +95,37 @@ internal static class ConnectionFailureChecks
             "other exceptions are left to the host's general mapping");
         check(!JsonSerializer.Serialize(ConnectionFailures.Describe(login, "localhost", kerberos: false, Probe(KerberosState.Valid))!.Details).Contains("assword", StringComparison.OrdinalIgnoreCase),
             "details hold only the number, state, class and server");
+
+        // The TLS certificate failures Trust server certificate fixes, as each SNI reports them, and look-alikes that it does not.
+        const string chain = "A connection was successfully established with the server, but then an error occurred during the login process. (provider: SSL Provider, error: 0 - The certificate chain was issued by an authority that is not trusted.)";
+        var untrusted = Sql(unchecked((int)0x80090325), 0, 20, "", chain, cause: new System.ComponentModel.Win32Exception(unchecked((int)0x80090325)));
+        failure = ConnectionFailures.Describe(untrusted, "localhost", kerberos: false, Probe(KerberosState.Valid));
+        check(failure?.Code == "SQL_ERROR" && failure.Message == chain && failure.Details == new ErrorDetails(unchecked((int)0x80090325), 0, 20, "localhost", ErrorDetailsLimits.Certificate),
+            "an untrusted certificate chain keeps SqlClient's message and details and adds the reason certificate");
+        var wrongName = Sql(unchecked((int)0x80090322), 0, 20, "sql01", "The target principal name is incorrect.");
+        check(ConnectionFailures.Describe(wrongName, "sql01", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate,
+            "a certificate issued for another name is a certificate failure too");
+        var managed = Sql(0, 0, 20, "", "A connection was successfully established with the server, but then an error occurred during the pre-login handshake. (provider: TCP Provider, error: 35 - An internal exception was caught)",
+            cause: new System.Security.Authentication.AuthenticationException("The remote certificate was rejected by the provided RemoteCertificateValidationCallback."));
+        check(ConnectionFailures.Describe(managed, "linux-sql", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate,
+            "the managed SNI's rejected certificate (an AuthenticationException) is a certificate failure");
+        var protocol = Sql(0, 0, 20, "", "An error occurred during the pre-login handshake.", cause: new System.Security.Authentication.AuthenticationException("Authentication failed because the remote party sent a TLS alert: 'ProtocolVersion'."));
+        check(ConnectionFailures.Describe(protocol, "old-sql", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null
+            && ConnectionFailures.Describe(login, "localhost", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null
+            && ConnectionFailures.Describe(Sql(233, 0, 20, "", "No process is on the other end of the pipe."), "x", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason is null,
+            "a TLS version mismatch, a failed login or a closed pipe is not a certificate failure");
+        check(!JsonSerializer.Serialize(failure!.Details).Contains("assword", StringComparison.OrdinalIgnoreCase), "a certificate failure's details hold nothing more than the reason");
+        // With Host Name in Certificate set, Windows' SNI reports an untrusted chain as a CERT_E code (observed live against a
+        // self-signed certificate), as the error number and as the Win32Exception inside.
+        bool Certificate(int code, bool asCause) => ConnectionFailures.Describe(asCause
+            ? Sql(0, 0, 20, "", "The certificate chain was not trusted.", cause: new System.ComponentModel.Win32Exception(code))
+            : Sql(code, 0, 20, "", "The certificate chain was not trusted."), "sql01", kerberos: false, Probe(KerberosState.Valid))?.Details?.Reason == ErrorDetailsLimits.Certificate;
+        int[] chained = [unchecked((int)0x800B0109), unchecked((int)0x800B010A)];
+        check(chained.All(code => Certificate(code, asCause: false) && Certificate(code, asCause: true)),
+            "CERT_E_UNTRUSTEDROOT and CERT_E_CHAINING, as the error number or the Win32Exception inside, are certificate failures");
+        // A pinned Server Certificate that does not match: never one Trust server certificate should wave through.
+        check(!Certificate(unchecked((int)0x800B0110), asCause: false) && !Certificate(unchecked((int)0x800B0110), asCause: true),
+            "CERT_E_WRONG_USAGE (a pinned certificate that does not match) is not an untrusted certificate");
 
         check(KerberosProbe.Classify(0, 36_000) == KerberosState.Valid && KerberosProbe.Classify(0, uint.MaxValue) == KerberosState.Valid, "a credential with time left is a valid ticket");
         check(KerberosProbe.Classify(0, 0) == KerberosState.Expired, "MIT: a credential with no time left is an expired ticket");
@@ -201,7 +236,7 @@ internal static class ConnectionFailureChecks
         var missing = "FILE:/nonexistent/varia-no-ticket-" + Guid.NewGuid().ToString("N");
         var (exit, answer, errors) = await ChildAsync(ProbeArgument, missing);
         var expected = present ? nameof(KerberosState.NoTicket) : nameof(KerberosState.LibraryMissing);
-        check(exit == 0 && answer == expected, "GSSAPI's own answer for a credential cache that does not exist is " + expected + " (got '" + answer + "', exit " + exit + ", " + errors + ")");
+        check(exit == 0 && answer == expected, "GSSAPI's Kerberos mechanism reports a missing cache as " + expected + ", even when other mechanisms are available (got '" + answer + "', exit " + exit + ", " + errors + ")");
         (exit, answer, errors) = await ChildAsync(IdentityArgument, missing);
         check(exit == 0 && answer == expected + "|", "without a ticket GSSAPI names no principal (got '" + answer + "', exit " + exit + ", " + errors + ")");
         if (!OperatingSystem.IsLinux() || !present) return;

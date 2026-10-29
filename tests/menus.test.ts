@@ -19,7 +19,7 @@ const outline = (menu: MenuId, platform: Platform) => pruneMenu(buildMenuModel(m
 
 describe('menu model', () => {
   it('builds the menubar from the catalogue and the extras', () => {
-    const windowMenu = ['window.explorer', 'window.editor', 'window.output', 'view.toggleResultsPane', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
+    const windowMenu = ['window.explorer', 'window.editor', 'window.output', 'view.toggleResultsPane', 'window.togglePanelTabs', '-', 'document.next', 'document.previous', 'file.closeAll', '-', 'layout.save@window', 'layout.load@window', 'layout.reset@window']
     for (const platform of ['win32', 'linux'] as const) {
       // Exit (Windows) and Quit (Linux): macOS quits from its app menu.
       expect(outline('file', platform)).toEqual(['connection.connect', 'connection.disconnect', 'connection.reconnect', '-', 'file.new', 'file.open', 'file.save', 'file.saveAs', 'file.saveAll', '-', 'file.close', '-', 'submenu:file.recent', '-', 'window.close'])
@@ -37,11 +37,11 @@ describe('menu model', () => {
         'edit.toggleLineComment', '-', 'edit.increaseIndent', 'edit.decreaseIndent'])
       expect(outline('edit.bookmarks', platform)).toEqual(['edit.toggleBookmark', '-', 'edit.previousBookmark', 'edit.nextBookmark', '-', 'edit.clearBookmarks', '-', 'edit.previousBookmarkInDocument', 'edit.nextBookmarkInDocument'])
       expect(outline('edit.intellisense', platform)).toEqual(['edit.insertSnippet', 'edit.surroundWith'])
-      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'submenu:view.theme', '-',
+      expect(outline('view', platform)).toEqual(['workbench.showCommands', 'workbench.quickOpen', 'workbench.search', '-', 'layout.save', 'layout.load', 'layout.reset', '-', 'activity.open', '-', 'submenu:view.theme', '-',
         'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', '-', 'developer.reloadWindow', 'developer.toggleDevTools'])
       expect(outline('query', platform)).toEqual(['submenu:query.connection', 'query.changeDatabase', '-', 'query.execute', 'query.cancel'])
       expect(raw('query', platform)).toEqual(outline('query', platform))
-      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection'])
+      expect(outline('query.connection', platform)).toEqual(['connection.connect@query.connection', 'query.disconnect', 'query.disconnectAll', 'connection.reconnect@query.connection', '-', 'query.changeConnection', 'connection.environment'])
       expect(outline('theme', platform)).toEqual(['preferences.colorTheme'])
       expect(outline('tools', platform)).toEqual(['preferences.options'])
     }
@@ -194,10 +194,10 @@ describe('mnemonics', () => {
 describe('context menu model', () => {
   it('lists each context menu\'s commands through its submenus', () => {
     // The editor menu's Connection submenu is Query › Connection.
-    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.reconnect',
+    expect(contextCommandIds('editor.context')).toEqual(['edit.cut', 'edit.copy', 'edit.paste', 'query.execute', 'query.cancel', 'workbench.showCommands', 'connection.connect', 'connection.environment', 'connection.reconnect',
       'query.changeConnection', 'query.disconnect', 'query.disconnectAll', 'edit.insertSnippet', 'edit.surroundWith'])
     expect(contextCommandIds('documentTab.context')).toEqual(['file.save', 'file.saveAs', 'file.close', 'file.closeOthers', 'file.closeAll', 'file.copyPath', 'file.revealInFolder'])
-    expect(contextCommandIds('dockTab.context')).toEqual(['pane.float', 'pane.dock', 'pane.close'])
+    expect(contextCommandIds('dockTab.context')).toEqual(['pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput', 'pane.float', 'pane.dock', 'pane.close', 'window.togglePanelTabs'])
     expect(contextCommandIds('input.context')).toEqual(['edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll'])
     for (const menu of contextMenuIds) expect(contextCommandIds(menu), menu).toEqual(commandIds.filter(id => menuIds.some(inner => menuRoots(inner).includes(menu) && commandDescriptor(id).menus?.some(placement => placement.menu === inner))))
     expect(contextMenuRequestSchema.safeParse({ token: 1, menu: 'editor.context', x: 0, y: 0, visible: ['query.execute'], disabled: [], checked: [] }).success).toBe(true)
@@ -324,12 +324,20 @@ describe('menu state', () => {
     const roles = ['window.close', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.delete', 'edit.selectAll', 'view.zoomIn', 'view.zoomOut', 'view.resetZoom', 'view.toggleFullScreen', 'developer.reloadWindow', 'developer.toggleDevTools']
     // Context-menu commands and the keyboard-only ones are not in the native menu bar either.
     const unplaced = ['file.closeOthers', 'file.copyPath', 'file.revealInFolder', 'workbench.showContextMenu', 'explorer.refresh', 'preferences.createTheme', 'preferences.openThemesFolder',
-      'preferences.reloadThemes', 'preferences.setTheme', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.newTable', ...scriptCommandIds,
+      'preferences.reloadThemes', 'preferences.setTheme', 'pane.dockLeft', 'pane.dockRight', 'pane.dockTop', 'pane.dockBottom', 'pane.tabWithExplorer', 'pane.tabWithEditor', 'pane.tabWithOutput', 'pane.float', 'pane.dock', 'pane.close', 'explorer.newQuery', 'explorer.selectTopRows', 'explorer.rename', 'explorer.delete', 'explorer.properties', 'explorer.newTable', ...scriptCommandIds,
       'explorer.scriptAs', 'explorer.modify', 'explorer.cancelScripting', 'explorer.copyName', 'output.copy', 'output.copyWithHeaders', 'output.selectAll', 'backend.restart',
-      'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.removeFilter', 'window.switchPane',
+      'connection.removeLost', 'explorer.stop', 'explorer.collapseAll', 'explorer.filter', 'explorer.filterLoaded', 'explorer.removeFilter', 'window.switchPane',
       'output.saveResultsAs', 'output.closeResults', 'output.openValue', 'editor.toggleOvertype', 'file.openRecent', 'file.clearRecent', 'file.recoverUnsaved', 'editor.toggleLineNumbers',
+      // Toasts are reached from the palette, as in VS Code.
+      'notifications.focus', 'notifications.clearAll',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
-      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop']
+      'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
+      // The SSIS Catalog's Properties on its tree nodes, and the properties documents' Refresh (their header and F5).
+      'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'ssis.refreshProperties',
+      // The Database Properties document's header verbs.
+      'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop',
+      // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.
+      'activity.togglePause', 'activity.refresh', 'activity.setInterval', 'activity.setChartWindow', 'activity.toggleSplit', 'activity.nextPane', 'activity.previousPane', 'activity.close']
     expect(menuCommandIds).toEqual(commandIds.filter(id => ![...roles, ...unplaced].includes(id)))
     // Query › Connection is a native submenu too.
     for (const id of ['preferences.colorTheme', 'connection.connect', 'query.disconnect', 'query.disconnectAll', 'query.changeConnection', 'file.closeAll', 'view.toggleResultsPane'] as const) expect(menuCommandIds).toContain(id)
@@ -337,7 +345,7 @@ describe('menu state', () => {
       const placed = commandDescriptor(id).menus?.some(placement => nativeMenuIds.includes(placement.menu)) ?? false
       expect(menuCommandIds.includes(id), id).toBe(placed && !commandDescriptor(id).role)
     }
-    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers'])
+    expect(toggleCommandIds).toEqual(['view.toggleResultsPane', 'editor.toggleWordWrap', 'editor.toggleOvertype', 'editor.toggleWhitespace', 'editor.toggleLineNumbers', 'activity.togglePause', 'activity.toggleSplit', 'window.togglePanelTabs'])
     // Main checks only toggles the schema names.
     expect(menuStateSchema.safeParse({ disabled: [], checked: ['editor.toggleWhitespace', 'editor.toggleLineNumbers'] }).success).toBe(true)
   })

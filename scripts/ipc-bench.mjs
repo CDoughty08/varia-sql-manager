@@ -2,6 +2,7 @@ import { _electron as electron } from '@playwright/test'
 import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
+import { backendReady, statusBar } from './fixtures/ui.mjs'
 
 // End-to-end IPC benchmarks (npm run bench:e2e): the built app with the Release backend and its test hooks, measured
 // from the renderer. --live adds a real query against VARIA_TEST_SQL_SERVER. Writes artifacts/bench/e2e.json, which
@@ -77,7 +78,7 @@ try {
   page.setDefaultTimeout(60000)
   // Smoke windows stay hidden, and a hidden window gets about one animation frame a second; show it without focus.
   await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].showInactive() })
-  await page.locator('.status-bar').getByText(/· Ready/).waitFor({ timeout: 60000 })
+  await backendReady(page).waitFor({ timeout: 60000 })
   const hello = await app.evaluate(() => globalThis.__variaTest.state())
   console.log(`Backend generation ${hello.generation}, ${hello.runtime} on ${hello.platform}.`)
 

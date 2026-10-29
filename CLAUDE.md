@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 563 offline
-  checks; how many depends on the server version and authentication (958 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 944 offline
+  checks; how many depends on the server version and authentication (1491 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -62,7 +62,8 @@ pages, limits, error codes, display formats, benchmarks).
   cipher), `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
   holdNextRenderer and releaseHolders), the renderer's test mode (`window.__variaResults`, `window.__variaGrid`,
   `window.__variaRecovery.flush()`, which saves AutoRecover's copies at once, `window.__variaLive`, which opens views on
-  the synthetic live source and stands in for a hidden window, and `window.__variaTestShellFault()`, which makes the
+  the synthetic live source, stands in for a hidden window and mounts a `LiveGridPane` over one (`mountGrid`, `grid`,
+  `sortGrid`, `saveGrid`, `unmountGrid`), and `window.__variaTestShellFault()`, which makes the
   workbench's next render throw), and passes the backend `VARIA_BACKEND_TEST_HOOKS` (synthetic results)
   and `VARIA_RESULT_BUDGET_BYTES`. Suites import `electron` and `expect` from `scripts/fixtures/smoke.mjs`: assertions
   wait 15 s on Windows, whose runners can take seconds to write a file, and closing the app logs main's file operations
@@ -94,11 +95,14 @@ pages, limits, error codes, display formats, benchmarks).
   exact-size ArrayBuffers (`toExactArrayBuffer`); only the results worker decodes them (`decodePage`). Results-port
   messages from the renderer are validated with `portRequestSchema`, ownership, and the current generation.
 - The grid renders cells only through `GridView` pools, and text only through `nodeValue` (`tests/grid-lint.test.ts`
-  forbids HTML sinks under `grid/` and `results/`); no React per row or cell, and frames stay O(visible cells).
+  forbids HTML sinks under `grid/`, `results/`, `designer/` and `live/`); no React per row or cell, and frames stay
+  O(visible cells).
+  Live tables show through `LiveGrid` (`src/renderer/src/live/`), which swaps each revision into its `GridView`; a table's row
+  tone column (catalogue `role: 'tone'`, its last) is hidden by the grid and left out of Copy and Save (`ResultJobs`).
 - Copy and Save text is formatted only by `ResultTextWriter`; export paths come only from main's save dialog and never
   leave main except to the backend.
 - Results are released on re-execute, tab close, Close Results and backend loss; jobs lease them.
-- Periodic data (Activity Monitor, SSIS monitoring, later Object Explorer status) flows only through the results port's
+- Periodic data (Activity Monitor, SSIS monitoring, Object Explorer status) flows only through the results port's
   `live.subscribe` and `live.update`: the backend schedules, the renderer never polls with timers, and at most one live
   EVENT per subscription is unacknowledged (`creditedEvents`; main counts it against the stream's credit). The results
   worker relays live events undecoded and grants an event's bytes back only once the page has applied it and called the
@@ -106,13 +110,21 @@ pages, limits, error codes, display formats, benchmarks).
   probes live only in `src/shared/live/catalog.ts`; after changing it, regenerate `docs/live.md` and the backend's embedded
   `Live/live-catalog.json` with `npx vitest run tests/live-catalog.test.ts -u`. Writes are never probes. Test-only sources
   (`debug.synthetic`) pass only main's test schemas (unpackaged smoke runs) and a backend with its test hooks. Probe SQL is
-  constant text per probe and band in `Live/LiveSql.cs` (its offline lint refuses metadata built-ins, temporary tables,
+  constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
+  by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
   Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
-  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
-  the live gates and a per-statement budget, and its failures are values that back off.
+  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
+  gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values that back
+  off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
-  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves.
+  ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
+  only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none
+  while off screen or hidden, at most two vertices a pixel column, colors only from the theme (its `charts.*` keys and the surface the chart sits on,
+  `chartSurfaces` in `src/shared/theme/charts.ts`) or, under forced colors, the system colors as the DOM resolves them. Object
+  Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
+  the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
+  the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -140,7 +152,7 @@ pages, limits, error codes, display formats, benchmarks).
   in the focused window (`UserActivation` in `src/main/window-roles.ts`). An idle or background page cannot read it, but
   main cannot tell which input chose Paste, so a page script can read it while the user types or clicks.
 - Object Explorer structure lives only in `src/shared/explorer/catalog.ts` (folders, kinds, icons, filters, version
-  gates); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
+  gates, the kinds that carry live status chips, whose words are in `status.ts`); after changing it, regenerate `docs/object-explorer.md` and the backend's embedded
   `Explorer/explorer-catalog.json` with `npx vitest run tests/explorer-catalog.test.ts -u`. Explorer SQL is constant
   text per query, band and filter shape, with values as parameters and database names only through `QUOTENAME`; no
   metadata built-ins; `READ UNCOMMITTED` and `LOCK_TIMEOUT 5000` on the explorer pool. The offline `CatalogSql` lint
@@ -176,16 +188,40 @@ pages, limits, error codes, display formats, benchmarks).
   from a constant table generated from the catalogue; a live dry run proves the server builds exactly
   `DesignerSql.Statements` for hostile names. The design lives in the renderer (`TableDesignerService`, a
   `CustomDocumentProvider` tab with no Monaco model), never reaches AutoRecover, and saves outside the document task.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, error codes, features, limits) live only in
-  `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's catalogue. After changing it, regenerate
+- Activity Monitor structure (probes, panes, tables and columns, tiles, view chips, wait categories, limits) lives only in
+  `src/shared/activity/catalog.ts`; after changing it, regenerate `docs/activity-monitor.md` and the backend's embedded
+  `Activity/activity-catalog.json` with `npx vitest run tests/activity-catalog.test.ts -u`. Its SQL is constant text per probe,
+  statement, band and capability in `Activity/ActivitySql.cs`: DMVs (joined to `sys.databases` and `sys.master_files` for
+  names), values as parameters, text sizes and caps from the catalogue's limits, no metadata built-ins, temp tables,
+  `sys.sysprocesses` or `dm_tran_locks`, every TOP ordered (only the capability probe asks what the login may do); the offline
+  lint renders and checks every variant. Its live probes are built from this catalogue (`src/shared/live/catalog.ts`), and
+  their column ids are unique within a probe (`liveColumnId`). Filters run in backend memory over a sample (`ActivityFilter`,
+  sent as the source's args), never in SQL. A session is one of Varia's pools (hidden by default) only when its id is one
+  Varia's own pooled or Object Actions connections were given as they opened (`ILiveHost.OwnSessions`), never by the
+  process id, host name and program name a client claims at login alone; `VariaSessions.Protected` (the ledger's ids or
+  those claims) is the wider set a refusal can use, since SqlClient's reconnect can move a held pool connection to an id
+  the ledger lacks. The session actions (`Activity/SessionActions.cs`)
+  have the only exemptions: `activity.details` reads `dm_tran_locks` only on request, on the monitor's pool under the live
+  gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
+  checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
+  only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
+- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, Object Explorer verbs and their commands,
+  documents, error codes, features, limits) live only in `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object
+  Explorer's catalogue. After changing it, regenerate
   the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
-  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read only on
-  the SSIS read pool (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
+  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read on the
+  SSIS read pool (and by a write's preflight in its own connection) (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
   the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
   (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
   `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
   RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
-  until disconnect. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
+  until disconnect. SSISDB changes only in `SsisActionService` (`ssis.execute`, sensitive): on its own unpooled connection
+  (the application name plus " - Integration Services Actions", Initial Catalog the catalog's database, never retried), never
+  a pool; after a preflight in the same connection (READ COMMITTED, `LOCK_TIMEOUT 10000`, 25 s); with steps only from
+  `SsisSql.WriteTemplates`, each calling only its verb's catalog procedures (`SsisSql.LintWrite`), values as parameters, no
+  outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
+  lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
+  box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
   (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
   names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
@@ -196,6 +232,16 @@ pages, limits, error codes, display formats, benchmarks).
   `docs/settings.md` with `npx vitest run tests/settings-catalog.test.ts -u`.
 - Colours live only in `src/shared/theme/`. CSS and TSX use `var(--varia-*)`; `tests/theme-css.test.ts` enforces this.
   Theme files are untrusted: only main reads them, and the renderer applies only the validated map main sends.
+- Sizes, radii, shadows and motion are metric tokens in `src/shared/theme/metrics.ts`, not theme keys, mirrored on
+  `:root` in `styles.css`. `tests/theme-metrics.test.ts` rejects literals outside them (font sizes in renderer code too),
+  keeps text at 11 px or more, lets only hover fills fade, and stops every animation under reduced motion, Monaco's codicon
+  spinners included; regenerate `docs/themes/metrics.md` with
+  `npx vitest run tests/theme-metrics.test.ts -u`.
+- Icons live only in `src/shared/icons.ts` (codicons and Varia's own SVGs, by id); catalogues name icons by those ids and
+  the renderer draws them only through `Icon.tsx`, or `codiconClass` where an element or Monaco takes a class
+  (`tests/icons.test.ts` forbids other codicon classes, inline SVGs and text glyphs in the renderer). Fonts are fixed in
+  `src/renderer/src/fonts.ts`. After changing the registry, regenerate `docs/icons.md` with
+  `npx vitest run tests/icons.test.ts -u`.
 
 ## Testing expectations
 
@@ -206,7 +252,10 @@ pages, limits, error codes, display formats, benchmarks).
   (`ScratchDatabase.cs` also sweeps stale `VariaScratch_` ones by name and age). `InjectionMatrix.cs` (scratch only)
   scripts objects named to break out of SMO's comments, strings, brackets and lines with every DDL verb and runs each
   script in a rolled-back transaction, which must change only what its verb implies; keep it when changing scripting.
-- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API.
+- UI behaviour: `scripts/*-smoke.mjs` drive the real app through Playwright's Electron API. Suites and the Electron benches
+  find surfaces by ARIA role and accessible name through `scripts/fixtures/ui.mjs`, the only place that names Varia's
+  classes (for parts with no role); `tests/smoke-selectors.test.ts` enforces it, so markup changes update ui.mjs, keeping
+  the roles and names stable.
 - Performance: `tests/bench/*.bench.ts`, `scripts/ipc-bench.mjs` and `scripts/grid-bench.mjs` only measure; a new
   metric needs a `tests/bench/floors.json` entry (`tests/bench-floors.test.ts` checks both lists) and a row in
   docs/ipc.md. Floors must stay well below what slow shared CI runners measure.
@@ -218,11 +267,12 @@ pages, limits, error codes, display formats, benchmarks).
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
-  every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
-  manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
-  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating. `sql-matrix.yml` (manual
-  runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) and the
+  Windows and macOS jobs run on every PR, drafts included (any base branch, so stacked PRs are tested), every push to
+  main and manual runs; the repository is public, so their minutes cost nothing. macOS skips the smoke tests until they
+  cover its window chrome. Once `npm run check` passes, the smoke suites and the benchmarks each run even when the other
+  failed first, so one run reports both (`tests/ci-workflow.test.ts`). `sql-matrix.yml` (manual runs only) repeats the
+  .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)
@@ -240,6 +290,9 @@ pages, limits, error codes, display formats, benchmarks).
   context menus on macOS.
 - SQL Server 2016-2025. Authentication: SQL and Integrated (Windows SSPI; Kerberos on Linux/macOS) first, Microsoft
   Entra ID next.
-- Visuals: SSMS layout, density, and behaviours. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's
-  SSMS icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
+- Visuals: the modern Calm Pro design language (graphite neutrals, one iris accent, Compact density by default and
+  Comfortable as an option), not SSMS's look; SSMS's features, behaviours, names and keys stay the parity target. Dense
+  Power's environment and status indicators are in (the red Production tag on connections, live Object Explorer status
+  chips), showing only what a probe produces. Icons are codicons (bundled with Monaco) plus custom SVGs; Microsoft's SSMS
+  icons cannot be reused. Themes: Dark and Light (plus follow System), customizable through a standardized palette
   system like VS Code or opencode.

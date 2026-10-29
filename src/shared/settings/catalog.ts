@@ -4,6 +4,7 @@ import { commandDescriptor, type CommandId } from '../commands/catalog'
 import type { Platform } from '../commands/keybindings'
 import type { ScriptingOptions } from '../scripting/options.ts'
 import { scriptingOptionKeys } from '../scripting/options.ts'
+import { activityMonitorSettings } from './activity-monitor'
 import { documentSettings } from './documents'
 import { environmentSettings } from './environment'
 import { integrationServicesSettings } from './integration-services'
@@ -28,6 +29,7 @@ const settingAreas = [
   queryResultsSettings,
   objectExplorerSettings,
   liveDataSettings,
+  activityMonitorSettings,
   integrationServicesSettings
 ] as const
 

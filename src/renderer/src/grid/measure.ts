@@ -27,6 +27,18 @@ export function typeHintChars(column: Pick<ResultColumn, 'dataType' | 'maxLength
   return 40
 }
 
+/**
+ * The column's SQL type as a header shows it, SSMS's way of writing it: nvarchar(50), varchar(max), decimal(18,2),
+ * datetimeoffset(7), int. Types SQL Server reports without a length (xml, text, CLR types) are their names.
+ */
+export function sqlTypeLabel(column: Pick<ResultColumn, 'dataType' | 'maxLength' | 'precision' | 'scale'>): string {
+  const type = column.dataType.toLowerCase()
+  if (characters.has(type) || binaries.has(type)) return `${type}(${column.maxLength ?? 'max'})`
+  if (type === 'decimal' || type === 'numeric') return column.precision !== undefined ? `${type}(${column.precision},${column.scale ?? 0})` : type
+  if (Object.hasOwn(scaled, type)) return column.scale !== undefined ? `${type}(${column.scale})` : type
+  return type
+}
+
 /** A column's width before the user sizes it: its header or its type hint, between 40 and 400 px. */
 export function initialWidth(headerTextWidth: number, chars: number, charWidth: number): number {
   return clamp(Math.max(Math.ceil(headerTextWidth) + g.cellChrome, Math.ceil(chars * charWidth) + g.cellChrome), g.initialMinWidth, g.initialMaxWidth)

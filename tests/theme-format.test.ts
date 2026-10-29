@@ -35,8 +35,8 @@ describe('theme files', () => {
       expect(result.problems).toEqual([])
       expect(result.theme).toMatchObject({ id: 'custom-theme', name: 'My Theme', type })
       expect(starter.palette).toEqual(type === 'dark'
-        ? { accent: '#8fb7ff', accentHover: '#accaff', onAccent: '#101b2d', focus: '#76acff' }
-        : { accent: '#005fb8', accentHover: '#004c94', onAccent: '#ffffff', focus: '#005fb8' })
+        ? { accent: '#8f9cff', accentHover: '#a8b2ff', onAccent: '#0e1230', focus: '#8f9cff' }
+        : { accent: '#4453d0', accentHover: '#3744b8', onAccent: '#ffffff', focus: '#4453d0' })
     }
   })
   it('turn file names into lowercase ids and reject bad or reserved names', () => {

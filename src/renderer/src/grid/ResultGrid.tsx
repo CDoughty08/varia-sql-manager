@@ -1,9 +1,9 @@
 import { Component, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ErrorInfo, type KeyboardEvent, type ReactNode } from 'react'
 import type { QueryResult } from '../../../shared/contracts'
 import { onUnexpectedError } from '../core/errors'
-import { useWorkbench } from '../core/WorkbenchContext'
+import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import type { ResultSetEntry } from '../results/ResultsService'
-import { formatBytes, formatCount, plural } from '../results/status'
+import { formatBytes, formatCount } from '../results/status'
 import { GridView, type GridStatus } from './GridView'
 import { describeSelection } from './selection'
 
@@ -16,9 +16,12 @@ export interface ResultGridProps {
   readonly focused: boolean
   readonly budget?: QueryResult['budget']
   onFocus(index: number): void
+  /** Whether the set's columns are wider than its grid (it needs a horizontal scroll bar), for sizing the stack to its rows. */
+  onWide?(index: number, wide: boolean): void
 }
 
 const lostText = 'These results are no longer available because the SQL backend restarted.'
+const incompleteText = 'This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.'
 
 /** Why the grid shows fewer rows than the query read, if it does (B8 strips). */
 function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: number; budget?: QueryResult['budget'] }): string | undefined {
@@ -33,19 +36,24 @@ function truncationText(o: { truncated?: string; rowsStored: number; rowsRead: n
 }
 
 /** The React shell of one grid: its root and scroller, strips and overlay. GridView renders and handles everything inside. */
-function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: ResultGridProps) {
-  const { results, resultClient, commands, platform, gridStats, panes } = useWorkbench()
+function ResultGridShell({ tabId, entry, count, focused, budget, onFocus, onWide }: ResultGridProps) {
+  const { results, resultClient, commands, platform, gridStats, panes, settings } = useWorkbench()
+  const showTypes = useServiceSnapshot(settings).values['queryResults.grid.showColumnTypes']
+  const showTypesRef = useRef(showTypes)
+  showTypesRef.current = showTypes
   const rootRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), viewRef = useRef<GridView | undefined>(undefined)
   const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
   const [status, setStatus] = useState<GridStatus>({})
   const index = entry.index
   const countRef = useRef(count)
   countRef.current = count
+  const onWideRef = useRef(onWide)
+  onWideRef.current = onWide
   // Before the shell paints: the view draws its first frame as it is built, so the grid never paints empty first.
   useLayoutEffect(() => {
     const view = new GridView({
       root: rootRef.current!, scroller: scrollRef.current!, handle: entry.handle, client: resultClient, descriptor: entry.descriptor, state: results.gridState(tabId, index),
-      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats,
+      resultIndex: index, resultCount: countRef.current, platform, stats: gridStats, showTypes: showTypesRef.current,
       onSelection: selection => {
         const current = entry.handle.getSnapshot()
         results.announceSelection(tabId, describeSelection(selection, current.rowsAvailable, entry.descriptor.columns.length))
@@ -53,15 +61,15 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       onCopy: () => { void commands.execute('output.copy', undefined, 'keybinding') },
       onEscape: () => results.cancelTabJob(tabId),
       onStatus: setStatus,
+      onWide: wide => onWideRef.current?.(index, wide),
       onError: onUnexpectedError,
       onOpenValue: (row, column) => { void commands.execute('output.openValue', { tabId, cell: { resultIndex: index, row, column } }, 'keybinding') }
     })
     viewRef.current = view
     const registration = results.registerGrid(tabId, index, { selectAll: () => view.selectAll(), repaint: () => view.repaint() })
     // Closing and opening the pane within one frame moves the grid without resizing it, and the move drops the scroller's
-    // offsets: the frame this asks for writes them back. It relies on GridView's offsetsDropped: without it, this frame
-    // would take the dropped offsets for a scroll to the top.
-    const unsubscribe = panes.subscribe(() => view.invalidate())
+    // offsets: the frame this asks for writes them back (GridView's offsetsDropped), and a press before it keeps them.
+    const unsubscribe = panes.subscribe(() => view.panesChanged())
     return () => {
       unsubscribe()
       registration.dispose()
@@ -69,7 +77,7 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
       if (viewRef.current === view) viewRef.current = undefined
     }
   }, [tabId, index, entry, results, resultClient, commands, platform, gridStats, panes])
-  useEffect(() => { viewRef.current?.update({ resultCount: count }) }, [count])
+  useEffect(() => { viewRef.current?.update({ resultCount: count, showTypes }) }, [count, showTypes])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.defaultPrevented || (event.target as Element).closest('button')) return
     if (viewRef.current?.key(event.nativeEvent)) { event.preventDefault(); event.stopPropagation() }
@@ -86,8 +94,8 @@ function ResultGridShell({ tabId, entry, count, focused, budget, onFocus }: Resu
     {lost && <div className="rg-overlay" role="status">{lostText}</div>}
     {!lost && status.renderError ? <div className="rg-strip error" role="status">This result could not be displayed. <button onClick={retry}>Retry</button></div>
       : !lost && status.tileError ? <div className="rg-strip error" role="status">Some rows could not be loaded: {status.tileError} <button onClick={retry}>Retry</button></div>
-        : !lost && snapshot.incomplete ? <div className="rg-strip" role="status">This result is incomplete because an error, cancellation, or timeout stopped it. See Messages.</div>
-          : !lost && truncation ? <div className="rg-strip" role="status">{truncation}</div> : null}
+        : !lost && snapshot.incomplete ? <div className="rg-strip" role="status" title={incompleteText}>{incompleteText}</div>
+          : !lost && truncation ? <div className="rg-strip" role="status" title={truncation}>{truncation}</div> : null}
   </div>
 }
 
@@ -109,10 +117,4 @@ function ErrorBoundaryKey({ children }: { children: ReactNode }) { return <>{chi
 
 export default function ResultGrid(props: ResultGridProps) {
   return <GridErrorBoundary index={props.entry.index}><ResultGridShell {...props} /></GridErrorBoundary>
-}
-
-/** "Result 3 · 1,234 rows": a grid still waiting for its turn to mount. */
-export function GridPlaceholder({ entry }: { entry: ResultSetEntry }) {
-  const snapshot = useSyncExternalStore(entry.handle.subscribe, entry.handle.getSnapshot)
-  return <div className="rs-placeholder">Result {entry.index + 1} · {formatCount(snapshot.rowsAvailable)} {plural(snapshot.rowsAvailable, 'row')}</div>
 }

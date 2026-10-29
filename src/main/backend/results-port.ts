@@ -43,8 +43,12 @@ export function toExactArrayBuffer(body: Uint8Array): ArrayBuffer {
 
 /** `withheld` is credit the worker granted that the port's limits held back; it is passed on once there is room. */
 interface Stream { readonly rid: number; readonly generation: number; granted: number; received: number; withheld: number; handle?: ReadStream }
-/** `ids` are the results this stream's ticks named: the only ones its `retired` lists and its end may take back. */
-interface LiveStream { readonly rid: number; readonly generation: number; readonly subscriptionId: string; readonly source: string; readonly ids: Set<number>; granted: number; received: number; withheld: number; handle?: LiveStreamHandle }
+/** `ids` are the results this stream's ticks named: the only ones its `retired` lists and its end may take back.
+ *  `snapshots` names the table (probe/index) of each snapshot revision not yet retired, and `newest` each table's latest. */
+interface LiveStream {
+  readonly rid: number; readonly generation: number; readonly subscriptionId: string; readonly source: string; readonly ids: Set<number>
+  readonly snapshots: Map<number, string>; readonly newest: Map<string, number>; granted: number; received: number; withheld: number; handle?: LiveStreamHandle
+}
 
 /**
  * Main's end of the results port: one MessagePort per renderer load, through which the results worker reads pages and
@@ -88,6 +92,8 @@ export class ResultsPortHost {
   get isOpen(): boolean { return !!this.port }
   get ownedCount(): number { return this.owned.size }
   get liveCount(): number { return this.lives.size }
+  /** The snapshot revisions the live streams name and have not retired (each stream's `snapshots`), for tests of its bound. */
+  get liveSnapshotCount(): number { let count = 0; for (const stream of this.lives.values()) count += stream.snapshots.size; return count }
 
   /** A new port for the frame (after trusted()); the previous one closes and its streams are cancelled. */
   open(frame: FrameLike): void {
@@ -154,6 +160,28 @@ export class ResultsPortHost {
 
   /** Whether this renderer may use the result: the current generation holds it for this renderer (copy and save). */
   owns(generation: number, resultId: number): boolean { return generation === this.generation && this.owned.has(resultId) }
+
+  /**
+   * For a live snapshot table's revision this renderer owns: a function that names the table's newest revision it owns
+   * when called (undefined once it no longer owns one: the stream ended without keeping it). Save Results As asks before
+   * its dialog, which may stay open for many samples while each revision is retired two samples on, and saves the revision
+   * the table has once the file is chosen; a source that ended meanwhile keeps its newest revision, which is saved.
+   * Undefined for any other result.
+   */
+  liveNewest(generation: number, resultId: number): (() => number | undefined) | undefined {
+    if (!this.owns(generation, resultId)) return undefined
+    for (const stream of this.lives.values()) {
+      const table = stream.generation === generation ? stream.snapshots.get(resultId) : undefined
+      if (table === undefined) continue
+      return () => {
+        const newest = stream.newest.get(table)
+        // Ownership alone decides: a stream's end disowns its results except those its source kept (still shown, saved until
+        // results.close), and a port's close or a new generation disowns them all.
+        return newest !== undefined && this.owns(generation, newest) ? newest : undefined
+      }
+    }
+    return undefined
+  }
 
   queryEvent(queryId: string, event: QueryEvent): void {
     if (event.type === 'resultSet.opened') this.own([event.descriptor])
@@ -261,7 +289,7 @@ export class ResultsPortHost {
     if (request.generation !== this.generation || this.backend.readyGeneration() !== request.generation) return this.end(rid, 'RESULT_UNAVAILABLE', sentences.resultUnavailable)
     if (this.subscriptions.has(params.subscriptionId)) return this.end(rid, 'DUPLICATE_REQUEST', sentences.liveDuplicate)
     const credit = wire.live.initialCredit
-    const stream: LiveStream = { rid, generation: request.generation, subscriptionId: params.subscriptionId, source: params.source, ids: new Set(), granted: credit, received: 0, withheld: 0 }
+    const stream: LiveStream = { rid, generation: request.generation, subscriptionId: params.subscriptionId, source: params.source, ids: new Set(), snapshots: new Map(), newest: new Map(), granted: credit, received: 0, withheld: 0 }
     this.lives.set(rid, stream)
     this.subscriptions.set(params.subscriptionId, rid)
     const port = this.port
@@ -271,8 +299,15 @@ export class ResultsPortHost {
       const descriptors = liveDescriptors(event)
       this.own(descriptors)
       for (const descriptor of descriptors) stream.ids.add(descriptor.resultId)
+      if (event.type === 'live.tick') {
+        for (const sample of event.samples) for (const entry of sample.tables ?? []) {
+          const table = sample.probe + '/' + entry.table
+          stream.snapshots.set(entry.descriptor.resultId, table)
+          stream.newest.set(table, entry.descriptor.resultId)
+        }
+      }
       // A tick can never take back results it did not deliver: a query's, or another stream's.
-      for (const id of liveRetired(event)) if (stream.ids.delete(id)) this.owned.delete(id)
+      for (const id of liveRetired(event)) if (stream.ids.delete(id)) { this.owned.delete(id); stream.snapshots.delete(id) }
       this.post({ t: 'live', rid, bytes, event })
     }
     stream.handle = this.backend.live(request.generation, params, onLive, credit)

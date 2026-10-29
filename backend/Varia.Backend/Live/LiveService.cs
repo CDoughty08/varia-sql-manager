@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Activity;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -26,9 +27,19 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>What every open connection says it is at login (its Application Name and workstation id): this backend's
+    /// sessions run under them plus a pool suffix, which tells the Activity Monitor which sessions may be Varia's own.</summary>
+    IReadOnlyCollection<VariaClient> Clients => [];
+    /// <summary>The session ids this backend's pooled and Object Actions connections to the connection's server were given when
+    /// they opened: what Varia knows of its own sessions without trusting what a client claims at login.</summary>
+    IReadOnlySet<int> OwnSessions(string connectionId) => new HashSet<int>();
     /// <summary>The SSIS Catalog's database, which SSISDB sources open: SSISDB, or the checks' fake catalog.</summary>
     string SsisCatalog => Ssis.SsisCatalog.Current.CatalogDatabase;
 }
+
+/// <summary>A connection's Application Name and the workstation id SqlClient sends with it (its Workstation ID, else this
+/// machine's name), as sys.dm_exec_sessions shows them in program_name and host_name.</summary>
+internal readonly record struct VariaClient(string ApplicationName, string Workstation);
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
 internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
@@ -65,9 +76,10 @@ internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
 }
 
 /// <summary>A due probe as the sampler sees it: its gap marker, the slots it missed, the time since its last sample, the
-/// settings an update may change (as they were when it came due), its statement budget, and the interval in force.</summary>
+/// settings an update may change (as they were when it came due: sort, track lists, view and filter), its statement budget,
+/// and the interval in force.</summary>
 internal sealed record LiveDue(LiveProbeState Probe, string? Gap, int? Skipped, long? ElapsedMs, LiveSortArgs[]? Sort, IReadOnlyDictionary<int, LiveTrackArgs> Tracks,
-    int BudgetMs = 0, int EffectiveIntervalMs = 0, long TakenAt = 0);
+    int BudgetMs = 0, int EffectiveIntervalMs = 0, long TakenAt = 0, string? View = null, LiveFilterArgs? Filter = null);
 /// <summary>One tick's samples and errors; Spid when the source opened a new session for it, and Cursors where its append
 /// tables settled (the resume token follows them).</summary>
 internal sealed record LiveSampleBatch(List<LiveSample> Samples, List<LiveProbeError> Errors, int? Spid = null, IReadOnlyList<LiveCursor>? Cursors = null);
@@ -294,7 +306,7 @@ internal sealed class LiveSubscription : IDisposable
                 // The settings an update may change, as they are now: the sampler reads them outside the lock.
                 // A first sample has no slots before it to miss, however long the opened frame waited for its acknowledgement.
                 due.Add(new LiveDue(probe, gap, missed > 0 && probe.LastSampleAt >= 0 ? missed : null, probe.LastSampleAt < 0 ? null : now - probe.LastSampleAt, probe.Sort,
-                    new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, now));
+                    new Dictionary<int, LiveTrackArgs>(probe.Tracks), probe.BudgetMs, probe.EffectiveIntervalMs, now, probe.View, probe.Filter));
                 probe.DueAt += (long)(missed + 1) * period;
                 probe.LastSampleAt = now;
                 probe.Resumed = false;
@@ -314,11 +326,16 @@ internal sealed class LiveSubscription : IDisposable
         {
             var samples = new List<LiveSample>(batch.Samples.Count);
             var errors = new List<LiveProbeError>(batch.Errors.Count);
+            // A probe may fail in more than one way at once (a table cut by the budget and a statement that failed): one error
+            // schedules it (a terminal one when nothing was sampled), and the others go with it while the tick has room
+            // (limits.live.errors), every probe's first error first.
+            var extra = new List<LiveProbeError>();
             foreach (var item in due)
             {
                 var probe = item.Probe;
                 var sample = batch.Samples.Find(entry => entry.Probe == probe.Spec.Id);
-                var error = batch.Errors.Find(entry => entry.Probe == probe.Spec.Id);
+                var all = batch.Errors.FindAll(entry => entry.Probe == probe.Spec.Id);
+                var error = (sample is null ? all.Find(entry => entry.Terminal) : null) ?? (all.Count > 0 ? all[0] : null);
                 if (sample is not null)
                 {
                     probe.Failures = 0;
@@ -343,8 +360,13 @@ internal sealed class LiveSubscription : IDisposable
                     retry = Retry(probe);
                     probe.DueAt = item.TakenAt + retry;
                 }
-                errors.Add(error with { RetryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max) });
+                // Terminal says the probe stopped: an error beside a sample (one table a statement could not read) never does.
+                var retryInMs = Math.Clamp(retry, 0, limits.IntervalMs.Max);
+                var stopped = probe.Stopped is not null;
+                errors.Add(error with { RetryInMs = retryInMs, Terminal = error.Terminal && stopped });
+                extra.AddRange(all.Where(other => !ReferenceEquals(other, error)).Select(other => other with { RetryInMs = retryInMs, Terminal = other.Terminal && stopped }));
             }
+            errors.AddRange(extra.Take(Math.Max(0, limits.Errors - errors.Count)));
             // A sampler reports only probes it was given; anything else it sent is dropped rather than sent.
             return new(samples, errors, batch.Spid, batch.Cursors);
         }
@@ -404,7 +426,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private static readonly string[] Clearable = ["sort", "view", "filter"];
     private readonly ConcurrentDictionary<string, LiveSubscription> running = new(StringComparer.Ordinal);
     private readonly Lock registration = new();
-    private readonly LiveCatalog catalog = catalog ?? LiveCatalog.Current;
+    private readonly LiveCatalog catalog = Shared(host, catalog ?? LiveCatalog.Current);
     private static readonly Stopwatch Clock = Stopwatch.StartNew();
     private static long Now => Clock.ElapsedMilliseconds;
 
@@ -417,6 +439,11 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     /// <summary>Rewrites a SQL probe's command text (probe id, text → text), so the live checks can make a probe wait on a lock
     /// they hold. Only the checks set it; it is never reachable from a request.</summary>
     internal Func<string, string, string>? TestText { get; set; }
+    /// <summary>Probes the live checks register (their queries, database, isolation and start); only the checks set it, with
+    /// their own catalogue, and it is never reachable from a request.</summary>
+    internal LiveTestSql? TestSql { get; set; }
+    /// <summary>The store the live tables write to (the checks read revisions from it).</summary>
+    internal ResultStore Store => host.Store;
 
     // \A and \z: .NET's $ also matches before a final newline, which main's pattern refuses.
     [GeneratedRegex(@"\A[A-Za-z0-9_-]+\z")]
@@ -426,6 +453,13 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     internal static bool IsResumeToken(string value) => ResumePattern().IsMatch(value);
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
+
+    /// <summary>Gives live tables their share of the host's result budget (limits.live.budgetShare).</summary>
+    private static LiveCatalog Shared(ILiveHost host, LiveCatalog catalog)
+    {
+        host.Store.ShareWithLive(catalog.Limits.BudgetShare);
+        return catalog;
+    }
 
     public async Task<LiveEnd> SubscribeAsync(LiveSubscribeArgs args, RequestContext? context, JsonSerializerOptions json)
     {
@@ -507,6 +541,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     throw Invalid("Only keyed snapshot tables are tracked.");
                 if (track.Seq < 1 || track.Keys is null || track.Keys.Length > Limits.TrackedKeys || track.Keys.Any(key => key is null || key.Length > Limits.KeyCharacters))
                     throw Invalid("A track list has up to 64 keys of up to 512 characters.");
+                if (track.Linger is { } linger && (linger < 0 || linger > track.Keys.Length)) throw Invalid("A track list lingers at most its own keys.");
             }
         }
         var sourceArgs = args.Args is null ? null : ArgsOf(source, args.Args, json);
@@ -656,8 +691,9 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
 
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
-        SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs()),
-        _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, connectionId, source, TestText),
+        SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
+        _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
+            source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
     };
 
@@ -694,15 +730,18 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     {
         if (settings.Sort is { } sort)
         {
-            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
-            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !sortable.Contains(key.Column))
-                || sort.Select(key => key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
+            // A row's tone column is never data: no sort or filter names it.
+            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            bool Sorts(LiveSortArgs key) => key.Table is not { } table ? sortable.Contains(key.Column)
+                : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column && LiveColumnJson.IsData(column));
+            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !Sorts(key))
+                || sort.Select(key => key.Table + "/" + key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
                 throw Invalid("Sort names a column the probe does not sort by.");
         }
         if (settings.View is { } view && !spec.Views.Contains(view, StringComparer.Ordinal)) throw Invalid("Unknown view.");
         if (settings.Filter is { } filter)
         {
-            var columns = spec.Tables.SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            var columns = spec.Tables.SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
             if (spec.FilterMode == "none" || filter.Text is not { Length: >= 1 } text || text.Length > Limits.FilterCharacters
                 || filter.Columns is { } named && (named.Length is 0 || named.Length > Limits.FilterColumns || named.Any(column => column is null || !columns.Contains(column))))
                 throw Invalid("The probe does not take this filter.");
@@ -710,15 +749,17 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     }
 
     /// <summary>The source's own args, read strictly (unknown members refused) and bounded.</summary>
-    private static object? ArgsOf(LiveSourceJson source, JsonElement? args, JsonSerializerOptions json)
+    private object? ArgsOf(LiveSourceJson source, JsonElement? args, JsonSerializerOptions json)
     {
+        var maxTail = Limits.SegmentRows;
         if (args is not { } element) return null;
         if (element.ValueKind != JsonValueKind.Object) throw Invalid("Invalid arguments for this source.");
         try
         {
             return source.Id switch
             {
-                SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source.")),
+                SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };
         }

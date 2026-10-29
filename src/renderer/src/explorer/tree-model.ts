@@ -65,6 +65,12 @@ export interface TreeNode {
   lastUsed: number
   /** Nodes below this one that are in the tree. */
   descendants: number
+  /** What a server row shows after its name ("16.0 · sa"); `sublabel` keeps SSMS's full text for its name and tooltip. */
+  brief?: string
+  /** When the first page of the children shown now arrived (epoch ms). */
+  updatedAt?: number
+  /** When a refresh that kept the old children failed (epoch ms); cleared by the next first page. */
+  staleSince?: number
   note?: NodeNote
 }
 export interface NodeTable { get(id: number): TreeNode | undefined }
@@ -117,11 +123,21 @@ class RowBuilder {
     this.ids = copy(this.ids, new Int32Array(capacity)); this.kinds = copy(this.kinds, new Uint8Array(capacity)); this.levels = copy(this.levels, new Uint8Array(capacity))
     this.posinset = copy(this.posinset, new Int32Array(capacity)); this.setsize = copy(this.setsize, new Int32Array(capacity))
   }
+  /** Drops the rows from `mark` on: a filtered subtree with no match in it. */
+  truncate(mark: number): void {
+    this.count = mark
+    this.nodes.length = mark
+  }
   rows(): VisibleRows {
     const n = this.count
     return { count: n, ids: this.ids.subarray(0, n), kinds: this.kinds.subarray(0, n), levels: this.levels.subarray(0, n), posinset: this.posinset.subarray(0, n), setsize: this.setsize.subarray(0, n), nodes: this.nodes }
   }
 }
+
+/** A filter's text as `TreeNode.lower` is compared with it: trimmed and in lower case; '' for no filter. */
+export const filterText = (text: string): string => text.trim().toLocaleLowerCase()
+/** Where `filter` (from `filterText`) starts in a node's label, or −1. */
+export const filterMatch = (node: Pick<TreeNode, 'lower'>, filter: string): number => filter ? node.lower.indexOf(filter) : -1
 
 /** The row after an expanded node's children, if any. */
 export function tailRow(node: TreeNode): RowKind | undefined {
@@ -167,6 +183,110 @@ export function flatten(nodes: NodeTable, roots: readonly number[], capacityHint
   return out.rows()
 }
 
+/**
+ * The rows a filter leaves, how many of their nodes match it, and the nodes shown only for rows below them or as the
+ * selection (`partial`: neither a match nor inside a match's subtree). Those list only some of their children, so a
+ * folder's item count would misread beside them.
+ */
+export interface FilteredRows { readonly rows: VisibleRows; readonly matches: number; readonly partial: ReadonlySet<number> }
+/**
+ * `flatten` narrowed to the nodes whose label contains `filter` (from `filterText`). It walks expanded nodes only, so it
+ * searches what has been loaded and opened, and never asks for more. A match keeps its ancestors (servers always show)
+ * and shows its expanded rows below as usual; a node that neither matches nor has a match below is left out with its
+ * loading and error rows. Positions in a set count the siblings that show. O(visible rows unfiltered).
+ *
+ * The `pinned` node (the selection) and its ancestors show too, matching or not: collapsing a node that showed only for
+ * the matches below it, or typing text the selection does not match, would otherwise leave the selection off the rows,
+ * where F5, copy and the footer would still act on it unseen.
+ */
+export function flattenFiltered(nodes: NodeTable, roots: readonly number[], filter: string, capacityHint = 256, pinned?: number): FilteredRows {
+  const out = new RowBuilder(Math.max(64, capacityHint))
+  const keep = new Set<number>()
+  for (let node = pinned === undefined ? undefined : nodes.get(pinned); node; node = node.parent ? nodes.get(node.parent) : undefined) keep.add(node.id)
+  let matches = 0
+  const partial = new Set<number>()
+  /** A node's synthetic rows around its children, as `flatten` places them; `each` emits one child. */
+  const visitChildren = (node: TreeNode, each: (child: TreeNode, index: number, size: number) => void) => {
+    const level = node.level + 1, children = node.children
+    if (node.load === 'error') out.push(syntheticId(node.id, RowKind.Error), RowKind.Error, level, 0, 0, undefined)
+    else if (node.showLoading && !children?.length) out.push(syntheticId(node.id, RowKind.Loading), RowKind.Loading, level, 0, 0, undefined)
+    if (children) {
+      const size = Math.max(node.total ?? 0, children.length)
+      for (let index = 0; index < children.length; index++) each(children[index], index, size)
+    }
+    const tail = tailRow(node)
+    if (tail !== undefined) out.push(syntheticId(node.id, tail), tail, level, 0, 0, undefined)
+  }
+  // A match's subtree shows whole, as without a filter; the matches in it still count. `matched`: the caller has
+  // already matched the node, so each name is searched once.
+  const visitAll = (node: TreeNode, posinset: number, setsize: number, matched = false) => {
+    out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
+    if (matched || filterMatch(node, filter) >= 0) matches++
+    if (node.expanded) visitChildren(node, (child, index, size) => visitAll(child, index + 1, size))
+  }
+  /** Emits the node if it or a node below it matches, or it is a server or pinned; true when it did. */
+  const visit = (node: TreeNode, posinset: number, setsize: number, server: boolean): boolean => {
+    if (filterMatch(node, filter) >= 0) { visitAll(node, posinset, setsize, true); return true }
+    const mark = out.count
+    out.push(node.id, RowKind.Node, node.level, posinset, setsize, node)
+    const shown: number[] = []
+    if (node.expanded) {
+      visitChildren(node, child => {
+        const at = out.count
+        if (child.expanded || keep.has(child.id) ? visit(child, 0, 0, false) : filterMatch(child, filter) >= 0) {
+          if (out.count === at) { out.push(child.id, RowKind.Node, child.level, 0, 0, child); matches++ }
+          shown.push(at)
+        }
+      })
+    }
+    if (!shown.length && !server && !keep.has(node.id)) { out.truncate(mark); return false }
+    for (let index = 0; index < shown.length; index++) { out.posinset[shown[index]] = index + 1; out.setsize[shown[index]] = shown.length }
+    partial.add(node.id)
+    return true
+  }
+  for (let index = 0; index < roots.length; index++) {
+    const root = nodes.get(roots[index])
+    if (root) visit(root, index + 1, roots.length, true)
+  }
+  return { rows: out.rows(), matches, partial }
+}
+
+/**
+ * Where rows sit: every row is `rowHeight` tall except servers (rows at level 1), which are `serverRowHeight`. Servers
+ * are few, so a row's offset is its index times the row height plus the extra height of the servers above it.
+ */
+export interface RowLayout {
+  readonly count: number
+  /** The height of every row together: the spacer's. */
+  readonly total: number
+  top(index: number): number
+  height(index: number): number
+  /** The row at `offset` px from the top, clamped to the rows. */
+  indexAt(offset: number): number
+}
+export function rowLayout(rows: Pick<VisibleRows, 'count' | 'levels'>, rowHeight: number = explorerLimits.rowHeight, serverRowHeight: number = explorerLimits.serverRowHeight): RowLayout {
+  const servers: number[] = [], extra = serverRowHeight - rowHeight
+  for (let index = 0; index < rows.count; index++) if (rows.levels[index] === 1) servers.push(index)
+  /** How many servers sit above row `index`. */
+  const above = (index: number) => {
+    let low = 0, high = servers.length
+    while (low < high) { const middle = (low + high) >> 1; if (servers[middle] < index) low = middle + 1; else high = middle }
+    return low
+  }
+  const top = (index: number) => index * rowHeight + above(index) * extra
+  return {
+    count: rows.count,
+    total: rows.count * rowHeight + servers.length * extra,
+    top,
+    height: index => rows.levels[index] === 1 ? serverRowHeight : rowHeight,
+    indexAt(offset: number) {
+      let low = 0, high = Math.max(0, rows.count - 1)
+      while (low < high) { const middle = (low + high + 1) >> 1; if (top(middle) <= offset) low = middle; else high = middle - 1 }
+      return low
+    }
+  }
+}
+
 /** The rows to render, `[first, end)`: the viewport plus `overscan` rows on each side. */
 export function computeWindow(scrollTop: number, viewport: number, count: number, rowHeight: number = explorerLimits.rowHeight, overscan: number = explorerLimits.overscan): [number, number] {
   if (count <= 0 || rowHeight <= 0) return [0, 0]
@@ -174,6 +294,22 @@ export function computeWindow(scrollTop: number, viewport: number, count: number
   const first = Math.min(count, Math.max(0, Math.floor(top / rowHeight) - overscan))
   const end = Math.min(count, Math.ceil((top + height) / rowHeight) + overscan)
   return [first, Math.max(first, end)]
+}
+/** The scroll offset that brings row `index` into a `viewport` px view scrolled to `scrollTop`, or undefined when it shows. */
+export function revealScroll(layout: RowLayout, index: number, scrollTop: number, viewport: number): number | undefined {
+  if (index < 0 || index >= layout.count) return undefined
+  const top = layout.top(index), bottom = top + layout.height(index)
+  if (top < scrollTop) return top
+  if (bottom > scrollTop + viewport) return bottom - viewport
+  return undefined
+}
+/** `computeWindow` over a layout whose rows differ in height. */
+export function layoutWindow(scrollTop: number, viewport: number, layout: RowLayout, overscan: number = explorerLimits.overscan): [number, number] {
+  if (layout.count <= 0) return [0, 0]
+  const top = Math.max(0, scrollTop), bottom = top + Math.max(0, viewport)
+  if (top >= layout.total) return [layout.count, layout.count]
+  const first = Math.max(0, layout.indexAt(top) - overscan)
+  return [first, Math.min(layout.count, layout.indexAt(Math.max(top, bottom - 1)) + 1 + overscan)]
 }
 /** The window's row indices plus the selected row, which is always rendered so `aria-activedescendant` resolves. */
 export function renderedIndices([first, end]: readonly [number, number], selected: number): number[] {
@@ -206,6 +342,8 @@ export type TreeAction =
   | { readonly type: 'continue'; readonly id: number }
   /** Enter on a capped row opens Filter Settings for its folder. */
   | { readonly type: 'filter'; readonly id: number }
+  /** Enter on a node that does not expand: its default action, if its kind has one (an SSIS package's Properties). */
+  | { readonly type: 'activate'; readonly id: number }
   | { readonly type: 'none' }
 const none: TreeAction = { type: 'none' }
 
@@ -257,7 +395,7 @@ export function treeKey(rows: VisibleRows, index: number, key: TreeKey, pageRows
       default: return none
     }
   }
-  const node = rows.nodes[index]
+  const node = rows.nodes[index], live = !!node && !node.lost
   switch (key) {
     case 'right':
       if (!expandable(node)) return none
@@ -268,7 +406,7 @@ export function treeKey(rows: VisibleRows, index: number, key: TreeKey, pageRows
       const parent = parentIndex(rows, index)
       return parent < 0 ? none : select(parent)
     }
-    case 'enter': return expandable(node) ? { type: 'toggle', id } : none
+    case 'enter': return expandable(node) ? { type: 'toggle', id } : live ? { type: 'activate', id } : none
     case 'expand': return expandable(node) && !node.expanded ? { type: 'expand', id } : none
     case 'collapse': return node?.expanded ? { type: 'collapse', id } : none
     case 'expandSiblings': return node ? { type: 'expandSiblings', id } : none

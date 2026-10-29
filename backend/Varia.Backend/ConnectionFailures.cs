@@ -47,7 +47,30 @@ internal static class ConnectionFailures
     {
         if (kerberos && Kerberos(error, server, probe) is { } failure) return failure;
         var sql = Find<SqlException>(error);
-        return sql is null ? null : new RequestException("SQL_ERROR", sql.Message, Details(sql, server));
+        if (sql is null) return null;
+        var details = Details(sql, server);
+        return new RequestException("SQL_ERROR", sql.Message, Untrusted(error, sql) ? details with { Reason = ErrorDetailsLimits.Certificate } : details);
+    }
+
+    // SEC_E_UNTRUSTED_ROOT and SEC_E_WRONG_PRINCIPAL: Windows' SNI reports them as the error number, and the managed SNI
+    // (Linux and macOS) reports any certificate its validation rejects as SEC_E_UNTRUSTED_ROOT. Once Host Name in
+    // Certificate is set, Windows' SNI reports an untrusted chain as CERT_E_UNTRUSTEDROOT or CERT_E_CHAINING instead.
+    // CERT_E_WRONG_USAGE (0x800B0110, what a pinned Server Certificate that does not match reports) stays out: that is a
+    // certificate Trust server certificate must not wave through.
+    private static readonly HashSet<int> CertificateErrors = [unchecked((int)0x80090325), unchecked((int)0x80090322), unchecked((int)0x800B0109), unchecked((int)0x800B010A)];
+
+    /// <summary>The TLS handshake failed because the server's certificate is not trusted, by its chain or its name: what
+    /// Trust server certificate (or Host Name in Certificate) fixes, unless the person pinned the certificate or its name
+    /// (connect-fix.ts then explains instead). The managed SNI can also surface it only as the
+    /// AuthenticationException that SslStream's validation callback raised.</summary>
+    internal static bool Untrusted(Exception error, SqlException sql)
+    {
+        foreach (SqlError item in sql.Errors)
+            if (CertificateErrors.Contains(item.Number)) return true;
+        for (Exception? current = error; current is not null; current = current.InnerException)
+            if (current is System.Security.Authentication.AuthenticationException && current.Message.Contains("certificate", StringComparison.OrdinalIgnoreCase)
+                || current is System.ComponentModel.Win32Exception { NativeErrorCode: var code } && CertificateErrors.Contains(code)) return true;
+        return false;
     }
 
     /// <summary>What to fix when the Kerberos token could not be built, with the failure's details, or null for any other failure.</summary>
@@ -140,7 +163,7 @@ internal static class KerberosProbe
     internal const int MaxPrincipalLength = 256;
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate uint AcquireCredential(out uint minor, IntPtr name, uint lifetimeWanted, IntPtr mechanisms, int usage, out IntPtr credential, IntPtr actualMechanisms, out uint lifetime);
+    private delegate uint AcquireCredential(out uint minor, IntPtr name, uint lifetimeWanted, ref GssOidSet mechanisms, int usage, out IntPtr credential, IntPtr actualMechanisms, out uint lifetime);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate uint ReleaseCredential(out uint minor, ref IntPtr credential);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -158,6 +181,13 @@ internal static class KerberosProbe
     {
         public nuint Length;
         public IntPtr Value;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct GssOidSet
+    {
+        public nuint Count;
+        public IntPtr Elements;
     }
 
     /// <summary>The library .NET's own GSSAPI shim loads: MIT Kerberos on Linux, the system GSS framework on macOS.</summary>
@@ -179,8 +209,7 @@ internal static class KerberosProbe
         try
         {
             if (!NativeLibrary.TryGetExport(library, "gss_acquire_cred", out var acquire) || !NativeLibrary.TryGetExport(library, "gss_release_cred", out var release)) return new(KerberosState.Unknown, null);
-            // The default initiator credential of the default mechanisms: the ticket SqlClient's Negotiate token would use.
-            var major = Marshal.GetDelegateForFunctionPointer<AcquireCredential>(acquire)(out _, IntPtr.Zero, 0, IntPtr.Zero, Initiate, out var credential, IntPtr.Zero, out var lifetime);
+            var major = AcquireKerberosCredential(acquire, out var credential, out var lifetime);
             try
             {
                 var state = Classify(major, lifetime);
@@ -189,6 +218,28 @@ internal static class KerberosProbe
             finally { if (credential != IntPtr.Zero) Marshal.GetDelegateForFunctionPointer<ReleaseCredential>(release)(out _, ref credential); }
         }
         finally { NativeLibrary.Free(library); }
+    }
+
+    private static uint AcquireKerberosCredential(IntPtr acquire, out IntPtr credential, out uint lifetime)
+    {
+        // RFC 4121's Kerberos mechanism, 1.2.840.113554.1.2.2. Asking for all mechanisms lets macOS succeed with a
+        // non-Kerberos credential even when the Kerberos cache is absent, which cannot establish that a ticket exists.
+        byte[] kerberos = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x12, 0x01, 0x02, 0x02];
+        // Apple's x86/x64 GSS ABI packs gss_OID_desc at two-byte alignment; its pointer follows the uint32 length
+        // immediately. MIT and Apple's ARM ABI align that pointer normally (gssapi.h's __APPLE__ pack(push,2)).
+        var pointerOffset = OperatingSystem.IsMacOS() && RuntimeInformation.ProcessArchitecture is Architecture.X86 or Architecture.X64 ? sizeof(uint) : IntPtr.Size;
+        var descriptorSize = pointerOffset + IntPtr.Size;
+        var storage = Marshal.AllocHGlobal(descriptorSize + kerberos.Length);
+        try
+        {
+            var elements = IntPtr.Add(storage, descriptorSize);
+            Marshal.Copy(kerberos, 0, elements, kerberos.Length);
+            Marshal.WriteInt32(storage, kerberos.Length);
+            Marshal.WriteIntPtr(storage, pointerOffset, elements);
+            var mechanisms = new GssOidSet { Count = 1, Elements = storage };
+            return Marshal.GetDelegateForFunctionPointer<AcquireCredential>(acquire)(out _, IntPtr.Zero, 0, ref mechanisms, Initiate, out credential, IntPtr.Zero, out lifetime);
+        }
+        finally { Marshal.FreeHGlobal(storage); }
     }
 
     /// <summary>gss_inquire_cred's name of the credential, as gss_display_name writes it (UTF-8), or null.</summary>

@@ -9,17 +9,21 @@ import { FileService } from '../services/files'
 import { RecentFilesService } from '../services/recent-files'
 import { RecoveryService } from '../services/recovery'
 import { EditorOptionsService } from '../services/editor-options'
+import { ShellOptionsService } from '../services/shell-options'
 import { EditorStatusService } from '../services/editor-status'
 import { TargetService } from '../services/targets'
 import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { ResultMemoryService } from '../results/memory'
-import { documentPage, LiveService } from '../live/LiveService'
+import { documentOwner, documentPage, LiveService } from '../live/LiveService'
+import { ActivityMonitorService } from '../activity/ActivityMonitorService'
+import { activityContribution } from '../contributions/activity'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../explorer/ExplorerService'
+import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
@@ -48,12 +52,18 @@ import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
+import { notificationsContribution } from '../contributions/notifications'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { ssisFocuser } from '../ssis/focus'
+import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
+import { ssisContribution } from '../contributions/ssis'
+import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
 import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
+import { NotificationService } from './notifications'
 import { ContextKeyService } from './contextkeys'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
@@ -97,6 +107,7 @@ export interface Workbench extends Disposable {
   readonly recovery: RecoveryService
   readonly targets: TargetService
   readonly editorOptions: EditorOptionsService
+  readonly shellOptions: ShellOptionsService
   /** Edit › Bookmarks: each open query's bookmarks, for this session. */
   readonly bookmarks: BookmarkService
   /** The query editor's dialogs (Go To Line). */
@@ -108,6 +119,8 @@ export interface Workbench extends Disposable {
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
+  /** Object Explorer's live status chips: one background live view per connected server while the pane shows. */
+  readonly explorerStatus: ExplorerStatusService
   /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
   readonly ssisTree: SsisTreeProbe
   /** The databases of each connected server, for the toolbar's database picker. */
@@ -124,7 +137,15 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** The SSIS Catalog's properties documents (Folder, Project, Package and Environment Properties). */
+  readonly ssisProperties: SsisPropertiesService
+  /** Database Properties documents: their drafts, Apply, Script previews and frames. */
+  readonly properties: DatabasePropertiesService
+  /** The Activity Monitors: one per connection, each a live view of its server. */
+  readonly activity: ActivityMonitorService
   readonly theme: ThemeService
+  /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
+  readonly notifications: NotificationService
 }
 /**
  * The next animation frame, or 50 ms when frames are throttled: a hidden window (the smoke tests') gets one a second,
@@ -149,9 +170,10 @@ function editorCaret(documents: DocumentService, monaco: typeof Monaco) {
 }
 export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: ThemeService, settings: SettingsService): Workbench {
   const platform = toPlatform(api.platform)
-  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), panes = new PaneService()
+  const events = new EventBus(), connections = new ConnectionService(), editorOptions = new EditorOptionsService(settings), shellOptions = new ShellOptionsService(settings), panes = new PaneService()
   const explorer = new ExplorerService({ api, connections, events, schedule: nextFrame }), databaseList = new DatabaseListService(api, connections, events)
   const backend = new BackendStateService(api, connections)
+  const notifications = new NotificationService()
   const documents = new DocumentService((text, uri, language) => monaco.editor.createModel(text, language, monaco.Uri.parse(uri)), api, events, callback => { frame(callback) },
     { ...settingsDocumentOptions(() => settings.getSnapshot().values), newLineEnding: platformLineEnding(platform) })
   const editorStatus = new EditorStatusService(callback => { frame(callback) }), inputMode = new InputModeService()
@@ -160,7 +182,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
-  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) } })
+  // The backend caps live views per server it reaches; a typed name is the closest this side knows.
+  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
+  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
@@ -183,6 +207,22 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
+  // Focus goes to the document's current section in its list, else to its first button (Refresh), once its first read
+  // has drawn them.
+  const ssisFocus = ssisFocuser({ get: id => ssisProperties.get(id), subscribe: listener => ssisProperties.subscribe(listener) }, {
+    root: id => document.querySelector<HTMLElement>(`[data-ssis-document="${CSS.escape(id)}"]`), activeElement: () => document.activeElement, body: () => document.body,
+    modalOpen, frame
+  })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
+  const properties = new DatabasePropertiesService({
+    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // The current section's item in the list: one tab stop, from which the keys move through the sections.
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
+  const activity = new ActivityMonitorService({
+    documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -191,6 +231,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     backend,
     editorOptions,
     panes,
+    shell: shellOptions,
     quickInput: quickInput.visibility,
     explorer: explorer.context,
     results: results.context,
@@ -200,6 +241,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recentFiles,
     recovery,
     designer: designers.context,
+    properties: properties.context,
+    notifications,
+    activity: activity.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -246,12 +290,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     targets,
     editorOptions,
+    shellOptions,
     bookmarks,
     editorDialogs,
     editorStatus,
     inputMode,
     panes,
     explorer,
+    explorerStatus,
     ssisTree,
     databaseList,
     resultSelection,
@@ -260,7 +306,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    ssisProperties,
+    properties,
+    activity,
     theme,
+    notifications,
     dispose: () => {
       if (disposed) return
       disposed = true
@@ -278,12 +328,18 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the live views: each monitor disposes its own; then the client, while the port is still there.
+      activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerStatus.dispose()
       live.dispose()
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()
+      ssisFocus.dispose()
+      ssisProperties.dispose()
+      properties.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -293,6 +349,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       dialogs.dispose()
       connections.dispose()
       editorOptions.dispose()
+      shellOptions.dispose()
       bookmarks.dispose()
       editorDialogs.dispose()
       editorStatus.dispose()
@@ -300,6 +357,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       panes.dispose()
       resultSelection.dispose()
       settings.dispose()
+      notifications.dispose()
       theme.dispose()
       events.dispose()
     }
@@ -321,7 +379,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
-    settingsContribution(workbench)
+    ssisContribution(workbench),
+    activityContribution(workbench),
+    settingsContribution(workbench),
+    notificationsContribution(workbench)
   ]
   // Capture on window runs before Monaco's own listeners and React's handlers.
   const listeners = [

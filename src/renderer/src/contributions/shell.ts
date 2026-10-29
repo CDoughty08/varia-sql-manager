@@ -18,13 +18,20 @@ export interface ShellHost {
   showConnect(): void
   /** Opens the Connect dialog filled in from a lost connection; connecting replaces it and retargets its queries. */
   reconnect(connectionId: string): void
+  /** Opens the Connection Environment dialog for a connected server. */
+  editEnvironment(connectionId: string): void
   /** Closes a panel as its × button does: its content and state are kept for when it is shown again. */
   closePane(pane: PaneId): void
   paneLocation(pane: PaneId): PaneLocation
   floatPane(pane: PaneId): void
   /** Returns a floating panel to where it was docked. */
   dockPane(pane: PaneId): void
+  /** Docks a panel at a side of the query editor (of Object Explorer, for the editor itself), as the old Move list did. */
+  dockPaneAt(pane: PaneId, side: DockSide): void
+  /** Moves a panel into another panel's group, as a tab beside it. */
+  tabPaneWith(pane: PaneId, other: PaneId): void
 }
+export type DockSide = 'left' | 'right' | 'top' | 'bottom'
 
 /**
  * Undo and Redo act on the focused text field outside the editor, otherwise on the query editor. While a dialog is open
@@ -46,6 +53,7 @@ function edit(documents: Workbench['documents'], command: 'undo' | 'redo', args?
   documents.boundEditor?.trigger('menu', command, null)
 }
 
+const runningOnServer = 'A query is running on this server.'
 const paneOf = (args?: CommandArgs): PaneId | undefined => args?.target?.kind === 'dockTab' ? args.target.pane : undefined
 const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { const pane = paneOf(args); if (pane) action(pane) }
 
@@ -54,19 +62,27 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, explorer, shellOptions }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'explorer' | 'shellOptions'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
+  const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
+  const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
+  // Beside another open panel, never itself.
+  const tabWith = (other: PaneId) => ({ when: (args?: CommandArgs) => open(args) && paneOf(args) !== other && host.paneLocation(other) !== 'closed', run: onPane(pane => host.tabPaneWith(pane, other)) })
   /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
   const lostNode = (args: CommandArgs | undefined) => {
     const node = explorerNodeOf(args)
     if (!node) return undefined
     return node.kind === 'server' && node.lost && connections.get(node.connectionId)?.lost ? node : null
   }
+  /** Why a server cannot be disconnected now: a query running on it, or a document's DDL (an Apply, a Save) that a disconnect would cut short. */
+  const disconnectRefusal = (id: string) => queries.isConnectionRunning(id) ? runningOnServer : documents.connectionBusy(id)
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
     commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }) }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
+    // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.
+    commands.register('explorer.filterLoaded', { run: () => { host.reveal('explorer'); explorer.focusQuickFilter() } }),
     commands.register('window.editor', { run: () => host.reveal('editor') }),
     commands.register('window.output', { run: () => host.reveal('output') }),
     // SSMS's Ctrl+R: hiding the results puts focus in the query editor; showing them leaves focus where it is.
@@ -93,13 +109,27 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     commands.register('connection.connect', { run: () => host.showConnect() }),
     // From a server node's menu, that server; otherwise the user picks one.
     commands.register('connection.disconnect', {
-      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !queries.isConnectionRunning(node.connectionId)) },
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId) && !disconnectRefusal(node.connectionId)) },
       run: args => {
         const node = explorerNodeOf(args)
         if (node?.kind === 'server') return host.disconnect(node.connectionId)
         quickInput.show({
           ariaLabel: 'Disconnect from Server', placeholder: 'Select a server to disconnect', noun: 'servers',
-          items: serverItems(connections.live(), id => queries.isConnectionRunning(id)), onDidAccept: item => host.disconnect(item.id)
+          items: serverItems(connections.live(), disconnectRefusal), onDidAccept: item => host.disconnect(item.id)
+        })
+      }
+    }),
+    // A server node's menu labels that server; otherwise the active query's server, else the user picks a connected one.
+    commands.register('connection.environment', {
+      when: args => { const node = explorerNodeOf(args); return node?.kind !== 'server' || (!node.lost && connections.isLive(node.connectionId)) },
+      run: args => {
+        const node = explorerNodeOf(args)
+        if (node?.kind === 'server') return host.editEnvironment(node.connectionId)
+        const active = documents.active?.connectionId
+        if (active && connections.isLive(active)) return host.editEnvironment(active)
+        quickInput.show({
+          ariaLabel: 'Set Connection Environment', placeholder: 'Select a server to label', noun: 'servers',
+          items: serverItems(connections.live()), onDidAccept: item => host.editEnvironment(item.id)
         })
       }
     }),
@@ -132,7 +162,15 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
-    commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) })
+    commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) }),
+    commands.register('pane.dockLeft', dockAt('left')),
+    commands.register('pane.dockRight', dockAt('right')),
+    commands.register('pane.dockTop', dockAt('top')),
+    commands.register('pane.dockBottom', dockAt('bottom')),
+    commands.register('pane.tabWithExplorer', tabWith('explorer')),
+    commands.register('pane.tabWithEditor', tabWith('editor')),
+    commands.register('pane.tabWithOutput', tabWith('output')),
+    commands.register('window.togglePanelTabs', { run: () => shellOptions.togglePanelTabs() })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

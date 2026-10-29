@@ -19,24 +19,35 @@ export function messageTail(tab: Pick<TabResults, 'status' | 'messages' | 'notic
 }
 
 /**
- * The Messages tab: messages stream in as the script runs, SQL errors inline in SSMS's two-line form and in red, then
- * the tail. It stays scrolled to the bottom while it was at the bottom. Text is selectable; Ctrl+A selects only it.
+ * The Messages view, and the Messages strip's open part: messages stream in as the script runs, SQL errors inline in SSMS's two-line form and in red, then
+ * the tail. It stays scrolled to the bottom while it was at the bottom; the strip (`firstError`) shows the first error at its
+ * top instead, once, when there is one. Text is selectable; Ctrl+A selects only it.
  */
-export default function MessagesView({ tabId, tab }: { tabId: string; tab: TabResults }) {
+export default function MessagesView({ id, tabId, tab, firstError }: { id?: string; tabId: string; tab: TabResults; firstError?: boolean }) {
   const { platform } = useWorkbench()
   const ref = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
+  const shownError = useRef(-1)
   const tail = messageTail(tab)
   useLayoutEffect(() => {
     const element = ref.current
-    if (element && atBottom.current) element.scrollTop = element.scrollHeight
-  }, [tab.messages, tail.length])
+    if (!element) return
+    const error = firstError ? tab.messages.findIndex(entry => entry.kind === 'error') : -1
+    if (error >= 0) {
+      if (shownError.current === error) return
+      shownError.current = error
+      const line = element.children[error]
+      if (line) element.scrollTop += line.getBoundingClientRect().top - element.getBoundingClientRect().top - element.clientTop
+      return
+    }
+    if (atBottom.current) element.scrollTop = element.scrollHeight
+  }, [tab.messages, tail.length, firstError])
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (chordFromEvent(event.nativeEvent, platform) !== (platform === 'darwin' ? 'meta+a' : 'ctrl+a')) return
     event.preventDefault()
     event.currentTarget.ownerDocument.getSelection()?.selectAllChildren(event.currentTarget)
   }
-  return <div ref={ref} className="messages" role="log" aria-label="Messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-result-index={0} data-pane-focus="messages"
+  return <div ref={ref} id={id} className="messages" role="log" aria-label="Messages" tabIndex={0} data-output-view="messages" data-tab-id={tabId} data-result-index={0} data-pane-focus="messages"
     onKeyDown={keyDown} onScroll={event => { const element = event.currentTarget; atBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight <= 4 }}>
     {tab.messages.map((entry, index) => <Message key={index} entry={entry} />)}
     {tail.map((line, index) => <pre key={'tail' + index} className="msg">{line || ' '}</pre>)}

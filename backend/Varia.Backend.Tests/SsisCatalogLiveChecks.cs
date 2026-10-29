@@ -99,7 +99,7 @@ internal static class SsisCatalogLiveChecks
         var server = new ObjectRefDto("server");
         var catalogs = await Children(Folder(server, "integrationServicesCatalogs"));
         var catalog = catalogs.Nodes.SingleOrDefault();
-        check(catalogs.Error is null && catalogs.Nodes.Count == 1 && catalog is { Label: var label, Icon: "svg:database", HasChildren: true, Ref.Object.Kind: "ssisCatalog" } && label == db && catalog.Ref.Object!.Name == db,
+        check(catalogs.Error is null && catalogs.Nodes.Count == 1 && catalog is { Label: var label, Icon: "database", HasChildren: true, Ref.Object.Kind: "ssisCatalog" } && label == db && catalog.Ref.Object!.Name == db,
             "Integration Services Catalogs lists the catalog's database as the SSIS catalog (the fake one, by the internal option)");
         var folders = await Children(Object(catalog!.Ref.Object!));
         var hostile = folders.Nodes.SingleOrDefault(node => node.Label == Hostile);

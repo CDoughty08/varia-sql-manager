@@ -102,6 +102,8 @@ internal static class SsisLiveChecks
         await FakeAsync(check, Sql, Close, scratch, manifest.Catalogs[^1]);
         // S1b: the SSIS tree and ssis.describe, against the same fake catalog.
         await SsisCatalogLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
+        // S-A: ssis.execute (Stop Operation), against the same fake catalog.
+        await SsisActionLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
         // S2: the SSIS tree's live catalog probe, against the same fake catalog.
         await SsisTreeLiveChecks.RunAsync(check, service, info, live, json, scratch, scratch.Ssis, Sql, Close);
     }

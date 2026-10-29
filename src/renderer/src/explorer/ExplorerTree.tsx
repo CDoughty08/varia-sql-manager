@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
 import { explorerLimits } from '../../../shared/explorer/catalog.ts'
+import { ssisDefaultVerb, ssisVerbSpecs } from '../../../shared/ssis/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { useMenuTarget } from '../menus/useMenuTarget'
 import { explorerDragType, maxDropText } from './drop'
 import type { Announcement } from './ExplorerService'
 import ExplorerRow, { type RowActions } from './ExplorerRow'
-import { computeWindow, renderedIndices, rowIndex, RowKind, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type TreeAction } from './tree-model'
+import { rowStatus } from './ExplorerStatusService'
+import { layoutWindow, renderedIndices, revealScroll, rowIndex, RowKind, rowLayout, swallowedKey, treeKey, treeKeyOf, TypeAheadBuffer, typeAhead, type RowLayout, type TreeAction, type VisibleRows } from './tree-model'
 
 const { rowHeight } = explorerLimits
 /** The live region speaks the latest announcement once things settle, as a screen reader cannot keep up with every page. */
@@ -18,8 +20,9 @@ const announceDelayMs = 500
  * arrows, Home and End, Page Up and Down, Enter, `*`, Numpad plus and minus, and type-ahead.
  */
 export default function ExplorerTree({ activeConnectionId }: { readonly activeConnectionId?: string }) {
-  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions } = workbench
+  const workbench = useWorkbench(), { explorer, commands, connections, actions: objectActions, explorerStatus } = workbench
   const snapshot = useServiceSnapshot(explorer)
+  const { servers: statuses } = useServiceSnapshot(explorerStatus)
   const { explorerLoading } = useServiceSnapshot(explorer.context)
   const servers = useServiceSnapshot(connections)
   const renaming = useServiceSnapshot(explorer.renaming)
@@ -33,8 +36,9 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   const typing = useMemo(() => new TypeAheadBuffer(), [])
   const { rows, selected } = snapshot
   const selectedIndex = rowIndex(rows, selected)
-  const latest = useRef({ rows, selectedIndex })
-  latest.current = { rows, selectedIndex }
+  const layout = useMemo(() => rowLayout(rows), [rows])
+  const latest = useRef({ rows, selectedIndex, layout })
+  latest.current = { rows, selectedIndex, layout }
 
   // Scrolling and resizing re-window on the next frame (or soon after, when frames are throttled).
   useLayoutEffect(() => {
@@ -61,12 +65,13 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     return () => clearTimeout(timer)
   }, [snapshot.announcement])
 
-  const ensureVisible = useCallback((index: number) => {
+  /** Scrolls row `index` of `rows` into view; rows published since the last render are laid out on the spot. */
+  const ensureVisible = useCallback((rows: VisibleRows, index: number) => {
     const tree = element.current
     if (!tree || index < 0) return
-    const top = index * rowHeight, bottom = top + rowHeight
-    if (top < tree.scrollTop) tree.scrollTop = top
-    else if (bottom > tree.scrollTop + tree.clientHeight) tree.scrollTop = bottom - tree.clientHeight
+    const at: RowLayout = latest.current.rows === rows ? latest.current.layout : rowLayout(rows)
+    const scrollTop = revealScroll(at, index, tree.scrollTop, tree.clientHeight)
+    if (scrollTop !== undefined) tree.scrollTop = scrollTop
   }, [])
   // Selecting can publish rows that arrived since the last render, which moves the row: its index is read from them. A
   // selection made outside the tree (Filter Settings closing) asks for the same through the snapshot's `reveal`.
@@ -76,15 +81,21 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     revealed.current = snapshot.reveal
     const id = reveal.current ?? (requested ? selected : undefined)
     reveal.current = undefined
-    if (id !== undefined) ensureVisible(rowIndex(rows, id))
+    if (id !== undefined) ensureVisible(rows, rowIndex(rows, id))
   })
   const run = useCallback((id: Parameters<typeof commands.execute>[0], rowId: number) => {
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
   }, [commands, explorer])
+  // Enter or a double-click on a node that does not expand runs its kind's default action, as SSMS opens a package's Properties.
+  const activate = useCallback((rowId: number) => {
+    const verb = ssisDefaultVerb(explorer.menuNode(rowId)?.kind)
+    if (verb) run(ssisVerbSpecs[verb].command, rowId)
+  }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
     select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
     toggle: rowId => explorer.toggle(rowId),
+    activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeLost', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type.
@@ -107,19 +118,19 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
     }
-  }), [explorer, run, objectActions])
+  }), [explorer, run, activate, objectActions])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
     return node ? { kind: 'explorer', node } : null
   })
 
-  const act = (action: TreeAction) => {
-    const { rows: current } = latest.current
+  /** Acts on `current`, the rows the action was worked out from. */
+  const act = (action: TreeAction, current: VisibleRows) => {
     switch (action.type) {
       case 'select': {
         const id = current.ids[action.index]
-        if (explorer.getSnapshot().selected === id) ensureVisible(rowIndex(explorer.getSnapshot().rows, id))
+        if (explorer.getSnapshot().selected === id) { const now = explorer.getSnapshot().rows; ensureVisible(now, rowIndex(now, id)) }
         else { reveal.current = id; explorer.select(id) }
         return
       }
@@ -130,12 +141,15 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       case 'retry': explorer.retry(action.id); return
       case 'continue': explorer.continueLoading(action.id); return
       case 'filter': run('explorer.filter', action.id); return
+      case 'activate': activate(action.id); return
       default: return
     }
   }
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     try {
-      const { rows: current, selectedIndex: index } = latest.current
+      // Rows the previous key changed may not have rendered yet: the service publishes them now, so Right, Right expands
+      // a folder and then enters it rather than asking to expand it twice.
+      const now = explorer.settle(), current = now.rows, index = rowIndex(current, now.selected)
       const key = treeKeyOf(event.nativeEvent)
       if (key) {
         event.preventDefault()
@@ -143,7 +157,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         const node = index >= 0 ? current.nodes[index] : undefined
         // Enter on a lost server reconnects it, as its button does.
         if (key === 'enter' && node?.lost) { run('connection.reconnect', node.id); return }
-        act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))))
+        act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))), current)
         return
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); event.preventDefault(); return }
@@ -154,7 +168,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       }
       event.preventDefault()
       const found = typeAhead(current, index, text)
-      if (found >= 0) act({ type: 'select', index: found })
+      if (found >= 0) act({ type: 'select', index: found }, current)
     } catch (error) { onUnexpectedError(error) }
   }
 
@@ -170,17 +184,20 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   }
 
   const accents = useMemo(() => new Map(servers.map(server => [server.id, server.color])), [servers])
-  const indices = renderedIndices(computeWindow(view.top, view.height, rows.count), selectedIndex)
+  const environments = useMemo(() => new Map(servers.map(server => [server.id, server.options.environment])), [servers])
+  const indices = renderedIndices(layoutWindow(view.top, view.height, layout), selectedIndex)
+  const match = snapshot.filter?.text, partial = snapshot.filter?.partial
   const active = selected !== undefined && selectedIndex >= 0 ? `oe-${selected}` : undefined
   return <><div ref={element} className="explorer-tree" role="tree" aria-label="Object Explorer" tabIndex={0} data-explorer-tree data-pane-focus aria-activedescendant={active}
     aria-busy={explorerLoading} onKeyDown={onKeyDown} onCopy={onCopy}>
-    <div className="explorer-spacer" style={{ height: rows.count * rowHeight }}>
+    <div className="explorer-spacer" style={{ height: layout.total }}>
       {indices.map(index => {
         const rowId = rows.ids[index], kind = rows.kinds[index] as RowKind, node = rows.nodes[index]
-        return <ExplorerRow key={rowId} rowId={rowId} kind={kind} index={index} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
+        return <ExplorerRow key={rowId} rowId={rowId} kind={kind} top={layout.top(index)} level={rows.levels[index]} posinset={rows.posinset[index]} setsize={rows.setsize[index]}
           node={node} rev={node?.rev ?? 0} text={kind === RowKind.Node ? '' : explorer.rowText(rowId)} selected={rowId === selected} draggable={kind === RowKind.Node && explorer.canInsert(rowId)}
-          active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined}
-          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} />
+          active={!!node && node.parent === 0 && node.connectionId === activeConnectionId} color={node?.parent === 0 ? accents.get(node.connectionId) : undefined} environment={node?.parent === 0 ? environments.get(node.connectionId) : undefined}
+          actions={actions} menuTarget={rowTarget} renaming={renaming !== undefined && rowId === renaming} match={kind === RowKind.Node ? match : undefined} partial={kind === RowKind.Node && !!partial?.has(rowId)}
+          status={kind === RowKind.Node && node ? rowStatus(statuses.get(node.connectionId), node) : undefined} />
       })}
     </div>
   </div>

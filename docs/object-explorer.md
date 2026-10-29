@@ -141,33 +141,33 @@ which list in deployment order (`package_id`: a package name can be longer than 
 
 ## Node kinds (56)
 
-Icons are codicons, or `svg:` stroke icons drawn by `Icon.tsx`. Folders show `folder` (`folder-opened` while expanded).
+Icons are ids of the [icon registry](icons.md): Varia's own stroke icons or codicons. Folders show `folder` (`folder-opened` while expanded).
 Inserts is what dragging the node into a query or Copy Name produces; names are bracket-quoted with `]` doubled.
 
 | Kind | Title | Scope | Icons | SMO | Scriptable | Inserts |
 | --- | --- | --- | --- | --- | --- | --- |
-| `server` | Server | `server` | `svg:server` | Server | No | — |
-| `login` | Login | `serverObject` | `svg:login` | Login | Yes | `[name]` |
-| `serverRole` | Server Role | `serverObject` | `svg:role` | ServerRole | Yes | `[name]` |
-| `credential` | Credential | `serverObject` | `svg:key` | Credential | Yes | `[name]` |
+| `server` | Server | `server` | `server` | Server | No | — |
+| `login` | Login | `serverObject` | `login` | Login | Yes | `[name]` |
+| `serverRole` | Server Role | `serverObject` | `role` | ServerRole | Yes | `[name]` |
+| `credential` | Credential | `serverObject` | `key` | Credential | Yes | `[name]` |
 | `cryptographicProvider` | Cryptographic Provider | `serverObject` | `circuit-board` | CryptographicProvider | Yes | `[name]` |
-| `audit` | Audit | `serverObject` | `svg:shield` | Audit | Yes | `[name]` |
-| `serverAuditSpecification` | Server Audit Specification | `serverObject` | `svg:shield` | ServerAuditSpecification | Yes | `[name]` |
+| `audit` | Audit | `serverObject` | `shield` | Audit | Yes | `[name]` |
+| `serverAuditSpecification` | Server Audit Specification | `serverObject` | `shield` | ServerAuditSpecification | Yes | `[name]` |
 | `backupDevice` | Backup Device | `serverObject` | `archive` | BackupDevice | Yes | `[name]` |
 | `linkedServer` | Linked Server | `serverObject` | `remote` | LinkedServer | Yes | `[name]` |
 | `serverTrigger` | Trigger | `serverObject` | `zap` | ServerDdlTrigger | Yes | `[name]` |
-| `database` | Database | `database` | `svg:database`; `snapshot` → `device-camera` | Database | Yes | `[name]` |
+| `database` | Database | `database` | `database`; `snapshot` → `device-camera` | Database | Yes | `[name]` |
 | `user` | User | `databaseObject` | `person` | User | Yes | `[name]` |
-| `databaseRole` | Database Role | `databaseObject` | `svg:role` | DatabaseRole | Yes | `[name]` |
-| `applicationRole` | Application Role | `databaseObject` | `svg:role` | ApplicationRole | Yes | `[name]` |
+| `databaseRole` | Database Role | `databaseObject` | `role` | DatabaseRole | Yes | `[name]` |
+| `applicationRole` | Application Role | `databaseObject` | `role` | ApplicationRole | Yes | `[name]` |
 | `schema` | Schema | `databaseObject` | `symbol-namespace` | Schema | Yes | `[name]` |
 | `assembly` | Assembly | `databaseObject` | `package` | SqlAssembly | Yes | `[name]` |
-| `asymmetricKey` | Asymmetric Key | `databaseObject` | `svg:key` | AsymmetricKey | Yes | `[name]` |
+| `asymmetricKey` | Asymmetric Key | `databaseObject` | `key` | AsymmetricKey | Yes | `[name]` |
 | `certificate` | Certificate | `databaseObject` | `workspace-trusted` | Certificate | Yes | `[name]` |
-| `symmetricKey` | Symmetric Key | `databaseObject` | `svg:key` | SymmetricKey | Yes | `[name]` |
-| `columnMasterKey` | Column Master Key | `databaseObject` | `svg:key` | ColumnMasterKey | Yes | `[name]` |
-| `columnEncryptionKey` | Column Encryption Key | `databaseObject` | `svg:key` | ColumnEncryptionKey | Yes | `[name]` |
-| `databaseAuditSpecification` | Database Audit Specification | `databaseObject` | `svg:shield` | DatabaseAuditSpecification | Yes | `[name]` |
+| `symmetricKey` | Symmetric Key | `databaseObject` | `key` | SymmetricKey | Yes | `[name]` |
+| `columnMasterKey` | Column Master Key | `databaseObject` | `key` | ColumnMasterKey | Yes | `[name]` |
+| `columnEncryptionKey` | Column Encryption Key | `databaseObject` | `key` | ColumnEncryptionKey | Yes | `[name]` |
+| `databaseAuditSpecification` | Database Audit Specification | `databaseObject` | `shield` | DatabaseAuditSpecification | Yes | `[name]` |
 | `databaseTrigger` | Trigger | `databaseObject` | `zap` | DatabaseDdlTrigger | Yes | `[name]` |
 | `externalDataSource` | External Data Source | `databaseObject` | `cloud` | ExternalDataSource | Yes | `[name]` |
 | `externalFileFormat` | External File Format | `databaseObject` | `file-code` | ExternalFileFormat | Yes | `[name]` |
@@ -177,27 +177,27 @@ Inserts is what dragging the node into a query or Copy Name produces; names are 
 | `partitionFunction` | Partition Function | `databaseObject` | `symbol-ruler` | PartitionFunction | Yes | `[name]` |
 | `searchPropertyList` | Search Property List | `databaseObject` | `list-flat` | SearchPropertyList | Yes | `[name]` |
 | `planGuide` | Plan Guide | `databaseObject` | `milestone` | PlanGuide | Yes | `[name]` |
-| `table` | Table | `schemaObject` | `svg:table`; `history` → `history`; `ledgerHistory` → `history`; `updatableLedger` → `verified`; `appendOnlyLedger` → `verified`; `graphNode` → `type-hierarchy`; `graphEdge` → `git-compare`; `fileTable` → `file`; `external` → `cloud`; `droppedLedger` → `trash` | Table | Yes | `[schema].[name]` |
-| `view` | View | `schemaObject` | `eye`; `ledger` → `verified`; `droppedLedger` → `trash` | View | Yes | `[schema].[name]` |
+| `table` | Table | `schemaObject` | `table`; `history` → `history`; `ledgerHistory` → `history`; `updatableLedger` → `verified`; `appendOnlyLedger` → `verified`; `graphNode` → `type-hierarchy`; `graphEdge` → `git-compare`; `fileTable` → `file`; `external` → `cloud`; `droppedLedger` → `trash` | Table | Yes | `[schema].[name]` |
+| `view` | View | `schemaObject` | `view`; `ledger` → `verified`; `droppedLedger` → `trash` | View | Yes | `[schema].[name]` |
 | `synonym` | Synonym | `schemaObject` | `link` | Synonym | Yes | `[schema].[name]` |
-| `procedure` | Stored Procedure | `schemaObject` | `symbol-method` | StoredProcedure | Yes | `[schema].[name]` |
+| `procedure` | Stored Procedure | `schemaObject` | `procedure` | StoredProcedure | Yes | `[schema].[name]` |
 | `function` | Function | `schemaObject` | `symbol-function` | UserDefinedFunction; `aggregate` → UserDefinedAggregate | Yes | `[schema].[name]` |
 | `sequence` | Sequence | `schemaObject` | `symbol-numeric` | Sequence | Yes | `[schema].[name]` |
 | `type` | Type | `schemaObject` | `symbol-structure` | UserDefinedDataType; `clr` → UserDefinedType | Yes | `[schema].[name]` |
-| `tableType` | Table Type | `schemaObject` | `svg:table` | UserDefinedTableType | Yes | `[schema].[name]` |
+| `tableType` | Table Type | `schemaObject` | `table` | UserDefinedTableType | Yes | `[schema].[name]` |
 | `xmlSchemaCollection` | XML Schema Collection | `schemaObject` | `code` | XmlSchemaCollection | Yes | `[schema].[name]` |
 | `rule` | Rule | `schemaObject` | `law` | Rule | Yes | `[schema].[name]` |
 | `default` | Default | `schemaObject` | `symbol-constant` | Default | Yes | `[schema].[name]` |
-| `securityPolicy` | Security Policy | `schemaObject` | `svg:shield` | SecurityPolicy | Yes | `[schema].[name]` |
-| `column` | Column | `child` | `symbol-field`; `primaryKey` → `svg:key`; `foreignKey` → `references`; `computed` → `symbol-operator` | Column | No | `[name]` |
-| `key` | Key | `child` | `svg:key`; `unique` → `symbol-key`; `foreign` → `references` | Index; `foreign` → ForeignKey | Yes | `[name]` |
+| `securityPolicy` | Security Policy | `schemaObject` | `shield` | SecurityPolicy | Yes | `[schema].[name]` |
+| `column` | Column | `child` | `symbol-field`; `primaryKey` → `key`; `foreignKey` → `references`; `computed` → `symbol-operator` | Column | No | `[name]` |
+| `key` | Key | `child` | `key`; `unique` → `symbol-key`; `foreign` → `references` | Index; `foreign` → ForeignKey | Yes | `[name]` |
 | `constraint` | Constraint | `child` | `pass`; `default` → `symbol-constant`; `edge` → `link` | Check; `default` → DefaultConstraint; `edge` → EdgeConstraint | Yes | `[name]` |
 | `trigger` | Trigger | `child` | `zap` | Trigger | Yes | `[name]` |
 | `index` | Index | `child` | `list-ordered`; `clusteredColumnstore` → `layers`; `nonclusteredColumnstore` → `layers` | Index | Yes | `[name]` |
 | `statistic` | Statistic | `child` | `graph` | Statistic | Yes | `[name]` |
 | `parameter` | Parameter | `child` | `symbol-parameter` | Parameter | No | the name as is (`@name`) |
 | `returnValue` | Return value | `childUnnamed` | `arrow-left` | — | No | — |
-| `ssisCatalog` | Integration Services Catalog | `ssisCatalog` | `svg:database` | — | No | — |
+| `ssisCatalog` | Integration Services Catalog | `ssisCatalog` | `database` | — | No | — |
 | `ssisFolder` | Folder | `ssisFolder` | `folder-library` | — | No | — |
 | `ssisProject` | Project | `ssisFolderObject` | `project` | — | No | — |
 | `ssisPackage` | Package | `ssisProjectObject` | `package`; `child` → `symbol-file` | — | No | — |
@@ -238,8 +238,8 @@ SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject
 
 ## Status badges
 
-An 8×8 badge at the bottom right of the row icon. Disabled, unavailable and inaccessible nodes are dimmed as well;
-read-only databases are not, because their sublabel says it.
+A 9 px badge (`--varia-glyph-badge`) at the bottom right of the row icon.
+Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.
 
 | Status | Badge |
 | --- | --- |
@@ -248,6 +248,41 @@ read-only databases are not, because their sublabel says it.
 | `noAccess` | `circle-slash` |
 | `error` | `error` |
 | `loading` | `loading` |
+
+## Live status
+
+While Object Explorer shows (and Environment › Live Data › Show live status in Object Explorer is on), each connected
+server has one background live view of the `explorer` source ([docs/live.md](live.md)) per login, shared by every
+connection to that server with that login, on one session of its own in master (so it never holds the database a
+connection opened in), paused while the pane or the window is hidden. Its samples become chips at the end of the rows
+below; they never reload the tree. While chips show, a database row's state comes from them rather than its sublabel
+(the state when the list loaded), and its tooltip says when the two differ. A probe that fails, is unavailable (no
+permission, or an edition without the feature) or has no sample yet shows nothing, and the row shows its sublabel again;
+so does a database past the 1,000 the probe lists, by name. A running-tone chip turns its glyph only while a restore or
+recovery reports progress. Refresh (F5) samples the view at once and opens again one that ended (a sign-in that
+failed). A window runs at most 8 such views and gives their slots to views the user opens, when the window's 16 are
+taken or the backend refuses one at its 8 a server ([docs/ipc.md](ipc.md#live-subscriptions)), so a server can be
+without chips until a slot frees. The chips are the only part of a row's end that gives way: the environment tag, item
+count and connection dot keep their size, and the label gives up the row's empty space first.
+
+| Kind | Probes |
+| --- | --- |
+| `server` | `explorer.agent`, `explorer.availability` |
+| `database` | `explorer.databases`, `explorer.progress` |
+
+| Node | Chip | Tone | When |
+| --- | --- | --- | --- |
+| database | RESTORING n % | running | state 1: The database is being restored, or waits for more backups to restore (WITH NORECOVERY). |
+| database | RECOVERING n % | running | state 2: The database is recovering. It comes online when recovery ends. |
+| database | RECOVERY PENDING | critical | state 3: Recovery could not start (a file or resource is missing). The database is not available. |
+| database | SUSPECT | critical | state 4: Recovery failed: the database may be damaged and is not available. |
+| database | EMERGENCY | critical | state 5: The database is in emergency mode: read-only, single user, for members of sysadmin. |
+| database | OFFLINE | warning | state 6 or 10: The database is offline. Bring it online to use it. |
+| database | COPYING | running | state 7: The database is being copied (Azure SQL Database copy). |
+| database | READ-ONLY / STANDBY | warning | is_read_only, or is_in_standby (a log-shipping standby) |
+| database | SINGLE USER / RESTRICTED USER | warning | user_access 1 or 2 |
+| server | n jobs running | running | SQL Server Agent jobs of its current session that started and have not stopped (none while none runs) |
+| server | <group> healthy / partially healthy / not healthy | success, warning, critical | the least healthy availability group (several: "n AGs …"); its tooltip names each group with its health and this replica's role |
 
 ## Limits
 
@@ -267,6 +302,7 @@ read-only databases are not, because their sublabel says it.
 | `typeAheadMs` | 1,000 | Type-ahead buffer reset, in ms |
 | `typeAheadMax` | 64 | Type-ahead buffer length |
 | `rowHeight` | 22 | Row height, in px |
+| `serverRowHeight` | 30 | Height of a server row, in px |
 | `indent` | 16 | Indentation per level, in px |
 | `overscan` | 10 | Rows rendered beyond each edge of the viewport |
 | `deleteSlice` | 10,000 | Nodes removed per task when a subtree is dropped |
@@ -276,3 +312,4 @@ read-only databases are not, because their sublabel says it.
 | `detail` | 512 | Characters in tooltip details |
 | `message` | 512 | Characters in an error message |
 | `maxName` | 260 | UTF-16 code units in the longest name a kind may declare; every other kind keeps 128 |
+| `quickFilter` | 128 | Characters in the Filter loaded objects box |

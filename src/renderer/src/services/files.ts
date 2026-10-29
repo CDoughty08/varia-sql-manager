@@ -34,15 +34,16 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     super({ error: '', kind: 'error' })
   }
   canRun(): boolean { return !this.disposed && !this.documents.getSnapshot().busy }
-  canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
+  /** Save for the tab a command targets (a tab's menu names it), else the active one; never for a document with nothing to save. */
+  canSave(id = this.documents.getSnapshot().activeId): boolean { return this.canClose(id) && this.documents.savable(id) }
   /** A query still executing can close too: main asks to cancel it first. */
-  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canSave(id) }
+  canClose(id = this.documents.getSnapshot().activeId): boolean { return this.canRun() && !!this.documents.get(id) }
   reportError(error: string, kind: FileSnapshot['kind'] = 'error'): void {
     const current = this.getSnapshot()
     if (!this.disposed && (error !== current.error || kind !== current.kind)) this.publish({ error, kind })
   }
-  /** Save All: a document task, and some query has unsaved changes. */
-  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => document.dirty) }
+  /** Save All: a document task, and some document it saves has unsaved changes. */
+  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => document.dirty && this.documents.inSaveAll(document.id)) }
   clearError(): void { this.reportError('') }
   /** Resolves once no file task runs, or on disposal. */
   private idle(): Promise<void> {
@@ -193,14 +194,16 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   }
   /**
    * File › Save All: the queries with unsaved changes, in tab order, as one task. A query never saved asks for its file
-   * in turn, as SSMS does; cancelling that dialog stops the rest, and so does a save that fails.
+   * in turn, as SSMS does; cancelling that dialog stops the rest, and so does a save that fails. Database Properties is
+   * left out: its Apply is DDL that can wait on locks, which would hold the task (and every file command) with its Stop
+   * in a tab nobody is looking at.
    */
   async saveAll(): Promise<void> {
     if (!this.canSaveAll()) return
     await this.perform(async () => {
       for (const { id } of this.documents.getSnapshot().documents) {
         if (this.disposed) return
-        if (!this.documents.get(id)?.dirty) continue
+        if (!this.documents.get(id)?.dirty || !this.documents.inSaveAll(id)) continue
         if (!await this.documents.save(id)) return
       }
     })
@@ -224,7 +227,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     // A table designer that is saving cannot close until its save ends or is stopped.
     if (refusal) throw new Error(refusal)
     if (!document?.dirty) return true
-    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : 'query'
+    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : 'query'
     const decision = unwrap(await this.api.confirmClose(document.name))
     if (this.disposed || decision === 'cancel') return false
     if (!this.documents.get(id)) return true

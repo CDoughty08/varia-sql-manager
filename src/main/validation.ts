@@ -5,7 +5,8 @@ import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionRequestSchema } from '../shared/actions/schema.ts'
-import { ssisDescribeSchema } from '../shared/ssis/schema.ts'
+import { ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
+import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 
 // Identifiers are used verbatim by the backend, so they are never trimmed here (a database may be named ' x').
 const name = z.string().min(1).max(128).refine(value => value.trim().length > 0)
@@ -37,7 +38,10 @@ export const requestSchemas = {
   'actions.describe': actionDescribeSchema,
   'actions.script': actionRequestSchema,
   'actions.execute': actionRequestSchema,
-  'ssis.describe': ssisDescribeSchema
+  'ssis.describe': ssisDescribeSchema,
+  'ssis.execute': ssisExecuteSchema,
+  'activity.details': activityDetailsRequestSchema,
+  'activity.kill': activityKillRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 // Shown as the dialog's User name: one line of at most 256 characters without control or formatting characters (C#: KerberosProbe.Bounded).

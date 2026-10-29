@@ -5,8 +5,8 @@ import { limits } from '../src/shared/ipc/wire/protocol'
 import { portRequestSchema, testPortRequestSchema } from '../src/shared/ipc/port-messages'
 import { liveProbeIds, liveProbes, liveSourceIds, liveSources, type LiveProbeSpec, type LiveSourceSpec } from '../src/shared/live/catalog'
 import {
-  buildLiveSchemas, liveEndSchema, liveErrorCodes, liveEventFits, liveEventSchema, liveUpdateResultSchema, stampLive, testLiveSubscribeParamsSchema, testLiveUpdateParamsSchema,
-  type BackendLiveEvent, type LiveSubscribeParams
+  buildLiveSchemas, liveEndSchema, liveErrorCodes, liveEventFits, liveEventSchema, liveRetired, liveStartSchema, liveUpdateResultSchema, stampLive, testLiveSubscribeParamsSchema,
+  testLiveUpdateParamsSchema, type BackendLiveEvent, type LiveSubscribeParams
 } from '../src/shared/live/schema'
 
 const L = limits.live
@@ -31,7 +31,7 @@ const fixtureProbes: Record<string, LiveProbeSpec> = {
     id: 'one.all', source: 'one', label: 'All', description: 'All', intervalMs: { default: 1000, min: 1000, max: 60_000 }, views: ['blocked'], filterMode: 'memory',
     series: [{ id: 'a', unit: 'count', label: 'A', counter: 'gauge' }],
     tables: [
-      { id: 's0', mode: 'snapshot', key: ['k0'], columns: [column('k0'), column('v0')] }, { id: 's1', mode: 'snapshot', key: [], columns: [column('k1')] },
+      { id: 's0', mode: 'snapshot', key: ['k0'], departed: true, facets: ['v0'], columns: [column('k0'), column('v0')] }, { id: 's1', mode: 'snapshot', key: [], columns: [column('k1')] },
       { id: 's2', mode: 'snapshot', key: ['k2'], columns: [column('k2')] }, { id: 's3', mode: 'snapshot', key: ['k3'], columns: [column('k3')] },
       { id: 'a0', mode: 'append', key: ['m0'], columns: [column('m0')] }, { id: 'a1', mode: 'append', key: ['m1'], columns: [column('m1')] },
       { id: 'a2', mode: 'append', key: ['m2'], columns: [column('m2')] }, { id: 'a3', mode: 'append', key: ['m3'], columns: [column('m3')] }
@@ -60,13 +60,27 @@ describe('live request schemas', () => {
     expect(ok(fixture.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(false)
     expect(ok(fixtureTest.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(true)
   })
-  it('accepts the Activity Monitor source on the production port, with no args', () => {
+  it('accepts the Activity Monitor source on the production port, with its own args', () => {
     const activity = (patch: Record<string, unknown> = {}) => ({ t: 'live', rid: 1, generation: 1, params: subscribe({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }], ...patch }) })
     expect(ok(portRequestSchema, activity())).toBe(true)
     expect(ok(portRequestSchema, activity({ args: {} }))).toBe(false)
     expect(ok(portRequestSchema, activity({ probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] }))).toBe(false)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 5000 }], refresh: true } })).toBe(true)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { rows: 1 } } })).toBe(false)
+    // One subscription per monitor: the three probes, one filter per table and the Details flyout's session.
+    const probes = [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'login', descending: false }, { column: 'activeCpuMs', descending: true }] },
+      { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+    const args = { filters: [{ table: 'sessions', view: 'blocked', showVaria: true, columnFilters: [{ column: 'login', values: ['app'] }] }, { table: 'waitTypes', hideBenign: false }], focusSession: 32_767 }
+    expect(ok(portRequestSchema, activity({ probes, args }))).toBe(true)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { focusSession: 0 } } })).toBe(true)
+    for (const bad of [
+      { focusSession: 32_768 }, { focusSession: -1 }, { filters: [] }, { filters: [{ table: 'sessions' }, { table: 'sessions' }] }, { filters: [{ table: 'files', view: 'all' }] },
+      { filters: [{ table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] }] }, { filters: [{ table: 'sessions', text: 'x'.repeat(401) }] }, { columns: ['login'] }, { focusSession: 1, rank: 'cpu' }
+    ]) expect(ok(portRequestSchema, activity({ args: bad })), JSON.stringify(bad)).toBe(false)
+    // Sort names live column ids, unique within a probe, so sorting Processes never reorders the Blocking tree.
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'chainDepth', descending: false }] }] }))).toBe(true)
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'Session ID', descending: false }] }] }))).toBe(false)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', track: [{ probe: 'activity.sessions', table: 1, seq: 1, keys: ['60'] }] } })).toBe(true)
   })
   it('is strict and bounded at every level', () => {
     const schema = testLiveSubscribeParamsSchema
@@ -96,11 +110,17 @@ describe('live request schemas', () => {
   it('allows sort, views and filters only where the probe declares them', () => {
     const settings = (probe: Record<string, unknown>) => ({ ...subscribe(), source: 'one', probes: [{ probe: 'one.all', intervalMs: 1000, ...probe }] })
     expect(ok(fixture.subscribe, settings({ sort: [{ column: 'v0', descending: true }, { column: 'k1', descending: false }], view: 'blocked', filter: { text: 'x', columns: ['m0', 'k0'] } }))).toBe(true)
+    // A key for one table names a column of that snapshot table; the same column may go once per table and once for all.
+    expect(ok(fixture.subscribe, settings({ sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k1', descending: false, table: 1 }, { column: 'k0', descending: false }] }))).toBe(true)
     for (const [name, probe] of Object.entries({
       appendSort: { sort: [{ column: 'm0', descending: true }] },
       unknownSort: { sort: [{ column: 'nope', descending: true }] },
       repeatedSort: { sort: [{ column: 'k0', descending: true }, { column: 'k0', descending: false }] },
       fiveSorts: { sort: ['k0', 'v0', 'k1', 'k2', 'k3'].map(column => ({ column, descending: false })) },
+      otherTablesSort: { sort: [{ column: 'k1', descending: true, table: 0 }] },
+      appendTableSort: { sort: [{ column: 'm0', descending: true, table: 4 }] },
+      missingTableSort: { sort: [{ column: 'k0', descending: true, table: 8 }] },
+      repeatedTableSort: { sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k0', descending: false, table: 0 }] },
       view: { view: 'other' },
       filterColumn: { filter: { text: 'x', columns: ['nope'] } },
       filterText: { filter: { text: 'x'.repeat(401) } },
@@ -119,6 +139,8 @@ describe('live request schemas', () => {
     expect(ok(schema, update({ paused: false }))).toBe(true)
     expect(ok(schema, update({ probes: [{ probe: 'debug.synthetic.table', paused: true, sort: [{ column: 'value', descending: true }] }], refresh: true, args: { tickMs: 50 } }))).toBe(true)
     expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 64 }, () => 'k'.repeat(512)) }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a', 'b'], linger: 2 }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: [], linger: 0 }] }))).toBe(true)
     for (const [name, patch] of Object.entries({
       nothing: {},
       refreshFalse: { refresh: false },
@@ -131,6 +153,9 @@ describe('live request schemas', () => {
       trackKeys: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 65 }, () => 'k') }] },
       trackKeyLength: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['k'.repeat(513)] }] },
       trackSeq: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 0, keys: [] }] },
+      trackLinger: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 2 }] },
+      trackLingerSign: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: -1 }] },
+      trackLingerType: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 0.5 }] },
       args: { args: { rows: -1 } }
     })) expect(ok(schema, update(patch)), name).toBe(false)
     // An unkeyed snapshot table and an append table are never tracked.
@@ -246,12 +271,86 @@ describe('live event schemas', () => {
   })
 })
 
+describe('live table samples', () => {
+  const full = (patch: Record<string, unknown> = {}) => ({ table: 0, descriptor: descriptor(['k0', 'v0']), revision: 2, ...patch })
+  const allTick = (snapshot: Record<string, unknown> = {}, append?: Record<string, unknown>) => tick([{
+    probe: 'one.all', costMs: 0, effectiveIntervalMs: 1000, tables: [full(snapshot)], ...(append ? { append: [{ table: 4, descriptor: descriptor(['m0']), segment: 3, ...append }] } : {})
+  }])
+  const facet = (column: string, values: { text: string; count: number }[], more?: true) => ({ column, values, ...(more ? { more } : {}) })
+  it('lists departed rows only for a table that keeps them, each once', () => {
+    expect(ok(fixture.event, allTick({ departed: [0, 5], tracked: { seq: 1, rows: [0, 5] } }))).toBe(true)
+    expect(ok(fixture.event, allTick({ departed: Array.from({ length: L.trackedKeys }, (_, index) => index) }))).toBe(true)
+    for (const [name, patch] of Object.entries({
+      repeated: { departed: [1, 1] }, negative: { departed: [-1] }, empty: { departed: [] }, tooMany: { departed: Array.from({ length: L.trackedKeys + 1 }, (_, index) => index) }
+    })) expect(ok(fixture.event, allTick(patch)), name).toBe(false)
+    // Only s0 keeps departed rows; s2 does not.
+    const other = tick([{ probe: 'one.all', costMs: 0, effectiveIntervalMs: 1000, tables: [{ table: 2, descriptor: descriptor(['k2']), revision: 1, departed: [0] }] }])
+    expect(ok(fixture.event, other)).toBe(false)
+  })
+  it('carries facets only for the table\'s facet columns, bounded in values, characters and text per tick', () => {
+    expect(ok(fixture.event, allTick({ facets: [facet('v0', [{ text: 'a', count: 2 }, { text: '', count: 1 }], true)] }))).toBe(true)
+    expect(ok(fixture.event, allTick({ facets: [facet('v0', Array.from({ length: L.facetValues }, (_, index) => ({ text: 'v' + index, count: 1 })))] }))).toBe(true)
+    for (const [name, patch] of Object.entries({
+      column: { facets: [facet('k0', [])] },
+      twice: { facets: [facet('v0', []), facet('v0', [])] },
+      values: { facets: [facet('v0', Array.from({ length: L.facetValues + 1 }, (_, index) => ({ text: 'v' + index, count: 1 })))] },
+      characters: { facets: [facet('v0', [{ text: 'x'.repeat(L.facetCharacters + 1), count: 1 }])] },
+      count: { facets: [facet('v0', [{ text: 'x', count: 0 }])] },
+      moreFalse: { facets: [{ column: 'v0', values: [], more: false }] },
+      empty: { facets: [] }
+    })) expect(ok(fixture.event, allTick(patch)), name).toBe(false)
+    // At most facetBytes of UTF-8 text in one tick: 3-byte characters count three times.
+    const wide = (count: number) => Array.from({ length: count }, (_, index) => ({ text: String(index % 10).repeat(1) + '€'.repeat(L.facetCharacters - 1), count: 1 }))
+    const perValue = 1 + 3 * (L.facetCharacters - 1)
+    expect(ok(fixture.event, allTick({ facets: [facet('v0', wide(Math.floor(L.facetBytes / perValue)))] }))).toBe(true)
+    expect(ok(fixture.event, allTick({ facets: [facet('v0', wide(Math.floor(L.facetBytes / perValue) + 1))] }))).toBe(false)
+  })
+  it('marks a restarted append table, which may retire every result it held', () => {
+    const all = Array.from({ length: L.segmentResults }, (_, at) => 7 + at)
+    const value = allTick({}, { restarted: true, retired: all })
+    expect(ok(fixture.event, value)).toBe(true)
+    expect(liveRetired(value as BackendLiveEvent)).toEqual(all)
+    for (const [name, patch] of Object.entries({ more: { retired: [...all, 99] }, restartedFalse: { restarted: false }, none: { retired: [] } }))
+      expect(ok(fixture.event, allTick({}, patch)), name).toBe(false)
+  })
+  it('takes start positions for a source\'s append tables: beginning, the last rows, or the rows before an id', () => {
+    for (const value of ['beginning', { tail: 1 }, { tail: L.segmentRows }, { before: 1 }, { before: Number.MAX_SAFE_INTEGER }]) expect(ok(liveStartSchema, value), JSON.stringify(value)).toBe(true)
+    for (const value of ['end', { tail: 0 }, { tail: L.segmentRows + 1 }, { before: 0 }, { tail: 1, before: 2 }, { tail: 1.5 }, {}]) expect(ok(liveStartSchema, value), JSON.stringify(value)).toBe(false)
+    const synthetic = (args: Record<string, unknown>) => subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000 }], args })
+    expect(ok(testLiveSubscribeParamsSchema, synthetic({ logRows: 10_000, logLevel: 3, lateEvery: 1000, start: { tail: 5 } }))).toBe(true)
+    for (const args of [{ logRows: 10_001 }, { logLevel: 4 }, { lateEvery: 0 }, { start: { tail: 0 } }]) expect(ok(testLiveSubscribeParamsSchema, synthetic(args)), JSON.stringify(args)).toBe(false)
+    expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', args: { start: { before: 9 } } })).toBe(true)
+  })
+  it('lets the log take a restart filter and the grid a memory filter, view, sort and tracking of both tables', () => {
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000, filter: { text: 'x', columns: ['text'] } }] }))).toBe(true)
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000, sort: [{ column: 'messageId', descending: true }] }] }))).toBe(false)
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.grid', intervalMs: 1000, view: 'even', filter: { text: 'G1' }, sort: [{ column: 'items', descending: true }] }] }))).toBe(true)
+    expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 1, keys: ['1'] }, { probe: 'debug.synthetic.grid', table: 1, seq: 1, keys: ['G1'] }] })).toBe(true)
+    expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.log', table: 0, seq: 1, keys: ['1'] }] })).toBe(false)
+  })
+  it('never lets a sort or filter name a table\'s hidden tone column', () => {
+    const grid = (settings: Record<string, unknown>) => subscribe({ probes: [{ probe: 'debug.synthetic.grid', intervalMs: 1000, ...settings }] })
+    expect(ok(testLiveSubscribeParamsSchema, grid({ filter: { text: 'warn', columns: ['name'] }, sort: [{ column: 'amount', descending: true, table: 0 }] }))).toBe(true)
+    for (const [name, settings] of Object.entries({
+      filter: { filter: { text: 'warn', columns: ['tone'] } },
+      sort: { sort: [{ column: 'tone', descending: true }] },
+      tableSort: { sort: [{ column: 'tone', descending: false, table: 0 }] }
+    })) expect(ok(testLiveSubscribeParamsSchema, grid(settings)), name).toBe(false)
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000, filter: { text: 'x', columns: ['tone'] } }] }))).toBe(false)
+  })
+})
+
 describe('live frame budget', () => {
   it('keeps the worst-case tick of every source within 192 KiB', () => {
     // Every number at its widest, every string in three-byte characters, every list at its catalogue or schema maximum.
     const big = Number.MAX_SAFE_INTEGER, wideText = (length: number) => '€'.repeat(length)
     for (const source of liveSourceIds) {
       let tables = L.tablesPerTick
+      // Facet text is bounded per tick, not per value: the worst case spends it on as many values as fit, every count at its
+      // widest, spread over the facet columns the source's tables declare.
+      const facetColumns = liveSources[source].probes.flatMap(id => liveProbes[id as typeof liveProbeIds[number]].tables ?? []).filter(table => table.mode === 'snapshot').flatMap(table => table.facets ?? []).length
+      const characters = Math.min(L.facetCharacters, Math.floor(L.facetBytes / 3 / Math.max(1, facetColumns * L.facetValues)))
+      const facetValues = () => Array.from({ length: L.facetValues }, () => ({ text: '€'.repeat(characters), count: 2 ** 31 - 1 }))
       const samples = liveSources[source].probes.slice(0, L.probes).map(id => {
         const probe = liveProbes[id as typeof liveProbeIds[number]]
         const spec = (mode: 'snapshot' | 'append') => (probe.tables ?? []).flatMap((table, index) => table.mode === mode && tables-- > 0 ? [{ table, index }] : [])
@@ -260,8 +359,13 @@ describe('live frame budget', () => {
         return {
           probe: id, costMs: 2 ** 31 - 1, effectiveIntervalMs: L.intervalMs.max, elapsedMs: big, gap: 'baseline', skipped: 2 ** 31 - 1,
           ...(probe.series?.length ? { metrics: probe.series.map(() => -Number.MAX_VALUE) } : {}),
-          ...(snapshots.length ? { tables: snapshots.slice(0, L.tablesPerProbe).map(({ table, index }) => ({ table: index, descriptor: columnsOf(table), revision: big, retired: [0xffffffff, 0xffffffff], diff: { added: 2 ** 31 - 1, removed: 2 ** 31 - 1, changed: 2 ** 31 - 1 }, tracked: { seq: 2 ** 31 - 1, rows: Array.from({ length: L.trackedKeys }, () => 2 ** 31 - 1) } })) } : {}),
-          ...(appends.length ? { append: appends.slice(0, L.appendPerProbe).map(({ table, index }) => ({ table: index, descriptor: columnsOf(table), segment: 2 ** 31 - 1, rolledFrom: 0xffffffff, retired: [0xffffffff] })) } : {}),
+          ...(snapshots.length ? { tables: snapshots.slice(0, L.tablesPerProbe).map(({ table, index }) => ({
+            table: index, descriptor: columnsOf(table), revision: big, retired: [0xffffffff, 0xffffffff], diff: { added: 2 ** 31 - 1, removed: 2 ** 31 - 1, changed: 2 ** 31 - 1 },
+            tracked: { seq: 2 ** 31 - 1, rows: Array.from({ length: L.trackedKeys }, () => 2 ** 31 - 1) },
+            ...(table.departed ? { departed: Array.from({ length: L.trackedKeys }, (_, at) => 2 ** 31 - 1 - at) } : {}),
+            ...(table.facets?.length ? { facets: table.facets.map(column => ({ column, values: facetValues(), more: true })) } : {})
+          })) } : {}),
+          ...(appends.length ? { append: appends.slice(0, L.appendPerProbe).map(({ table, index }) => ({ table: index, descriptor: columnsOf(table), segment: 2 ** 31 - 1, rolledFrom: 0xffffffff, retired: Array.from({ length: L.segmentResults }, () => 0xffffffff), restarted: true })) } : {}),
           ...(probe.status?.length ? { status: probe.status.map(id => ({ id, value: wideText(L.statusCharacters) })) } : {})
         }
       })

@@ -19,7 +19,7 @@ The code is the reference implementation; this document describes it.
 | Result store | — | `Results/ResultStore.cs`, `ResultSetBuffer.cs`, `QueryEventSink.cs`, `ForXmlCollector.cs` |
 | Copy and Save Results As | `src/main/results-jobs.ts`; the fake backend's `tests/fixtures/backend/text-writer.mjs` | `Results/ResultJobs.cs`, `ResultTextWriter.cs`, `PageView.cs` |
 | Results worker | `src/renderer/src/results/` | — |
-| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues), `LiveSql.cs` (probe text, lint), `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
+| Live subscriptions | `src/shared/live/` (catalogue, schemas, docs/live.md); main's parts in `connection.ts`, `supervisor.ts`, `results-port.ts`; the renderer's `LiveService` in `src/renderer/src/live/` | `Live/LiveService.cs` (registry, scheduler), `LiveCatalog.cs`, `SqlSampler.cs` (pools, prologues, table reads), `LiveSql.cs` (probe text, lint), `LiveSqlReader.cs` (multi-statement sources), `Activity/ActivityReader.cs` and `ActivityRows.cs` (the Activity Monitor source), `LiveTables.cs` (snapshot and append writers), `LiveStart.cs`, `LiveDeltas.cs`, `LiveGates.cs`, `LiveResume.cs`, `LiveErrors.cs`, `SyntheticSampler.cs` |
 
 ## Contents
 
@@ -143,9 +143,11 @@ properties are omitted, as in JSON; `undefined` in an array is an error. The C# 
 
 The backend transcodes REQUEST params to a `JsonElement` and results from System.Text.Json output (`JsonBridge`), so the
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
-become float64, which TypeScript accepts. Requests that carry a password (`connections.connect`, `.databases`,
-`.preview`) are encoded into buffers that are zeroed after use on both sides; the JavaScript and .NET strings they came
-from cannot be zeroed.
+become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
+`.databases`, `.preview`, and `ssis.execute`) are encoded into buffers that are zeroed after use on both sides; the
+JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
+`sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
+`tests/validation.test.ts` keeps the two lists equal.
 
 ## Handshake
 
@@ -193,12 +195,15 @@ backend schedules it: `control` runs at once, `metadata` waits for one of 8 slot
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
 `actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot, and `ssis` runs SSIS Catalog reads
-at once under the SSIS service's own gates (2 per connection, 4 in all, waited for at most 30 s, then `BUSY`), so a read
-waiting on SSISDB never holds one either. `live` takes no slot either: a
-live subscription samples on its own task, and its statements, like those of any unary method on lane `live` (none yet;
+for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
+runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s, then `BUSY`), so it never queues behind a
+DROP that may be waiting on the very session it kills. `live` takes no slot either: a live subscription samples on its
+own task, and its statements, like those of a unary method on lane `live` (`activity.details`, through
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
-statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names never pile up).
+statement's budget, and for Details at most its 10 s budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
+never pile up).
+`ssis` runs SSIS Catalog reads and writes at once under the SSIS services' own gates (reads 2 per connection and 4 in all,
+writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds a metadata slot either.
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -227,6 +232,9 @@ statement's budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, 
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent |
+| `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
+| `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
 | `debug.results.synthesize` | `__variaTest` and tests only | unary | metadata | 120 s; exists only with `VARIA_BACKEND_TEST_HOOKS=1` |
 
@@ -351,25 +359,86 @@ and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENT
 works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
 routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.
 
+**SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId }, revision? }`
+(`operationId` 1 to 2^53 − 1; `revision`, 64 lowercase hex characters, only for a verb that takes one, which Stop Operation
+does not; the verbs, their steps and the procedures they may call are `ssisActions` in `src/shared/ssis/catalog.ts`) answers
+`{ steps: { status: done | failed | skipped | cancelled, message? }[], elapsedMs, error? }`. Its policy is sensitive, so the
+frame is zeroed once written, because later verbs carry sensitive values. Before it connects, the backend refuses a server
+older than 2016 or on Linux (`NOT_SUPPORTED`) and, for a verb SSISDB refuses to SQL Server logins (error 27123, every verb
+that changes the catalog), a connection that signed in with SQL Server authentication to a box server
+(`WINDOWS_AUTH_REQUIRED`; Azure SQL Database and Managed Instance excepted). It then takes the SSIS write gates (1 per
+connection, 2 in all; 64 registered) and opens a connection of its own: unpooled, never retried, no command timeout,
+Initial Catalog the catalog's database, under the program name plus " - Integration Services Actions". There it runs the
+verb's preflight at READ COMMITTED with `LOCK_TIMEOUT 10000` (`BLOCKED`) within 25 s (`TIMEOUT`), then its steps in
+order, each one constant template from `SsisSql` with values as parameters, waiting for locks as SSMS does
+(`LOCK_TIMEOUT -1`), with no outer transaction. Stop Operation's preflight reads `catalog.operations`: no row answers
+`NOT_FOUND`, a type other than an execution or validation (200, 300, 301) `NOT_SUPPORTED`, an ended or stopping one
+`ALREADY_FINAL` (information, not a failure), and a created execution nobody started (it never runs) `NOT_STARTED` (not
+retryable); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or 27126 the operation is read again:
+`ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it is pending, and the catalog's own
+refusal, with the step failed, if that second look fails. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission
+error `PERMISSION_DENIED` naming the action. A connection lost before the step is sent answers `CONNECTION_LOST` saying
+nothing changed; lost during the step, that the outcome is unknown. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
+answer to the handler (`IRequestDispatcher.AnswersStop`, as for `actions.execute`), which waits up to 10 s for SQL Server to
+end the statement and answers `CANCELLED` with the step `cancelled`, or, before any step, "stopped before it changed
+anything"; past the grace the outcome is unknown. `catalog.stop_operation` commits its own Stop operation (type 202,
+Running) before its transaction, and a cancelled statement never reaches its error path, so Stop during Stop Operation's
+step rolls the stop back but may leave that row Running until SQL Server restarts; the `CANCELLED` message says so (SSMS
+never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a connection's writes. Nothing is logged.
+
+**Activity Monitor session actions** (docs/activity-monitor.md, Session actions) name a session by its id and its login
+time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters; main checks the form, and the backend also
+refuses a time outside `datetime`'s range, 1753-01-01 to 9999-12-31T23:59:59.997, as `INVALID_PARAMS`), since SQL Server
+reuses session ids. `activity.details { connectionId, requestId, sessionId: 1–32,767, loginTime, text?: statement |
+batch | inputBuffer, locks?: bool }` (not `text` with `locks`) reads on the Activity Monitor's pool (" - Activity Monitor",
+READ UNCOMMITTED, LOCK_TIMEOUT 1000) under one live gate, within 10 s in all, and answers `{ sessionId, state: present |
+ended | changed | unknown (with `error`), session?, statement?, batch?, inputBuffer?, waits? (≤ 20), transactions? (≤ 50), transactionsTruncated?,
+tempdb?, locks? (≤ 1,000, only with `locks`), locksTruncated?, sectionErrors?: { section, code, message }[], readAt?,
+elapsedMs, error? }`. `changed` (another session has the id) reads nothing more. Each section is its own statement, so a
+permission or a lock that stops one is a `sectionErrors` entry and the others come back; texts are `{ text, chars,
+truncated }`, cut at 65,536 characters unless `text` asks for one of them, which then comes back alone, whole up to
+1,000,000. Every read checks the statement's columns against its declaration. Closing Details cancels the read
+(`ActivityRequests`, `varia:activity-cancel`, 1–16 ids, 64 tombstones for 60 s; 32 running): a CANCEL frame (reason 1),
+an attention in SQL Server, `CANCELLED`, and a pooled connection cancelled or broken mid-statement never goes back to its
+pool. `activity.kill { connectionId, sessions: { sessionId, loginTime, hostProcessId: int | null }[1..64] }` (distinct ids)
+opens the object actions' own connection (" - Object Actions": unpooled, never retried, in master) and runs, per session in
+order, one batch (`SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;`, then `ActivitySql`'s kill template) that checks the id is not
+its own session's, exists, is a user session, still has the row's login time and host process id, and is not one of this
+backend's pool sessions (its host process id, and a program name among the pool names of every connection of this backend,
+whatever Application Name each set), and only then runs `KILL`, built on the server from the int
+parameter. It answers `{ results: { sessionId, outcome: killed | ended | changed | own | system | varia | denied |
+failed, message? (≤ 2,000) }[], elapsedMs, error? }`: SQL Server's refusals map to outcomes (6102 `denied`, 6104 `own`,
+6106 `ended`, 6107 `system`), a session not in `results` was not tried, and `error` says why (`CONNECTION_LOST`, `TIMEOUT`
+past its 25 s budget, a sign-in failure); a session whose batch was cut off by either is `failed` with an unknown outcome.
+Failures the user can act on are values with the live layer's codes (`BLOCKED`, `TIMEOUT`, `PERMISSION_DENIED`,
+`CONNECTION_LOST`, `DATABASE_UNAVAILABLE`, `LOGIN_FAILED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `NOT_SUPPORTED` for a server the
+monitor does not serve, `SQL_ERROR`); envelope errors are only `INVALID_PARAMS`, `NOT_CONNECTED`, `BUSY`, `CANCELLED`,
+`TIMEOUT` at the header deadline, and `BACKEND_ERROR` for a statement whose columns differ from its declaration (a bug).
+Neither logs a session id, login, host, SQL text or message.
+
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
-`{ databaseProperties: { general, options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
+`{ databaseProperties: { general (with `id`, the database_id, and `created`), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
 (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel,
 pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }, elapsedMs }`, where `options` and
 `scoped` map the catalogue's option keys (docs/object-actions.md) to tokens. `actions.script` and `actions.execute` take
-`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? } }`:
+`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? }, identity?: { id, created } }`:
 only changed values, at least one and at most 512 statements, each key a settable option with one of its tokens (an
 integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
-Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
+Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. `identity` is the database the document read (database_id ≥ 1 and create_date as the describe writes it,
+`yyyy-MM-ddTHH:mm:ss.fff`): the preflight answers `NOT_FOUND` for a database that has taken the name since (renamed,
+dropped or restored meanwhile), before anything runs, for Script too. Script always
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
 Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
 connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and
-the dialog asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
+the Database Properties document asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
 whose sessions SQL Server can still list for a few milliseconds, a count above zero is taken again every 50 ms for up to a
 second first. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only database (the owner,
 scoped configurations, Target Recovery Time, Delayed Durability, FILESTREAM Non-Transacted Access) answers `NOT_SUPPORTED` before
 anything runs, for Script too.
-A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
+The document's Script drawer previews with `actions.script` only while it is open, one request once typing has paused
+for 300 ms, and cancels a preview an edit overtook (`varia:actions-cancel`), so typing never queues requests on the
+metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
@@ -497,7 +566,12 @@ left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or th
 transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
 lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
 `SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
-committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+committed. Check the data before running the work again." A commit the deadline or a cancel interrupts answers `TIMEOUT` or
+`CANCELLED` and leaves the session open, its outcome unknown: the session remembers it, and when a later commit or state
+read finds it lost it answers `SESSION_LOST` with "The SQL session was lost after a commit that did not finish (it was
+cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work
+again." A severity 20 error ends the session even while its connection still reads open (managed SNI closes it later):
+the state read, the commit and an execution all take it for lost. `'rollback'` is a plain close: SQL Server rolls back what a
 closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
@@ -554,7 +628,7 @@ when no port is open).
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 | `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
@@ -660,7 +734,7 @@ messages get "Column ‘{name}’ ({type}): some values could not be read and ar
 
 ## Messages
 
-The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'error' }`, in order, under
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' | 'error' }`, in order, under
 the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped. Past the caps,
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
@@ -668,12 +742,17 @@ after a flood of PRINT output or row counts. An event carries at most 1,000 entr
 stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
-- **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
+- **Print:** what the script printed: PRINT (message number 0) and RAISERROR with severity 0 – 10 (number 50000, or a
+  user message's number above it). They read like info entries; the renderer opens the Messages strip under the results
+  when one arrives, as it does for an error.
+- **Server:** SQL Server's other severity 0 – 10 messages: warnings such as 8153 ("Null value is eliminated by an
+  aggregate…"), SET STATISTICS IO and TIME output, and the messages of DBCC and sp_rename. They read like info entries and
+  show in the Messages strip without opening it. As in SSMS, "Changed database context to …" (5701) and "Changed language
+  setting to …" (5703) are left out, whether from USE, a session's login, or the toolbar's database.
+- **Info:** Varia's own lines: row counts as SSMS writes them ("(1 row affected)", "({n} rows
   affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
   after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session
-  closed. …" when a session that had opened closed (not for one that failed to open). As in SSMS, "Changed database
-  context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
-  the toolbar's database.
+  closed. …" when a session that had opened closed (not for one that failed to open).
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
   the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
   message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
@@ -765,8 +844,9 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs; its `activity.overview` probe for now) and the SSIS tree's `ssis.catalog` (scope
-`ssisdb`; its `ssis.catalogProbe` fingerprints the catalog for Object Explorer). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, and `activity.resources`, declared but not sampled yet), Object Explorer's `explorer` (the
+status chips: database states, restore progress, running Agent jobs, availability group health) and the SSIS tree's
+`ssis.catalog` (scope `ssisdb`; its `ssis.catalogProbe` fingerprints the catalog for Object Explorer). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -775,19 +855,34 @@ results port, and a backend whose HELLO lacks either is refused.
 
 ```ts
 live.subscribe { subscriptionId: uuid, connectionId: uuid, source, probes: { probe, intervalMs: 1,000..3,600,000, paused?,
-                 sort?: { column, descending }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
+                 sort?: { column, descending, table? }[1..4], view?, filter?: { text: 1..400, columns?: id[1..8] } }[1..8],
                  args?, resume?: base64url ≤ 256 }
 live.update    { subscriptionId, source, paused?, probes?: (the same, intervalMs optional, clear?: (sort | view | filter)[1..3])[1..8],
-                 refresh?: true, track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64] }[1..8], args? }
+                 refresh?: true, track?: { probe, table, seq: u31, keys: str ≤ 512 [≤ 64], linger?: 0..keys }[1..8], args? }
 ```
 
 Every probe belongs to the source and is named once; the interval is then clamped to the probe's own minimum and maximum.
-Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties), a view must
-be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
+Sort names columns of the probe's snapshot tables (catalogue column ids, not ordinals; the row key breaks ties); a key with
+`table` sorts only that snapshot table and must name one of its columns, a key without it sorts every snapshot table that has
+the column, and each column is named once per table (or once for all). A view must be one the probe declares, and a filter needs a probe with a filter mode. `args` is checked by the source's own schema
 (`liveArgsSchemas`): `debug.synthetic` takes `{ rows?: 0..10,000, tickMs?: 10..60,000, endAfterTicks?: 1..10,000,
-errorEvery?: 1..1,000 }`, a sampling period below the 1 s minimum so tests run fast (samples still report the requested
-interval), a sample count after which the source ends, and an error value every n-th table sample. Tracking names a keyed
-snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F. A source without append
+errorEvery?: 1..1,000, logRows?: 0..10,000, logLevel?: 0..3, lateEvery?: 1..1,000, start? }`, a sampling period below the 1 s
+minimum so tests run fast (samples still report the requested interval), a sample count after which the source ends, an
+error value every n-th table sample, and its log's messages per sample, lowest level, late messages and start. `activity`
+takes `{ filters?: activity filter[1..7], focusSession?: 0..32,767 }` (`activityLiveArgsSchema`), at least one member: one filter
+per table (`activityFilterSchema`: Processes' view chip and System and Varia toggles, the filter box ≤ 400 characters, ≤ 8
+column value filters of ≤ 50 values ≤ 256 characters on the table's facet columns, Hide benign waits on Resource Waits), and
+the session the sessions probe's two series follow (the Details flyout; 0 for none). The first sessions sample after
+`focusSession` names another session is marked `gap: 'reset'`, so a chart starts the series again rather than join one
+session's points to the next's. An update replaces the filters of the
+tables it names and keeps the others; a table without one shows the catalogue's defaults (system sessions, Varia's pools and
+benign waits hidden). The Activity Monitor's column ids are unique within a probe (its first table keeps the catalogue's ids,
+the others take a prefix: `chainSessionId`, `activeCpuMs`; docs/activity-monitor.md), so one sort list orders each table by
+its own columns and never reorders another. A source
+whose append tables can start elsewhere than their first row takes `start` (`liveStartSchema`): `'beginning'`,
+`{ tail: 1..200,000 }` (the last rows) or `{ before: 1..2^53−1 }` (the rows before an id, ending there). Tracking names a keyed
+snapshot table by its index; each key is the key columns' stored cell texts joined with U+001F, and `linger` says how many
+of the first keys stay one revision when they leave (all of them when absent). A source without append
 tables has nothing to resume from and refuses `resume`; a token is base64url characters only (the backend matches the whole
 string, so a trailing newline is refused on both sides). An update must change something, and repeats the subscription's
 source; main and the backend check it matches. In an update, an absent setting keeps its value, so `clear` drops one: the
@@ -799,21 +894,86 @@ probe, intervalMs, minIntervalMs, maxIntervalMs, state: ok | limited | unavailab
 `live.tick` per scheduler wake that sampled something (seq 1, 2, …): `{ sampledAt: Unix ms (monotonic), spid?, resume?,
 samples: { probe, costMs, effectiveIntervalMs, elapsedMs? (absent for the first), gap?: baseline | reset | resumed | late,
 skipped?, metrics?: (number | null)[], tables?: { table, descriptor, revision, retired?: u32[≤ 2], diff?: { added,
-removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] } }[≤ 4], append?: { table, descriptor, segment, rolledFrom?,
-retired?: u32[1] }[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
+removed, changed }, tracked?: { seq, rows: (row | −1)[≤ 64] }, departed?: row[1..64], facets?: { column, values: { text ≤ 128,
+count }[≤ 100], more?: true }[1..7] }[≤ 4], append?: { table, descriptor, segment, rolledFrom?, retired?: u32[1..8], restarted?: true
+}[≤ 4], status?: { id, value: integer | str ≤ 128 }[≤ 16] }[≤ 8], errors?: probe error[1..8] }`. A probe
 error is a value, never an exception, so the other probes carry on: `{ probe, code, message ≤ 2,000 (a sentence, never SQL,
 names or values), number?, retryInMs, terminal, tables?, series? }` (the tables or series one failed statement of the
-probe's batch would have filled), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
+probe's batch would have filled; a probe can report more than one error in a tick, such as `BUDGET` for one table and
+the failed statement of another, and `terminal` is true only when the probe stopped, never beside its sample), with `code` one of BLOCKED, TIMEOUT, PERMISSION_DENIED, NOT_SUPPORTED,
 DATABASE_UNAVAILABLE, CONNECTION_LOST, SQL_ERROR, AUTH_KERBEROS, AUTH_ENTRA, BUDGET, BUSY, CATALOG_MISSING, NOT_FOUND or
 LOGIN_FAILED.
 Main checks every frame against `liveEventSchema` (each probe sampled once, metrics aligned with the catalogue's series,
-tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, status ids the
-probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
+tables named by their catalogue index with the catalogue's column names in order, at most 8 tables in a tick, departed rows
+only for a table that keeps them, facets only for its facet columns and at most 32 KiB of facet text (UTF-8) in a tick, status
+ids the probe declares, error tables and series the probe has, and `seq` 0 and then one more each time) and against the
 subscription it arrived on (`liveEventFits`, in the supervisor): `live.opened` names the subscription's source and reports
 each subscribed probe once, and a tick samples or fails only subscribed probes, so another source's or an unsubscribed
 probe's tables are never owned. It stamps the generation on every descriptor. The catalogue's worst-case tick (every list at its maximum, every string in
 three-byte characters) encodes to at most 192 KiB (`tests/live-schema.test.ts`); a tick over 256 KiB is never sent: the
 backend ends the subscription `failed` with `BACKEND_ERROR`, a bug rather than a silent drop.
+
+**Tables** (`Live/LiveTables.cs`; each table's own settings are in docs/live.md). Every table is a stored result the worker
+reads with `results.read`, as a query's is: its cells are the text a query of the same value shows (CellFormat), every column
+`text` on the wire, so Copy and Save treat it as any result. A source gives a table's rows from a SQL Server result set or
+from its own state; the writers do the rest.
+- **Snapshot tables.** Each sample writes a new result (a revision). Two stay readable: the newest, and the one before, which
+  the renderer may still show until it applies the newest; stop and wait means it has, so writing revision k+1 first releases
+  k−1 and names it in `retired` (a revision that could not be stored names it in the next one that is). A revision applies the
+  probe's view (a predicate the source gives for each view id it declares), then its filter (`filterMode: 'memory'`: the
+  stored text contains the filter text, case-insensitively, in the named columns of that table, or in all of them; columns
+  of another of the probe's tables leave this one whole), sorts by the probe's sort keys for it (numbers as numbers, NULL
+  first ascending, text case-insensitively and then exactly), then by the key, so equal values never trade places (a table
+  that no key names keeps the source's order), and stores at most the
+  table's row cap (`rowLimit` past it, the rows the source left out counted in `rowsRead`). `diff` counts keys added and
+  removed and kept keys whose cells changed (a 64-bit hash of their texts); `tracked` gives each key of the latest track list
+  its new row or −1. A key is its key cells' stored texts joined with U+001F, NULL as empty text, so it equals what the worker
+  decodes. A table with `departed` keeps a tracked row that left the source (not one its view or filter hides) for one more
+  revision, at the row it had, and lists it in `departed`; the next revision drops it. Only the track list's first `linger`
+  keys stay (LiveGrid's selected rows); the others are answered −1 at once. Facet columns carry their distinct
+  values over every row the source gave that its facet scope keeps (before the view and filter; NULL left out; the
+  Activity Monitor's Processes counts only the rows its view chip and toggles show, before its filter box and column value
+  filters, so it never offers a value only hidden sessions have, and a column's own filter never empties its list), most frequent first, at most 100 of at
+  most 128 characters (values that differ only past them count together), and only when they changed since the table's last
+  facets; a tick's facet text is shared by its tables up to 32 KiB, counting only the facets a sample sends, and what does
+  not fit is left out (`more`) for a later tick to send.
+- **Row tones.** A table may end with a tone column (catalogue `role: 'tone'`, an nvarchar that is never a key or facet, and that no sort or filter names; a filter over every column leaves it out, so its text never matches):
+  each cell is `error`, `warning`, `running`, `muted` or NULL. The stored result's column keeps the role
+  (`ResultColumn.role` `tone`), so the grid hides it and colours the row instead (LiveGrid, below), and Copy and Save
+  Results As leave it out of every part, header and JSON object whatever columns a request names (`ResultJobs` through
+  `ResultTextWriter.Hidden`; a part of only the tone copies no text).
+- **Append tables.** One result (a segment) grows by the rows a source reads above the table's settled id, ordered by its one
+  key, an integer id. Ids are assigned at insert, not commit, so a lower id can become visible after a higher one (under READ
+  COMMITTED, or for an instant under READ UNCOMMITTED): each read covers every unsettled id again (the source reads `@top` =
+  the table's rows per tick plus its unsettled ids above `@after` = its settled id), and rows already appended are skipped by
+  id, so a late row is appended once, in arrival order. An id settles once first seen the table's settle ticks and
+  milliseconds ago (2 and 5 s by default); unsettled ids stay within twice the rows a tick reads, the lowest settling early past
+  that. Each write seals what it appended, so the rows are readable at once, and a sample carries the table only when it
+  changed. At 200,000 rows or 32 MiB a segment completes and a new one starts (`rolledFrom`). Two segments' worth are kept: on
+  a roll, the oldest completed segments are released and named retired while the completed ones hold more than one
+  segment's 200,000 rows or 32 MiB, and two or more are left; a segment that stopped early for memory counts only what it
+  holds, so the rolls after a budget stop cost no segment while the table stays under its caps. A table holds at most 8
+  stored results (the current segment included); past that the oldest goes whatever it holds. A read opens at most one segment, since a sample describes only the newest: rows past a
+  second one wait for the next read. A probe whose filter mode is `restart` passes its filter to SQL Server as a LIKE pattern
+  (`@filter`, wildcards escaped, `ESCAPE N'\'`); a new filter, or args that change what a source reads, start the table
+  again: every segment is retired (`retired` up to 8) and the next sample says `restarted`. The old segments stay
+  readable until the restarted table's first read arrives, so a read that fails after a restart leaves the view whole;
+  they are released only together with the new segment's open, so the sample that names them is always sent: when the
+  budget refuses that open, they go first and their bytes pay for its metadata, which nothing else can take in between. A start at the last rows, or
+  before an id, begins with a note row ("n earlier rows are not shown.", in the table's first text column, the other cells
+  NULL); a start before an id also ends the table there (`@before`). Rows that were not stored (out of budget, or past a
+  second segment) are never counted as seen, and no id at or above the lowest of them settles, so a later read stores them,
+  once.
+- **Memory.** Each revision and segment has its own budget, so one that does not fit never stops later ones, and a
+  subscription's tables share 64 MiB; all live tables together stay within a quarter of the result budget (a revision past
+  the subscription's limit says `queryBudget`, past the live share `globalBudget`), so queries keep the rest. A table that
+  ran out stores what fits and the probe reports `BUDGET` naming it; one that stored nothing reports `BUDGET` alone; either
+  stores again once memory is free, without giving up what it holds: an append table whose segment ran out keeps it
+  (complete) and opens the next only once a row fits, never retiring a segment to make room. Live results seal 64 KiB pages, under the large object heap's threshold, and their
+  releases do not count toward the store's forced gen2 collection (after every 64 MiB released), which a 1 s snapshot of a
+  large table would otherwise run every few seconds; the snapshot churn benchmark measures the collections that remain.
+- **Ends.** A source that ends keeps each snapshot table's newest revision and each append table's segments (the newest
+  first), complete and readable, within the 64 kept results; every other end releases them all.
 
 **Credit: stop and wait.** This is the one place EVENTs are credited, flagged by `creditedEvents` in `methodPolicies`.
 - The REQUEST carries `credit: 65,536`.
@@ -861,13 +1021,15 @@ its 8; a source that reaches no server (`debug.synthetic`) counts by connection 
 sampler is built, and a sampler acquires nothing (store, pools, connections) until the subscription runs, so a refused
 request never touches what a running subscription holds. Each subscription is one task with its own schedule, so it never
 overlaps itself; a source runs its due probes through an `ILiveSampler`. `debug.synthetic` (`SyntheticSampler.cs`) runs
-no SQL: its metrics probe counts samples and draws a wave (the rate is null until a second sample), its table probe stores
-one snapshot result per sample whose rows move on by one id each time (two revisions alive: the oldest is released before
-the next is stored, since the renderer has applied the newest by then, and the next stored revision names it as retired),
-sorted as asked, with diff counts and tracked rows, and its status probe reports the phase and the sample count. Each
-revision has its own query budget, so a revision that did not fit (a `BUDGET` error value) never stops later ones: the
-probe stores again once memory is free. The per-subscription cap (64 MiB, all live views within 25 % of the result budget)
-comes with the SQL sources' snapshot writers. Its scope is `none`, so any connection id is accepted;
+no SQL, and its tables go through the same writers as the SQL sources' (Tables, above): its metrics probe counts samples and
+draws a wave (the rate is null until a second sample); its table probe stores one snapshot per sample whose rows move on by
+one id each time, so rows leave at the top and arrive at the bottom; its status probe reports the phase and the sample
+count; its grid probe stores two snapshot tables from one sample, items (a view, facets, departed rows, a row tone by group)
+and their groups,
+which come from the source's own state rather than a query, and with `errorEvery` fails the groups alone, as one failed
+statement of a batch would; its log probe grows an append table from an in-memory log (toned by level), with late
+messages, a start, and a restart when its filter or level changes; and its wide probe stores the 23-column snapshot the churn benchmark swaps,
+reporting the backend's gen2 collections. Its scope is `none`, so any connection id is accepted;
 other scopes need a connected one (`NOT_CONNECTED`). Nothing is logged.
 
 **Scheduler** (`LiveSubscription` in `Live/LiveService.cs`; every rule below runs on times passed in, and the offline
@@ -917,15 +1079,41 @@ and one without it (its count and checksum 0) for everyone else, so nobody else'
 and the probe's budget): no row is `CATALOG_MISSING` (terminal), a database that is not online, single-user or restricted
 `DATABASE_UNAVAILABLE` (retried), and an online one the login may not open `PERMISSION_DENIED` (terminal), each with its own
 sentence; an open whose errors already say the database is unavailable (942, 976 and the others below) is not looked up; when that read fails too, the open's
-own error is classified as below. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
+own error is classified as below. The Activity Monitor's source runs its capability probe in its place (Activity/ActivitySql.cs `Capabilities`):
+the session id and whether the login reads server state, may end sessions (ALTER ANY CONNECTION) and sees every file's name
+(VIEW ANY DEFINITION), and whether the query statistics have spills; its sessions probe sends the first two as the status
+values `serverState` and `canKill` with every sample (each new connection's capability probe reads them again), so a
+view that attaches later, or keeps only the latest sample, knows them. A subscription whose probes all start paused connects for neither until one resumes (no SQL while paused). A probe whose catalogue gates (version
 from its band, where Managed Instance counts as the newest; EngineEdition) exclude the server opens `unavailable`
 `NOT_SUPPORTED`; one that needs server state the login lacks opens `unavailable` `PERMISSION_DENIED`; neither ever runs.
+When the session probe did not run as the source opened (every probe paused, the gates full, the connect failed), such a
+probe opens `ok` and stops at its first tick with a terminal `PERMISSION_DENIED`, running nothing; so does one whose new
+connection's session probe finds the permission gone. SqlSampler checks this for every probe, one-batch or reader.
 A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
 its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
 the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
-more than `LOCK_TIMEOUT`; the catalog probe's range is 500 ms to 10 s, SSISDB's budget. Probe SQL is constant text per probe and band in `Live/LiveSql.cs`: one row whose columns it
-declares, mapped to the catalogue's series and status values (whole numbers, sent as they are; a probe without series sends
-no metrics and no `baseline` or `resumed` gap, so it has no quick second sample); values only as parameters; no metadata built-ins (they ignore
+more than `LOCK_TIMEOUT`; the catalog probe's range is 500 ms to 10 s, SSISDB's budget. A source with several statements per probe (`ILiveSqlReader`; the Activity Monitor's
+`ActivityReader`) runs them one at a time on the same connection within that one budget and builds the probe's series and
+rows in C#; its statements are `ActivitySql`'s constant text, checked by their own lint and the live lint, each read checked
+against the columns it declares (a mismatch is a bug: `BACKEND_ERROR`). A statement the login may not run (`PERMISSION_DENIED`)
+or the server lacks (`NOT_SUPPORTED`) fails alone: the sample goes on, an error beside it names the tables and series that
+statement feeds, and it is not run again on that connection, only reported each sample (each new connection's capability
+probe runs it again: the login may since hold the permission, or the connection reach another server). A lock wait or another statement
+error stops the probe's statements: what was read arrives and the error names the rest; a probe that read nothing reports
+its first error and backs off; a lost connection or the budget fails the probe as below. Without server state the sessions
+probe reads one statement (the caller's own session: SQL Server shows such a login nothing else) and reports Blocking and
+Active Expensive Queries as `PERMISSION_DENIED` beside each sample without SQL. Probe SQL of the other sources is constant
+text per probe and band in `Live/LiveSql.cs` (Object Explorer's status probes and the SSIS tree's catalog probe; the live
+checks register theirs): one batch per probe, its metrics row (when it has series or status values) with the columns it
+declares, mapped to the catalogue's series and status values (whole numbers, sent as they are; a probe of status values
+alone sends no metrics and no `baseline` or `resumed` gap, so it has no quick second sample), then one result set per table, in
+catalogue order, whose column names and types must be the table's (the types live tables store: integers, text, bit, float,
+real, decimal, the date and time types and uniqueidentifier; a column of another type, or a query that does not read each of
+its probe's tables once, in order, fails the open as a bug). An append table's read takes `@after{i}`, `@top{i}` and
+`@before{i}` (i its index) and may name a tail statement that returns `(after_id, earlier)` for `@tail{i}` rows, for a
+start at the last rows. A snapshot result set is read up to 10,000 rows. When one statement of the batch fails after earlier
+ones returned, the tables already read arrive and the error names the rest (`tables`), so the tick goes on; values only as
+parameters; no metadata built-ins (they ignore
 `LOCK_TIMEOUT` and the isolation level), temporary tables, `SELECT … INTO`, writes, DDL, transactions, `WAITFOR`,
 `EXEC` or `sp_executesql`, remote reads (`OPENQUERY`, `OPENROWSET`, `OPENDATASOURCE`), comments (they belong in C#), and
 no `TOP`, with or without parentheses, without an `ORDER BY` at its own level (one inside `OVER (…)` or another statement
@@ -938,7 +1126,7 @@ server's band and compare its columns (the SSISDB ones against the fake catalog)
 
 **Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
 `PERMISSION_DENIED` (for an SSISDB source, with its own sentence: the login cannot read the catalog) and 207 and 208
-`NOT_SUPPORTED` (both terminal); `CATALOG_MISSING` (above) is terminal too; 4060, 911, 942, 952 and the other offline,
+`NOT_SUPPORTED` (both terminal; so are an SSIS source's `CATALOG_MISSING`, above, and `NOT_FOUND`); 4060, 911, 942, 952 and the other offline,
 restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above and transport errors
 `CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
 advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
@@ -953,17 +1141,24 @@ kind in the catalogue: `gauge` (as read), `rate` and `msPerSecond` (change per s
 counter's change; none when the base did not move) and `cpuPercent` (100 × Δ CPU ms / (elapsed × schedulers), 0 to 100).
 Elapsed time is the server's own (Δ`ms_ticks` of `sys.dm_os_sys_info`) when the probe reads it, so a slow round trip never
 skews a rate, and the backend's clock otherwise; `elapsedMs` reports it. A changed start time (a restart) drops every
-baseline (`gap: 'reset'`); a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
+baseline (`gap: 'reset'`), and a reader's series that follow something else from a sample on (the Activity Monitor's focus
+series, another session) mark that sample `reset` too; a counter that went down rebaselines alone (null, `reset`); the first sample, the first after a
 pause and the first after a lost connection (which may have reached another server) have no rates (`baseline`,
 `resumed`); a sample over 3 intervals after the previous one is `late`. Reopening a connection that went back to the pool
 while idle keeps the baselines. `LiveKeyedDeltas` keeps per-row baselines for snapshot rates (L2b's tables): keyed by an
-identity column (a session's login time), bounded by the row cap, dropped after two samples absent.
+identity column (a request's start time), bounded by the row cap, dropped after two samples absent, and each with the time
+it was read at on the probe's sample clock, so a row missing from a sample gets a rate over its own span when it returns.
+The Activity Monitor's per-session CPU and reads use their own rule (`SessionRates` in `Activity/ActivityRows.cs`): a
+session's counters take in a request's work only when it ends, on a smaller scale than the request reported, so each
+running request (by id and start time; a MARS session has several) counts by its own change, a new one whole, and the ended
+ones only beyond what they had counted (never negative, nothing twice).
 
 **Resume tokens** (`Live/LiveResume.cs`): base64url of `{"v":1,"source":…,"cursors":[[probe,table,settledId],…]}`, at
 most 256 characters (a set of cursors that would not fit makes no token), parsed strictly against the subscription's
 source and its append tables (`INVALID_PARAMS` on any other shape, a repeat or an unsafe id). A tick carries `resume` only
-when a cursor moved, the end carries the last one, and a subscription resumed with one hands its source the cursors.
-Only append tables have cursors (L2b), so for now every source refuses `resume`.
+when a cursor moved, the end carries the last one, and a subscription resumed with one hands its source the cursors: each
+append table starts after the id its cursor settled. A source without append tables (the Activity Monitor) refuses
+`resume`.
 
 **Renderer.** The results worker relays live requests and events, and `ResultClient.live` runs a stream ([Results port
 and results worker](#results-port-and-results-worker)). Views never call it themselves: they open a `LiveHandle` from
@@ -972,12 +1167,24 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 - **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
-  connection, and closes with the tab. The SSIS tree's views (`SsisTreeProbe`, `src/renderer/src/ssis/`, one per connection
-  whose SSISDB node is open, at most one per server row) belong to Object Explorer: visible while its pane shows, and following
-  the connection while its server row is in the tree; closing SSISDB disposes the view. At most 16 views are open in a window, first come, whoever owns them; another, or
-  one naming probes its source does not have, is a handle that has already ended with `TOO_MANY_REQUESTS` or
-  `INVALID_PARAMS` as a value, never an exception, and runs nothing. An owner of many background views (a status chip per
-  connected server) should share handles rather than take one each, or the documents a user opens find none left.
+  connection, and closes with the tab. The SSIS tree's views (`SsisTreeProbe`, `src/renderer/src/ssis/`, one per
+  connection whose SSISDB node is open, at most one per server row) belong to Object Explorer: visible while its pane
+  shows, and following the connection while its server row is in the tree; closing SSISDB disposes the view. They are not
+  `background` views: each holds an ordinary slot. At most 16 views hold a slot in a window (main's 16 streams on the port). A
+  `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server and login, owned by the
+  pane, which `ExplorerStatusService` opens, moves to the next connection of the same server and login when its own goes,
+  and disposes once it ends, opening it again on Refresh) takes only a slot no other view wants, at most 8 of them: one
+  opened without a free slot waits (`status: 'dormant'`, `waiting: true`, running nothing), and a view that opens when all
+  16 are taken takes the newest running background view's slot, which stops and waits again; the new view subscribes once
+  that stream's end has arrived, as after a Reconnect, so main never sees a 17th. A view that closes hands its slot to the
+  oldest waiting background view, which subscribes after the closed view's stream has ended (or, hidden, stays dormant
+  until it shows). With every slot held by other views, another view, or one naming probes its source does not have, is a
+  handle that has already ended with `TOO_MANY_REQUESTS` or `INVALID_PARAMS` as a value, never an exception, and runs
+  nothing. The backend's 8 per server and 32 per backend count background views too, so they give way there as well: a
+  view the backend refuses with `BUSY` before it opens takes the newest running background view's slot on the same server
+  (`serverOf`: the server the connection names, as typed; without it, the same connection) and subscribes again once that
+  stream has ended, once (a second refusal ends it with `BUSY`; with no such background view it ends at once). A
+  background view the backend refuses waits instead of ending, and tries again when a view of the window closes.
 - **Frames.** Each event is applied synchronously in the port message's own task (states, the probe's history ring, its
   tables as `ResultHandle`s), then `onTick` listeners run (an exception there is reported and changes nothing), and only
   then is it acknowledged. Snapshot listeners hear of it once an animation frame, however many frames arrived.
@@ -987,8 +1194,8 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   hidden, counted from when they hid. Hidden for `liveData.stopAfterHiddenMinutes` (5 min) it cancels its subscription (the backend releases what it held) and
   is `dormant`; shown again it subscribes again with a new subscription id and the last resume token, and its history
   continues after a gap. With `liveData.pauseWhenHidden` off, hidden views keep running. A source may allow
-  `hidden: 'statusOnly'` (none does yet; the catalogue field is the renderer's alone and stays out of the backend's JSON):
-  a view that asks for it with `whileHidden` keeps its probes without tables at 30 s or slower instead of pausing, never
+  `hidden: 'statusOnly'` (none does yet; the backend's JSON carries the field, but only the renderer acts on it):
+  a view that asks for it with `whileHidden` keeps its probes without tables at `limits.live.hiddenIntervalMs` (30 s) or slower instead of pausing, never
   goes dormant, and pauses its table probes; at most 4 such views a window, the rest pause. A view that ends, is lost,
   closes or shows gives its slot to the oldest hidden view that paused only because none was free.
 - **Pause, settings, refresh.** The user's Pause is `paused: true` and visibility never undoes it. Probe settings
@@ -999,22 +1206,73 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   Paused), with the reason in `error` and on the indicator; `TOO_MANY_REQUESTS`, `BUSY`, `TIMEOUT` and
   `BACKEND_UNAVAILABLE` refusals go again after 1 s, doubling to 30 s, any other with the view's next change, and the next
   accepted update clears the error. A view subscribing while paused pauses every probe in `live.subscribe` (there is no
-  subscription-wide pause there) and unpauses them when it resumes. `setArgs` changes the source's `args` in place (the
+  subscription-wide pause there) and unpauses them when it resumes; a view opened with `paused: true` (a paused Activity
+  Monitor's Retry) is paused by the user from the start, so nothing samples before its pause could reach the backend. `setArgs` changes the source's `args` in place (the
   history and state carry on, and later subscriptions use them). Refresh sends `refresh: true` (a dormant view subscribes
-  again); `track` sends a keyed table's tracked keys with a new `seq` each time, and a new subscription sends them again
-  with new ones.
+  again); `track` sends a keyed table's tracked keys (and how many linger) with a new `seq` each time, and a new
+  subscription sends them again with new ones. `probeOptions(probe)` reads a probe's settings as the view wants them (a
+  copy), so a grid built again shows the sort its probe has.
 - **Ends.** A backend that went away (`BACKEND_LOST`, `RESULT_UNAVAILABLE`, `BACKEND_UNAVAILABLE`) leaves the view `lost`
   with its history and its tables' handles (they read `lost`); nothing resubscribes by itself, since the connection went
   with its backend. When the owner moves to another connection (Reconnect retargets the tab), the view subscribes on it
   once the old stream's end has arrived (main and the backend count a cancelled stream until then, so a full window or
   server keeps the view's slot); a dormant view stays dormant until it shows. When the owner loses its connection, the
   view ends `disconnected`. Every other end is `ended` with the backend's reason. A finished source's kept tables stay
-  readable until the view closes, which releases them; if the source finished while the view's cancel was on its way,
+  readable until the view closes, which releases every result it kept (an append table's older segments too, which the
+  view does not show yet); if the source finished while the view's cancel was on its way,
   `ResultClient` closes what it kept at once.
 - **History.** `MetricRing` (`live/ring.ts`) keeps each metrics probe's samples in typed arrays: a sample's time, its gap
   and reset flags and one value per series (missing values NaN), with binary search by time and min and max per series.
   Its capacity is `liveData.historyMinutes` at the probe's interval, at most 7,200 samples, then fitted to 4 MiB a view and
   32 MiB in all, keeping the newest samples. It lives in renderer memory only, so it survives a backend restart.
+- **Charts.** `ChartView` (`live/ChartView.ts`, imperative like `GridView`) draws one probe's ring on a canvas, and
+  `LiveChart` (`live/LiveChart.tsx`) mounts it with its legend and "View as table"; React renders nothing per point.
+  Series are lines, a line over a faint area, or stacked bands parted by a one-pixel line of the surface; a chart is a
+  full chart (labels for the scale's top, or value and time axes) or a sparkline (one trace, no text). The window is the
+  last `spanMs` up to the newest sample, or up to a fixed time. A draw happens at most once an animation frame (a tick,
+  a ring resized by `LiveService` (`onRings`), a resize, a theme, forced-colors or color-scheme change asks for one), only
+  if the ring's revision, the window, the size, the pixel ratio, the theme, the forced palette or the crosshair changed (a crosshair or a color alone repaints from the columns, bands and layout the last draw reduced the window to, without reading its samples again), and only while the canvas is on screen (`IntersectionObserver`) and the
+  page is visible (`live.page`, test mode's `setPageHidden` included). Each series is reduced to the smallest and largest
+  value per device pixel column (stacked bands to each column's mean), so a draw is O(samples in the window) plus at
+  most two vertices a column, whatever the history holds; a gap flag or a missing value breaks a line, and a lone
+  sample between gaps shows as a one-pixel tick. Stacked bands break at a gap flag or at a sample with no stacked value at
+  all; a series missing from a sample that has other stacked values counts as 0 in it (a column's band is the mean over
+  every such sample in the column), so its band drops onto the one below rather than breaking every band above it. A
+  series whose `index` the ring does not have reads as no value, never as a neighbour's. Colors come only from the
+  active theme's `charts.*` keys and the surface the chart sits on (series
+  `charts.blue`, `.orange`, `.green`, `.yellow`, `.purple` in that order and `charts.gray` for Other; `charts.red` is a
+  status mark, never a series; grid lines `charts.lines`, text and crosshair `charts.foreground`); under forced colors it
+  draws in `CanvasText`, `Canvas` and `GrayText` as the DOM resolves them at each draw (from a hidden element styled with
+  them), since a canvas keeps its own stale reading of those keywords when the contrast theme changes while forced colors
+  stay on; it draws without fills, and each series after the first takes the dash of its place in the chart, as the legend
+  shows it. A chart sits on `editor.background`, `panel.background` (the default), `editorWidget.background` or
+  `tile.background`: its end markers are ringed and its bands parted in that color, and series and text are checked
+  against all four. A tile's sparkline goes in the states kit's `Tile` chart slot (`<Tile><LiveChart variant="sparkline"
+  surface="tile.background" …/></Tile>`), 32 px tall. A change of device pixel ratio alone (a move to a display of another scale)
+  redraws it, through a `resolution` media query, since it resizes nothing. Canvas text uses the UI font at the type scale's 11 px step. The canvas is `role="img"` with a name such as
+  "SQL Server CPU: 12 %, 3 % to 40 % over the last 5 minutes", changed at most every 5 s and never while the canvas has
+  focus (a screen reader would read the whole name again at each change; it catches up on blur),
+  `aria-roledescription="chart"`, and a description of its keys. The pointer shows a crosshair and a tooltip ("4:10 ago · 93 %") inside the plot, beside
+  the crosshair (or against the plot's right edge when neither side has room; one wider than the plot wraps between its
+  parts); a pointer held still keeps the crosshair under it as a live window moves, on the sample now nearest it; with the canvas focused, Left and Right step it one sample, Home and End go to the window's ends, Escape
+  or a blur hides it (a keyboard crosshair whose sample a live window moves past stays on the window's oldest sample), and each step is announced through a polite status region (these are the chart's own keys, as the
+  grid's arrows are the grid's, not workbench commands). Charts joined to one `ChartLink` show the same moment together,
+  and a chart disposed while it drives the crosshair takes it off the others. "View as table" shows the window in the
+  plot's place, at its size and scrolling there (a focusable region named "<title> table", its header kept in view),
+  newest first, at most 120 rows or `tableRows` (a longer window is sampled evenly), a row marked when any sample since
+  the row before it follows a gap (never the oldest row: the flag of a view's first, baseline sample parts it from nothing shown); the table, `latest()` and the keys read the window,
+  not the canvas, so they work whatever size the canvas has. `LiveChart` keeps the table's state itself or takes it as
+  `tableShown`/`onTableShownChange`, and `tableToggle: false` drops its button for a document that offers the command
+  from its catalogue; it draws at most 12 series (`chartLimits.series`), and its legend and table list the same ones.
+  A live window ends at the newest sample, so history stays in view when collection stops. Whether that sample reads as
+  "now" comes from the view, not from the spacing of the ring's samples (which a refresh, a back-off or a new interval
+  would mislead): `bindChart` follows the handle's snapshot, and the times read "now" and "ago" only while the probe is
+  `fresh` or `limited` and its newest sample came within twice its effective interval (so a resumed view is not "now"
+  until its first sample). Otherwise (paused, stale, failing, lost, ended) they read as clock times at once, and the name,
+  like a fixed window's, gives the clock range ("… from 13:05:00 to 13:10:00"). The tooltip, announcements and table are Text nodes or React text, never markup. A chart reads any
+  `RingReader` (`live/ring.ts`), so a series sent in one unit can be shown in another through `scaledRing(ring, factor)`, a
+  cached view that multiplies values and keeps the ring's times, flags and revision (the Activity Monitor's waiting tasks,
+  sent as wait milliseconds per second); a `ChartSource` may hand one out from `ring()`.
 - **State.** A handle's snapshot has its status (`connecting`, `live`, `paused` by `hidden` or `user`, `dormant`, `lost`,
   `ended`) and each probe's state (`fresh`, `stale` once nothing arrived for twice its effective interval, `failing` with its
   probe error, `limited`, `unavailable`, `paused`), interval asked and run, newest sample time and cost. The stale moment
@@ -1022,7 +1280,75 @@ and results worker](#results-port-and-results-worker)). Views never call it them
   pill and badge text ("Live · every 2 s", "Slowed to 4 s", "Paused while hidden", "Updated 12 s ago", "Connection lost").
   `live.peek(source)` reports open views as they are, for badges and summaries: it never subscribes, and a paused,
   hidden or stale view reads stale.
+  `pillStatus` and `freshness` give the states kit's `LivePill` and `StaleBadge` the same facts: the pace of the probes
+  that run (`slowed` when the backend runs one slower than asked), who paused the view and how it ended, the newest
+  running sample's time, and since when a running probe has been stale or failing.
+- **Tables.** `handle.table(probe, index)` is the table's latest result as a `ResultHandle`, with its revision, diff and
+  departed rows (snapshot) or segment, `rolledFrom` and `restarted` (append). `tracked` carries the rows the backend
+  found and, when the view still has it, the key list that `seq` answers: the view keeps every list it sent for the table
+  since the newest one a sample answered (at most 64), since many may go while one sample runs.
+- **Activity Monitor.** One monitor is one handle on the `activity` source with every probe the live catalogue declares,
+  owned by its tab (`documentOwner`). `ActivityMonitorService` (`src/renderer/src/activity/`) keeps each probe paused unless
+  a shown pane whose grid exists reads it (`paneProbes` in `src/shared/activity/catalog.ts`; the tiles' overview always
+  runs), sends the monitor's interval raised to each probe's floor (`probeIntervalMs`), and changes only the probes a pane
+  or interval change moves, through `setProbe` (one debounced `live.update`). Pause is the handle's user pause, Refresh Now
+  its `refresh`, Retry a new handle. The view reads the overview's ring for its tiles and charts and runs no timer but the
+  states kit's one-second age ticker.
 
+**LiveGrid** (`live/LiveGrid.ts`, its React shell `live/LiveGridPane.tsx`): a live table in a results grid. It wraps
+`GridView`, which renders it as any result (pools, tiles, `nodeValue` text, keys, selection, Copy) with three additions:
+`GridView.swap(handle, descriptor, mapRow)` shows another result with the same columns in place (widths and scroll stay;
+the first row shown, the active cell and each block move through `mapRow`, `grid/swap.ts`), a hidden tone column, and
+follow tail.
+- **Snapshot revisions.** After each applied tick (before it is acknowledged) the grid first reads the rows the new revision
+  will show into the window cache (`GridView.prepare`, at most 250 ms), then swaps it in, so a swap never paints a frame of
+  empty cells; a newer revision arriving meanwhile has retired the one shown and swaps in at once. The grid tracks the
+  selected rows (the active row and every block's anchor and focus rows), then the rows next to the active row and the first
+  row shown unless that is row 0 (at most 64): it reads their keys from the window cache's worker (`display: false` over
+  the key columns, in as few windows as fit), sends them with `track` only when the list changes, with `linger` counting
+  the selected rows' keys, so only a selected row that leaves stays one revision, and maps each row it knew to where the
+  backend says its key went; rows it did not know keep their index. A revision sampled under an older list may not answer a
+  selected row's key: the selection then stays at its index for now, but the grid keeps that key (pinned) for that row, sends
+  it, reports it as `activeKey`, and moves the selection once a revision places it; a click or key of the user's replaces
+  pinned keys, since the user chose by what they see. A block whose row is gone collapses to the active cell; an active row that is gone moves to
+  where the nearest surviving row went (below, then above, within 64 rows), passing over rows whose place the grid does
+  not know, and else stays at its index. A view scrolled to the very top stays at the top,
+  so rows that sort first are seen. Departed rows are muted for their one revision, whatever their tone. A grid that is disposed
+  (its pane unmounts) sends an empty list for its table, so the backend stops following, and keeping, the rows it selected.
+- **Tones.** The tone column (the result's last, role `tone`) is not shown: each row tile the grid reads also reads the tile
+  column that holds it, and each pooled row takes one class, `tone-error`, `tone-warning`, `tone-running` or
+  `tone-muted` (theme keys `resultsGrid.row{Error,Warning,Running,Muted}{Background,Foreground}`; a NULL in a toned row drops
+  its tint). Under forced colours a toned row's number gets a bar and a muted row dims. The owner may name tones for screen
+  readers (`toneLabel`, "blocked", "ended"), which the active cell's label then ends with.
+- **Append segments.** A segment grows in place. While the view is at its last row it stays there as rows arrive; scrolled
+  up, it stays where it is and the pane counts the rows that arrived since ("n new rows · Jump to latest", which scrolls
+  back and follows again; `newRowsLabel` names the rows another way). A roll swaps to the new segment and keeps
+  following; a restart (a new filter or args) keeps the view's intent: the tail if it followed, else the top of the new rows.
+- **Remounts.** An owner that unmounts the pane (a tab switch) keeps a `LiveGridState` and passes it again: GridView's scroll,
+  widths, selection and `following` (a follow-tail grid built over a state that had left the tail opens where it was), the
+  rows the segment had when the view left its tail, and the selected rows' keys (known in the same result, pinned in a newer
+  one). The grid reports the selection it restores as its snapshot's `selection` and `activeKey`.
+- **Sort, Copy, Save.** `sortBy(column, descending)` sets the probe's sort key for this grid's table (`table`, by catalogue
+  column id; never the tone; append tables are in id order), keeping the keys of the probe's other tables (a probe-wide key gives way on this table and becomes a key of each other
+  snapshot table with that column), and the next revision arrives sorted; the snapshot's `sort` is this table's keys in the probe's settings.
+  GridView has no header sort yet: header presses select columns, and a header-click sort with its indicator and
+  `aria-sort` is Activity Monitor's (AM2b) change to GridView. Copy acts on the revision the grid shows, through
+  `results.copy`, which leases it: the samples after it may retire it mid-copy and the copy still completes. Save names
+  that revision too, but a revision is retired two samples on, sooner than most save dialogs close, and the backend's
+  lease starts only with the export: so for a live snapshot table main saves the table's newest revision the renderer owns
+  once the file is chosen (`ResultsPortHost.liveNewest`, from the ticks it relays), the one the grid shows by then (which
+  may hold a departed row that stays its one revision); it fails `RESULT_UNAVAILABLE` only if the subscription ended
+  meanwhile without keeping the table (a source that ends keeps its newest revision, which is saved). When the view's rows are
+  gone (the table it holds now is lost or released) and a job failed because its result was, Copy and Save answer in the live
+  view's words, not a query's; a retired revision is not a stop, and any other failure (a file in use) keeps its own words. An append segment saves once it is complete (a roll
+  or the source's end).
+- **What the owner sees.** The grid's snapshot carries the table shown, the new-rows count, the sort, `lost` (the shown
+  result was lost with the backend), `released` (the view's subscription ended and released it: `dormant` while hidden
+  long enough to stop, which resumes when shown, else `stopped`; the pane shows an overlay for both and for `lost`), the selection the grid shows (a swap
+  that moves it reports it, as a click does; one to a revision with no rows clears it, and the first cell a frame selects
+  once rows come back is read from the grid) and the active row's key once known (`activeKey`), for a details pane, Kill
+  or a context menu. It is published only when one of these changed, so scrolling renders nothing. Copy with Headers,
+  Save's command and the context menu are the owning view's (later PRs).
 
 ## Results port and results worker
 
@@ -1225,16 +1551,17 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
+| Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
-| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 characters; error messages ≤ 2,048 | zod and backend |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered | backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048 | zod and backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
-| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
+| Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; snapshot revisions ≤ 10,000 rows, append segments 200,000 rows or 32 MiB (2 segments' worth kept, at most 8 results a table), ≤ 10,000 new append rows a tick; 64 MiB of tables per subscription, all live tables ≤ 25 % of the result budget; facets 7 columns × 100 values × 128 characters, ≤ 32 KiB of facet text a tick; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
 | Results worker | 64 MiB / 512 cached pages (pending windows answer early past 64 MiB); windows of 4,096 rows, 262,144 cells, 4,000,000 characters | worker |
 | Results grid | tiles of 128 rows × 32 columns; 512 characters per displayed cell; one window cache of 256 windows / 16,777,216 UTF-16 units; at most 12 grids mounted, 2 a frame | renderer |
 | Timers | HELLO 20 s; PING every 5 s; unresponsive after 15 s; stop grace 2 s; backstop deadline + 5 s; progress ≤ 10/s; messages every 100 ms | main and backend |
@@ -1245,11 +1572,21 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
-`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
-**Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does for both. They are
-`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
-server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
-Main refuses (as a contained violation) details with any other member or out of these bounds.
+`details` comes with a failed `connections.connect` or `connections.databases` open, and with `BACKEND_ERROR`. The Connect
+dialog shows them in **Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does
+for both. They are `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256, reason?: 'certificate',
+exception?: str ≤ 512 }`: SqlClient's first error and the server that answered (the server typed when SqlClient names
+none), and `reason` 'certificate' when the TLS handshake failed because the server's certificate is not trusted, by its
+chain or its name (SqlClient's error number `SEC_E_UNTRUSTED_ROOT` or `SEC_E_WRONG_PRINCIPAL`, which the managed SNI on
+Linux and macOS also uses for any certificate its validation rejects, `CERT_E_UNTRUSTEDROOT` or `CERT_E_CHAINING`, which
+Windows' SNI reports once Host Name in Certificate is set, or an `AuthenticationException` about the certificate; never
+`CERT_E_WRONG_USAGE`, a pinned certificate that does not match); the Connect dialog then offers **Trust server
+certificate and connect**, except under Strict encryption, which ignores that setting, and when the connection pins a
+Server Certificate or a Host Name in Certificate, which trusting would skip: there it explains instead. `BACKEND_ERROR` for an exception the backend did not expect carries only `exception`: the types
+and HRESULTs from the outer exception inwards, at most four (`System.InvalidOperationException (0x80131509) >
+System.DllNotFoundException (0x80131524)`), for **Copy details**, because its sentence is generic; never the exceptions'
+messages, which can hold paths, names or SQL text. Details never hold the connection string or the password. Main
+refuses (as a contained violation) details with any other member or out of these bounds.
 
 Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
 be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the
@@ -1308,7 +1645,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Surface | Text |
 | --- | --- |
-| Status bar | "Starting SQL backend…", "{runtime} · Ready", "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
+| Status bar | "Starting SQL backend…", "Ready" (its tooltip names the runtime and the SMO and SqlClient versions), "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
 | Banner: not responding | "The SQL backend is not responding. You can keep waiting, or restart it; restarting closes all connections and rolls back uncommitted transactions." **Restart now** |
 | Banner: unexpected restart | "The SQL backend stopped unexpectedly and was restarted. {n} connection(s) were lost and {m} running script(s) were stopped; nothing was re-run." **Reconnect…** **Dismiss** |
 | Banner: manual restart | "The SQL backend was restarted. {n} connection(s) were closed." **Reconnect…** **Dismiss** |
@@ -1316,7 +1653,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
-| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 
@@ -1441,13 +1778,37 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
   core and `ResultClient`, and a `LiveService` view on it hidden, shown, lost with a restart and back after a Reconnect.
   `tests/live-service.test.ts` drives `LiveService` against a fake client with fake timers (the hysteresis, user pause,
   update order, debounce, stale, lost and Reconnect, kept tables, the 16-view cap, status-only views, `peek`, ring
-  memory), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the indicator text.
+  memory, the track lists a sample may answer), `tests/live-ring.test.ts` the ring and `tests/live-status.test.ts` the
+  indicator text.
+  `tests/chart-view.test.ts` draws charts into a context that records styles, paths and text: at most two vertices a
+  pixel column for 7,200 samples, gaps and missing values breaking lines, no draw while hidden or unchanged, every color
+  from the theme (the DOM's system colors, followed through a palette change, and dashes under forced colors), stacked
+  bands and where they break, crosshair dots on the bands, the 5 s accessible name held while focused, the keyboard and
+  pointer crosshair (a keyboard one kept on the oldest sample and a pointer's under the pointer as a live window moves, a
+  move repainted without reading the window again), the tooltip inside a narrow plot, series indexes the ring lacks,
+  stacked gaps, lone samples and missing values, the 12-series cap, linked charts, the table and `probeCurrent`'s bound;
+  `tests/live-service.test.ts` binds a chart to a view and checks that "now" follows the probe's state through an
+  interval change, a refresh, a back-off, a pause and a resume, and that a ring resize redraws a paused view's chart.
+  `tests/live-grid.test.ts` covers `LiveGrid` against a stand-in grid and view (the swap's row map and
+  selection, the tone column, tracked keys and how many linger, pinned keys a revision has not answered, prepare, follow
+  tail and new rows, remounts over kept state, the selection, lost and released state it publishes, per-table sort, Copy), and `tests/results-jobs.test.ts` and `tests/results-port.test.ts` a Save of a live revision retired while
+  its dialog is open.
   `scripts/backend-smoke.mjs` covers restarts, lost connections, the crash loop, the silent backend, a protocol 1
   backend, UI responsiveness while a million stored rows are read, and a live subscription to the real backend's
   `debug.synthetic` source through the Electron results worker, held by an unacknowledged tick. `scripts/live-smoke.mjs`
   runs `LiveService` views in the app on the fake backend through `window.__variaLive`: ticks acknowledged in turn, a
   hidden window pausing the view within 3 s and its frames stopping, a resume with a gap, a tab switch, the owner tab
-  closing, and a killed backend reported lost and back after Reconnect. `scripts/results-smoke.mjs` drives the grid on
+  closing, and a killed backend reported lost and back after Reconnect. `scripts/chart-smoke.mjs` mounts charts of such
+  a view and reads their canvas pixels: the series in the theme's chart color, redrawn as ticks arrive and not while the
+  window is hidden, the accessible name (held while focused), the keyboard and pointer crosshair (a pointer held still near either edge
+  keeps its tooltip as the window moves; a narrow two-series chart keeps its tooltip inside the plot), the table (its caption,
+  header, focus ring and row cap), a legend of two series and none for one, a tile's sparkline (which takes no focus), a switch to Light, and
+  forced colors through a dark-to-light contrast theme change, the pixels contrasting with the box behind them.
+  `scripts/live-grid-smoke.mjs` mounts `LiveGridPane` (`window.__variaLive.mountGrid`) over the real backend's synthetic grid and log: tones and the hidden tone
+  column, the selected item kept across revisions, muted once it leaves and then moved to a neighbour (with its key
+  reported), Copy without the tone, a Save whose dialog stays open across samples, the sort hook, follow tail and "n new
+  rows", a log mounted again over its kept state opening where it was, a stopped view's overlay and Copy, and a killed
+  backend's overlay. `scripts/results-smoke.mjs` drives the grid on
   the fake backend's sets and then, with `VARIA_TEST_SQL_SERVER` set, against that server: a million rows shown while
   the script runs, Cancel keeping them, Copy of 100,000 rows and Save Results As of a million compared with the rows
   the query produces, a FOR XML PATH value, and an error reported between the messages around it.
@@ -1455,7 +1816,7 @@ only against a 2025 server; CI runs 2022 and reports that block as skipped.
 ## Benchmarks
 
 ```sh
-npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models
+npm run bench                                   # node harness: codecs, main ↔ Release backend ↔ results worker, grid models, chart draw
 npm run bench:e2e                               # Electron, real backend with test hooks (add -- --live for SQL Server)
 npm run bench:grid                              # Electron, the results grid on the fake backend (add -- --live for SQL Server)
 node scripts/check-bench.mjs [--enforce]        # compare with tests/bench/floors.json; markdown to $GITHUB_STEP_SUMMARY
@@ -1476,9 +1837,21 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
   backend's `debug.synthetic` source every 10 ms and has the bench's thread (the page) acknowledge each event 20 ms after
   it arrived, so the next sample is overdue when its credit reaches the backend: the time from an acknowledgement to the
   next event is the whole loop (page → worker → main → backend → main → worker → page), not the source's schedule.
+- **The live snapshot churn** runs main's live path (`ResultsPortHost` with the test sources, the supervisor, the Release
+  backend's table writer) with a worker stand-in that acknowledges each frame at once: `debug.synthetic.wide` stores 5,000
+  rows of 23 typed columns every 10 ms if it can, each revision owned, retired, forgotten and released one at a time, for 5 s.
+  It reports revisions a second and the backend's gen2 collections per revision, times 60: what a 1 s snapshot of that
+  size runs a minute. The collections follow the revisions, not the clock (0.32 a revision at 10 ms and at 1 s alike), and
+  none is induced or set off by the large object heap: a GC event listener counted every collection as an allocation
+  budget one (reason AllocSmall), about 60 % of the gen2 ones blocking, and only the reused key dictionary allocating
+  large objects. Each revision's source rows and pages live across a collection or two and are promoted (about 6 MB a
+  revision out of gen0), so gen2 fills with revisions already released. The forced collection never runs for live tables.
+  On a 24-CPU Windows machine: 52 – 54 revisions/s, 18 – 20 collections a minute (about 1,000 a minute at 10 ms).
 - **The grid models** (`tests/bench/grid.bench.ts`) time what the results grid computes for each frame of a
   1600 × 1000 view, in one thread: selection blocks against the cells in view, scroll mapping past the scroll cap, tile
-  planning, and the shared window cache (full, so every insert evicts).
+  planning, and the shared window cache (full, so every insert evicts). **The chart draw** (`tests/bench/chart.bench.ts`)
+  times `ChartView`'s whole draw of a full ring (7,200 samples, two hours at 1 s) of six series over a 1,600 px chart
+  with axes, into a context that only counts calls: what a live chart costs a frame at most.
 - **The e2e run** reads every row through `window.__variaResults` in the built app (four windows in flight), watching
   the UI thread for long tasks and animation-frame gaps, and times 500 live ticks of the real backend's `debug.synthetic`
   source through `ResultClient.live` as the node pipeline does; `--live` stores a million W1-like rows from SQL Server with
@@ -1500,6 +1873,8 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | `decodePage` and the text of every cell, W1 page | ≥ 300 MB/s | ≥ 75 MB/s | 370 – 385 MB/s | 395 MB/s |
 | main ↔ backend `system.health`, p50 / p99 | ≤ 0.3 / 2 ms | p50 ≤ 2 ms | 0.12 – 0.14 / 0.4 – 0.5 ms | 0.09 / 0.8 ms |
 | 256 concurrent `system.health` | ≤ 150 ms | ≤ 1 s | 4 – 7 ms | 7 ms |
+| Live snapshot revisions, 5,000 × 23, stored, sent, acknowledged and released | ≥ 50 swaps/s | ≥ 10 swaps/s | – | – |
+| Backend gen2 collections a minute of a 1 s snapshot of them (per revision × 60) | ≤ 60 | ≤ 120 | – | – |
 | W1, 500,000 rows, store → main → port → worker | ≥ 1,000,000 rows/s, ≥ 200 MB/s | ≥ 250,000 rows/s, ≥ 50 MB/s | 710,000 – 935,000 rows/s, 150 – 203 MB/s | 514,000 – 612,000 rows/s, 112 – 133 MB/s |
 | B1 through the same path | ≥ 400 MB/s | ≥ 100 MB/s | 250 – 410 MB/s | 249 MB/s |
 | Main event-loop delay during W1, p99 | ≤ 20 ms | ≤ 100 ms | 12 – 14 ms | 17 ms |
@@ -1510,6 +1885,7 @@ floors on Linux (with live SQL Server); Windows and macOS report only.
 | Grid frame: Mode B scroll mapping, 100M rows | ≥ 5,000,000 ops/s | ≥ 1,000,000 ops/s | 6,500,000 – 7,600,000 ops/s | 6,800,000 – 7,300,000 ops/s |
 | Grid frame: visible range, tiles and prefetch ring, 300 columns | ≥ 500,000 ops/s | ≥ 100,000 ops/s | 700,000 – 850,000 ops/s | 800,000 – 870,000 ops/s |
 | Grid frame: window cache, 3 lookups and 1 insert at 256 windows | ≥ 100,000 ops/s | ≥ 25,000 ops/s | 157,000 – 174,000 ops/s | 178,000 ops/s |
+| Chart draw: 7,200 samples × 6 series bucketed and stroked at 1,600 px | ≥ 1,000 ops/s | ≥ 100 ops/s | 770 – 780 ops/s (Windows, 24 CPUs) | not measured |
 | Renderer invoke → backend → renderer, p50 / p99 | ≤ 1 / 5 ms | p50 ≤ 5 ms | 0.4 / 1.2 – 1.6 ms | 0.4 / 2 ms |
 | Live tick round trip in the app, acknowledgement → next tick at the page, p50 / p99 | ≤ 2 / 10 ms | p50 ≤ 10 ms | 0.7 / 2.8 – 4 ms (Windows, 24 CPUs) | not measured |
 | W1, 500,000 rows into the worker and UI windows | ≥ 500,000 rows/s, ≥ 100 MB/s | ≥ 100,000 rows/s, ≥ 20 MB/s | 240,000 – 303,000 rows/s, 52 – 66 MB/s | 200,000 rows/s, 44 MB/s |

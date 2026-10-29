@@ -118,3 +118,33 @@ export function parseLayoutFile(value: unknown): WorkspaceLayout {
   if (!file.success) throw new Error('Invalid or unsupported Varia layout file.')
   return parseWorkspaceLayout(file.data.layout)
 }
+
+/** Whether a dock group hides its header (its tabs): a docked group with one panel does, unless Window › Panel Tabs is on. */
+export function hidesHeader(group: { readonly location: string; readonly panels: number }, panelTabs: boolean): boolean {
+  return !panelTabs && group.location === 'grid' && group.panels === 1
+}
+/**
+ * The panel a ⋯ menu's Dock Left/Right/Top/Bottom docks `id` beside: the editor (the explorer, for the editor), else any
+ * other panel, as long as it is docked in the grid; beside a floating panel the move would split the floating window
+ * instead. Undefined when no other panel is docked: `id` then goes to the grid's own edge.
+ */
+export function dockReference<T extends { readonly id: string; readonly location: string }>(id: PaneId, panels: readonly T[]): T | undefined {
+  const docked = panels.filter(panel => panel.id !== id && panel.location === 'grid')
+  const preferred = id === 'editor' ? 'explorer' : 'editor'
+  return docked.find(panel => panel.id === preferred) ?? docked[0]
+}
+/**
+ * The layout without hidden-header state. Which headers hide follows `hidesHeader`, not the layout, so a saved or exported
+ * layout leaves it out and shows the same panels however Panel Tabs is set when it is loaded.
+ */
+export function withoutHeaderState(layout: WorkspaceLayout): WorkspaceLayout {
+  const copy = JSON.parse(JSON.stringify(layout)) as { grid: { root: unknown }; floatingGroups?: { data?: Record<string, unknown>; grid?: { root: unknown } }[] }
+  const node = (value: unknown): void => {
+    const item = value as { type?: string; data?: unknown }
+    if (item?.type === 'leaf' && item.data && typeof item.data === 'object') delete (item.data as Record<string, unknown>).hideHeader
+    else if (item?.type === 'branch' && Array.isArray(item.data)) item.data.forEach(node)
+  }
+  node(copy.grid.root)
+  for (const floating of copy.floatingGroups ?? []) { if (floating.data) delete floating.data.hideHeader; if (floating.grid) node(floating.grid.root) }
+  return copy as unknown as WorkspaceLayout
+}

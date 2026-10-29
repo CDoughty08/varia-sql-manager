@@ -1,8 +1,9 @@
 # Integration Services (SSIS Catalog)
 
-Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projects, packages and environments, kept current
-while SSISDB is open by a live catalog probe (The live tree, below), and `ssis.describe` reads each of them for the
-properties documents that follow. Nothing in Varia changes the catalog yet.
+Object Explorer shows the SSIS Catalog (`SSISDB`) read-only: its folders, projects, packages and environments. Properties
+on any of them (and Enter or a double-click on a package or environment, as in SSMS) opens its properties as a read-only
+document tab, which `ssis.describe` reads. The only change Varia makes so far is Stop Operation (`ssis.execute`), which the
+backend runs and the Operations view (S3) will offer.
 This page records what is known about the catalog that the SSIS work builds on, how it was found out, and the test
 fixtures that stand in for a catalog where there is none; its last part, generated from `src/shared/ssis/catalog.ts`,
 is the reference for the tree, the reads, the catalog's code tables and the limits. The design is D-ssis (wave 4).
@@ -64,9 +65,20 @@ What the checks prove:
   the profile answers `BLOCKED` while another session holds a change to `ssis_admin`'s members, then reads the login's
   roles and, for ssis_admin, `catalog_properties`. Every connection those reads leave in the catalog's database is the
   SSIS read pool's.
-- **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry, and the SSIS tree's
-  catalog probe samples it read only (16 status values, each count the view's own as the login sees it, two samples alike,
-  its cost printed; a login that is not an admin is not checked there, since mapping one would change the catalog). With
+- **Stop Operation against the fake** (`SsisActionLiveChecks`, `VARIA_TEST_SQL_SCRATCH=1`): a running execution stops
+  (Stopping, with the catalog's own stop operation Succeeded); a second stop and an ended execution answer `ALREADY_FINAL`
+  from the preflight, so the catalog records no failed stop; a missing operation answers `NOT_FOUND`, a stop operation
+  `NOT_SUPPORTED`; a created execution nobody started answers `NOT_STARTED` from the preflight, twice, with no failed stop
+  recorded; one that ends between the preflight and the stop answers `ALREADY_FINAL`, and, when the second look loses its
+  connection, the catalog's refusal with the step failed; the write's own session is named " - Integration Services Actions",
+  in the catalog's database, at READ COMMITTED with no lock timeout, and Stop ends it waiting on a lock with its step
+  cancelled, the execution unchanged, and the catalog's own Stop operation left Running, which the reply says; the
+  preflight behind a lock answers `TIMEOUT` within its budget, `BLOCKED` after 10 s, and `CONNECTION_LOST` saying nothing
+  changed when its session is ended; the scratch SQL Server login is refused before connecting, gets
+  `PERMISSION_DENIED` without EXECUTE, and the catalog's own 27123 answers `WINDOWS_AUTH_REQUIRED`; a missing catalog
+  answers `CATALOG_MISSING`; and no actions session is left behind. On CI's SQL Server authentication the internal
+  `SsisOptions.IgnoreSqlAuthentication` lets them run.
+- **Drift check** (`VARIA_TEST_SSIS=1`): the real `SSISDB`'s shape equals its band's manifest entry. With
   `VARIA_TEST_SQL_SCRATCH=1` too, so does the Integration Services feature's own catalog backup, restored as a marked
   `VariaScratch_…_ssisref` database. Neither creates, changes or drops `SSISDB`; the restored copy is never named
   `SSISDB` and gets no master key, CLR, logins or jobs. Run it once per server version that has Integration Services.
@@ -225,7 +237,65 @@ change to a role's members; a sysadmin's are not evaluated.
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | No |
 | `AUTH_ENTRA` | No |
+| `WINDOWS_AUTH_REQUIRED` | No |
+| `ALREADY_FINAL` | No |
+| `NOT_STARTED` | No |
+| `NOT_RUNNING` | Yes |
+| `CANCELLED` | Yes |
 | `SQL_ERROR` | Yes |
+
+### Verbs and documents
+
+Each verb is one command (the palette shows it under Integration Services), on Object Explorer's menu for the kinds that offer it,
+and enabled by its context key, which the selected node sets. A verb marked as the default action runs on Enter and a double-click,
+as in SSMS. None of them changes the catalog yet. docs/commands.md lists the commands with their keys and menus.
+
+| Verb | Command | Menu item | Offered on | Opens | Default action | Context key |
+| --- | --- | --- | --- | --- | --- | --- |
+| `folderProperties` | `ssis.folderProperties` | Properties | Folder | Folder Properties | No | `ssisVerbFolderProperties` |
+| `projectProperties` | `ssis.projectProperties` | Properties | Project | Project Properties | No | `ssisVerbProjectProperties` |
+| `packageProperties` | `ssis.packageProperties` | Properties | Package | Package Properties | Yes | `ssisVerbPackageProperties` |
+| `environmentProperties` | `ssis.environmentProperties` | Properties | Environment | Environment Properties | Yes | `ssisVerbEnvironmentProperties` |
+
+A properties document is a read-only document tab named as SSMS names the dialog ("Folder Properties - Finance"), with one
+section per page. Opening an object that has a tab shows that tab and reads it again, and Refresh (F5 in the document,
+`ssis.refreshProperties`) reads it again while the last model stays on screen. A sensitive value always shows as `********`.
+
+| Document | Title | Reads (view) | Sections |
+| --- | --- | --- | --- |
+| `ssisFolder` | Folder Properties | `folder` | General |
+| `ssisProject` | Project Properties | `project` | General, Packages, Parameters, References |
+| `ssisPackage` | Package Properties | `package` | General, Parameters |
+| `ssisEnvironment` | Environment Properties | `environment` | General, Variables |
+
+Validation statuses shown in words: `N` Not validated; any other code shows as the catalog stores it.
+Commands: `ssis.folderProperties`, `ssis.projectProperties`, `ssis.packageProperties`, `ssis.environmentProperties`, `ssis.refreshProperties`.
+
+### Writes (`ssis.execute`)
+
+A write runs on a connection of its own, opened for the request and closed after it: unpooled, never retried, in the catalog's
+database, under the program name plus " - Integration Services Actions", so DBAs can tell it from the read pool. It takes the SSIS
+write gates (1 per connection, 2 in all), then runs a preflight in the same connection at READ COMMITTED with
+`LOCK_TIMEOUT 10000` (within 25 s), then its steps in order, each one statement from `SsisSql`'s constant templates
+with values as parameters, waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), with no outer transaction. Stop (`varia:ssis-cancel`)
+ends it at any time: the reply waits up to 10 s for SQL Server to end the statement and lists the steps that completed (done,
+failed, cancelled, skipped). On a box server SSISDB changes nothing for a SQL Server login (error 27123), so a verb that needs
+Windows authentication answers `WINDOWS_AUTH_REQUIRED` before it connects. Nothing is logged: not names, values, SQL or messages.
+
+| Verb | Title | Steps | Calls | Takes a revision | On a box server |
+| --- | --- | --- | --- | --- | --- |
+| `stopOperation` | Stop Operation | Stop the operation | `catalog.stop_operation` | No | Windows authentication only |
+
+Stop Operation's preflight reads the operation from `catalog.operations`: one this login cannot see, or that no longer exists,
+answers `NOT_FOUND`; one that is not an execution or validation (types `200`, `300`, `301`), `NOT_SUPPORTED`; one that has
+ended or is already stopping, `ALREADY_FINAL`; an execution that was created and never started (it never runs), `NOT_STARTED`. Otherwise
+it calls `catalog.stop_operation`, which records a stop operation (type 202) of its own and makes the operation Stopping (8) until
+the package ends (Canceled, 3). When the catalog refuses because the operation is not running (27124) or already stopping (27126),
+the operation is read again: `ALREADY_FINAL` if it ended or is stopping, `NOT_RUNNING` (retry once it runs) if it is pending, and
+the catalog's own refusal if that second look fails. A lost connection before the stop is sent says nothing changed; after, that
+its outcome is unknown. The catalog records its stop operation as Running before its own transaction, and a cancelled statement
+never reaches its error path, so Stop during `catalog.stop_operation` (waiting on a lock) rolls the stop back but may leave that
+Stop operation Running until SQL Server restarts and the catalog's startup procedure ends it; the `CANCELLED` reply says so.
 
 ### Code tables
 
@@ -358,7 +428,7 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `revision` | 64 | Characters in a revision (a SHA-256 in hex) |
 | `messageChars` | 2,048 | Characters in an error message |
 | `describeMs` | 40,000 | A describe's budget, in ms, answered as `TIMEOUT` |
-| `gateWaitMs` | 30,000 | How long a request waits for an SSIS read gate before `BUSY`, in ms |
+| `gateWaitMs` | 30,000 | How long a request waits for an SSIS read or write gate before `BUSY`, in ms |
 | `readPerConnection` | 2 | SSIS reads at once per connection |
 | `readTotal` | 4 | SSIS reads at once in all |
 | `registered` | 256 | SSIS requests registered at once |
@@ -367,3 +437,9 @@ Environment reference types: `R` Relative, `A` Absolute. Parameter value types: 
 | `tombstoneMs` | 60,000 | How long main remembers them, in ms |
 | `readLockTimeoutMs` | 5,000 | LOCK_TIMEOUT of the tree's and describe's reads, in ms |
 | `profileLockTimeoutMs` | 1,000 | LOCK_TIMEOUT of the profile read (its role checks), in ms |
+| `writePerConnection` | 1 | SSIS writes (`ssis.execute`) at once per connection |
+| `writeTotal` | 2 | SSIS writes at once in all |
+| `registeredWrites` | 64 | SSIS writes registered at once |
+| `preflightLockTimeoutMs` | 10,000 | LOCK_TIMEOUT of a write's preflight, in ms (`BLOCKED`) |
+| `preflightMs` | 25,000 | A write's preflight budget, in ms, answered as `TIMEOUT` |
+| `stopGraceMs` | 10,000 | How long a stopped write's reply waits for SQL Server to end its statement, in ms, then answers `CANCELLED` (outcome unknown) |

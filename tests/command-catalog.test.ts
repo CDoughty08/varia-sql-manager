@@ -1,26 +1,51 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { codicons, commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
+import { commandCatalog, commandDescriptor, commandIds, isCommandId, paletteLabel, type CommandId } from '../src/shared/commands/catalog'
 import { findConflicts, focusSamples } from '../src/shared/commands/conflicts'
-import { contextKeyNames, contextKeys, contextRecord, isContextKey, keysOfScope, targetKeyMenu, whenProblems } from '../src/shared/commands/context-keys'
+import { contextKeyNames, contextKeys, contextKeyValues, contextRecord, isContextKey, keysOfScope, targetKeyMenu, whenProblems, type ContextKey, type ContextKeys } from '../src/shared/commands/context-keys'
 import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
 import { assignMnemonics, buildMenuModel, contextMenuIds, maxSubmenuDepth, menubarIds, menuIds, menuRoots, menuTitle, mnemonicIndex, submenuIds, submenus, type MenuId } from '../src/shared/commands/menus'
-import { parseWhen, referencedKeys } from '../src/shared/commands/when'
+import { evaluateWhen, parseWhen, referencedKeys } from '../src/shared/commands/when'
+import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
+import { ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs } from '../src/shared/ssis/catalog'
 import { themeMenuModel } from '../src/shared/theme/menu'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
+import { isIconId } from '../src/shared/icons'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
 import { workbenchFixture } from './fixtures/workbench'
-import { folderIds, nodeKinds } from '../src/shared/explorer/catalog'
+import { folderIds, kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { noExplorerContext } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptAsTitleKeys, scriptCommandIds, scriptVerbContextKey, scriptVerbs } from '../src/shared/scripting/catalog'
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
 
+/** Object Explorer's selection keys for each kind of node its menu can open on, as ExplorerService publishes them. */
+const explorerSelections: Partial<ContextKeys>[] = [
+  ...nodeKinds.flatMap(kind => [undefined, ...kindSpecs[kind].subtypes ?? []].map(subtype => ({
+    ...noExplorerContext, explorerNode: kind, explorerHasSelection: true, explorerSelectionKind: kind, ...actionContextValues(actionMenuState({ kind, subtype })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
+  }))),
+  { ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder' },
+  { ...noExplorerContext, explorerNode: 'background' }
+]
+/** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
+function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
+  const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
+  for (const selection of menu === 'explorer.context' ? explorerSelections : [{}]) {
+    const free = [...new Set(asts.flatMap(referencedKeys))].filter(key => !Object.hasOwn(selection, key)) as ContextKey[]
+    if (free.length > 12) throw new Error(`${menu}: too many keys to enumerate (${free.join(', ')})`)
+    const search = (index: number, values: Record<string, boolean | string>): boolean => index === free.length
+      ? asts.every(ast => evaluateWhen(ast, contextRecord('win32', { ...selection, ...values } as Partial<ContextKeys>)))
+      : contextKeyValues(free[index]).some(value => search(index + 1, { ...values, [free[index]]: value }))
+    if (search(0, {})) return true
+  }
+  return false
+}
+
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 98 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel.
-    expect(commandIds).toHaveLength(143)
+    // 109 commands, Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, and the Activity Monitor's nine.
+    expect(commandIds).toHaveLength(174)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {
@@ -54,13 +79,9 @@ describe('command catalogue', () => {
     expect(isCommandId('file.new')).toBe(true)
     for (const value of ['__proto__', 'toString', 'constructor', 'file.New', 'theme.mode.dark', '', 1, null, undefined, {}]) expect(isCommandId(value), String(value)).toBe(false)
   })
-  it('uses codicons that exist in the bundled font', async () => {
-    // Untyped Monaco internals: loading the library registers every codicon with codiconsUtil.
-    const library = 'monaco-editor/base/common/codiconsLibrary.js', util = 'monaco-editor/base/common/codiconsUtil.js'
-    await import(library)
-    const { getCodiconFontCharacters } = await import(util) as { getCodiconFontCharacters(): Record<string, number> }
-    const characters = getCodiconFontCharacters()
-    for (const icon of codicons) expect(Object.hasOwn(characters, icon), icon).toBe(true)
+  it('names icons of the registry', () => {
+    // tests/icons.test.ts checks the registry against the bundled codicon font.
+    expect(commandIds.filter(id => commandDescriptor(id).icon !== undefined && !isIconId(commandDescriptor(id).icon))).toEqual([])
   })
   it('lets exactly window close, the text-editing commands, and the context-menu key run behind a modal', () => {
     // Text fields in dialogs keep Undo, Redo, the clipboard, and their context menu.
@@ -135,9 +156,9 @@ describe('command catalogue', () => {
     for (const menu of menuIds) {
       const items = [
         ...commandIds.flatMap(id => (commandDescriptor(id).menus ?? []).filter(placement => placement.menu === menu && (!placement.platforms || placement.platforms.includes(platform)))
-          .map(placement => ({ title: menuTitle(id, platform, placement.title), mnemonic: placement.mnemonic }))),
-        ...submenuIds.flatMap(id => submenus[id].placements.filter(placement => placement.menu === menu).map(placement => ({ title: submenus[id].title, mnemonic: placement.mnemonic }))),
-        ...(menu === 'theme' ? themeItems.flatMap(item => item.kind === 'separator' ? [] : [{ title: item.label, mnemonic: item.mnemonic }]) : [])
+          .map(placement => ({ title: menuTitle(id, platform, placement.title), mnemonic: placement.mnemonic, when: placement.when }))),
+        ...submenuIds.flatMap(id => submenus[id].placements.filter(placement => placement.menu === menu).map(placement => ({ title: submenus[id].title, mnemonic: placement.mnemonic, when: placement.when }))),
+        ...(menu === 'theme' ? themeItems.flatMap(item => item.kind === 'separator' ? [] : [{ title: item.label, mnemonic: item.mnemonic, when: undefined }]) : [])
       ]
       for (const { title, mnemonic } of items) {
         if (mnemonic === undefined) continue
@@ -147,7 +168,12 @@ describe('command catalogue', () => {
       const assigned = assignMnemonics(items)
       expect(assigned.every(index => index >= 0), `${menu}: ${assigned.join(' ')}`).toBe(true)
       const letters = assigned.map((index, position) => items[position].title[index].toLowerCase())
-      expect(new Set(letters).size, `${menu}: ${letters.join(' ')}`).toBe(letters.length)
+      // A menu assigns access keys over the items it shows, so only items that never show together may share one (an SSIS
+      // folder's Properties and a database's).
+      for (let first = 0; first < items.length; first++) for (let second = first + 1; second < items.length; second++) {
+        if (letters[first] !== letters[second]) continue
+        expect(showTogether(menu, items[first].when, items[second].when), `${menu}: ${items[first].title} and ${items[second].title} share "${letters[first]}"`).toBe(false)
+      }
     }
   })
   it('places commands in named groups, once per menu, in a fixed order', () => {
@@ -186,7 +212,7 @@ describe('context keys', () => {
     expect(record).toMatchObject({ isMac: true, isWindows: false, isLinux: false, queryRunning: true, activePanel: 'explorer', editorFocus: false })
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
-    expect(keysOfScope('target')).toEqual(['explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'outputView', 'paneFloating'])
+    expect(keysOfScope('target')).toEqual(['explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'outputView', 'pane', 'paneFloating'])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)
   })
@@ -201,12 +227,14 @@ describe('context keys', () => {
   it('keep Object Explorer selection keys in step with the catalogue and out of keybinding conditions', () => {
     expect(contextKeys.explorerSelectionKind.values).toEqual(['', 'folder', ...nodeKinds])
     expect(contextKeys.explorerSelectionFolder.values).toEqual(['', ...folderIds])
-    const explorerKeys = contextKeyNames.filter(key => key.startsWith('explorer') && contextKeys[key].scope === 'state')
+    // The SSIS verb keys (ssisVerb<Verb>) describe the selection too.
+    const explorerKeys = contextKeyNames.filter(key => (key.startsWith('explorer') || key.startsWith('ssisVerb')) && contextKeys[key].scope === 'state')
     expect(explorerKeys.sort()).toEqual(Object.keys(noExplorerContext).sort())
     // Script As's keys are among them; scriptingRunning, though not Object Explorer's, stays out of keys too.
     expect(explorerKeys).toEqual(expect.arrayContaining(['explorerScriptTitle', 'explorerScriptCreate', 'explorerScriptExecute', 'explorerSelectionModifiable']))
     expect(contextKeys.explorerScriptTitle.values).toEqual(['', ...scriptAsTitleKeys])
     for (const verb of scriptVerbs) expect(contextKeys[scriptVerbContextKey(verb)]).toMatchObject({ type: 'enum', scope: 'state', values: ['', 'disabled', 'enabled'] })
+    for (const verb of ssisVerbs) expect(contextKeys[ssisVerbContextKey(verb)]).toMatchObject({ type: 'enum', scope: 'state', values: ['', 'disabled', 'enabled'] })
     explorerKeys.push('scriptingRunning')
     // findConflicts enumerates every value of the keys two clauses share; these enums would make that explode.
     for (const id of commandIds) for (const spec of commandDescriptor(id).keybindings ?? []) {
