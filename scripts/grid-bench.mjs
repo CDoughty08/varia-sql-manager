@@ -79,7 +79,8 @@ async function launch(env) {
   })
   // Closing a typed query asks first; answer Don't Save.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await backendReady(page).waitFor({ timeout: 60000 })
+  // The fake backend (VARIA_TEST_BACKEND) says its runtime is 'fake'; the Release backend names its .NET.
+  await backendReady(page, env.VARIA_TEST_BACKEND ? 'fake' : undefined).waitFor({ timeout: 60000 })
   await page.evaluate(gridPart => {
     /** What grid 0 shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {
