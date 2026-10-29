@@ -143,9 +143,11 @@ properties are omitted, as in JSON; `undefined` in an array is an error. The C# 
 
 The backend transcodes REQUEST params to a `JsonElement` and results from System.Text.Json output (`JsonBridge`), so the
 STJ records with `UnmappedMemberHandling.Disallow` keep rejecting unknown members. JSON integers beyond ±(2⁵³ − 1)
-become float64, which TypeScript accepts. Requests that carry a password (`connections.connect`, `.databases`,
-`.preview`) are encoded into buffers that are zeroed after use on both sides; the JavaScript and .NET strings they came
-from cannot be zeroed.
+become float64, which TypeScript accepts. Requests that carry a password or a sensitive value (`connections.connect`,
+`.databases`, `.preview`, and `ssis.execute`) are encoded into buffers that are zeroed after use on both sides; the
+JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the methods whose `methodPolicies` entry is
+`sensitive`, the backend those in `SqlService.SensitiveMethods` (`IRequestDispatcher.Sensitive`), and
+`tests/validation.test.ts` keeps the two lists equal.
 
 ## Handshake
 
@@ -200,8 +202,8 @@ own task, and its statements, like those of a unary method on lane `live` (`acti
 `LiveService.RunGatedAsync`), run under the live gates (2 per connection, 8 in all, each waited for at most the
 statement's budget, and for Details at most its 10 s budget, then `BUSY`; only for a connected id, else `NOT_CONNECTED`, so ids a request names
 never pile up).
-`ssis` runs SSIS Catalog reads at once under the SSIS service's own gates (2 per connection, 4 in all, waited for at
-most 30 s, then `BUSY`), so a read waiting on SSISDB never holds a metadata slot either.
+`ssis` runs SSIS Catalog reads and writes at once under the SSIS services' own gates (reads 2 per connection and 4 in all,
+writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting on SSISDB never holds a metadata slot either.
 
 | Method | Renderer path | Kind | Lane | Header deadline |
 | --- | --- | --- | --- | --- |
@@ -230,6 +232,7 @@ most 30 s, then `BUSY`), so a read waiting on SSISDB never holds a metadata slot
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
+| `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent |
 | `activity.details` | invoke; cancelled with `cancelActivity` (closing Details) | unary | live (the live gates) | 15 s; the backend answers its own 10 s budget as an `error: TIMEOUT` value |
 | `activity.kill` | invoke | unary | actions (its own gates) | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value with the outcomes of the sessions it tried. Never re-sent |
 | `entra.cache.clear` | main only (`varia:entra-cache-clear`, after its confirmation) | unary | control | 10 s. Takes `{}` (unknown members refused); answers `{ cleared: true }` |
@@ -350,6 +353,33 @@ and on Linux), `CONNECTION_LOST`, `AUTH_KERBEROS`, `AUTH_UNSUPPORTED`, `AUTH_ENT
 works as the object actions' does (`SsisRequests`, `varia:ssis-cancel`, 1–64 ids, 64 tombstones for 60 s; 256 running): main
 routes every `ssis.*` method there, the backend sends an attention, and the request answers `CANCELLED`.
 
+**SSIS writes.** `ssis.execute { connectionId, requestId, action: { verb: 'stopOperation', operationId }, revision? }`
+(`operationId` 1 to 2^53 − 1; `revision`, 64 lowercase hex characters, only for a verb that takes one, which Stop Operation
+does not; the verbs, their steps and the procedures they may call are `ssisActions` in `src/shared/ssis/catalog.ts`) answers
+`{ steps: { status: done | failed | skipped | cancelled, message? }[], elapsedMs, error? }`. Its policy is sensitive, so the
+frame is zeroed once written, because later verbs carry sensitive values. Before it connects, the backend refuses a server
+older than 2016 or on Linux (`NOT_SUPPORTED`) and, for a verb SSISDB refuses to SQL Server logins (error 27123, every verb
+that changes the catalog), a connection that signed in with SQL Server authentication to a box server
+(`WINDOWS_AUTH_REQUIRED`; Azure SQL Database and Managed Instance excepted). It then takes the SSIS write gates (1 per
+connection, 2 in all; 64 registered) and opens a connection of its own: unpooled, never retried, no command timeout,
+Initial Catalog the catalog's database, under the program name plus " - Integration Services Actions". There it runs the
+verb's preflight at READ COMMITTED with `LOCK_TIMEOUT 10000` (`BLOCKED`) within 25 s (`TIMEOUT`), then its steps in
+order, each one constant template from `SsisSql` with values as parameters, waiting for locks as SSMS does
+(`LOCK_TIMEOUT -1`), with no outer transaction. Stop Operation's preflight reads `catalog.operations`: no row answers
+`NOT_FOUND`, a type other than an execution or validation (200, 300, 301) `NOT_SUPPORTED`, an ended or stopping one
+`ALREADY_FINAL` (information, not a failure), and a created execution nobody started (it never runs) `NOT_STARTED` (not
+retryable); otherwise `catalog.stop_operation` runs, and when it refuses with 27124 or 27126 the operation is read again:
+`ALREADY_FINAL` if it has ended or is stopping meanwhile, `NOT_RUNNING` (retryable) if it is pending, and the catalog's own
+refusal, with the step failed, if that second look fails. The catalog's 27123 is `WINDOWS_AUTH_REQUIRED`, and a permission
+error `PERMISSION_DENIED` naming the action. A connection lost before the step is sent answers `CONNECTION_LOST` saying
+nothing changed; lost during the step, that the outcome is unknown. Stop (CANCEL reason 1 through `varia:ssis-cancel`) ends a write at any time: the backend's protocol host leaves the
+answer to the handler (`IRequestDispatcher.AnswersStop`, as for `actions.execute`), which waits up to 10 s for SQL Server to
+end the statement and answers `CANCELLED` with the step `cancelled`, or, before any step, "stopped before it changed
+anything"; past the grace the outcome is unknown. `catalog.stop_operation` commits its own Stop operation (type 202,
+Running) before its transaction, and a cancelled statement never reaches its error path, so Stop during Stop Operation's
+step rolls the stop back but may leave that row Running until SQL Server restarts; the `CANCELLED` message says so (SSMS
+never cancels the call, so only Varia's Stop leaves it). A disconnect cancels a connection's writes. Nothing is logged.
+
 **Activity Monitor session actions** (docs/activity-monitor.md, Session actions) name a session by its id and its login
 time, `YYYY-MM-DDTHH:MM:SS[.fffffff]` (server local time, as `sys.dm_exec_sessions` has it, ≤ 40 characters; main checks the form, and the backend also
 refuses a time outside `datetime`'s range, 1753-01-01 to 9999-12-31T23:59:59.997, as `INVALID_PARAMS`), since SQL Server
@@ -382,23 +412,27 @@ Neither logs a session id, login, host, SQL text or message.
 
 **Database Properties** uses the same three methods. `actions.describe { connectionId, requestId, dialog:
 'databaseProperties', target: { kind: 'database', name } }` (any database, SQL Server's own included) answers
-`{ databaseProperties: { general, options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
+`{ databaseProperties: { general (with `id`, the database_id, and `created`), options, scoped, compatibilityLevels, collations (≤ 8,192), logins (≤ 1,024), files
 (≤ 1,024), filesTruncated, filegroups (≤ 256), filegroupsTruncated, server: { level, sysadmin, filestreamLevel,
 pathSeparator, edition, containedAuthentication }, sessions?, readOnlyReason? }, elapsedMs }`, where `options` and
 `scoped` map the catalogue's option keys (docs/object-actions.md) to tokens. `actions.script` and `actions.execute` take
-`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? } }`:
+`{ action: 'properties', connectionId, requestId, target, closeConnections, changes: { owner?, options?, scoped? }, identity?: { id, created } }`:
 only changed values, at least one and at most 512 statements, each key a settable option with one of its tokens (an
 integer as plain decimal text in range, a collation name of letters, digits and underscores), and `closeConnections` (the
-Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. Script always
+Open Connections prompt's Yes, `WITH ROLLBACK IMMEDIATE`) only with an option SSMS closes connections for. `identity` is the database the document read (database_id ≥ 1 and create_date as the describe writes it,
+`yyyy-MM-ddTHH:mm:ss.fff`): the preflight answers `NOT_FOUND` for a database that has taken the name since (renamed,
+dropped or restored meanwhile), before anything runs, for Script too. Script always
 writes `WITH NO_WAIT` and answers `database: 'master'`; execute runs one step per statement, titled by the option's label.
 Before any statement, execute counts the database's sessions again, as SSMS does when OK is pressed: an option SSMS closes
 connections for, without `closeConnections`, while other sessions are in the database answers `IN_USE` with no steps, and
-the dialog asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
+the Database Properties document asks Open Connections. When execute has just closed the backend's own idle pooled connections in the database,
 whose sessions SQL Server can still list for a few milliseconds, a count above zero is taken again every 50 ms for up to a
 second first. Turning Database Read-Only on with a change SQL Server refuses after it on a read-only database (the owner,
 scoped configurations, Target Recovery Time, Delayed Durability, FILESTREAM Non-Transacted Access) answers `NOT_SUPPORTED` before
 anything runs, for Script too.
-A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
+The document's Script drawer previews with `actions.script` only while it is open, one request once typing has paused
+for 300 ms, and cancels a preview an edit overtook (`varia:actions-cancel`), so typing never queues requests on the
+metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
@@ -526,7 +560,12 @@ left. A script still running (`SESSION_BUSY`), a commit SQL Server refuses or th
 transaction. A session found lost before the commit was sent is closed and answers `SESSION_LOST` ("The SQL session was
 lost, so SQL Server rolled back its transaction. Nothing was committed."); one lost while the commit ran answers
 `SESSION_LOST` with "The SQL session was lost while committing, so it is not known whether its transaction was
-committed. Check the data before running the work again." `'rollback'` is a plain close: SQL Server rolls back what a
+committed. Check the data before running the work again." A commit the deadline or a cancel interrupts answers `TIMEOUT` or
+`CANCELLED` and leaves the session open, its outcome unknown: the session remembers it, and when a later commit or state
+read finds it lost it answers `SESSION_LOST` with "The SQL session was lost after a commit that did not finish (it was
+cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work
+again." A severity 20 error ends the session even while its connection still reads open (managed SNI closes it later):
+the state read, the commit and an execution all take it for lost. `'rollback'` is a plain close: SQL Server rolls back what a
 closed session left open, and the close does not wait for it (an explicit `ROLLBACK`, or an attention sent during one,
 waits for the whole rollback, which can outlast the 10 s deadline). An unknown session answers `{ closed: false }`.
 
@@ -583,7 +622,7 @@ when no port is open).
 | --- | --- |
 | `resultSet.opened` | When a kept result set's columns are known, before its first row; carries the descriptor |
 | `progress` | At most 10 times a second per query, latest value wins; up to 64 result sets with `rowsRead`, `rowsStored`, `rowsAvailable`, `bytesStored`. A sealed page is reported at once when no progress went out in the last 100 ms, and every set's first sealed page at once whatever the spacing, so the first rows of each set (one-row sets included) are readable without waiting for a tick |
-| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'error' }` ([Messages](#messages)) |
+| `messages` | Every 100 ms or 64 KiB, only entries stored under the message caps: `{ text, kind: 'info' \| 'print' \| 'server' \| 'error' }` ([Messages](#messages)) |
 | `resultSet.closed` | Once per kept result set, with its final descriptor |
 | `results.memory` (id 0) | Checked once a second and after each `results.close` (before its answer): when usage crosses 50, 75, 90 or 100 % of the budget, grows by 64 MiB, or falls below the last report (results were closed, or a lease ended). The status bar follows these events and each summary's `budget`, not the `usedBytes` of a close's answer, which could arrive after a newer event; a summary's `budget` counts as a report, so closing results that only a summary showed still sends the fall. Events and summary budgets take their `seq` from one counter of the backend process, under the same lock as the usage they carry, and main pairs it with the generation: a summary is serialized after its figure is taken, so a close in another tab can send its fall first, and the status bar ignores any report older than the one it shows. Like any droppable event it is refused while the control lane is full (main not reading); a refused report does not count as sent and takes no `seq`, so the next check sends it once the lane drains |
 
@@ -689,7 +728,7 @@ messages get "Column ‘{name}’ ({type}): some values could not be read and ar
 
 ## Messages
 
-The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'error' }`, in order, under
+The summary's `messages` and the `messages` events carry `MessageEntry { text, kind: 'info' | 'print' | 'server' | 'error' }`, in order, under
 the caps (1,000 entries, 1,000,000 characters); the summary is authoritative, since events may be dropped. Past the caps,
 "Messages were truncated by the display limit; …" marks where entries stopped, and up to 20 more error entries (each cut
 at 16,384 characters) are still kept, so the error that stopped a script, or its cancellation or timeout, is in Messages
@@ -697,12 +736,17 @@ after a flood of PRINT output or row counts. An event carries at most 1,000 entr
 stored entries, the late errors, and up to 8 notes). Should a summary with an `error` still hold no error entry, the
 renderer adds its `error` as one.
 
-- **Info:** PRINT and other severity 0 – 10 messages, row counts as SSMS writes them ("(1 row affected)", "({n} rows
+- **Print:** what the script printed: PRINT (message number 0) and RAISERROR with severity 0 – 10 (number 50000, or a
+  user message's number above it). They read like info entries; the renderer opens the Messages strip under the results
+  when one arrives, as it does for an error.
+- **Server:** SQL Server's other severity 0 – 10 messages: warnings such as 8153 ("Null value is eliminated by an
+  aggregate…"), SET STATISTICS IO and TIME output, and the messages of DBCC and sp_rename. They read like info entries and
+  show in the Messages strip without opening it. As in SSMS, "Changed database context to …" (5701) and "Changed language
+  setting to …" (5703) are left out, whether from USE, a session's login, or the toolbar's database.
+- **Info:** Varia's own lines: row counts as SSMS writes them ("(1 row affected)", "({n} rows
   affected)", no digit grouping), the notes above, "Batch {b} raised an error; execution continued with the next batch."
   after a batch that raised an error when another remains ([Query execution](#query-execution)), and "The SQL session
-  closed. …" when a session that had opened closed (not for one that failed to open). As in SSMS, "Changed database
-  context to …" (5701) and "Changed language setting to …" (5703) are left out, whether from USE, a session's login, or
-  the toolbar's database.
+  closed. …" when a session that had opened closed (not for one that failed to open).
 - **Error:** every severity 11+ error in SSMS's two-line form, `Msg {n}, Level {l}, State {s}, Line {k}` (the line within
   the whole script or selection) or `Msg …, Procedure {p}, Line {k}` (the procedure's own line), then a line feed and the
   message. Errors that arrive with an exception are added unless InfoMessage already delivered them (matched by number,
@@ -1315,8 +1359,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
-| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 characters; error messages ≤ 2,048 | zod and backend |
-| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered | backend |
+| SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; error messages ≤ 2,048 | zod and backend |
+| Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |
 | Credit | 64 KiB – 16 MiB per grant (worker 4 MiB); 16 MiB outstanding per stream, 64 MiB per port; one page of overdraft | main and backend |
 | Results port | 64 outstanding requests; 100 invalid messages close it; 10 opens a minute per page load | main |
 | Live subscriptions | 16 per results port, 32 per backend, 8 per SQL Server; 8 probes each, 4 snapshot and 4 append tables per probe, 8 tables a tick; one unacknowledged EVENT (64 KiB initial credit), at most 256 KiB (catalogue worst case 192 KiB); interval 1 s – 1 h; 64 series, 16 status values of 128 characters, 8 probe errors of 2,000; sort 4 columns, filter 400 characters on 8, track 64 keys of 512; resume 256; 64 kept results; snapshot revisions ≤ 10,000 rows, append segments 200,000 rows or 32 MiB (2 segments' worth kept, at most 8 results a table), ≤ 10,000 new append rows a tick; 64 MiB of tables per subscription, all live tables ≤ 25 % of the result budget; facets 7 columns × 100 values × 128 characters, ≤ 32 KiB of facet text a tick; live statements 2 per connection and 8 in the backend; statement budget 0.8 × interval within 500 ms – 10 s (5 s by default); back-off up to 60 s (or the asked interval); LOCK_TIMEOUT 1 s; connection back to the pool when idle 30 s | zod, main and backend |
@@ -1330,11 +1374,21 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
-`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
-**Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does for both. They are
-`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
-server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
-Main refuses (as a contained violation) details with any other member or out of these bounds.
+`details` comes with a failed `connections.connect` or `connections.databases` open, and with `BACKEND_ERROR`. The Connect
+dialog shows them in **Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does
+for both. They are `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256, reason?: 'certificate',
+exception?: str ≤ 512 }`: SqlClient's first error and the server that answered (the server typed when SqlClient names
+none), and `reason` 'certificate' when the TLS handshake failed because the server's certificate is not trusted, by its
+chain or its name (SqlClient's error number `SEC_E_UNTRUSTED_ROOT` or `SEC_E_WRONG_PRINCIPAL`, which the managed SNI on
+Linux and macOS also uses for any certificate its validation rejects, `CERT_E_UNTRUSTEDROOT` or `CERT_E_CHAINING`, which
+Windows' SNI reports once Host Name in Certificate is set, or an `AuthenticationException` about the certificate; never
+`CERT_E_WRONG_USAGE`, a pinned certificate that does not match); the Connect dialog then offers **Trust server
+certificate and connect**, except under Strict encryption, which ignores that setting, and when the connection pins a
+Server Certificate or a Host Name in Certificate, which trusting would skip: there it explains instead. `BACKEND_ERROR` for an exception the backend did not expect carries only `exception`: the types
+and HRESULTs from the outer exception inwards, at most four (`System.InvalidOperationException (0x80131509) >
+System.DllNotFoundException (0x80131524)`), for **Copy details**, because its sentence is generic; never the exceptions'
+messages, which can hold paths, names or SQL text. Details never hold the connection string or the password. Main
+refuses (as a contained violation) details with any other member or out of these bounds.
 
 Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
 be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the
@@ -1393,7 +1447,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 
 | Surface | Text |
 | --- | --- |
-| Status bar | "Starting SQL backend…", "{runtime} · Ready", "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
+| Status bar | "Starting SQL backend…", "Ready" (its tooltip names the runtime and the SMO and SqlClient versions), "SQL backend not responding…", "Restarting SQL backend…", "SQL backend unavailable" |
 | Banner: not responding | "The SQL backend is not responding. You can keep waiting, or restart it; restarting closes all connections and rolls back uncommitted transactions." **Restart now** |
 | Banner: unexpected restart | "The SQL backend stopped unexpectedly and was restarted. {n} connection(s) were lost and {m} running script(s) were stopped; nothing was re-run." **Reconnect…** **Dismiss** |
 | Banner: manual restart | "The SQL backend was restarted. {n} connection(s) were closed." **Reconnect…** **Dismiss** |
@@ -1401,7 +1455,7 @@ access, choose Help › Clear Entra ID Token Cache, then connect again." The sam
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 10 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
-| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." |
+| `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
 | Running placeholder | "Your query is running… {n} rows" |
 

@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { encryptedMessage, installScriptingStub, scriptingStubData, viewDefinitionWarning } from './fixtures/scripting-stub.mjs'
-import { activeDocument, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
+import { activeDocument, backendReady, documentTabs, editorText as editorTextOf, errorBanner, errorMessages, explorerLabel, menuItemNames, messages, openMenus as openMenusOf, optionsDescription, optionsHeading, outputView, part, quickInput as quickInputOf, quickInputActive, serverRows, statusSegment, toolbarButton, unsavedMark, warningBanner as warningBannerOf } from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -28,7 +28,7 @@ async function launch() {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
 }
 // Unsaved queries make a normal exit ask first; answer Don't Save.

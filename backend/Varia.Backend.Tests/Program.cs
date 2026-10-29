@@ -90,6 +90,15 @@ messages.Add("printed later");
 var late = messages.Snapshot();
 Check(late.Count == 1000 + 1 + QueryMessages.MaxLateErrors && late[1000].Text.StartsWith("Messages were truncated") && late.Skip(1001).All(entry => entry.Kind == "error" && entry.Text.Length == 16_384),
     "after the message caps, up to 20 errors are still kept (cut at 16,384 characters), after the truncation note");
+messages = new QueryMessages();
+messages.Add("(1 row affected)");
+messages.Add("printed", MessageKind.Print);
+messages.Add("Warning: Null value is eliminated by an aggregate or other SET operation.", MessageKind.Server);
+messages.Add("Msg 1", MessageKind.Error);
+Check(messages.Snapshot().Select(entry => entry.Kind).SequenceEqual(["info", "print", "server", "error"]), "messages carry their kind: Varia's lines, what the script printed, SQL Server's other messages, errors");
+Check(SqlService.InformationalKind(0) == MessageKind.Print && SqlService.InformationalKind(50000) == MessageKind.Print && SqlService.InformationalKind(50001) == MessageKind.Print
+    && SqlService.InformationalKind(8153) == MessageKind.Server && SqlService.InformationalKind(3612) == MessageKind.Server && SqlService.InformationalKind(15477) == MessageKind.Server,
+    "PRINT (0) and RAISERROR (50000 and user messages) are print; engine warnings, STATISTICS and sp_rename's caution are server");
 var stored = new List<MessageEntry>();
 messages = new QueryMessages(stored.Add);
 messages.Add("printed");
@@ -165,6 +174,12 @@ using (var offline = new SqlService())
 Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
     && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
     "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+static SqlRun Names(params string[] names) => new("Completed", null, [[.. names.Select(name => new string?[] { name })]]);
+Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123abcd", "model", "varia_scratch_0123456789ab"))
+        == ScratchDatabase.Lasting(Names("master", "model"))
+    && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
+    && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
+    "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
 Check(new[] { "", "_ro", "_off", "_su", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
         "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "SSISDB" }.Any(ScratchDatabase.Sweepable),
@@ -225,6 +240,24 @@ try
         }
     }
     await ConnectionFailureChecks.PoolBlockingAsync(Check, rejected);
+    // Development servers (the local one, CI's container) have self-signed certificates: without Trust server certificate,
+    // connect and Load databases fail with the reason the Connect dialog offers to fix. A server with a trusted certificate
+    // connects instead, and then there is nothing to check.
+    var validated = Live("master") with { TrustServerCertificate = false, Encrypt = "mandatory" };
+    foreach (var method in new[] { "connections.connect", "connections.databases" })
+    {
+        try
+        {
+            var opened = await Call<object>(method, validated);
+            if (opened is ConnectionInfo trusted) await Call<object>("connections.disconnect", new ConnectionArgs(trusted.Id));
+            Console.WriteLine(method + ": the server's certificate is trusted here, so the untrusted-certificate check is skipped.");
+        }
+        catch (RequestException error)
+        {
+            Check(error.Code == "SQL_ERROR" && error.Details is { Reason: ErrorDetailsLimits.Certificate, Class: 20, Server.Length: > 0 },
+                method + " answers an untrusted server certificate with the reason certificate and SqlClient's own message: " + error.Code + " " + error.Details?.Number + " " + error.Message);
+        }
+    }
 
     // A Kerberos ticket that expires while connected: every later open says to run kinit, and works again after it.
     var signIn = Guid.NewGuid().ToString();
@@ -373,7 +406,12 @@ try
     result = await Run("SELECT 1 AS a;\nGO\nSELECT * FROM dbo.VariaTableThatDoesNotExist;");
     Check(result.Status == "completedWithErrors" && result.CompletedBatches == 2 && result.ResultSets.Count == 1 && result.Error?.Message.Contains("Msg 208") == true, "compile errors in later batches keep earlier output");
     result = await Run("RAISERROR ('expected informational message', 10, 1); PRINT 'expected print';");
-    Check(result.Status == "completed" && Texts(result).Contains("expected informational message") && Texts(result).Contains("expected print"), "low severity informational messages do not become errors");
+    Check(result.Status == "completed" && result.Messages.Where(entry => entry.Text is "expected informational message" or "expected print").Count(entry => entry.Kind == "print") == 2,
+        "low severity informational messages do not become errors and are marked as printed by the script (print)");
+    // An aggregate over a NULL warns (8153, severity 10) under the default ANSI_WARNINGS: SQL Server's own message, which must not open the strip.
+    result = await Run("SELECT SUM(x) AS total FROM (VALUES (1), (NULL)) AS v(x);");
+    Check(result.Status == "completed" && result.Messages.Any(entry => entry.Kind == "server" && entry.Text.StartsWith("Warning: Null value is eliminated")) && result.Messages.All(entry => entry.Kind != "print"),
+        "SQL Server's own warnings (8153) are server messages, not print: " + string.Join(" | ", result.Messages.Select(entry => entry.Kind + ":" + entry.Text)));
     result = await Run("USE tempdb;\nGO\nSELECT DB_NAME();");
     Check(result.Status == "completed" && result.Database == "tempdb" && Convert.ToString(RowsOf(result.ResultSets[0])[0][0]) == "tempdb", "USE persists across batches and returns the new database context");
     result = await Run("SELECT DB_NAME();", database: result.Database);

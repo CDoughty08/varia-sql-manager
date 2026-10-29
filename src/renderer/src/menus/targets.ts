@@ -70,6 +70,7 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
     explorerFolderInsertable: target?.kind === 'explorer' && target.node?.kind === 'folder' && !!target.node.insertable,
     outputView: target?.kind === 'output' ? target.view : '',
+    pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating
   }
 }

@@ -145,6 +145,27 @@ export const describeTargets: { readonly [V in SsisDescribeView]: NodeKind } = {
   catalog: 'ssisCatalog', folder: 'ssisFolder', project: 'ssisProject', package: 'ssisPackage', environment: 'ssisEnvironment'
 }
 
+/** What ssis.execute does (D-ssis 4.4), by verb: its title, the steps it runs in order (one statement each, reported back
+ *  as done, failed, cancelled or skipped), the only catalog procedures its statements may call (SsisSql's write lint),
+ *  whether it takes a describe's `revision` (a write that changes what a document showed compares it first), and whether
+ *  SSISDB refuses it to a SQL Server login on a box server (S0, docs/integration-services.md 14.7: error 27123), which the
+ *  backend answers WINDOWS_AUTH_REQUIRED before it connects. Later verbs (execute, validate, configure, …) append. */
+export interface SsisActionSpec {
+  readonly title: string
+  readonly steps: readonly string[]
+  readonly procedures: readonly string[]
+  readonly revision: boolean
+  readonly windowsAuthOnBox: boolean
+}
+export const ssisActions = {
+  /** catalog.stop_operation: an execution or validation that runs stops after its current work (Stopping, then Canceled). */
+  stopOperation: { title: 'Stop Operation', steps: ['Stop the operation'], procedures: ['stop_operation'], revision: false, windowsAuthOnBox: true }
+} as const satisfies { readonly [verb: string]: SsisActionSpec }
+export type SsisActionVerb = keyof typeof ssisActions
+export const ssisActionVerbs = Object.keys(ssisActions) as SsisActionVerb[]
+/** catalog.operations.operation_type values Stop Operation applies to: executions and validations. */
+export const stoppableOperationTypes = [200, 300, 301] as const
+
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
 export const ssisErrorRetryable = {
   CATALOG_MISSING: false,
@@ -160,6 +181,17 @@ export const ssisErrorRetryable = {
   AUTH_KERBEROS: true,
   AUTH_UNSUPPORTED: false,
   AUTH_ENTRA: false,
+  /** A box server's SSISDB changes nothing for a SQL Server login (27123): reconnect with Windows authentication. */
+  WINDOWS_AUTH_REQUIRED: false,
+  /** Stop Operation on an operation that has ended or is already stopping: nothing to do, shown as information. */
+  ALREADY_FINAL: false,
+  /** Stop Operation on an execution that was created and never started: it never runs, so there is nothing to stop. */
+  NOT_STARTED: false,
+  /** Stop Operation on an execution that is pending, not running yet: it can be stopped once it runs. */
+  NOT_RUNNING: true,
+  /** Varia's Stop ended a write's request before it changed anything, or at the step the reply names (for Stop Operation, the
+   *  catalog may then list its own Stop operation as Running until SQL Server restarts). */
+  CANCELLED: true,
   SQL_ERROR: true
 } as const
 export type SsisErrorCode = keyof typeof ssisErrorRetryable
@@ -190,7 +222,17 @@ export const ssisLimits = {
   tombstoneMs: 60_000,
   /** The tree's and describe's lock timeout; the profile's role checks use the live reads' 1 s (owner decision 4). */
   readLockTimeoutMs: 5_000,
-  profileLockTimeoutMs: 1_000
+  profileLockTimeoutMs: 1_000,
+  /** ssis.execute: writes at once per connection and in all, on the actions connection (" - Integration Services Actions"). */
+  writePerConnection: 1,
+  writeTotal: 2,
+  registeredWrites: 64,
+  /** A write's preflight reads at READ COMMITTED with this LOCK_TIMEOUT, within this budget (TIMEOUT). The write itself waits
+   *  for locks as SSMS does (LOCK_TIMEOUT -1) until Stop. */
+  preflightLockTimeoutMs: 10_000,
+  preflightMs: 25_000,
+  /** How long a stopped write's reply waits for SQL Server to end its statement, then answers CANCELLED (outcome unknown). */
+  stopGraceMs: 10_000
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.
@@ -204,15 +246,19 @@ const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + 
 export function ssisCatalogJson(): string {
   return [
     '{',
+    `  "actions": ${block(ssisActionVerbs.map(verb => ({ verb, ...ssisActions[verb] })))},`,
     `  "catalogDatabase": ${line(catalogDatabase)},`,
     `  "errors": ${block(ssisErrorCodes.map(code => ({ code, retryable: ssisErrorRetryable[code] })))},`,
     `  "features": ${line(ssisFeatures)},`,
+    `  "finalStatuses": ${line(finalStatuses)},`,
     `  "limits": ${line(ssisLimits)},`,
     `  "loggingLevels": ${line(loggingLevels)},`,
     `  "messageTypes": ${line(messageTypes)},`,
+    `  "openStatuses": ${line(openStatuses)},`,
     `  "operationStatuses": ${line(operationStatuses)},`,
     `  "operationTypes": ${line(operationTypes)},`,
     `  "parameterObjectTypes": ${line(parameterObjectTypes)},`,
+    `  "stoppableOperationTypes": ${line(stoppableOperationTypes)},`,
     `  "version": 1,`,
     `  "views": ${block(describeViews.map(view => ({ view, kind: describeTargets[view] })))}`,
     '}',

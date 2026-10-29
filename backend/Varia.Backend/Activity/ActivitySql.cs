@@ -232,6 +232,10 @@ internal static partial class ActivitySql
     public const string KillPrologue = "SET NOCOUNT ON; SET LOCK_TIMEOUT 10000;\n";
     private static ActivityParameter Session() => Int("@session_id");
     private static ActivityParameter LoginTime() => new("@login_time", SqlDbType.DateTime);
+    /// <summary>Every Details section after the session read reads only while the id is still that session: SQL Server can
+    /// give a session id that ended to a new connection between statements, and a section must then read nothing rather
+    /// than the new session's text, transactions or locks under the old one's header.</summary>
+    internal const string SameSession = "EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS g WHERE g.session_id = @session_id AND g.login_time = @login_time)";
 
     /// <summary>Details' statements by section, each run on its own (so a permission or a lock that stops one leaves the
     /// rest) on the monitor's pool with <see cref="Prologue"/>. "identity" checks visibility before the richer "session"
@@ -276,18 +280,18 @@ internal static partial class ActivitySql
             + "       LEFT(t.text, @batch_chars) AS batch_text, DATALENGTH(t.text) / 2 AS batch_length\n"
             + "FROM sys.dm_exec_requests AS r\n"
             + "CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t\n"
-            + "WHERE r.session_id = @session_id\n"
+            + "WHERE r.session_id = @session_id AND " + SameSession + "\n"
             + "ORDER BY CASE WHEN r.blocking_session_id > 0 THEN 0 ELSE 1 END, r.request_id;",
-            ["request_id", "statement_text", "statement_length", "batch_text", "batch_length"], [Session(), Int("@statement_chars"), Int("@batch_chars")], ["statement", "batch"], NoLiterals),
+            ["request_id", "statement_text", "statement_length", "batch_text", "batch_length"], [Session(), LoginTime(), Int("@statement_chars"), Int("@batch_chars")], ["statement", "batch"], NoLiterals),
         new("activity.details", "inputBuffer",
             "SELECT ib.event_type, ib.parameters, LEFT(ib.event_info, @chars) AS event_info, DATALENGTH(ib.event_info) / 2 AS event_length\n"
-            + "FROM sys.dm_exec_input_buffer(@session_id, NULL) AS ib;",
-            ["event_type", "parameters", "event_info", "event_length"], [Session(), Int("@chars")], ["inputBuffer"], NoLiterals),
+            + "FROM sys.dm_exec_input_buffer(@session_id, NULL) AS ib WHERE " + SameSession + ";",
+            ["event_type", "parameters", "event_info", "event_length"], [Session(), LoginTime(), Int("@chars")], ["inputBuffer"], NoLiterals),
         new("activity.details", "waits",
             $"SELECT TOP ({Limit("detailsWaits")}) w.wait_type, w.waiting_tasks_count, w.wait_time_ms, w.max_wait_time_ms, w.signal_wait_time_ms\n"
-            + "FROM sys.dm_exec_session_wait_stats AS w WHERE w.session_id = @session_id\n"
+            + "FROM sys.dm_exec_session_wait_stats AS w WHERE w.session_id = @session_id AND " + SameSession + "\n"
             + "ORDER BY w.wait_time_ms DESC, w.wait_type;",
-            ["wait_type", "waiting_tasks_count", "wait_time_ms", "max_wait_time_ms", "signal_wait_time_ms"], [Session()], ["waits"], NoLiterals),
+            ["wait_type", "waiting_tasks_count", "wait_time_ms", "max_wait_time_ms", "signal_wait_time_ms"], [Session(), LoginTime()], ["waits"], NoLiterals),
         // One row per transaction and database it touched; @rowCap is the cap plus one, to see truncation.
         new("activity.details", "transactions",
             "SELECT TOP (@rowCap) st.transaction_id, a.name, a.transaction_begin_time, a.transaction_type, a.transaction_state, st.is_user_transaction,\n"
@@ -296,10 +300,10 @@ internal static partial class ActivitySql
             + "JOIN sys.dm_tran_active_transactions AS a ON a.transaction_id = st.transaction_id\n"
             + "LEFT JOIN sys.dm_tran_database_transactions AS dt ON dt.transaction_id = st.transaction_id\n"
             + "LEFT JOIN sys.databases AS d ON d.database_id = dt.database_id\n"
-            + "WHERE st.session_id = @session_id\n"
+            + "WHERE st.session_id = @session_id AND " + SameSession + "\n"
             + "ORDER BY a.transaction_begin_time, st.transaction_id, dt.database_id;",
             ["transaction_id", "name", "transaction_begin_time", "transaction_type", "transaction_state", "is_user_transaction", "database_id", "database_name",
-                "database_transaction_log_bytes_used", "database_transaction_log_bytes_reserved"], [Session(), Int("@rowCap")], ["transactions"], NoLiterals),
+                "database_transaction_log_bytes_used", "database_transaction_log_bytes_reserved"], [Session(), LoginTime(), Int("@rowCap")], ["transactions"], NoLiterals),
         // The session's finished tasks and its running ones: pages allocated less pages freed, in each.
         new("activity.details", "tempdb",
             "SELECT ss.user_objects_alloc_page_count, ss.user_objects_dealloc_page_count, ss.internal_objects_alloc_page_count, ss.internal_objects_dealloc_page_count,\n"
@@ -308,18 +312,18 @@ internal static partial class ActivitySql
             + "OUTER APPLY (SELECT SUM(t.user_objects_alloc_page_count) AS task_user_alloc, SUM(t.user_objects_dealloc_page_count) AS task_user_dealloc,\n"
             + "                    SUM(t.internal_objects_alloc_page_count) AS task_internal_alloc, SUM(t.internal_objects_dealloc_page_count) AS task_internal_dealloc\n"
             + "             FROM sys.dm_db_task_space_usage AS t WHERE t.session_id = @session_id) AS ts\n"
-            + "WHERE ss.session_id = @session_id;",
+            + "WHERE ss.session_id = @session_id AND " + SameSession + ";",
             ["user_objects_alloc_page_count", "user_objects_dealloc_page_count", "internal_objects_alloc_page_count", "internal_objects_dealloc_page_count", "task_user_alloc",
-                "task_user_dealloc", "task_internal_alloc", "task_internal_dealloc"], [Session()], ["tempdb"], NoLiterals),
+                "task_user_dealloc", "task_internal_alloc", "task_internal_dealloc"], [Session(), LoginTime()], ["tempdb"], NoLiterals),
         // On demand only (Load locks): sys.dm_tran_locks costs tens of ms even for a few locks.
         new("activity.details", "locks",
             "SELECT TOP (@rowCap) l.resource_type, l.resource_database_id, d.name AS database_name, l.request_mode, l.request_status, COUNT(*) AS lock_count\n"
             + "FROM sys.dm_tran_locks AS l\n"
             + "LEFT JOIN sys.databases AS d ON d.database_id = l.resource_database_id\n"
-            + "WHERE l.request_session_id = @session_id\n"
+            + "WHERE l.request_session_id = @session_id AND " + SameSession + "\n"
             + "GROUP BY l.resource_type, l.resource_database_id, d.name, l.request_mode, l.request_status\n"
             + "ORDER BY COUNT(*) DESC, l.resource_type, l.resource_database_id, l.request_mode, l.request_status;",
-            ["resource_type", "resource_database_id", "database_name", "request_mode", "request_status", "lock_count"], [Session(), Int("@rowCap")], ["locks"], NoLiterals)
+            ["resource_type", "resource_database_id", "database_name", "request_mode", "request_status", "lock_count"], [Session(), LoginTime(), Int("@rowCap")], ["locks"], NoLiterals)
     ];
 
     /// <summary>Kill's batch for one session (D-am §5.5, run after <see cref="KillPrologue"/>): the state of the session

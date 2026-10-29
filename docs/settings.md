@@ -45,6 +45,8 @@ Its first row is a note: Color theme: View › Theme (stored in `appearance.json
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `environment.layout.classicToolbar` | Show the classic toolbar | Boolean | False |  | All | At once | Shows the text toolbar of earlier versions below the header: Connect, New query, Open, Save, Save All, Execute, Cancel and Layouts, with the active query's Server and Database boxes. The header then keeps only the menus and the search box, and query tabs show no query bar of their own. This option will be removed in a later release. Not in SSMS. |
+| `environment.layout.panelTabs` | Show panel tabs | Boolean | False |  | All | At once | Window › Panel Tabs: a panel that is alone in its dock group shows its tab, which can be dragged to dock the panel elsewhere. Without it such a panel shows no tab and moves through its ⋯ menu. Panels that share a group, and floating panels, always show their tabs. Not in SSMS. Not shown in Options. |
 | `environment.recentFiles.count` | Items shown in recently used file lists | Integer 1–24 | 10 |  | All | At once | How many files File › Recent Files lists. Varia SQL Manager remembers up to 50, so a larger number shows older files again. |
 
 ### Environment › AutoRecover
@@ -105,12 +107,13 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 
 | Setting key | Label | Type and bounds | Default | SSMS default | Platforms | Applies | What it changes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). |
+| `textEditor.statusBar.executionTime` | Display execution time | One of `elapsed` (Elapsed), `end` (End), `none` (None) | Elapsed |  | All | At once | Select type of time display to include on the query window status bar: how long the query has run or ran (Elapsed), or the time its last execution ended (End). Without that bar the results head shows how long the query ran and when it ended. Greyed while `textEditor.statusBar.queryWindow` is False. |
 | `textEditor.statusBar.showDatabase` | Include database name | Boolean | True |  | All | At once | Include the database name on the status bar. |
 | `textEditor.statusBar.showLogin` | Include login name | Boolean | True |  | All | At once | Include login information on the status bar: the login and session id, `login (SPID)`, of the query's last execution. |
-| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the status bar. |
+| `textEditor.statusBar.showRowCount` | Include row count | Boolean | True |  | All | At once | Include count of returned rows on the query window status bar. Without that bar the results head shows the rows. Greyed while `textEditor.statusBar.queryWindow` is False. |
 | `textEditor.statusBar.showServer` | Include server name | Boolean | True |  | All | At once | Include server name on the status bar, with the server's major and minor version. |
-| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. |
+| `textEditor.statusBar.queryWindow` | Show query window status bar | Boolean | False |  | All | At once | Shows SSMS's status bar in the query window again, below or above the query (Status bar location), with the query's state, server, login, database, time and rows. Without it the window's status bar shows the active query's server, login and database, and the results head how its last execution went, its time and its rows. This option will be removed in a later release. Not in SSMS. |
+| `textEditor.statusBar.location` | Status bar location | One of `bottom` (Bottom), `top` (Top) | Bottom |  | All | At once | Select the location of the status bar for the editor: below the query text, or above it. Greyed while `textEditor.statusBar.queryWindow` is False. |
 
 ### Text Editor › Transact-SQL › General
 
@@ -146,6 +149,7 @@ The query window's status bar: where it is, and what it shows. A property grid: 
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `queryResults.grid.includeColumnHeaders` | Include column headers when copying or saving the results | Boolean | False |  | All | At once | Copy and Save Results As (CSV and tab-delimited text) start with a row of column names. JSON always names its keys, and Copy with Headers always includes them. |
 | `queryResults.grid.maxResultSets` | Maximum result sets kept per execution | Integer 1–1,000 | 1,000 |  | All | Next execution | Result sets after this many still run and are counted, but their rows are not kept; the Messages tab says so. Not in SSMS. |
+| `queryResults.grid.showColumnTypes` | Show column data types in the column headers | Boolean | True |  | All | At once | Each column header shows the column's SQL type after its name, in smaller text: int, nvarchar(50), decimal(18,2). The header's tooltip names the type either way. Column widths already set are kept when this changes. Not in SSMS. |
 
 ### SQL Server Object Explorer › Commands
 
@@ -228,4 +232,4 @@ A property grid: True/False lists, values that differ from their default in bold
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (69 today).
+A patch holds at most one entry per setting (73 today).

@@ -12,6 +12,7 @@ import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/ca
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
 import { rowIndex, RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
+import { meterWork } from './fixtures/work-meter'
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 const uuid = (n: number) => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`
@@ -157,7 +158,8 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
 
 /** Measure reconciliation's work, not a shared runner's GC pauses or setTimeout(0) wakeup time. Old refs count matching
  *  work; table reads catch a scan of every pending load for each unchanged leaf. Flattening visits the visible nodes
- *  directly, so it does not charge a table lookup for every visible row. */
+ *  directly, so it does not charge a table lookup for every visible row. The work meter counts the array copying, sorting
+ *  and flattening that touch neither. */
 async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, matches: (params: ExplorerChildrenParams) => boolean = isFolder('tables')) {
   let refs = 0, lookups = 0
   const table = f.explorer.table, get = table.get
@@ -167,6 +169,7 @@ async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, mat
     Object.defineProperty(child, 'ref', { configurable: true, enumerable: true, get: () => { refs++; return ref } })
   }
   let pages = 0
+  const folderRows = f.explorer.node(tables)!.children!.length
   try {
     for (;;) {
       const pending = f.sent.filter(entry => !entry.settled && matches(entry.params))
@@ -176,13 +179,18 @@ async function reconcilePages(f: ReturnType<typeof fixture>, tables: number, mat
       const count = Math.min(f.state.pageSize, f.state.tables.length - offset) + (offset === 0 ? 1 : 0)
       const version = f.explorer.getSnapshot().version
       refs = lookups = 0
-      f.release(matches)
       // The next page stays unanswered across this event-loop turn: its predecessor must be published independently.
-      await settle()
+      const { work } = await meterWork(async () => { f.release(matches); await settle(); f.explorer.getSnapshot() })
       // Work grows with the arriving page, rather than the old folder or the unrelated pending-load queue per row.
       const budget = count * 16
       expect(refs, `page ${pages + 1}: old-node identity reads`).toBeLessThanOrEqual(budget)
       expect(lookups, `page ${pages + 1}: node-table reads`).toBeLessThanOrEqual(budget)
+      // Array work the counters above cannot see: a page passes over the folder about three times (the waiting rows' slice
+      // and filter, and the children's concat) plus a few times over its own rows, and the snapshot is flattened once. An
+      // extra copy or a sort of the folder per page, or a second flatten, is more work here, whatever the runner's speed.
+      expect(work.elements, `page ${pages + 1}: array elements visited or copied ${JSON.stringify(work)}`).toBeLessThanOrEqual(3.5 * folderRows + 8 * count)
+      expect(work.allocations, `page ${pages + 1}: typed arrays allocated (one flatten) ${JSON.stringify(work)}`).toBeLessThanOrEqual(5)
+      expect(work.costly, `page ${pages + 1}: locale-aware or regular-expression calls ${JSON.stringify(work)}`).toBeLessThanOrEqual(8)
       const loaded = Math.min(offset + f.state.pageSize, f.state.tables.length)
       expect(f.explorer.node(tables)!.children![loaded].label).toBe(f.state.tables[loaded - 1])
       expect(f.explorer.getSnapshot().version).toBeGreaterThan(version)
@@ -342,6 +350,54 @@ describe('ExplorerService: loading', () => {
     expect(f.explorer.node(tables)!.children).toHaveLength(5)
     expect(f.labels()).toContain('[Showing the first 5 of 9 items in Tables. Use Filter Settings to narrow the list.]')
     expect(f.calls().filter(isFolder('tables'))).toHaveLength(2)
+  })
+})
+
+describe('ExplorerService: search', () => {
+  it('lists the loaded objects with their paths, leaves folders and unloaded objects out, and stops at the limit', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    await f.open('Databases')
+    const sent = f.calls().length
+    expect(f.explorer.loadedObjects(100).map(item => [item.label, item.path, item.icon])).toEqual([
+      ['server-a.example', '', 'server'], ['AppData', 'server-a.example › Databases', 'database'], ['Locked', 'server-a.example › Databases', 'database'], ['Offline', 'server-a.example › Databases', 'database']])
+    expect(f.explorer.loadedObjects(2).map(item => item.label)).toEqual(['server-a.example', 'AppData'])
+    expect(f.calls()).toHaveLength(sent)
+  })
+  it('reveals a loaded node under collapsed folders by expanding them and selecting it', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const databases = await f.open('Databases')
+    const appData = f.find('AppData')
+    f.explorer.collapse(databases)
+    expect(f.labels()).toEqual(['server-a.example', '  Databases', '  Security', '  Server Objects'])
+    const reveals = f.explorer.getSnapshot().reveal ?? 0
+    expect(f.explorer.reveal(appData)).toBe(true)
+    expect(f.labels()).toContain('    AppData')
+    expect(f.explorer.getSnapshot()).toMatchObject({ selected: appData, reveal: reveals + 1 })
+    expect(f.explorer.reveal(987_654)).toBe(false)
+  })
+  it('opens a found object\'s folders as clicks would: listing sends nothing, but a folder a collapse interrupted carries on loading', async () => {
+    const f = fixture()
+    f.state.tables = Array.from({ length: 5 }, (_, index) => `dbo.T${index}`)
+    f.state.pageSize = 2
+    f.connect()
+    await settle()
+    f.hold(isPage('tables'))
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    f.explorer.collapse(tables)
+    await settle()
+    f.unhold()
+    const sent = f.calls().length
+    const t0 = f.explorer.loadedObjects(100).find(item => item.label === 'dbo.T0')!
+    expect(t0.path).toBe('server-a.example › Databases › AppData › Tables')
+    expect(f.calls()).toHaveLength(sent)
+    expect(f.explorer.reveal(t0.id)).toBe(true)
+    await settle()
+    expect(f.calls().slice(sent).map(params => params.cursor)).toEqual(['v1.tables.2', 'v1.tables.4'])
+    expect(f.explorer.getSnapshot().selected).toBe(t0.id)
   })
 })
 

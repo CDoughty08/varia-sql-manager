@@ -24,6 +24,24 @@ internal static partial class SsisSql
     /// row when it does not exist.</summary>
     public const string CatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @catalog;";
 
+    /// <summary>The actions connection's session (D-ssis 4.2): READ COMMITTED, and writes wait for locks as SSMS does (no
+    /// LOCK_TIMEOUT) until Stop. XACT_ABORT stays off, as in SSMS: the catalog's procedures manage their own transactions.</summary>
+    public const string ActionPrologue = "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT -1; SET DEADLOCK_PRIORITY NORMAL;";
+
+    /// <summary>Stop Operation's preflight, and its second look after the catalog refuses: the operation's type and status, or no
+    /// row when it does not exist or the login may not read it (the catalog view's row-level security). Each statement sets its
+    /// own lock timeout, so neither depends on how long a SET inside a parameterized batch lasts.</summary>
+    public static readonly string OperationPreflight = "SET LOCK_TIMEOUT " + SsisCatalog.Current.Limit("preflightLockTimeoutMs") + ";\n"
+        + "SELECT o.operation_type, o.status FROM [catalog].[operations] AS o WHERE o.operation_id = @operation_id;";
+
+    /// <summary>The write templates by verb, one statement per step: values are parameters, and each calls only its verb's
+    /// catalog procedures (<see cref="LintWrite"/>).</summary>
+    public static IReadOnlyList<string> WriteTemplates(string verb) => verb switch
+    {
+        "stopOperation" => ["SET LOCK_TIMEOUT -1;\nEXEC [catalog].[stop_operation] @operation_id = @operation_id;"],
+        _ => throw new InvalidOperationException("Unknown SSIS verb " + verb + ".")
+    };
+
     private static string Has(string table) => "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id "
         + "WHERE s.name = N'catalog' AND o.name = N'" + table + "') THEN 1 ELSE 0 END)";
     private static string HasColumn(string table, string column) => "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.columns AS c JOIN sys.objects AS o ON o.object_id = c.object_id "
@@ -132,12 +150,42 @@ internal static partial class SsisSql
         return problems;
     }
 
-    /// <summary>Every statement this file renders, for the lint: the profile, the state check, and each view's statements for
-    /// each band and feature set.</summary>
+    [GeneratedRegex(@"\bEXEC(?:UTE)?\b\s*(\S*)", RegexOptions.IgnoreCase)]
+    private static partial Regex Calls();
+    [GeneratedRegex(@"^\[catalog\]\.\[([a-z_]+)\]$")]
+    private static partial Regex CatalogProcedure();
+
+    /// <summary>Problems with one write template; empty when it passes (D-ssis 4.6): it calls only the catalog procedures its
+    /// verb allows, by their bracketed names, and holds no literal, dynamic SQL, SYNCHRONIZED, metadata built-in, or DML and DDL
+    /// of its own. Every change is the catalog's procedures' to make.</summary>
+    public static List<string> LintWrite(string text, IReadOnlyList<string> procedures)
+    {
+        var problems = new List<string>();
+        foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        if (text.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
+        if (text.Contains("SYNCHRONIZED", StringComparison.OrdinalIgnoreCase)) problems.Add("names SYNCHRONIZED");
+        foreach (Match literal in LiteralPattern().Matches(text)) problems.Add("has the literal " + literal.Value);
+        var unquoted = LiteralPattern().Replace(text, "''");
+        var calls = Calls().Matches(unquoted).Select(match => match.Groups[1].Value).ToList();
+        if (calls.Count == 0) problems.Add("calls no catalog procedure");
+        foreach (var call in calls)
+        {
+            var name = CatalogProcedure().Match(call);
+            if (!name.Success) problems.Add(call.Length == 0 || call[0] is '(' or '@' ? "runs dynamic SQL" : "calls " + call + ", which is not a catalog procedure");
+            else if (!procedures.Contains(name.Groups[1].Value, StringComparer.Ordinal)) problems.Add("calls catalog." + name.Groups[1].Value + ", which its verb does not allow");
+        }
+        foreach (var word in Words().Matches(unquoted).Select(match => match.Value.ToUpperInvariant()).Distinct())
+            if (word is not ("EXEC" or "EXECUTE") && Writes.Contains(word)) problems.Add("writes on its own: " + word);
+        return problems;
+    }
+
+    /// <summary>Every statement this file renders, for the lint: the profile, the state check, the write preflight, and each
+    /// view's statements for each band and feature set. Write templates have their own lint (<see cref="LintWrite"/>).</summary>
     public static IEnumerable<(string Id, string Text, bool List)> All(IEnumerable<string> views)
     {
         yield return ("profile", ProfilePrologue + Profile, false);
         yield return ("catalogState", CatalogState, false);
+        yield return ("operationPreflight", OperationPreflight, false);
         foreach (var prologue in new[] { ReadPrologue(false), ReadPrologue(true) }) yield return ("readPrologue", prologue, false);
         foreach (var view in views)
             for (var band = 13; band <= ExplorerCatalog.MaxBand; band++)
