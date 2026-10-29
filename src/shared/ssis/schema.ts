@@ -3,7 +3,9 @@
 import { z } from 'zod'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { objectRefSchema } from '../explorer/schema.ts'
-import { describeTargets, describeViews, ssisActions, ssisLimits, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature } from './catalog.ts'
+import {
+  describeTargets, describeViews, operationKinds, operationStatuses, ssisActions, ssisLimits, type OperationKind, type SsisActionVerb, type SsisDescribeView, type SsisErrorCode, type SsisFeature
+} from './catalog.ts'
 import type { ActionStep } from '../actions/schema.ts'
 
 export interface SsisDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly view: SsisDescribeView; readonly target: ObjectRef }
@@ -47,6 +49,37 @@ export const ssisExecuteSchema = z.object({
 /** What the Create Catalog dialog reads before it opens (`ssis.catalogSetup`). */
 export interface SsisCatalogSetupRequest { readonly connectionId: string; readonly requestId: string }
 export const ssisCatalogSetupSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid() }).strict() satisfies z.ZodType<SsisCatalogSetupRequest>
+
+/**
+ * The ssis.operations live source's args (src/shared/live/catalog.ts): the Operations view's filters. Kinds and statuses keep
+ * the operations of any of theirs; folder, project and package match an execution's names exactly, or from their start with
+ * `prefix`; caller matches the caller's name exactly; windowHours keeps the operations created in the last hours (24 by
+ * default) and limit the newest of them (1,000 by default). An absent member does not filter.
+ */
+export interface SsisOperationsArgs {
+  readonly kinds?: OperationKind[]
+  readonly statuses?: number[]
+  readonly folder?: string
+  readonly project?: string
+  readonly package?: string
+  readonly prefix?: boolean
+  readonly caller?: string
+  readonly windowHours?: number
+  readonly limit?: number
+}
+const distinct = (items: readonly unknown[]) => new Set(items).size === items.length
+export const ssisOperationsArgsSchema = z.object({
+  kinds: z.array(z.enum(operationKinds)).min(1).max(operationKinds.length).refine(distinct, 'Each kind may be named once.').optional(),
+  statuses: z.array(z.number().int().refine(code => operationStatuses.some(status => status.code === code), 'Unknown operation status.')).min(1).max(operationStatuses.length)
+    .refine(distinct, 'Each status may be named once.').optional(),
+  folder: z.string().min(1).max(ssisLimits.name).optional(),
+  project: z.string().min(1).max(ssisLimits.name).optional(),
+  package: z.string().min(1).max(ssisLimits.packageName).optional(),
+  prefix: z.boolean().optional(),
+  caller: z.string().min(1).max(ssisLimits.name).optional(),
+  windowHours: z.number().int().min(1).max(ssisLimits.operationsWindowHours).optional(),
+  limit: z.number().int().min(1).max(ssisLimits.operationsRows).optional()
+}).strict() satisfies z.ZodType<SsisOperationsArgs>
 
 export const ssisCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(ssisLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')

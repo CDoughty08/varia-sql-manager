@@ -25,16 +25,21 @@ export const operationTypes: readonly CodeLabel[] = [
   { code: 301, label: 'Validate package' },
   { code: 1000, label: 'Configure catalog' }
 ]
-/** catalog.operations.status. */
-export const operationStatuses: readonly CodeLabel[] = [
-  { code: 1, label: 'Created' },
+/** A row's tone in the Operations grid (one of the live grid's tones, src/shared/live/catalog.ts liveTones). */
+export type OperationTone = 'error' | 'warning' | 'muted'
+/**
+ * catalog.operations.status, with the tone an Operations row takes: none for one that is running, pending, succeeded or
+ * completed. The grid's running tone is the accent's hue, as its selection is, so open rows toned with it read as selected.
+ */
+export const operationStatuses: readonly (CodeLabel & { readonly tone?: OperationTone })[] = [
+  { code: 1, label: 'Created', tone: 'muted' },
   { code: 2, label: 'Running' },
-  { code: 3, label: 'Canceled' },
-  { code: 4, label: 'Failed' },
+  { code: 3, label: 'Canceled', tone: 'muted' },
+  { code: 4, label: 'Failed', tone: 'error' },
   { code: 5, label: 'Pending' },
-  { code: 6, label: 'Ended unexpectedly' },
+  { code: 6, label: 'Ended unexpectedly', tone: 'error' },
   { code: 7, label: 'Succeeded' },
-  { code: 8, label: 'Stopping' },
+  { code: 8, label: 'Stopping', tone: 'warning' },
   { code: 9, label: 'Completed' }
 ]
 /** Statuses an operation can still leave, and those it cannot. */
@@ -352,6 +357,34 @@ export const catalogProbeFinalCodes = ['PERMISSION_DENIED', 'LOGIN_FAILED', 'NOT
 /** The status values of `ssis.catalogProbe`, in order: each fingerprint's count, then its checksum. */
 export const catalogFingerprintStatus: readonly string[] = catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum'])
 
+/**
+ * The Operations view's kind filter (D-ssis 6.2): the operation types each kind holds. `other` is every type the others do
+ * not name, known to the catalogue or not, so no operation falls outside every kind.
+ */
+export const operationKinds = ['execution', 'validation', 'deploy', 'other'] as const
+export type OperationKind = typeof operationKinds[number]
+export const operationKindSpecs: { readonly [K in OperationKind]: { readonly label: string; readonly types: readonly number[] } } = {
+  execution: { label: 'Executions', types: [200] },
+  validation: { label: 'Validations', types: [300, 301] },
+  deploy: { label: 'Deployments', types: [101] },
+  other: { label: 'Other', types: [] }
+}
+/** The operation types a kind other than `other` names: what `other` leaves out. */
+export const groupedOperationTypes: readonly number[] = operationKinds.flatMap(kind => operationKindSpecs[kind].types)
+/**
+ * The Operations view's tiles (D-ssis 6.2), one per series of the `ssis.operations.list` probe: the statuses each counts,
+ * over every operation the login may see whatever the filters, and for a final status only those created in the last
+ * `lastHours`. A tile is also a filter: pressed, it shows those statuses (in that window).
+ */
+export interface OperationTile { readonly series: string; readonly label: string; readonly statuses: readonly number[]; readonly lastHours?: number }
+export const operationTiles: readonly OperationTile[] = [
+  { series: 'running', label: 'Running', statuses: [2] },
+  { series: 'pending', label: 'Pending', statuses: [5] },
+  { series: 'failed24h', label: 'Failed', statuses: [4, 6], lastHours: 24 },
+  { series: 'succeeded24h', label: 'Succeeded', statuses: [7, 9], lastHours: 24 },
+  { series: 'canceled24h', label: 'Canceled', statuses: [3], lastHours: 24 }
+]
+
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
 export const ssisErrorRetryable = {
   CATALOG_MISSING: false,
@@ -435,7 +468,16 @@ export const ssisLimits = {
   /** Create Catalog's encryption password, in UTF-16 code units; the server's password policy applies too. */
   catalogPassword: 128,
   /** A path Create Catalog reads on the server (the catalog backup, the assembly, the database files). */
-  serverPath: 1_024
+  serverPath: 1_024,
+  /** The Operations view (the ssis.operations live source): the most operations its window holds, how many it holds unless
+   *  told otherwise, the open ones one tick reads again, the longest window in hours (a year, the catalog's longest
+   *  retention), and how often it counts the last 24 hours by status. */
+  operationsRows: 10_000,
+  operationsDefaultRows: 1_000,
+  operationsRefresh: 256,
+  operationsWindowHours: 8_760,
+  operationsDefaultWindowHours: 24,
+  operationsCountMs: 30_000
 } as const
 
 // Compact sorted-key JSON, as in explorerCatalogJson(), so each entry diffs as one line.
@@ -459,7 +501,9 @@ export function ssisCatalogJson(): string {
     `  "loggingLevels": ${line(loggingLevels)},`,
     `  "messageTypes": ${line(messageTypes)},`,
     `  "openStatuses": ${line(openStatuses)},`,
+    `  "operationKinds": ${line(operationKinds.map(kind => ({ kind, ...operationKindSpecs[kind] })))},`,
     `  "operationStatuses": ${line(operationStatuses)},`,
+    `  "operationTiles": ${line(operationTiles)},`,
     `  "operationTypes": ${line(operationTypes)},`,
     `  "parameterObjectTypes": ${line(parameterObjectTypes)},`,
     `  "stoppableOperationTypes": ${line(stoppableOperationTypes)},`,

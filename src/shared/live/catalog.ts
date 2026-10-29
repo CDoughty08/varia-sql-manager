@@ -50,9 +50,10 @@ export interface LiveTableSpec {
   /** Snapshot: columns whose distinct values, with their counts, samples carry whenever they change (column value
    *  filters), at most limits.live.facetColumns. */
   readonly facets?: readonly string[]
-  /** Append: an id counts as settled once it was first seen at least this many ticks and milliseconds ago
-   *  (defaultSettle). Ids are assigned at insert, not commit, so a lower id can appear after a higher one; until the ids
-   *  around it settle, every tick reads them again and appends only the ones it has not seen. */
+  /** Append, and a snapshot the backend builds from ids it reads above a settled one (the Operations window): an id counts
+   *  as settled once it was first seen at least this many ticks and milliseconds ago (defaultSettle). Ids are assigned at
+   *  insert, not commit, so a lower id can appear after a higher one; until the ids around it settle, every tick reads them
+   *  again and appends (or keeps) only the ones it has not seen. */
   readonly settle?: { readonly ticks: number; readonly ms: number }
   /** Append: the most new rows one tick reads (defaultBatchRows, at most limits.live.batchRows), so a catch-up never runs
    *  one huge read; twice as many unsettled ids are remembered to skip repeats. */
@@ -119,12 +120,14 @@ export const defaultDutyCycle = 0.25
 export const defaultSnapshotRows = 5000
 export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
+/** The Operations window's settle window: its ids, like an append table's, are assigned before their rows commit. */
+const operationsSettle = defaultSettle
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog', 'ssis.operations'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
-  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe'
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe', 'ssis.operations.list'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -144,6 +147,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   'ssis.catalog': {
     id: 'ssis.catalog', label: 'SSIS Catalog', scope: 'ssisdb', testOnly: false, probes: ['ssis.catalogProbe'],
     description: 'The SSIS Catalog\'s views, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Object Explorer holds one per connection while an SSISDB node is open. A catalog that no longer exists ends it (CATALOG_MISSING).'
+  },
+  'ssis.operations': {
+    id: 'ssis.operations', label: 'SSIS Operations', scope: 'ssisdb', testOnly: false, probes: ['ssis.operations.list'],
+    description: 'The SSIS Catalog\'s operations (executions, validations, deployments and the rest) in a window of the last hours, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Its args are the Operations document\'s filters (kinds, statuses, folder, project, package, caller, the window and its row limit); new args read the window again. A catalog that no longer exists ends it (CATALOG_MISSING).'
   }
 }
 
@@ -257,6 +264,28 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'ssis.catalogProbe', source: 'ssis.catalog', label: 'Catalog changes', intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 },
     description: 'A fingerprint of each catalog view the SSIS tree and its documents show, in one query: its row count and a checksum of the columns they show (catalogFingerprints in src/shared/ssis/catalog.ts), over the rows row-level security lets the login see; catalog properties only for a sysadmin or ssis_admin, the only ones who may read them. Object Explorer reloads only what changed, keeping expansion and selection.',
     status: catalogFingerprintStatus
+  },
+  'ssis.operations.list': {
+    id: 'ssis.operations.list', source: 'ssis.operations', label: 'Operations', intervalMs: { default: 2000, min: 1000, max: 60_000 }, budgetMs: { min: 500, max: 10_000 },
+    description: `The window's operations, newest first, as the backend keeps them. A new window (the first sample, new args) reads the newest operations that pass the filters and, apart, every open one in their scope whatever its age; each later sample reads the operations above the newest id it has settled (an id settles ${operationsSettle.ticks} samples and ${operationsSettle.ms / 1000} s after it was first seen, since an id is assigned before its row commits) and the open ones it holds again (at most 256 a sample, in turn), and drops what left the window or the status filter. Within the limit, open operations come first. Folder and Project match an execution's or a validation's names, and Project a deployment's project too. The tiles ignore the filters and the limit: each sample counts the running and pending operations, and every 30 s those created in the last 24 hours by status, over every operation the login may see (row-level security shows a login only the operations it may read).`,
+    series: [
+      { id: 'running', unit: 'count', label: 'Running', counter: 'gauge' },
+      { id: 'pending', unit: 'count', label: 'Pending', counter: 'gauge' },
+      { id: 'failed24h', unit: 'count', label: 'Failed (24 h)', counter: 'gauge' },
+      { id: 'succeeded24h', unit: 'count', label: 'Succeeded (24 h)', counter: 'gauge' },
+      { id: 'canceled24h', unit: 'count', label: 'Canceled (24 h)', counter: 'gauge' }
+    ],
+    status: ['newest'],
+    tables: [{
+      id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true, settle: operationsSettle,
+      columns: [
+        { id: 'operationId', name: 'ID', dataType: 'bigint' }, { id: 'type', name: 'Type', dataType: 'nvarchar' }, { id: 'status', name: 'Status', dataType: 'nvarchar' },
+        { id: 'folder', name: 'Folder', dataType: 'nvarchar' }, { id: 'project', name: 'Project', dataType: 'nvarchar' }, { id: 'package', name: 'Package', dataType: 'nvarchar' },
+        { id: 'object', name: 'Object', dataType: 'nvarchar' }, { id: 'start', name: 'Start', dataType: 'datetimeoffset' }, { id: 'end', name: 'End', dataType: 'datetimeoffset' },
+        { id: 'duration', name: 'Duration', dataType: 'nvarchar' }, { id: 'caller', name: 'Caller', dataType: 'nvarchar' }, { id: 'stoppedBy', name: 'Stopped by', dataType: 'nvarchar' },
+        { id: 'server', name: 'Server', dataType: 'nvarchar' }, { id: 'machine', name: 'Machine', dataType: 'nvarchar' }, toneColumn
+      ]
+    }]
   }
 }
 
@@ -277,7 +306,7 @@ export function liveCatalogJson(): string {
   const probes = liveProbeIds.map(id => {
     const spec = liveProbes[id]
     const tables = (spec.tables ?? []).map(table => table.mode === 'snapshot'
-      ? { id: table.id, mode: table.mode, columns: table.columns, key: table.key, rowCap: table.rowCap ?? defaultSnapshotRows, departed: table.departed ?? false, facets: table.facets ?? [] }
+      ? { id: table.id, mode: table.mode, columns: table.columns, key: table.key, rowCap: table.rowCap ?? defaultSnapshotRows, departed: table.departed ?? false, facets: table.facets ?? [], ...table.settle ? { settle: table.settle } : {} }
       : { id: table.id, mode: table.mode, columns: table.columns, key: table.key, settle: table.settle ?? defaultSettle, batchRows: table.batchRows ?? defaultBatchRows })
     return {
       ...spec, series: spec.series ?? [], tables, status: spec.status ?? [], views: spec.views ?? [], filterMode: spec.filterMode ?? 'none',

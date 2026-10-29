@@ -162,6 +162,7 @@ await SsisChecks.RunAsync(Check);
 ActivityChecks.Run(Check);
 ActivitySourceChecks.Run(Check);
 await ActivityActionChecks.RunAsync(Check, json);
+SsisOperationsChecks.Run(Check);
 using (var offline = new SqlService())
 {
     try { await offline.DispatchAsync("tables.columns", JsonSerializer.SerializeToElement(new TableArgs(Guid.NewGuid().ToString(), "master", "dbo", new string('x', 129)), json), json); throw new Exception("Overlong table name accepted"); }

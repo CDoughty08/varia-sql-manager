@@ -234,6 +234,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     IReadOnlyCollection<string> IActivityHost.ApplicationNames() =>
         connections.Values.Select(connectionString => new SqlConnectionStringBuilder(connectionString).ApplicationName).ToHashSet(StringComparer.Ordinal);
     string ILiveHost.SsisCatalog => ssis.Options.CatalogDatabase;
+    bool ILiveHost.SsisIgnoresLinux => ssis.Options.IgnoreLinuxHost;
 
     /// <summary>The server a connection reaches: its own name (SERVERPROPERTY('ServerName'), probed at connect), so two
     /// connections to one server count as one whatever name, login or database they used; the connection's data source when

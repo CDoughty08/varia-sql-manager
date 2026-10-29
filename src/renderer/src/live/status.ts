@@ -105,3 +105,19 @@ export function freshness(snapshot: LiveSnapshot, now: number, shown?: readonly 
   if (!late.length) return updatedAt === undefined ? {} : { updatedAt }
   return { ...updatedAt === undefined ? {} : { updatedAt }, stale: { since: Math.min(...late.map(probe => probe.lastSampleAt ?? now)) } }
 }
+
+/**
+ * The states kit's LivePill for one probe of a view: the view's status, slowed while the server stretched the interval, who
+ * paused it, and why it ended. A probe the view does not run reads as the view does, at the catalogue's default.
+ */
+export function probePillStatus(snapshot: LiveSnapshot, probe: LiveProbeId, defaultMs: number): KitLiveStatus {
+  const entry = snapshot.probes[probe]
+  const intervalMs = entry?.intervalMs ?? defaultMs
+  const ended = snapshot.ended?.ended
+  switch (snapshot.status) {
+    case 'live': return entry && entry.effectiveIntervalMs > entry.intervalMs ? { state: 'slowed', intervalMs, effectiveMs: entry.effectiveIntervalMs } : { state: 'live', intervalMs }
+    case 'paused': return { state: 'paused', intervalMs, ...snapshot.pausedBy ? { pausedBy: snapshot.pausedBy } : {} }
+    case 'ended': return { state: 'ended', intervalMs, ...ended ? { ended } : {} }
+    default: return { state: snapshot.status, intervalMs }
+  }
+}

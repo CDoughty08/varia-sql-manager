@@ -146,8 +146,12 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 : spec.Permission == "serverState" && permitted is false ? State("unavailable", "PERMISSION_DENIED", LiveErrors.PermissionMessage)
                 : State("ok"));
         }
-        return new(states, band, spid, LiveSql.Isolation(prologue));
+        return new(states, band, spid, LiveSql.Isolation(Prologue));
     }
+
+    /// <summary>The prologue the probes run with: a reader's own once its session probe chose one (SSISDB's isolation follows
+    /// the catalog's READ_COMMITTED_SNAPSHOT), else the scope's.</summary>
+    private string Prologue => sourceReader?.Prologue ?? prologue;
 
     /// <summary>Opens a connection when none is open, within <see cref="ConnectBudgetMs"/> (TimeoutException past it).</summary>
     private async Task ConnectAsync(CancellationToken token)
@@ -250,7 +254,7 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
                 }
                 budget.CancelAfter(item.BudgetMs);
                 var started = Stopwatch.GetTimestamp();
-                var read = byReader ? await sourceReader!.ReadAsync(connection!, prologue, item, testText, budget.Token).ConfigureAwait(false) : await ReadAsync(query!, item, budget.Token).ConfigureAwait(false);
+                var read = byReader ? await sourceReader!.ReadAsync(connection!, Prologue, item, testText, budget.Token).ConfigureAwait(false) : await ReadAsync(query!, item, budget.Token).ConfigureAwait(false);
                 var cost = (int)Math.Min(int.MaxValue, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 if (!read.Sampled)
                 {
@@ -349,9 +353,9 @@ internal sealed class SqlSampler(ILiveHost host, LiveGates gates, string subscri
             command.CommandText = LiveSql.UncommittedPrologue + LiveSql.CatalogState;
             command.Parameters.Add(new SqlParameter("@catalog", SqlDbType.NVarChar, 128) { Value = host.SsisCatalog });
             await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, budget.Token).ConfigureAwait(false);
-            return await reader.ReadAsync(budget.Token).ConfigureAwait(false)
-                ? LiveErrors.Catalog(probe, Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture), Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture))
-                : LiveErrors.Catalog(probe, null, null);
+            if (!await reader.ReadAsync(budget.Token).ConfigureAwait(false)) return null;
+            int? Number(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+            return LiveErrors.Catalog(probe, Number(0), Number(1), Number(2) == 1);
         }
         catch (Exception error) when (token.IsCancellationRequested && error is SqlException or InvalidOperationException or OperationCanceledException)
         {

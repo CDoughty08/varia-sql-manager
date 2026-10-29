@@ -43,6 +43,22 @@ internal static class ConnectionFailureChecks
         return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;
     }
 
+    /// <summary>A SqlException that carries several errors, as one batch or login raises them (4060 with 18456, say), each
+    /// with its number and severity.</summary>
+    internal static SqlException SqlMany(IReadOnlyList<(int Number, byte Level)> numbers)
+    {
+        var flags = BindingFlags.NonPublic | BindingFlags.Instance;
+        var constructor = typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
+            ?? throw new Exception("SqlClient's SqlError constructor changed; update ConnectionFailureChecks.Sql");
+        var errors = (SqlErrorCollection)(typeof(SqlErrorCollection).GetConstructor(flags, Type.EmptyTypes) ?? throw new Exception("SqlErrorCollection's constructor changed")).Invoke([]);
+        var add = typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed");
+        foreach (var (number, level) in numbers)
+            add.Invoke(errors, [constructor.Invoke([number, (byte)1, level, "server", "failed " + number.ToString(System.Globalization.CultureInfo.InvariantCulture), "", 0, null])]);
+        var create = typeof(SqlException).GetMethod("CreateException", BindingFlags.NonPublic | BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string)])
+            ?? throw new Exception("SqlException.CreateException changed");
+        return (SqlException)create.Invoke(null, [errors, "17.00.1000"])!;
+    }
+
     /// <summary>The argument that makes the check program print KerberosProbe.Inspect() and exit (see RunAsync).</summary>
     internal const string ProbeArgument = "--kerberos-probe";
 

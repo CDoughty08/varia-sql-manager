@@ -3,11 +3,14 @@
 import {
   catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
-  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, validationStatuses, createCatalog, type CodeLabel, type SsisActionSpec
+  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, operationKinds, operationKindSpecs, groupedOperationTypes, validationStatuses, createCatalog, type CodeLabel, type SsisActionSpec
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
-import { liveProbes } from '../live/catalog.ts'
+import { defaultSettle, liveProbes } from '../live/catalog.ts'
 import { createCatalogDrainMs } from '../ipc/methods.ts'
+
+/** The settle window the Operations window binds: its table's in the live catalogue, as the backend reads it. */
+const settle = liveProbes['ssis.operations.list'].tables?.[0]?.settle ?? defaultSettle
 
 export const generatedMarker = '<!-- Generated below from src/shared/ssis/catalog.ts. Regenerate with: npx vitest run tests/ssis-catalog.test.ts -u -->'
 
@@ -48,7 +51,13 @@ const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   createDrainMs: 'How long a backend that is shutting down waits for a Create Catalog past its restore to finish, or to remove what it created, in ms; a Stop or a disconnect waits as long past `stopGraceMs`',
   restoreStopMs: 'How long Create Catalog\'s restore runs on after a Stop, a disconnect or a shutdown before SQL Server is asked to end it too, in ms',
   catalogPassword: 'UTF-16 code units in Create Catalog\'s encryption password (at least 1; the server\'s password policy applies too)',
-  serverPath: 'Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files)'
+  serverPath: 'Characters in a path Create Catalog reads on the server (the catalog backup, the assembly, the database files)',
+  operationsRows: 'The most operations the Operations view\'s window holds (its `limit`)',
+  operationsDefaultRows: 'The operations it holds unless told otherwise',
+  operationsRefresh: 'Open operations one sample reads again; more take turns',
+  operationsWindowHours: 'The longest window, in hours (`windowHours`)',
+  operationsDefaultWindowHours: 'The window unless told otherwise, in hours',
+  operationsCountMs: 'How often the 24-hour counts are read, in ms'
 }
 
 const viewNotes: Readonly<Record<typeof describeViews[number], string>> = {
@@ -243,6 +252,30 @@ export function renderSsisDocs(): string {
     'SQL text Varia builds, in messages, in logs or on disk, and the request\'s frame is zeroed on both sides.',
     '',
 
+    '### Operations (the `ssis.operations` live source)',
+    '',
+    'The Operations document (Active Operations, All Executions, All Validations and All Operations) shows one live subscription of',
+    'the `ssis.operations` source per connection, on the SSIS read pool at the live prologue (docs/live.md). Its args are the',
+    'document\'s filters; new args read the window again. The backend keeps the window: `limit` operations that pass the filters',
+    'and are still open or were created in the last `windowHours`, the open ones first (an open one of any age stays, so Active',
+    'Operations finds a long run), then the newest, and the open ones the status filter hides, followed unseen since they can end',
+    'in a status it shows. A new window reads the open operations of its scope apart, whatever their age. Each sample reads the',
+    `operations above the newest id it has settled (${settle.ticks} samples and ${settle.ms / 1000} s after it was first seen, the operations table's`,
+    `settle in the live catalogue: an id is assigned before its row commits), refreshes the open ones it holds (at most ${ssisLimits.operationsRefresh} a`,
+    'sample, in turn), counts the running and pending operations, and drops what it neither shows nor follows; every',
+    `${ssisLimits.operationsCountMs / 1000} s it counts the last 24 hours by status. The counts ignore the filters and the limit. A row a refresh no longer`,
+    'finds (removed by the retention cleanup, or a dirty read rolled back) leaves the window. Folder and Project match an',
+    'execution\'s or a validation\'s names (`catalog.executions`, `catalog.validations`) and Project a deployment\'s project (its',
+    '`object_name`); Package matches an execution\'s.',
+    '',
+    table(['Kind', 'Label', 'Operation types'], operationKinds.map(kind => [code(kind), operationKindSpecs[kind].label,
+      kind === 'other' ? `every type but ${groupedOperationTypes.map(code).join(', ')}` : operationKindSpecs[kind].types.map(code).join(', ')])),
+    '',
+    'A row\'s tone follows its status (none for one that is running, pending, succeeded or completed: the grid\'s running tone is',
+    'the selection\'s hue):',
+    '',
+    table(['Status', 'Meaning', 'Tone'], operationStatuses.map(item => [code(item.code), item.label, item.tone ?? '—'])),
+    '',
     '### Code tables',
     '',
     `Operation types (\`catalog.operations.operation_type\`):`,

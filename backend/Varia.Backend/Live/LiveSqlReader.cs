@@ -33,4 +33,7 @@ internal interface ILiveSqlReader
     void Apply(object args);
     /// <summary>The connection was lost and may reach another server: per-row rates start again.</summary>
     void Reset();
+    /// <summary>The prologue the reader's statements run with once its session probe has chosen one (an SSISDB reader reads
+    /// committed when the catalog's database has READ_COMMITTED_SNAPSHOT on); null keeps the scope's.</summary>
+    string? Prologue => null;
 }

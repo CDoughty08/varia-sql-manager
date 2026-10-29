@@ -1,0 +1,36 @@
+{
+  "description": "ssis.operations args that main (src/shared/ssis/schema.ts ssisOperationsArgsSchema) and the backend (Live/SsisOperations.cs SsisOperationsArgs) must both accept, or both refuse. tests/ssis-operations.test.ts and SsisOperationsChecks read this file.",
+  "accepted": [
+    {},
+    {"kinds":["execution","other"],"statuses":[2,4],"folder":"Fin_100%","prefix":true,"caller":"CORP\\etl","windowHours":8760,"limit":10000},
+    {"folder":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","project":"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp","package":"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk","caller":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","windowHours":1,"limit":1}
+  ],
+  "refused": [
+    {"kinds":[]},
+    {"kinds":["execution","execution"]},
+    {"kinds":["jobs"]},
+    {"kinds":"execution"},
+    {"kinds":["execution","validation","deploy","other","execution"]},
+    {"statuses":[]},
+    {"statuses":[42]},
+    {"statuses":[2,2]},
+    {"statuses":[2.5]},
+    {"folder":""},
+    {"folder":"fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+    {"folder":5},
+    {"project":""},
+    {"project":"ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"},
+    {"package":""},
+    {"package":"kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"},
+    {"caller":""},
+    {"caller":"ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"prefix":"yes"},
+    {"windowHours":0},
+    {"windowHours":8761},
+    {"windowHours":1.5},
+    {"limit":0},
+    {"limit":10001},
+    {"limit":100.5},
+    {"since":"2026-10-01"}
+  ]
+}

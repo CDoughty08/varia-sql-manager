@@ -67,8 +67,9 @@ internal static class LiveSchedulerChecks
             .Concat(queries.Where(query => query.Probe == LiveSql.CatalogProbe).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.CommittedPrologue))).Select(problem => "catalog probe, read committed: " + problem))
             .Concat(queries.Where(query => query.Restricted is not null).SelectMany(query => LiveSql.Lint(query.Text(LiveSql.UncommittedPrologue, admin: false))
                 .Concat(LiveSql.Lint(query.Text(LiveSql.CommittedPrologue, admin: false))).Select(problem => query.Probe + " band " + query.Band + ", restricted: " + problem))).ToList();
-        // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's run several statements each (ActivityReader).
-        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id)).ToList();
+        // The one-batch probes are Object Explorer's status probes and the SSIS tree's catalog probe; the Activity Monitor's and the
+        // Operations document's run several statements each (ActivityReader, SsisOperationsReader), checked by their own lints.
+        var oneBatch = catalog.Probes.Values.Where(probe => catalog.Sources[probe.Source].Scope != "none" && !ActivityCatalog.Current.LiveProbes.Contains(probe.Id) && probe.Id != LiveSql.OperationsProbe).ToList();
         check(oneBatch.Count == 5 && queries.Count == oneBatch.Count * (LiveSql.MaxBand - LiveSql.MinBand + 1) && problems.Count == 0,
             "every one-batch SQL probe's text passes the live lint at every band, with the session probe, the catalog state read and the catalog probe's restricted and read-committed texts (" + queries.Count + "): " + string.Join("; ", problems.Take(5)));
         // The Activity Monitor's statements run through the live layer too, so they pass its lint as well as their own; @@SPID is
@@ -621,12 +622,12 @@ internal static class LiveSchedulerChecks
             && new[] { LiveErrors.BlockedMessage, LiveErrors.TimeoutMessage, LiveErrors.PermissionMessage, LiveErrors.UnsupportedMessage, LiveErrors.UnavailableMessage, LiveErrors.LostMessage, LiveErrors.BusyMessage, LiveErrors.LoginFailedMessage }.All(message => message.EndsWith('.')),
             "probe error messages are complete sentences of at most 2,000 characters, and a sign-in failure keeps its own advice");
         // An SSISDB source that cannot open the catalog's database, by its sys.databases row (state, user_access).
-        var missing = LiveErrors.Catalog(LiveSql.CatalogProbe, null, null);
-        var offline = LiveErrors.Catalog(LiveSql.CatalogProbe, 6, 0);
-        var restoring = LiveErrors.Catalog(LiveSql.CatalogProbe, 1, 0);
-        var single = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 1);
-        var closed = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 0);
-        var restricted = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 2);
+        var missing = LiveErrors.Catalog(LiveSql.CatalogProbe, null, null, seesAll: true);
+        var offline = LiveErrors.Catalog(LiveSql.CatalogProbe, 6, 0, seesAll: true);
+        var restoring = LiveErrors.Catalog(LiveSql.CatalogProbe, 1, 0, seesAll: true);
+        var single = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 1, seesAll: true);
+        var closed = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 0, seesAll: true);
+        var restricted = LiveErrors.Catalog(LiveSql.CatalogProbe, 0, 2, seesAll: true);
         check(missing is { Code: "CATALOG_MISSING", Terminal: true, Message: LiveErrors.CatalogMissingMessage } && offline is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
             && restoring is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && single is { Code: "DATABASE_UNAVAILABLE", Terminal: false } && restricted is { Code: "DATABASE_UNAVAILABLE", Terminal: false }
             && closed is { Code: "PERMISSION_DENIED", Terminal: true, Message: LiveErrors.CatalogAccessMessage } && LiveErrors.CatalogMissingMessage.EndsWith('.') && LiveErrors.CatalogAccessMessage.EndsWith('.'),

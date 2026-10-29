@@ -109,6 +109,10 @@ internal sealed record SyntheticLiveArgs(int? Rows = null, int? TickMs = null, i
 /// <summary>The Activity Monitor's args (src/shared/activity/schema.ts, activityLiveArgsSchema): one filter per table, and the
 /// session the sessions probe's two series follow (0: none). Activity/ActivityReader.cs checks them as zod does.</summary>
 internal sealed record ActivityLiveArgs(List<ActivityFilterDto?>? Filters = null, int? FocusSession = null);
+/// <summary>ssis.operations' args (src/shared/ssis/schema.ts SsisOperationsArgs): the Operations view's filters, each absent one
+/// no filter. Live/SsisOperations.cs re-checks every member and bound.</summary>
+internal sealed record SsisOperationsLiveArgs(string[]? Kinds = null, int[]? Statuses = null, string? Folder = null, string? Project = null, string? Package = null, bool? Prefix = null,
+    string? Caller = null, int? WindowHours = null, int? Limit = null);
 
 /// <summary>explorer.children: refs are flat records (no polymorphic converters), validated by ExplorerRefs against the catalogue.</summary>
 internal sealed record ExplorerChildrenArgs(string ConnectionId, string RequestId, NodeRefDto Node, string? Subtype = null, string? Cursor = null, int? PageSize = null,

@@ -70,6 +70,7 @@ View
   &Reset Layout  ++++
   ---
   Activity &Monitor  +++-
+  I&ntegration Services Operations  -+++
   ---
   T&heme >
     &Color Theme…  ++++

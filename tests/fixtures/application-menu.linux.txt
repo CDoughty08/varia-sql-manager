@@ -69,6 +69,7 @@
   {"id":"layout.reset","label":"Reset Layout","registerAccelerator":false,"type":"normal","click":[["command","layout.reset"]]}
   {"type":"separator"}
   {"id":"activity.open","label":"Activity Monitor","registerAccelerator":false,"type":"normal","click":[["command","activity.open"]]}
+  {"id":"ssis.allOperations","label":"Integration Services Operations","registerAccelerator":false,"type":"normal","click":[["command","ssis.allOperations"]]}
   {"type":"separator"}
   {"id":"view.theme","label":"Theme"}
     {"id":"preferences.colorTheme","label":"Color Theme…","registerAccelerator":false,"type":"normal","click":[["command","preferences.colorTheme"]]}

@@ -20,10 +20,12 @@ internal sealed class SsisCatalog
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record ViewJson(string View, string Kind);
     private sealed record ActionJson(string Verb, string Title, List<string> Steps, List<string> Procedures, bool Revision, bool WindowsAuthOnBox, string Scope);
+    private sealed record KindJson(string Kind, string Label, List<int> Types);
     private sealed record BackupFileJson(int Since, string File);
     private sealed record CreateJson(List<BackupFileJson> BackupFiles, string AssemblyFile, string CleanupStep);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, string CatalogDatabase, CreateJson CreateCatalog, List<ErrorJson> Errors, List<string> Features, List<int> FinalStatuses,
-        Dictionary<string, long> Limits, List<CodeJson> LoggingLevels, List<CodeJson> MessageTypes, List<int> OpenStatuses, List<CodeJson> OperationStatuses, List<CodeJson> OperationTypes,
+        Dictionary<string, long> Limits, List<CodeJson> LoggingLevels, List<CodeJson> MessageTypes, List<int> OpenStatuses, List<KindJson> OperationKinds, List<CodeJson> OperationStatuses,
+        List<OperationTile> OperationTiles, List<CodeJson> OperationTypes,
         List<CodeJson> ParameterObjectTypes, List<int> StoppableOperationTypes, List<ViewJson> Views);
 
     private readonly Dictionary<string, bool> errors;
@@ -48,6 +50,9 @@ internal sealed class SsisCatalog
         Limits = json.Limits;
         LoggingLevels = json.LoggingLevels.ToDictionary(row => row.Code, row => row.Label);
         OperationStatuses = json.OperationStatuses.ToDictionary(row => row.Code, row => row.Label);
+        OperationTones = json.OperationStatuses.Where(row => row.Tone is not null).ToDictionary(row => row.Code, row => row.Tone!);
+        OperationKinds = json.OperationKinds.ToDictionary(row => row.Kind, row => (IReadOnlyList<int>)row.Types, StringComparer.Ordinal);
+        OperationTiles = json.OperationTiles;
         OperationTypes = json.OperationTypes.ToDictionary(row => row.Code, row => row.Label);
         ParameterObjectTypes = json.ParameterObjectTypes.ToDictionary(row => row.Code, row => row.Label);
         MessageTypes = json.MessageTypes.ToDictionary(row => row.Code, row => row.Label);
@@ -69,6 +74,12 @@ internal sealed class SsisCatalog
     public IReadOnlyDictionary<string, long> Limits { get; }
     public IReadOnlyDictionary<int, string> LoggingLevels { get; }
     public IReadOnlyDictionary<int, string> OperationStatuses { get; }
+    /// <summary>The Operations grid's row tone by status (a live grid tone); a status without one has none.</summary>
+    public IReadOnlyDictionary<int, string> OperationTones { get; }
+    /// <summary>The Operations view's kinds and the operation types each names (other names none: it is every type the rest do not).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<int>> OperationKinds { get; }
+    /// <summary>The Operations view's tiles: the probe's series, in order, and the statuses each counts.</summary>
+    public IReadOnlyList<OperationTile> OperationTiles { get; }
     public IReadOnlyDictionary<int, string> OperationTypes { get; }
     public IReadOnlyDictionary<int, string> ParameterObjectTypes { get; }
     public IReadOnlyDictionary<int, string> MessageTypes { get; }
@@ -89,6 +100,10 @@ internal sealed class SsisCatalog
     public bool Retryable(string code) => errors.TryGetValue(code, out var retryable) ? retryable : throw new InvalidOperationException("Unknown SSIS error code " + code + ".");
     public int Limit(string name) => checked((int)Limits[name]);
 }
+
+/// <summary>One Operations tile (src/shared/ssis/catalog.ts operationTiles): the probe series it shows, the statuses it counts,
+/// and for final statuses the hours it looks back.</summary>
+internal sealed record OperationTile(string Series, string Label, List<int> Statuses, int? LastHours = null);
 
 /// <summary>One ssis.execute verb (src/shared/ssis/catalog.ts ssisActions): its steps' titles in order, the catalog procedures its
 /// templates may call, whether it takes a describe's revision, whether a box server's SSISDB refuses it to SQL Server logins, and

@@ -4,6 +4,7 @@ import type { SettingKey } from '../settings/catalog'
 import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
+import { operationsCommandEntries } from '../ssis/operations.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 
@@ -335,6 +336,9 @@ export const commandCatalog = {
   ...propertiesCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
+  // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
+  // from src/shared/ssis/operations.ts.
+  ...operationsCommandEntries(),
   // Script as › <verb> To › <destination>: 30 commands generated from src/shared/scripting/catalog.ts, which keep the
   // table menu's explorer.scriptCreateTo* ids. Each acts on its menu's node, else the selection.
   ...scriptCommandEntries(),

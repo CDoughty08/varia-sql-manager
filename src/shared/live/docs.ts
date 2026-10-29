@@ -17,7 +17,7 @@ const schedule = (probe: LiveProbeSpec) => {
 const count = (value: number) => value.toLocaleString('en-US')
 /** A table's own settings: a snapshot's row cap, departed rows and facets; an append table's keyset, settle window and reads. */
 const tableRules = (table: LiveTableSpec) => table.mode === 'snapshot'
-  ? [`at most ${count(table.rowCap ?? defaultSnapshotRows)} rows`, ...table.departed ? ['keeps departed rows'] : [], ...table.facets?.length ? ['facets ' + table.facets.map(code).join(', ')] : []].join(', ')
+  ? [`at most ${count(table.rowCap ?? defaultSnapshotRows)} rows`, ...table.departed ? ['keeps departed rows'] : [], ...table.facets?.length ? ['facets ' + table.facets.map(code).join(', ')] : [], ...table.settle ? [`settles after ${table.settle.ticks} ticks and ${seconds(table.settle.ms)}`] : []].join(', ')
   : [`keyset ${code(table.key[0])}`, `settles after ${(table.settle ?? defaultSettle).ticks} ticks and ${seconds((table.settle ?? defaultSettle).ms)}`, `at most ${count(table.batchRows ?? defaultBatchRows)} new rows a tick`].join(', ')
 
 export function renderLiveDocs(): string {

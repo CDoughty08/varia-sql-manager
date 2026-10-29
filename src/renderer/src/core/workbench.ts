@@ -59,6 +59,7 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
 import { MenuTargetService } from '../menus/targets'
@@ -146,6 +147,8 @@ export interface Workbench extends Disposable {
   readonly properties: DatabasePropertiesService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
+  /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
+  readonly operations: SsisOperationsService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -227,6 +230,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
   })
+  const operations = new SsisOperationsService({
+    api, documents, panes, live, connections, settings,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -248,6 +255,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     properties: properties.context,
     notifications,
     activity: activity.context,
+    ssis: operations.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -314,6 +322,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     ssisProperties,
     properties,
     activity,
+    operations,
     theme,
     notifications,
     dispose: () => {
@@ -333,6 +342,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the live views: its documents' views and stops are cancelled while the service still runs them.
+      operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.

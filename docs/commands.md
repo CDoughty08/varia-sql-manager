@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (175)
+## Commands (184)
 
 ### File
 
@@ -203,6 +203,15 @@ keys it uses are listed below.
 
 | Command | Id | Windows | Linux | macOS | Available when | Menus |
 | --- | --- | --- | --- | --- | --- | --- |
+| Active Operations | `ssis.activeOperations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › Active Operations |
+| All Executions | `ssis.allExecutions` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Executions |
+| All Validations | `ssis.allValidations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Validations |
+| All Operations | `ssis.allOperations` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › All Operations; View › Integration Services Operations |
+| Stop Operation | `ssis.stopOperation` | — | — | — | `backendReady && ssisOperationStoppable` | Integration Services Operations context menu › Stop Operation |
+| Refresh Operations | `ssis.refreshOperations` | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsisOperations && !activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsisOperations && ssisOperationsRefreshable` | Integration Services Operations context menu › Refresh |
+| Pause Operations | `ssis.pauseOperations` | — | — | — | `activeDocumentIsSsisOperations && ssisOperationsPausable`; checked when `ssisOperationsPaused` | Integration Services Operations context menu › Pause |
+| Copy Operations | `ssis.copyOperations` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy |
+| Copy Operations with Headers | `ssis.copyOperationsWithHeaders` | — | — | — | `activeDocumentIsSsisOperations` | Integration Services Operations context menu › Copy with Headers |
 | Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
@@ -366,6 +375,7 @@ platforms or, in a context menu, to targets that match its condition; an item th
 | `1_layout` | **L**oad Layout… | `layout.load` | Always |
 | `1_layout` | **R**eset Layout | `layout.reset` | Always |
 | `2_monitor` | Activity **M**onitor | `activity.open` | Always |
+| `2_monitor` | I**n**tegration Services Operations | `ssis.allOperations` | Always |
 | `3_theme` | T**h**eme › | Submenu: View › Theme | Always |
 | `4_zoom` | Zoom **I**n | `view.zoomIn` | Always |
 | `4_zoom` | Zoom **O**ut | `view.zoomOut` | Always |
@@ -466,6 +476,10 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
@@ -655,7 +669,19 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (90)
+#### Integration Services Operations context menu (`ssis.operation.context`)
+
+Right-click the Integration Services Operations grid (a right-click outside the selection selects that row first), or press Shift+F10 or the context-menu key in it. Items act on the selected operation and the document's rows.
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_operation` | **S**top Operation | `ssis.stopOperation` | Always |
+| `5_copy` | **C**opy | `ssis.copyOperations` | Always |
+| `5_copy` | Copy with **H**eaders | `ssis.copyOperationsWithHeaders` | Always |
+| `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
+| `8_view` | **P**ause | `ssis.pauseOperations` | Always |
+
+## Context keys (95)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -683,6 +709,11 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
 | `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
+| `activeDocumentIsSsisOperations` | boolean | state | The active document is Integration Services Operations. |
+| `ssisOperationStoppable` | boolean | state | The operation selected in the active Integration Services Operations document is an execution or validation that is running or pending, and no stop of it is on its way. |
+| `ssisOperationsPaused` | boolean | state | The active Integration Services Operations document is paused (Pause): it reads nothing until resumed. |
+| `ssisOperationsRefreshable` | boolean | state | The active Integration Services Operations document reads the catalog, or stopped on a failure that Refresh may get past (not a missing catalog). |
+| `ssisOperationsPausable` | boolean | state | The active Integration Services Operations document has not stopped, so Pause applies. |
 | `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |

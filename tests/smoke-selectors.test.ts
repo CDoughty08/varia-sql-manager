@@ -168,6 +168,15 @@ describe('smoke selectors', () => {
     })
     expect(stale).toEqual([])
   })
+  it('selects an SSIS operation only through selectOperation', () => {
+    // New operations arrive at the top every few samples, so a row found by its id can move down before the click lands
+    // and select the operation that took its place; selectOperation clicks until the grid's active row is the one asked.
+    const file = 'scripts/ssis-operations-smoke.mjs'
+    const source = readFileSync(file, 'utf8')
+    expect(source).toMatch(/\bselectOperation\('107'\)/)
+    const bare = [...source.matchAll(/hasText: \/\^\d+\$\/ \}\) \}\)\.locator\(gridPart\.cell\)\.nth\(\d+\)\.click\(\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
+    expect(bare).toEqual([])
+  })
 
   it('waits in the benches for the backend each launch starts', () => {
     // backendReady's default runtime is the Release backend's .NET, which the fake backend (VARIA_TEST_BACKEND, runtime

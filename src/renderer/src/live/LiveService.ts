@@ -145,7 +145,9 @@ export interface LiveHandle extends ExternalStore<LiveSnapshot>, Disposable {
   setArgs(args: LiveArgs): void
   /** Pause / Resume: no SQL while paused, whatever the view's visibility. */
   setUserPaused(paused: boolean): void
-  /** Refresh now: every running probe samples at once (a dormant view subscribes again). */
+  /** Refresh now: every running probe samples at once. A dormant view subscribes again, and so does one whose subscription
+   *  failed or was refused (Retry) while its owner still has the connection; one that was disconnected, cancelled or whose
+   *  source ended stays ended. */
   refresh(): void
   /** A probe's settings as the view wants them (what setProbe last set), read only; undefined for a probe it does not run. */
   probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined
@@ -490,6 +492,8 @@ class Handle implements LiveHandle {
   private pauseArmedAt: number | undefined
   private dormantArmedAt: number | undefined
   private ownerConnection: string | undefined
+  /** The owner had a connection and no longer has one: the view never subscribes again until it has one. */
+  private ownerLost = false
   private readonly stopOwner: () => void
   private chain: Promise<void> = Promise.resolve()
   private syncQueued = false
@@ -777,6 +781,7 @@ class Handle implements LiveHandle {
     const connection = this.owner.connectionId?.()
     if (connection !== this.ownerConnection) {
       this.ownerConnection = connection
+      this.ownerLost = connection === undefined
       if (connection !== undefined && connection !== this.connectionId) {
         this.connectionId = connection
         this.stop()
@@ -1080,7 +1085,7 @@ class Handle implements LiveHandle {
 
   refresh(): void {
     if (this.disposed || this.waiting) return
-    if (this.status === 'dormant') { this.restart(); return }
+    if (this.status === 'dormant' || this.retryable()) { this.restart(); return }
     const record = this.stream
     if (!record || this.pausedNow()) return
     this.enqueue(async () => {
@@ -1092,6 +1097,14 @@ class Handle implements LiveHandle {
       if (!result.ok) { if (result.code === undefined || !endingCodes.has(result.code)) this.reportUpdateError(result.code ?? 'BACKEND_ERROR', result.error) }
       else if (this.updateError && !record.refused) { this.error = undefined; this.updateError = false; this.changed() }
     })
+  }
+
+  /** Ended by a failure (the backend's, or main's refusal) rather than by a disconnect, a cancel or its source's end, with
+   *  the owner still on a connection: subscribing again may succeed (access granted, the server back). */
+  private retryable(): boolean {
+    if (this.status !== 'ended' || this.stream || this.pendingStart) return false
+    if (this.ownerLost) return false
+    return this.ended ? this.ended.ended === 'failed' : this.error !== undefined
   }
 
   probeOptions(probe: LiveProbeId): Readonly<LiveProbeOptions> | undefined {

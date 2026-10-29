@@ -58,6 +58,8 @@ import { ActivityMonitorService } from '../../src/renderer/src/activity/Activity
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
 import { fakeLiveViews } from './live-views'
+import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
+import { fakeLive } from './live-handle'
 import { settingsContribution } from '../../src/renderer/src/contributions/settings'
 import { notificationsContribution } from '../../src/renderer/src/contributions/notifications'
 import { NotificationService } from '../../src/renderer/src/core/notifications'
@@ -310,6 +312,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
+  const live = fakeLive()
+  const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
   const context = new ContextKeyService({
@@ -333,6 +337,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     properties: properties.context,
     notifications,
     activity: activity.context,
+    ssis: operations.context,
     activeElement
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
@@ -391,7 +396,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties,
     properties,
     notifications,
-    activity
+    activity,
+    operations
   }
   const contributions = [
     queryContribution(workbench, api),
@@ -447,6 +453,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
     shellOptions.dispose()
@@ -481,6 +488,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     properties,
     activity,
     liveViews,
+    operations,
+    live,
     focusEditor,
     notifications,
     queries,

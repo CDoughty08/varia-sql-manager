@@ -229,6 +229,10 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `integrationServices.treeLive` | Update the SSIS Catalog in Object Explorer as it changes | Boolean | True |  | All | At once | While a connection's SSISDB node is open in Object Explorer, Varia checks the catalog for changes made elsewhere, such as a deployment or a new folder, project or environment, and updates only the folders that changed, keeping what is expanded and selected. The check is one small query that pauses while Object Explorer is hidden. While it is False, the tree changes only on Refresh (F5) and after Varia's own changes. Not in SSMS. |
 | `integrationServices.treeRefreshSeconds` | Check the catalog for changes every | Integer 10–300 seconds | 30 seconds |  | All | At once | How often an open SSISDB node checks the catalog for changes. Each check reads every catalog folder, project, package, environment, variable, reference and parameter the login may see, so a large catalog on a busy server may want a longer interval. Not in SSMS. Greyed while `integrationServices.treeLive` is False. |
+| `integrationServices.operationsRefreshSeconds` | Update Operations every | Integer 1–60 seconds | 2 seconds |  | All | At once | How often an open Integration Services Operations document reads the catalog for new operations and the open ones' status. It pauses while the document is hidden. A busy catalog on a busy server may want a longer interval. Not in SSMS. |
+| `integrationServices.operationsWindowHours` | Show operations created in the last | Integer 1–8,760 hours | 24 hours |  | All | At once | The window a new Operations document opens on. Its Window filter changes it for that document only. The catalog keeps operations for its own retention period (365 days by default), so a longer window shows nothing older than that. Not in SSMS. |
+| `integrationServices.operationsLimit` | Show at most | Integer 100–10,000 operations | 1,000 operations |  | All | At once | The most operations an Operations document holds: the newest ones of its window that pass its filters, open ones first. Open documents read their window again with the new limit. The tiles count every operation the login may see, whatever this limit and the filters are. Not in SSMS. |
+| `integrationServices.confirmStop` | Ask before Stop Operation | Boolean | True |  | All | At once | Asks before Stop Operation ends a running package or validation. The package stops after its current work; the catalog then lists it as Stopping, and Canceled once it has ended. While it is False, Stop Operation stops at once. Not in SSMS. |
 
 ## Storage
 
@@ -260,4 +264,4 @@ How Varia follows the SSIS Catalog (SSISDB) as it changes. Not in SSMS.
 | `searchChars` | 256 | Characters in the Options search box |
 | `warningLabels` | 3 | Setting labels a salvage warning names before "and N more" |
 
-A patch holds at most one entry per setting (85 today).
+A patch holds at most one entry per setting (89 today).

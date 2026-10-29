@@ -35,6 +35,8 @@ internal interface ILiveHost
     IReadOnlySet<int> OwnSessions(string connectionId) => new HashSet<int>();
     /// <summary>The SSIS Catalog's database, which SSISDB sources open: SSISDB, or the checks' fake catalog.</summary>
     string SsisCatalog => Ssis.SsisCatalog.Current.CatalogDatabase;
+    /// <summary>The checks' fake catalog runs on SQL Server on Linux (CI) too, where no real catalog can exist.</summary>
+    bool SsisIgnoresLinux => false;
 }
 
 /// <summary>A connection's Application Name and the workstation id SqlClient sends with it (its Workstation ID, else this
@@ -454,6 +456,9 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
 
     private static RequestException Invalid(string message) => new("INVALID_PARAMS", message);
 
+    /// <summary>The SSIS Catalog's operations (the Operations document), read by SsisOperationsReader.</summary>
+    internal const string SsisOperationsSource = "ssis.operations";
+
     /// <summary>Gives live tables their share of the host's result budget (limits.live.budgetShare).</summary>
     private static LiveCatalog Shared(ILiveHost host, LiveCatalog catalog)
     {
@@ -692,6 +697,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
+        SsisOperationsSource when source.Scope == "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, null,
+            new SsisOperationsReader(Ssis.SsisCatalog.Current, (SsisOperationsLiveArgs?)args, () => host.SsisCatalog, host.SsisIgnoresLinux)),
         _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
             source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
@@ -759,6 +766,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             return source.Id switch
             {
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                SsisOperationsSource => SsisOperationsArgs.Check(element.Deserialize<SsisOperationsLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), Ssis.SsisCatalog.Current),
                 _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };

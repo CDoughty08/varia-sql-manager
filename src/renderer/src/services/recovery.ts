@@ -106,7 +106,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
   }
   private async keep(tabId: string): Promise<void> {
     const { documents } = this.options, document = documents.get(tabId), model = documents.getModel(tabId)
-    // A table designer, Database Properties, SSIS properties or an Activity Monitor has no model: AutoRecover keeps text only.
+    // A table designer, Database Properties, SSIS properties, an Activity Monitor or Operations has no model: AutoRecover keeps text only.
     if (!document?.dirty || !model || isCustomKind(document.kind)) return
     const version = model.getAlternativeVersionId(), current = this.kept.get(tabId)
     if (current?.version === version) return
@@ -116,7 +116,7 @@ export class RecoveryService extends SnapshotStore<RecoverySnapshot> implements 
     const server = document.connectionId ? this.options.server?.(document.connectionId) : undefined
     try {
       unwrap(await this.options.api.writeRecovery({
-        id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: document.kind ?? 'sql', ...document.file ? { fileId: document.file.id } : {},
+        id: kept.id, name: document.name.slice(0, recoveryLimits.nameChars), kind: !document.kind || isCustomKind(document.kind) ? 'sql' : document.kind, ...document.file ? { fileId: document.file.id } : {},
         eol: model.getEOL() === '\r\n' ? 'crlf' : 'lf', ...server ? { server: server.slice(0, recoveryLimits.serverChars) } : {},
         ...server && document.database ? { database: document.database.slice(0, recoveryLimits.databaseChars) } : {}, text: model.getValue()
       }))

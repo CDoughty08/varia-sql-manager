@@ -8,6 +8,7 @@ import type { BackendResultDescriptor, ResultDescriptor } from '../contracts'
 import { backendDescriptorSchema } from '../ipc/descriptors'
 import { errorCodes, limits, type ErrorCode } from '../ipc/wire/protocol'
 import { activityLiveArgsSchema } from '../activity/schema'
+import { ssisOperationsArgsSchema } from '../ssis/schema'
 import { liveProbes, liveSources, type LiveProbeId, type LiveProbeSpec, type LiveSourceId, type LiveTableSpec, type LiveSourceSpec } from './catalog'
 
 const L = limits.live
@@ -45,7 +46,10 @@ export const liveArgsSchemas = {
   // Object Explorer's status chips take no args.
   explorer: z.never(),
   // The catalog probe fingerprints all of the catalog the login may see: no args.
-  'ssis.catalog': z.never()
+  'ssis.catalog': z.never(),
+  // The Operations document's filters. Each args replaces the last whole (an absent member is no filter), and new args read
+  // the window again.
+  'ssis.operations': ssisOperationsArgsSchema
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

@@ -65,7 +65,8 @@ describe('live catalogue', () => {
           expect((table.facets ?? []).length, id).toBeLessThanOrEqual(L.facetColumns)
           expect(new Set(table.facets ?? []).size, id).toBe((table.facets ?? []).length)
           for (const facet of table.facets ?? []) expect(columnIds, id).toContain(facet)
-          expect(table.settle === undefined && table.batchRows === undefined, id).toBe(true)
+          // A snapshot built from ids read above a settled one (the Operations window) names its settle window as an append table does.
+          expect(table.batchRows === undefined && (table.settle === undefined || (Number.isInteger(table.settle.ticks) && table.settle.ticks >= 1 && table.settle.ticks <= 10 && Number.isInteger(table.settle.ms) && table.settle.ms >= 0 && table.settle.ms <= 60_000)), id).toBe(true)
         } else {
           // An append table reads by one integer keyset id, settles within a minute, and reads at most batchRows a tick.
           expect(table.key.length, id).toBe(1)
@@ -114,7 +115,7 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog', 'ssis.operations'])
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
     // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
     // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
@@ -125,6 +126,15 @@ describe('live catalogue', () => {
     expect(liveProbes['explorer.agent']).toMatchObject({ gates: { editions: [1, 2, 3, 8] }, series: [{ id: 'runningJobs', counter: 'gauge' }] })
     expect(liveProbes['explorer.agent'].permission).toBeUndefined()
     expect(liveProbes['explorer.availability']).toMatchObject({ permission: 'serverState', gates: { editions: [2, 3] }, tables: [{ id: 'groups', key: ['name'] }] })
+    // SSIS Operations: the catalog's own pool and prologue, 2 s by default (owner decision 12), settable from 1 to 60 s, one
+    // snapshot table keyed by operation id whose selected row lingers, its tone column last.
+    expect(liveSources['ssis.operations']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.operations.list'] })
+    const operations = liveProbes['ssis.operations.list']
+    expect(operations).toMatchObject({ intervalMs: { default: 2000, min: 1000, max: 60_000 }, status: ['newest'] })
+    expect(operations.series!.map(series => [series.id, series.counter])).toEqual([['running', 'gauge'], ['pending', 'gauge'], ['failed24h', 'gauge'], ['succeeded24h', 'gauge'], ['canceled24h', 'gauge']])
+    expect(operations.tables).toHaveLength(1)
+    expect(operations.tables![0]).toMatchObject({ id: 'operations', mode: 'snapshot', key: ['operationId'], rowCap: 10_000, departed: true })
+    expect(operations.tables![0].columns.at(-1)).toMatchObject({ id: 'tone', role: 'tone' })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
   })
