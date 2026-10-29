@@ -113,6 +113,20 @@ export const part = {
   connectionChoice: '.connection-choice',
   /** The Connect dialog's failure: its InlineError and the Error details under it. */
   connectFailure: '.connect-failure',
+  // Connect v2's layout, for the probes that measure it: the two panes, the form's own scroll, and at its bottom the
+  // outcome (busy, notices, the failure) above the footer with Connect.
+  connectPanes: '.connect-panes',
+  connectSourcesPane: '.connect-sources-pane',
+  connectFormPane: '.connect-form-pane',
+  connectFormScroll: '.connect-form-scroll',
+  connectActions: '.connect-actions',
+  connectOutcome: '.connect-outcome',
+  connectionFooter: '.connection-footer',
+  /** The saved connections' list, one of its rows (the entry with its star and ×), and a connection's colour dot. */
+  connectionSources: '.connection-sources',
+  connectionListRow: '.connection-list-row',
+  connectionSwatch: '.connection-swatch',
+  visuallyHidden: '.visually-hidden',
   /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
   connectionScroll: '.connection-scroll',
   environmentPreview: '.environment-preview',
@@ -305,6 +319,8 @@ export const connectFailureSentence = dialog => connectFailure(dialog).locator(p
 export const connectFailureNote = dialog => connectFailure(dialog).locator(part.inlineErrorNote)
 /** The outcome line of the Connect failure's Copy details. */
 export const connectFailureCopyStatus = dialog => connectFailure(dialog).locator(part.inlineErrorStatus)
+/** What shows at Connect while it works or after it: busy, notices and the failure. */
+export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 /** An object dialog's Connection and Progress boxes (Delete Object, Database Properties). */
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')

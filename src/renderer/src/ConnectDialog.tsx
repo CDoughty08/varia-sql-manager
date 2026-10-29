@@ -6,6 +6,7 @@ import { connectionPickerColor, connectionPresets } from '../../shared/theme/con
 import Icon from './Icon'
 import InlineError, { type ErrorAction } from './kit/InlineError'
 import { connectFix } from './connect-fix'
+import { advancedSummary, customSummary, listStep, rowTitle } from './connect-form'
 import { EnvironmentField } from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
 import { entryKey, parseEnvironment, savedEntry } from './services/environments'
@@ -58,6 +59,8 @@ const strictCertificate = "Strict encryption always validates the server's certi
 /** A pinned certificate or name is a check the person chose: trusting would skip it, so the dialog only explains. */
 const pinnedCertificate = "The server's certificate did not match the Server Certificate or the Host Name in Certificate set for this connection, so it was not trusted. Check that this is the server you meant and that those settings are current; Trust server certificate would skip that check."
 const trustNeedsPassword = 'Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then connect.'
+// Custom Properties starts collapsed; once opened it stays open for this window's later Connect dialogs.
+let customPropertiesOpen = false
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 /** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
@@ -122,7 +125,11 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [properties, setProperties] = useState<'properties' | 'string'>('properties')
   const [preview, setPreview] = useState('')
   const [advanced, setAdvanced] = useState(false)
+  const [customOpen, setCustomOpenState] = useState(customPropertiesOpen)
+  const setCustomOpen = (open: boolean) => { customPropertiesOpen = open; setCustomOpenState(open) }
   const dialog = useRef<HTMLFormElement>(null)
+  const sourcesPane = useRef<HTMLDivElement>(null)
+  const filterInput = useRef<HTMLInputElement>(null)
   const alive = useRef(true)
   const currentOptions = useRef(options)
   currentOptions.current = options
@@ -281,7 +288,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
    *  Custom label cannot be one. */
   function labelledOptions(from: ConnectionOptions = options): ConnectionOptions | undefined {
     const environment = parseEnvironment(from.environment)
-    if (!environment.ok) { setError(environment.error); return undefined }
+    if (!environment.ok) {
+      // The label to fix may be inside the collapsed Custom Properties: show it and go there.
+      setError(environment.error); setCustomOpen(true)
+      setTimeout(() => dialog.current?.querySelector<HTMLInputElement>('#connect-environment-custom')?.focus(), 0)
+      return undefined
+    }
     return { ...from, environment: environment.environment }
   }
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile) {
@@ -344,18 +356,33 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const shownFailure = error && failure?.error === error ? failure : undefined
   const fix = shownFailure && connectFix(shownFailure.options, shownFailure.details)
   const fixActions: ErrorAction[] = fix === 'trust' ? [{ label: trustLabel, run: trustAndConnect }] : []
-  // The error sits at the end of the scrolled form, next to Connect: bring it into view, as people look there first.
+  // The error sits at Connect, above the footer, in a region of its own that scrolls when the details are long: keep it in view there.
   useEffect(() => { if (error) failureBox.current?.scrollIntoView({ block: 'nearest' }) }, [error])
   const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase())
   const filtered = library.profiles.filter(profile => matches([profile.options.displayName, profile.options.server, profile.options.database, profile.options.username].join(' ')))
   const recent = filtered.filter(profile => profile.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
   const favorite = filtered.filter(profile => profile.favorite)
+  const custom = customSummary(options)
+  const advancedNote = advancedSummary(options.advanced)
+  const passwordShown = usesPassword(options.authentication)
   function profileRows(profiles: ConnectionProfile[], empty: string) {
     return profiles.length ? profiles.map(profile => <div key={profile.id} className={'connection-list-row' + (selectedId === profile.id ? ' selected' : '')}>
-      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={`${profile.options.server} · ${profile.options.database || '<default>'}`}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
+      <button type="button" className="connection-choice" disabled={locked} onClick={() => choose(profile)} title={rowTitle(profile.options)}><span className="connection-swatch" style={{ backgroundColor: theme.accent(profile.options.color) ?? 'var(--varia-connection-default)' }} /><Icon name="server" /><span><span className="connection-choice-title"><strong>{profile.options.displayName || profile.options.server}</strong><EnvironmentTag environment={profile.options.environment} place="list" /></span><small>{profile.options.displayName ? profile.options.server + ' · ' : ''}{profile.options.database || '<default>'} · {showsIdentity(profile.options.authentication) ? identityOf(profile.options.authentication) : profile.options.username ?? ''}</small></span></button>
       <button type="button" className="icon-button favorite-button" aria-label={`${profile.favorite ? 'Unfavorite' : 'Favorite'} ${profile.options.displayName || profile.options.server}`} title={profile.favorite ? 'Remove from favorites' : 'Add to favorites'} disabled={locked} onClick={() => void saveProfile(!profile.favorite, undefined, profile)}><Icon name={profile.favorite ? 'star-full' : 'star-empty'} /></button>
       <button type="button" className="icon-button" aria-label={`Remove saved ${profile.options.displayName || profile.options.server}`} title="Remove saved connection" disabled={locked} onClick={() => void remove(profile)}><Icon name="close" /></button>
     </div>) : <p className="connection-empty">{empty}</p>
+  }
+  /** Up and Down move through the shown rows of the list, from the filter box too; Tab still reaches each row's buttons. */
+  function sourcesKey(event: KeyboardEvent<HTMLDivElement>) {
+    const rows = [...sourcesPane.current?.querySelectorAll<HTMLButtonElement>('.connection-choice, .discovered-server') ?? []].filter(row => !row.disabled && row.getClientRects().length > 0)
+    const fromFilter = event.target === filterInput.current
+    const current = fromFilter ? -1 : rows.indexOf(event.target as HTMLButtonElement)
+    if (!fromFilter && current < 0) return
+    const next = listStep(current, rows.length, event.key, event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing)
+    if (next === undefined) return
+    event.preventDefault()
+    if (next < 0) filterInput.current?.focus()
+    else rows[next].focus()
   }
   function trap(event: KeyboardEvent<HTMLFormElement>) {
     if (advanced) return
@@ -367,54 +394,79 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   return <>
     <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
       <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="icon-button" aria-label="Close connection dialog" disabled={locked} onClick={onClose}><Icon name="close" /></button></div>
-      <div className="connection-scroll">
-        <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
-        <input className="connection-filter" aria-label="Filter connections" placeholder="Type here to filter the list" value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} />
-        <div id="connection-sources" className="connection-sources" role="tabpanel" aria-label={tab === 'history' ? 'History' : 'Browse'}>
-          {!loaded && <p className="connection-empty">Loading saved connections…</p>}
-          {tab === 'history' ? <><details open><summary>Favorites ({favorite.length})</summary>{profileRows(favorite, 'No favorite connections')}</details><details open><summary>Recent Connections ({recent.length})</summary>{profileRows(recent, 'No recent connections')}</details></> : <>
-            <div className="browse-toolbar"><label htmlFor="browse-scope">Server source</label><select id="browse-scope" value={scope} disabled={locked} onChange={event => { browseRequest.current++; setBrowseBusy(false); setBrowseNote(''); setScope(event.target.value as typeof scope) }}><option value="local">Local</option><option value="network">Network</option><option value="registered">Registered Servers</option></select>{scope !== 'registered' && <button type="button" disabled={browseBusy || locked} onClick={() => void browse(scope)}>Refresh</button>}</div>
-            {scope === 'registered' ? <>{profileRows(filtered.filter(profile => profile.registered), 'No registered servers. Register the connection below to add one.')}<p className="field-note">Registered servers are saved in Varia on this computer.</p></> : <>
-              {browseBusy && <p className="connection-empty">Discovering {scope} servers…</p>}
-              {servers.filter(server => matches(server.server)).map(server => <button type="button" className="discovered-server" disabled={locked} key={server.server} onClick={() => changeServer(server.server, { database: '', password: '', displayName: '' })}><Icon name="server" /><span>{server.server}</span><small>{server.version}</small></button>)}
-              {!browseBusy && !servers.length && <p className="connection-empty">No servers found. You can enter a server name below.</p>}
-              {browseNote && <p className="field-note">{browseNote}</p>}
+      <div className="connect-panes">
+        <div ref={sourcesPane} className="connect-sources-pane" onKeyDown={sourcesKey}>
+          <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
+          <div className="connection-filter-box"><Icon name="search" /><input ref={filterInput} className="connection-filter" aria-label="Filter connections" placeholder="Filter connections" maxLength={256} value={filter} onChange={event => setFilter(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault() }} /></div>
+          <div id="connection-sources" className="connection-sources" role="tabpanel" aria-label={tab === 'history' ? 'History' : 'Browse'}>
+            {!loaded && <p className="connection-empty">Loading saved connections…</p>}
+            {tab === 'history' ? <><details open><summary>Favorites ({favorite.length})</summary>{profileRows(favorite, 'No favorite connections')}</details><details open><summary>Recent Connections ({recent.length})</summary>{profileRows(recent, 'No recent connections')}</details></> : <>
+              <div className="browse-toolbar"><label htmlFor="browse-scope">Server source</label><select id="browse-scope" value={scope} disabled={locked} onChange={event => { browseRequest.current++; setBrowseBusy(false); setBrowseNote(''); setScope(event.target.value as typeof scope) }}><option value="local">Local</option><option value="network">Network</option><option value="registered">Registered Servers</option></select>{scope !== 'registered' && <button type="button" disabled={browseBusy || locked} onClick={() => void browse(scope)}>Refresh</button>}</div>
+              {scope === 'registered' ? <>{profileRows(filtered.filter(profile => profile.registered), 'No registered servers. Use Register server to add one.')}<p className="field-note">Registered servers are saved in Varia on this computer.</p></> : <>
+                {browseBusy && <p className="connection-empty">Discovering {scope} servers…</p>}
+                {servers.filter(server => matches(server.server)).map(server => <button type="button" className="discovered-server" disabled={locked} key={server.server} onClick={() => changeServer(server.server, { database: '', password: '', displayName: '' })}><Icon name="server" /><span>{server.server}</span><small>{server.version}</small></button>)}
+                {!browseBusy && !servers.length && <p className="connection-empty">No servers found. You can type a server name.</p>}
+                {browseNote && <p className="field-note">{browseNote}</p>}
+              </>}
             </>}
-          </>}
-        </div>
-        <div className="connection-tabs connection-property-tabs" role="tablist" aria-label="Connection details"><button type="button" role="tab" aria-selected={properties === 'properties'} aria-controls="connection-properties" onClick={() => setProperties('properties')}>Connection Properties</button><button type="button" role="tab" aria-selected={properties === 'string'} aria-controls="connection-properties" onClick={() => setProperties('string')}>Connection String</button></div>
-        <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
-          <div className="property-grid" hidden={properties !== 'properties'}>
-            <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
-            <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
-            <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
-            <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked || !usesPassword(options.authentication)} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
-            <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
-            {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
-            {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
-            <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '', environment: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}><Icon name={dbBusy ? 'loading' : 'refresh'} spin={dbBusy} /></button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
-            {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
-            <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
-            <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
-            <div className="property-row"><label htmlFor="connect-hostname">Host Name in Certificate</label><input id="connect-hostname" maxLength={256} disabled={locked} value={options.hostNameInCertificate ?? ''} onChange={event => update({ hostNameInCertificate: event.target.value })} /></div>
-            <div className="advanced-action"><button type="button" disabled={locked} onClick={() => setAdvanced(true)}>Advanced…</button></div>
           </div>
-          {properties === 'string' && <div className="connection-preview"><textarea aria-label="Connection string preview" readOnly value={preview || 'Preparing connection string…'} /><p className="field-note">Preview generated by SqlClient. The password is omitted. Edit settings in Connection Properties.</p></div>}
         </div>
-        <fieldset className="property-section custom-properties"><legend>Custom Properties</legend><div className="property-grid">
-          <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
-          <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
-          <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { labelServer.current = null; environmentOwner.current = options.server.trim().toLowerCase(); update({ environment }) }} /></div>
-        </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
-        {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
-        {notice && <p className="field-note" role="status">{notice}</p>}
-        {error && <div ref={failureBox} className="connect-failure">
-          <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
-            note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
-          {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
-        </div>}
+        <div className="connect-form-pane">
+          <div className="connection-tabs connection-property-tabs" role="tablist" aria-label="Connection details"><button type="button" role="tab" aria-selected={properties === 'properties'} aria-controls="connection-properties" onClick={() => setProperties('properties')}>Connection Properties</button><button type="button" role="tab" aria-selected={properties === 'string'} aria-controls="connection-properties" onClick={() => setProperties('string')}>Connection String</button></div>
+          <div className="connect-form-scroll">
+            <div id="connection-properties" role="tabpanel" aria-label={properties === 'properties' ? 'Connection Properties' : 'Connection String'}>
+              <div className="property-grid" hidden={properties !== 'properties'}>
+                <div className="property-row"><label htmlFor="connect-server">Server Name</label><input id="connect-server" list="known-servers" required maxLength={256} disabled={locked} value={options.server} placeholder="localhost,1433 or server\instance" onChange={event => changeServer(event.target.value)} /><datalist id="known-servers">{[...new Set(library.profiles.map(profile => profile.options.server))].map(server => <option key={server} value={server} />)}</datalist></div>
+                <div className="property-row"><label htmlFor="connect-auth">Authentication</label><select id="connect-auth" value={options.authentication} disabled={locked} onChange={event => update({ authentication: event.target.value as AuthenticationMode, password: '' })}>{authenticationModes.map(mode => <option key={mode} value={mode}>{authenticationCatalog[mode].label}</option>)}</select></div>
+                <div className="property-row"><label htmlFor="connect-user">{auth.userLabel}</label><input id="connect-user" required={requiresUser(options.authentication)} disabled={locked || showsIdentity(options.authentication)} autoComplete="off" maxLength={128} placeholder={userPlaceholders[options.authentication]} value={showsIdentity(options.authentication) ? identityOf(options.authentication) : options.username ?? ''} onChange={event => update({ username: event.target.value })} /></div>
+                {/* Only the types with a password show Password and Remember password; the others have nothing to type there. */}
+                {passwordShown && <>
+                  <div className="property-row"><label htmlFor="connect-password">Password</label><input id="connect-password" type="password" autoComplete="off" disabled={locked} maxLength={1024} value={options.password ?? ''} {...match && !options.password ? { placeholder: '••••••••', 'aria-describedby': 'connect-password-saved' } : {}} onChange={event => update({ password: event.target.value })} />{match && !options.password && <span id="connect-password-saved" className="visually-hidden">A saved password will be used. Type to replace it.</span>}</div>
+                  <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={remember && rememberable} disabled={locked || !rememberable} {...storageNote ? { 'aria-describedby': 'connect-remember-note' } : {}} onChange={event => setRemember(event.target.checked)} />Remember password</label></div>
+                  {storageNote && <div className="property-row"><span /><p className="field-note" id="connect-remember-note">{storageNote}</p></div>}
+                </>}
+                {authNote && <div className="property-row"><span /><p className="field-note" id="connect-auth-note">{authNote}</p></div>}
+                <div className="property-row"><label htmlFor="connect-database">Database Name</label><div className="property-input-action"><input id="connect-database" list="available-databases" maxLength={128} disabled={locked} placeholder="<default>" value={options.database} onFocus={() => { const key = JSON.stringify({ ...currentOptions.current, database: '', displayName: '', color: '', environment: '' }); if (dbLoadedKey.current !== key) void loadDatabases() }} onChange={event => update({ database: event.target.value })} /><button type="button" aria-label="Load databases" title="Load databases from this server" disabled={locked || dbBusy || !authReady} onClick={() => void loadDatabases()}><Icon name={dbBusy ? 'loading' : 'refresh'} spin={dbBusy} /></button></div><datalist id="available-databases"><option value="" label="<default>" />{databases.map(database => <option key={database.name} value={database.name} />)}</datalist></div>
+                {(dbBusy || dbNote) && <div className="property-row"><span /><div><p className="field-note" role="status">{dbBusy ? 'Loading databases…' : dbNote}</p>{!dbBusy && dbDetails && <FailureDetails details={dbDetails} />}</div></div>}
+                <div className="property-row"><label htmlFor="connect-encrypt">Encrypt</label><select id="connect-encrypt" value={options.encrypt ?? 'mandatory'} disabled={locked} onChange={event => update({ encrypt: event.target.value as ConnectionOptions['encrypt'] })}><option value="optional">Optional</option><option value="mandatory">Mandatory</option><option value="strict">Strict</option></select></div>
+                <div className="property-row"><span /><label className="checkbox-label"><input type="checkbox" checked={options.encrypt !== 'strict' && options.trustServerCertificate} disabled={locked || options.encrypt === 'strict'} onChange={event => update({ trustServerCertificate: event.target.checked })} />Trust server certificate</label></div>
+                <div className="property-row"><label htmlFor="connect-hostname">Host Name in Certificate</label><input id="connect-hostname" maxLength={256} disabled={locked} value={options.hostNameInCertificate ?? ''} onChange={event => update({ hostNameInCertificate: event.target.value })} /></div>
+                <div className="advanced-action">{advancedNote && <span className="advanced-summary" id="connect-advanced-summary">{advancedNote}</span>}<button type="button" disabled={locked} {...advancedNote ? { 'aria-describedby': 'connect-advanced-summary' } : {}} onClick={() => setAdvanced(true)}>Advanced…</button></div>
+              </div>
+              {properties === 'string' && <div className="connection-preview"><textarea aria-label="Connection string preview" readOnly value={preview || 'Preparing connection string…'} /><p className="field-note">Preview generated by SqlClient. The password is omitted. Edit settings in Connection Properties.</p></div>}
+            </div>
+            <section className="property-section custom-properties" aria-labelledby="connect-custom-toggle">
+              <div className="custom-properties-header">
+                <button type="button" id="connect-custom-toggle" className="custom-properties-toggle" aria-expanded={customOpen} aria-controls="connect-custom" {...customOpen ? {} : { 'aria-describedby': 'connect-custom-summary' }} onClick={() => setCustomOpen(!customOpen)}><Icon name={customOpen ? 'chevron-down' : 'chevron-right'} />Custom Properties</button>
+                {!customOpen && <span className="custom-properties-summary" id="connect-custom-summary">
+                  {custom.color && <span className="connection-swatch" aria-hidden="true" style={{ backgroundColor: theme.accent(options.color) ?? 'var(--varia-connection-default)' }} />}
+                  {custom.name && <span className="custom-properties-name" aria-hidden="true">{custom.name}</span>}
+                  {custom.environment && <span aria-hidden="true"><EnvironmentTag environment={custom.environment} place="list" /></span>}
+                  <span className="visually-hidden">{custom.text}</span>
+                </span>}
+              </div>
+              <div id="connect-custom" className="property-grid" role="group" aria-label="Custom Properties" hidden={!customOpen}>
+                <div className="property-row"><label htmlFor="connect-name">Name</label><input id="connect-name" maxLength={128} disabled={locked} value={options.displayName ?? ''} placeholder="Optional connection name" onChange={event => { labelServer.current = null; update({ displayName: event.target.value }) }} /></div>
+                <div className="property-row"><label htmlFor="connect-color">Color</label><div className="property-input-action"><select id="connect-color" value={palette.some(([, color]) => color === (options.color ?? '')) ? options.color ?? '' : 'custom'} disabled={locked} onChange={event => { labelServer.current = null; update({ color: event.target.value || undefined }) }}>{palette.map(([name, color]) => <option value={color} key={name}>{name === 'Default' ? '<default>' : name}</option>)}{options.color && !palette.some(([, color]) => color === options.color) && <option value="custom">Custom</option>}</select><input type="color" aria-label="Custom connection color" title="Custom connection color" disabled={locked} value={connectionPickerColor(options.color, active)} onChange={event => { labelServer.current = null; update({ color: event.target.value }) }} /></div></div>
+                <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { labelServer.current = null; environmentOwner.current = options.server.trim().toLowerCase(); update({ environment }) }} /></div>
+              </div>
+              <div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div>
+            </section>
+          </div>
+        </div>
       </div>
-      <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
+      <div className="connect-actions">
+        {(busy || notice || error) && <div className="connect-outcome">
+          {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
+          {notice && <p className="field-note" role="status">{notice}</p>}
+          {error && <div ref={failureBox} className="connect-failure">
+            <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
+              note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
+            {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
+          </div>}
+        </div>}
+        <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
+      </div>
     </form></div>
     {advanced && <AdvancedProperties value={options.advanced ?? {}} onSave={value => { update({ advanced: value }); setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} onClose={() => { setAdvanced(false); setTimeout(() => dialog.current?.querySelector<HTMLButtonElement>('.advanced-action button')?.focus(), 0) }} />}
   </>
