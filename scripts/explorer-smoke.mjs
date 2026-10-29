@@ -684,8 +684,14 @@ try {
   await press('ArrowLeft', 'Tables')
   await expect.poll(() => explorerLines(page)).toEqual(['1 server-a [true]', '2 Databases [true]', '3 AppData [true]', '4 Tables [false]', '1 server-b [true]'])
   expect(await activeInView()).toBe(true)
-  await press('ArrowRight', 'Tables')
-  await press('ArrowRight', 'dbo.Orders')
+  // Right, Right in one task, with no frame between them to draw the rows the first one opened, expands Tables and then
+  // enters it: each key acts on what the key before it did.
+  await page.evaluate(selector => {
+    const tree = document.querySelector(selector)
+    for (let key = 0; key < 2; key++) tree.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', bubbles: true, cancelable: true }))
+  }, part.explorerTree)
+  await expect.poll(async () => (await active())?.label, { message: 'Right, Right enters Tables' }).toBe('dbo.Orders')
+  expect((await active())?.selected).toBe('true')
   await press('ArrowRight', 'dbo.Orders')
   await expect.poll(() => explorerLines(page)).toEqual(ordLines.filter(line => line !== '5 dbo.table1 [false]'))
   // Text that matches nothing says so under the box, with Clear filter; the selection stays in view.

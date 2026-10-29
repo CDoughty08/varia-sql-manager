@@ -368,6 +368,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id, ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
   }
+  /**
+   * The snapshot, with rows a change left for the next frame published now. The tree's keys read it, so a key that
+   * arrives before that frame (typed fast, or queued behind a long task) acts on what the key before it did.
+   */
+  settle(): ExplorerSnapshot {
+    if (this.dirty) this.guard(() => this.flush())
+    return this.getSnapshot()
+  }
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
     const node = this.selectedNode()

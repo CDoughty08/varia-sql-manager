@@ -10,7 +10,7 @@ import { ConnectionService } from '../src/renderer/src/services/connections'
 import { ExplorerService, serverBrief, serverSublabel, type ExplorerServiceLimits } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptContextValues, scriptMenuState } from '../src/shared/scripting/catalog'
 import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
-import { rowIndex, RowKind, rowKindOf, syntheticId } from '../src/renderer/src/explorer/tree-model'
+import { rowIndex, RowKind, rowKindOf, syntheticId, treeKey } from '../src/renderer/src/explorer/tree-model'
 import { connectionInfo, connectionOptions } from './fixtures/workbench'
 import { meterWork } from './fixtures/work-meter'
 
@@ -1192,6 +1192,37 @@ describe('ExplorerService: reset', () => {
     expect([after.count, after.nodes[0]?.label]).toEqual([1, 'server-a.example'])
     expect(after.ids[0]).not.toBe(before)
     expect(explorer.getSnapshot().selected).toBe(after.ids[0])
+  })
+})
+
+describe('ExplorerService: settle', () => {
+  it('publishes rows waiting for the next frame, so a second key acts on what the first did', async () => {
+    const backend = fakeBackend(), connections = new ConnectionService(), queued: (() => void)[] = []
+    const explorer = new ExplorerService({ api: backend.api, connections, events: new EventBus(), schedule: callback => { queued.push(callback) } })
+    disposals.push(() => explorer.dispose())
+    const frames = async () => { for (let round = 0; round < 10; round++) { await settle(); queued.splice(0).forEach(callback => callback()) } }
+    connections.add(info('server-a'), connectionOptions)
+    await frames()
+    const rows = () => explorer.getSnapshot().rows
+    const server = rows().ids[0]
+    expect(rows().nodes[0]!.expanded).toBe(true)
+    // Left collapses the server; its rows wait for the frame, and settle publishes them at once.
+    explorer.collapse(server)
+    expect(rows().count).toBeGreaterThan(1)
+    const collapsed = explorer.settle().rows
+    expect([collapsed.count, collapsed.nodes[0]!.expanded]).toEqual([1, false])
+    expect(treeKey(collapsed, 0, 'right', 10)).toEqual({ type: 'expand', id: server })
+    // Right expands it again (its folders are loaded). Before the frame, the published rows show it expanded without its
+    // children, where Right does nothing; the settled rows have them, so the next Right moves into it.
+    explorer.expand(server)
+    expect(treeKey(rows(), 0, 'right', 10)).toEqual({ type: 'none' })
+    const expanded = explorer.settle()
+    expect(treeKey(expanded.rows, rowIndex(expanded.rows, expanded.selected), 'right', 10)).toEqual({ type: 'select', index: 1 })
+    // Nothing waits any more: settling again publishes nothing, and the queued frame finds nothing to do.
+    const version = explorer.getSnapshot().version
+    expect(explorer.settle().version).toBe(version)
+    queued.splice(0).forEach(callback => callback())
+    expect(explorer.getSnapshot().version).toBe(version)
   })
 })
 

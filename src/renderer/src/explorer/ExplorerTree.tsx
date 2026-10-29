@@ -116,8 +116,8 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     return node ? { kind: 'explorer', node } : null
   })
 
-  const act = (action: TreeAction) => {
-    const { rows: current } = latest.current
+  /** Acts on `current`, the rows the action was worked out from. */
+  const act = (action: TreeAction, current: VisibleRows) => {
     switch (action.type) {
       case 'select': {
         const id = current.ids[action.index]
@@ -137,7 +137,9 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
   }
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     try {
-      const { rows: current, selectedIndex: index } = latest.current
+      // Rows the previous key changed may not have rendered yet: the service publishes them now, so Right, Right expands
+      // a folder and then enters it rather than asking to expand it twice.
+      const now = explorer.settle(), current = now.rows, index = rowIndex(current, now.selected)
       const key = treeKeyOf(event.nativeEvent)
       if (key) {
         event.preventDefault()
@@ -145,7 +147,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
         const node = index >= 0 ? current.nodes[index] : undefined
         // Enter on a lost server reconnects it, as its button does.
         if (key === 'enter' && node?.lost) { run('connection.reconnect', node.id); return }
-        act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))))
+        act(treeKey(current, index, key, Math.max(1, Math.floor((element.current?.clientHeight ?? 0) / rowHeight))), current)
         return
       }
       if (event.key === 'Escape' && typing.value) { typing.clear(); event.preventDefault(); return }
@@ -156,7 +158,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       }
       event.preventDefault()
       const found = typeAhead(current, index, text)
-      if (found >= 0) act({ type: 'select', index: found })
+      if (found >= 0) act({ type: 'select', index: found }, current)
     } catch (error) { onUnexpectedError(error) }
   }
 
