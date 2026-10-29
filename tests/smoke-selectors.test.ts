@@ -159,6 +159,19 @@ describe('smoke selectors', () => {
   it('keeps Varia\'s class names out of the suites, the benches and their fixtures', () => {
     expect(suites.flatMap(classSelectors)).toEqual([])
   })
+  it('waits in the benches for the backend each launch starts', () => {
+    // backendReady's default runtime is the Release backend's .NET, which the fake backend (VARIA_TEST_BACKEND, runtime
+    // 'fake') never matches. `check` runs the smoke suites' waits but not the benches', so a bench that starts the fake
+    // backend names the runtime at every wait.
+    const benches = suites.filter(file => /-bench\.mjs$/.test(file))
+    expect(benches).toEqual(expect.arrayContaining(['scripts/grid-bench.mjs', 'scripts/ipc-bench.mjs']))
+    const bare = benches.flatMap(file => {
+      const source = readFileSync(file, 'utf8')
+      if (!/\bVARIA_TEST_BACKEND\s*:/.test(source)) return []
+      return [...source.matchAll(/\bbackendReady\(\s*page\s*\)/g)].map(match => `${file}:${source.slice(0, match.index).split('\n').length}`)
+    })
+    expect(bare).toEqual([])
+  })
   it('names in ui.mjs only classes the renderer still has', () => {
     const named = literals(readFileSync(fixtures, 'utf8')).filter(({ regex }) => !regex).flatMap(({ text }) => selectorClasses(text)).filter(name => !library.test(name))
     expect(named.length).toBeGreaterThan(50)
