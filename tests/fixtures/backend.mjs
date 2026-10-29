@@ -18,6 +18,9 @@
 //   extra/<folder>      explorer.children lists one more row in that folder (`explorerExtras`), as after a CREATE
 //   crash-next          the next query.execute crashes the backend (GOAWAY BACKEND_CRASH, exit 70); the file is removed
 //   fail-commit         query.session.close with transaction commit fails as SQL Server's would, and the session stays
+//   ssis/missing        ssis.describe answers NOT_FOUND, as for an object deleted elsewhere
+//   ssis/fail           ssis.describe answers a retryable TIMEOUT
+//   ssis/many           ssis.describe gives the project as many packages, parameters and references as one read returns
 //   silent-<generation> that generation stops answering PING, as a hung backend would
 //   ignore-eof          stdin EOF does not end the process, as with a backend too wedged to read it; only a kill does
 //   ignore-eof-<generation>  the same for that generation only
@@ -701,6 +704,53 @@ function liveUpdate(id, params) {
   wakeLive(live)
 }
 
+// The SSIS Catalog's objects in the explorer fixture, as ssis.describe reads them: the folder Finance, its project Loads (the
+// entry point Daily.dtsx and Child.dtsx) and its environment Test. Times keep the catalog's own offset (+02:00), and a
+// sensitive parameter or variable has no value, as the backend never reads one. ssis/missing makes every object
+// NOT_FOUND, as when it was deleted elsewhere, and ssis/fail fails every read with a retryable TIMEOUT; ssis/many fills the
+// project's three lists to the 2,048 rows one read returns, with long descriptions, as a truncated answer; hold/ssis.describe
+// holds a read until the file goes or a CANCEL frame ends it (logged to cancels.jsonl).
+const ssisTime = '2026-10-21T14:05:06.1234567+02:00'
+const ssisParameter = (name, fields = {}) => ({ name, dataType: 'String', required: false, sensitive: false, valueType: 'V', valueSet: false, ...fields })
+const ssisModels = {
+  folder: target => ({ view: 'folder', id: 1, name: target.name, description: 'Nightly finance loads', createdBy: 'CONTOSO\\etl', created: ssisTime, projects: 1, environments: 1 }),
+  project: target => ({
+    view: 'project', id: 3, folder: target.ssisFolder, name: target.name, description: 'Loads the ledger', formatVersion: 1, deployedBy: 'CONTOSO\\etl', deployed: ssisTime, created: ssisTime,
+    versionLsn: 42, validationStatus: 'N', packages: [{ name: 'Daily.dtsx', entryPoint: true, version: '1.0.7' }, { name: 'Child.dtsx', entryPoint: false, version: '1.0.2', description: 'Called by Daily' }],
+    parameters: [ssisParameter('Server', { required: true, designDefault: 'localhost', value: 'sql01', valueSet: true }), ssisParameter('Password', { sensitive: true, valueSet: true }),
+      ssisParameter('Port', { dataType: 'Int32', valueType: 'R', valueSet: true, variable: 'Port' })],
+    references: [{ id: 7, type: 'R', environment: 'Test', validationStatus: 'N' }], truncated: false
+  }),
+  package: target => ({
+    view: 'package', id: 11, folder: target.ssisFolder, project: target.ssisProject, name: target.name, formatVersion: 8, version: '1.0.7', versionComments: 'Adds the ledger step',
+    entryPoint: target.name !== 'Child.dtsx', validationStatus: 'N', parameters: [ssisParameter('Rows', { dataType: 'Int64', designDefault: '9000000000' })], truncated: false
+  }),
+  environment: target => ({
+    view: 'environment', id: 5, folder: target.ssisFolder, name: target.name, description: 'Test servers', createdBy: 'CONTOSO\\etl', created: ssisTime,
+    variables: [{ name: 'Port', type: 'Int32', sensitive: false, value: '1433' }, { name: 'Secret', type: 'String', sensitive: true, description: 'Never read' }], truncated: false
+  })
+}
+/** The project at the cap of every list (ssisLimits.rows), each row with a 200-character description or value. */
+const ssisMany = (model, rows = 2048) => ({
+  ...model, truncated: true,
+  packages: Array.from({ length: rows }, (_, index) => ({ name: `Package ${index + 1}.dtsx`, entryPoint: index % 7 === 0, version: `1.0.${index}`, description: `Package ${index + 1} `.padEnd(200, 'x') })),
+  parameters: Array.from({ length: rows }, (_, index) => ssisParameter(`Parameter ${index + 1}`, { valueSet: true, ...index % 5 === 0 ? { sensitive: true } : { value: `Value ${index + 1} `.padEnd(200, 'v') } })),
+  references: Array.from({ length: rows }, (_, index) => ({ id: index + 1, type: index % 2 ? 'A' : 'R', ...index % 2 ? { folder: 'Shared' } : {}, environment: `Environment ${index + 1}`, validationStatus: 'N' }))
+})
+async function ssisDescribe(id, { view, target }) {
+  while (await controlled(join('hold', 'ssis.describe'))) {
+    if (cancelled.delete(id)) {
+      if (controlDirectory) appendFileSync(join(controlDirectory, 'cancels.jsonl'), JSON.stringify({ method: 'ssis.describe' }) + '\n')
+      return fail(id, 'CANCELLED', 'The operation was cancelled.')
+    }
+    await sleep(25)
+  }
+  if (await controlled(join('ssis', 'fail'))) return respond(id, { elapsedMs: 1, error: { code: 'TIMEOUT', message: 'The SSIS Catalog did not answer in time.', retryable: true } })
+  if (await controlled(join('ssis', 'missing'))) return respond(id, { elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The ${view} ${target.name} no longer exists in the SSIS Catalog.`, retryable: false } })
+  const model = ssisModels[view](target)
+  return respond(id, { model: view === 'project' && await controlled(join('ssis', 'many')) ? ssisMany(model) : model, revision: 'a'.repeat(64), elapsedMs: 1 })
+}
+
 /** A sign-in waiting for the browser: the request ends only when a CANCEL frame names it (logged to cancels.jsonl). */
 async function entraWait(id, method) {
   while (!cancelled.has(id)) await sleep(25)
@@ -719,7 +769,7 @@ async function workbench(id, method, params, credit) {
   }
   // A directive's `hold` and an export's hold apply later, after their first output.
   const directive = method === 'query.execute' ? parseDirective(params.sql) : undefined
-  if (!directive?.hold && method !== 'results.export') while (await controlled(join('hold', method))) await sleep(25)
+  if (!directive?.hold && method !== 'results.export' && method !== 'ssis.describe') while (await controlled(join('hold', method))) await sleep(25)
   switch (method) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
@@ -807,6 +857,7 @@ async function workbench(id, method, params, credit) {
     case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
+    case 'ssis.describe': return ssisDescribe(id, params)
     case 'query.execute': {
       // As the real backend's crash handler does: a best-effort GOAWAY, then exit 70.
       if (await controlled('crash-next', true)) return exitAfter(encodeFrame(FrameKind.GOAWAY, 0, 0, encodeControl({ code: 'BACKEND_CRASH', message: 'The SQL backend failed unexpectedly (Exception).' })), 70)

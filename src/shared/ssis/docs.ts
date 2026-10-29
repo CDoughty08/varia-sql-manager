@@ -3,7 +3,7 @@
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
-  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, stoppableOperationTypes, type CodeLabel
+  valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, validationStatuses, type CodeLabel
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
 
@@ -93,6 +93,27 @@ export function renderSsisDocs(): string {
     table(['Feature', 'Found when the catalog has'], ssisFeatures.map(feature => [code(feature), code(ssisFeatureSources[feature])])),
     '',
     table(['Error', 'Retry helps'], ssisErrorCodes.map(item => [code(item), ssisErrorRetryable[item] ? 'Yes' : 'No'])),
+    '',
+    '### Verbs and documents',
+    '',
+    'Each verb is one command (the palette shows it under Integration Services), on Object Explorer\'s menu for the kinds that offer it,',
+    'and enabled by its context key, which the selected node sets. A verb marked as the default action runs on Enter and a double-click,',
+    'as in SSMS. None of them changes the catalog yet. docs/commands.md lists the commands with their keys and menus.',
+    '',
+    table(['Verb', 'Command', 'Menu item', 'Offered on', 'Opens', 'Default action', 'Context key'], ssisVerbs.map(verb => {
+      const spec = ssisVerbSpecs[verb]
+      return [code(verb), code(spec.command), spec.menuTitle, spec.kinds.map(kind => kindSpecs[kind].title).join(', '), spec.document ? ssisDocumentSpecs[spec.document].title : '—', spec.defaultAction ? 'Yes' : 'No', code(ssisVerbContextKey(verb))]
+    })),
+    '',
+    'A properties document is a read-only document tab named as SSMS names the dialog ("Folder Properties - Finance"), with one',
+    'section per page. Opening an object that has a tab shows that tab and reads it again, and Refresh (F5 in the document,',
+    `${code('ssis.refreshProperties')}) reads it again while the last model stays on screen. A sensitive value always shows as ${code('********')}.`,
+    '',
+    table(['Document', 'Title', 'Reads (view)', 'Sections'], ssisDocumentKinds.map(kind => [code(kind), ssisDocumentSpecs[kind].title, code(ssisDocumentSpecs[kind].view),
+      ssisDocumentSpecs[kind].sections.map(section => section.title).join(', ')])),
+    '',
+    `Validation statuses shown in words: ${validationStatuses.map(item => `${code(item.code)} ${item.label}`).join(', ')}; any other code shows as the catalog stores it.`,
+    `Commands: ${Object.keys(ssisCommandEntries()).map(code).join(', ')}.`,
     '',
     '### Writes (`ssis.execute`)',
     '',

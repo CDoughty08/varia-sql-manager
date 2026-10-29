@@ -9,8 +9,10 @@ import { nodeKinds } from '../src/shared/explorer/catalog'
 import {
   catalogDatabase, describeTargets, describeViews, executableResults, finalStatuses, loggingLevels, messageSourceTypes, messageTypes, openStatuses, operationStatuses, operationTypes,
   parameterObjectTypes, permissionTypes, securableTypes, ssisActions, ssisActionVerbs, ssisCatalogJson, ssisErrorCodes, ssisErrorRetryable, ssisFeatures, ssisFeatureSources, ssisLimits,
-  stoppableOperationTypes, systemParameters
+  stoppableOperationTypes, systemParameters,
+  isSsisDocumentKind, ssisCommandEntries, ssisDocumentKinds, ssisDocumentName, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs, ssisVerbSpecs, validationStatuses
 } from '../src/shared/ssis/catalog'
+import { commandDescriptor } from '../src/shared/commands/catalog'
 import { generatedMarker, renderSsisDocs } from '../src/shared/ssis/docs'
 import { ssisRequestLimits } from '../src/main/backend/ssis-requests'
 import { methodPolicies } from '../src/shared/ipc/methods'
@@ -52,6 +54,30 @@ describe('SSIS catalogue', () => {
     expect(Object.keys(ssisFeatureSources)).toEqual([...ssisFeatures])
     for (const source of Object.values(ssisFeatureSources)) expect(source).toMatch(/^catalog\.[a-z_]+(\.[a-z_]+)?$/)
     expect(catalogDatabase).toBe('SSISDB')
+  })
+  it('gives each verb one command, on Object Explorer\'s menu for its own kind only, and each document its own view', () => {
+    expect(ssisVerbs).toEqual(['folderProperties', 'projectProperties', 'packageProperties', 'environmentProperties'])
+    const entries = ssisCommandEntries()
+    expect(Object.keys(entries)).toEqual([...ssisVerbs.map(verb => ssisVerbSpecs[verb].command), 'ssis.refreshProperties'])
+    for (const verb of ssisVerbs) {
+      const spec = ssisVerbSpecs[verb], key = ssisVerbContextKey(verb), kind = spec.kinds[0]
+      expect(spec, verb).toMatchObject({ class: 'document', writes: false, document: kind, menuTitle: 'Properties', group: '9_properties', mnemonic: 'p' })
+      expect(commandDescriptor(spec.command), verb).toEqual(entries[spec.command])
+      expect(entries[spec.command]).toMatchObject({ category: 'Integration Services', precondition: `backendReady && ${key} == 'enabled'`, menus: [{ menu: 'explorer.context', title: 'Properties', when: `explorerNode == '${kind}' && ${key} != ''` }] })
+      expect(key).toBe(`ssisVerb${verb[0].toUpperCase()}${verb.slice(1)}`)
+      // Only its own kind offers it.
+      for (const other of [...nodeKinds, 'folder' as const]) expect(ssisVerbMenuState(other)[verb], `${verb} on ${other}`).toBe(other === kind ? 'enabled' : '')
+    }
+    expect(ssisVerbContextValues(ssisVerbMenuState('ssisProject'))).toEqual({ ssisVerbFolderProperties: '', ssisVerbProjectProperties: 'enabled', ssisVerbPackageProperties: '', ssisVerbEnvironmentProperties: '' })
+    for (const kind of ssisDocumentKinds) {
+      expect(describeTargets[ssisDocumentSpecs[kind].view], kind).toBe(kind)
+      expect(ssisDocumentSpecs[kind].sections[0], kind).toEqual({ id: 'general', title: 'General' })
+      expect(unique(ssisDocumentSpecs[kind].sections.map(section => section.id)), kind).toBe(true)
+      expect(isSsisDocumentKind(kind)).toBe(true)
+    }
+    expect([isSsisDocumentKind('ssisCatalog'), isSsisDocumentKind('tableDesigner'), isSsisDocumentKind(undefined)]).toEqual([false, false, false])
+    expect(ssisDocumentName('ssisPackage', 'Daily.dtsx')).toBe('Package Properties - Daily.dtsx')
+    expect(validationStatuses).toEqual([{ code: 'N', label: 'Not validated' }])
   })
   it('keeps error codes retryable only where a retry can help', () => {
     expect(ssisErrorCodes.filter(code => ssisErrorRetryable[code])).toEqual(['DATABASE_UNAVAILABLE', 'BLOCKED', 'TIMEOUT', 'CONNECTION_LOST', 'AUTH_KERBEROS', 'NOT_RUNNING', 'CANCELLED', 'SQL_ERROR'])

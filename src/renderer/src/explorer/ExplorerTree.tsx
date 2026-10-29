@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react'
 import { explorerLimits } from '../../../shared/explorer/catalog.ts'
+import { ssisDefaultVerb, ssisVerbSpecs } from '../../../shared/ssis/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { onUnexpectedError } from '../core/errors'
 import { useMenuTarget } from '../menus/useMenuTarget'
@@ -86,9 +87,15 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
     const node = explorer.menuNode(rowId)
     if (node) void commands.execute(id, { target: { kind: 'explorer', node } }, 'toolbar')
   }, [commands, explorer])
+  // Enter or a double-click on a node that does not expand runs its kind's default action, as SSMS opens a package's Properties.
+  const activate = useCallback((rowId: number) => {
+    const verb = ssisDefaultVerb(explorer.menuNode(rowId)?.kind)
+    if (verb) run(ssisVerbSpecs[verb].command, rowId)
+  }, [explorer, run])
   const actions = useMemo<RowActions>(() => ({
     select: rowId => { explorer.select(rowId); element.current?.focus({ preventScroll: true }) },
     toggle: rowId => explorer.toggle(rowId),
+    activate,
     reconnect: rowId => run('connection.reconnect', rowId),
     remove: rowId => run('connection.removeLost', rowId),
     // The text goes as plain text too, so other apps take it; the query editor accepts only the Varia type.
@@ -111,7 +118,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       objectActions.cancelRename()
       if (refocus) element.current?.focus({ preventScroll: true })
     }
-  }), [explorer, run, objectActions])
+  }), [explorer, run, activate, objectActions])
   // Rows are menu targets: right-click has selected the row; Shift+F10 asks for the active descendant's menu.
   const rowTarget = useMenuTarget<HTMLDivElement>(row => {
     const node = explorer.menuNode(Number(row.getAttribute('data-row-id')))
@@ -134,6 +141,7 @@ export default function ExplorerTree({ activeConnectionId }: { readonly activeCo
       case 'retry': explorer.retry(action.id); return
       case 'continue': explorer.continueLoading(action.id); return
       case 'filter': run('explorer.filter', action.id); return
+      case 'activate': activate(action.id); return
       default: return
     }
   }

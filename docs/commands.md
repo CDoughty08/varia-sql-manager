@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (169)
+## Commands (174)
 
 ### File
 
@@ -197,6 +197,16 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### Integration Services
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Folder Properties | `ssis.folderProperties` | — | — | — | `backendReady && ssisVerbFolderProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Project Properties | `ssis.projectProperties` | — | — | — | `backendReady && ssisVerbProjectProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Package Properties | `ssis.packageProperties` | — | — | — | `backendReady && ssisVerbPackageProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Environment Properties | `ssis.environmentProperties` | — | — | — | `backendReady && ssisVerbEnvironmentProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Refresh Properties | `ssis.refreshProperties` | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | F5 (`activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus`) | `backendReady && activeDocumentIsSsis` | — |
 
 ### Tools
 
@@ -466,6 +476,10 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
 | `8_refresh` | Re**f**resh | `explorer.refresh` | `!explorerServerLost` |
 | `9_properties` | **P**roperties | `explorer.properties` | `explorerActionProperties != '' && explorerNode != 'background'` |
+| `9_properties` | **P**roperties | `ssis.folderProperties` | `explorerNode == 'ssisFolder' && ssisVerbFolderProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.projectProperties` | `explorerNode == 'ssisProject' && ssisVerbProjectProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.packageProperties` | `explorerNode == 'ssisPackage' && ssisVerbPackageProperties != ''` |
+| `9_properties` | **P**roperties | `ssis.environmentProperties` | `explorerNode == 'ssisEnvironment' && ssisVerbEnvironmentProperties != ''` |
 
 #### Object Explorer context menu › New
 
@@ -639,7 +653,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (85)
+## Context keys (90)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -664,8 +678,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `backendStatus` | `'starting'`, `'ready'`, `'unresponsive'`, `'restarting'`, `'failed'`, `'stopped'`, `''` | state | The SQL backend's state; '' before the workbench has heard from main. |
 | `backendReady` | boolean | state | `backendStatus == 'ready'`. |
 | `hasActiveDocument` | boolean | state | A query is open. |
-| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer or Database Properties. |
+| `activeDocumentIsText` | boolean | state | The active document has text in the editor: a query or a value opened from the results, not a table designer, Database Properties, SSIS properties or an Activity Monitor. |
 | `activeDocumentIsDesigner` | boolean | state | The active document is a table designer. |
+| `activeDocumentIsSsis` | boolean | state | The active document is the properties of an SSIS Catalog folder, project, package or environment. |
 | `designerEditable` | boolean | state | The active table designer has loaded, is not saving or saved, and its server is connected. |
 | `designerSaving` | boolean | state | A table designer is saving its table (Stop cancels it). |
 | `designerRowSelected` | boolean | state | The active table designer has a column selected. |
@@ -721,6 +736,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `ssisVerbEnvironmentProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Environment Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
 | `scriptingRunning` | boolean | state | A Script As request is running. |
 | `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |

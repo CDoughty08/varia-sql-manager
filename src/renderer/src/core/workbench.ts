@@ -53,6 +53,9 @@ import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { notificationsContribution } from '../contributions/notifications'
 import { TableDesignerService } from '../designer/TableDesignerService'
+import { ssisFocuser } from '../ssis/focus'
+import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
+import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -131,6 +134,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
+  /** The SSIS Catalog's properties documents (Folder, Project, Package and Environment Properties). */
+  readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
   /** The Activity Monitors: one per connection, each a live view of its server. */
@@ -198,6 +203,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
   })
+  // Focus goes to the document's current section in its list, else to its first button (Refresh), once its first read
+  // has drawn them.
+  const ssisFocus = ssisFocuser({ get: id => ssisProperties.get(id), subscribe: listener => ssisProperties.subscribe(listener) }, {
+    root: id => document.querySelector<HTMLElement>(`[data-ssis-document="${CSS.escape(id)}"]`), activeElement: () => document.activeElement, body: () => document.body,
+    modalOpen, frame
+  })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
     api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
@@ -289,6 +301,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     designers,
+    ssisProperties,
     properties,
     activity,
     theme,
@@ -318,6 +331,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
       designers.dispose()
+      ssisFocus.dispose()
+      ssisProperties.dispose()
       properties.dispose()
       documents.dispose()
       backend.dispose()
@@ -358,6 +373,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    ssisContribution(workbench),
     activityContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)

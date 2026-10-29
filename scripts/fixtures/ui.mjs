@@ -177,7 +177,9 @@ export const part = {
   tableDesigner: '.table-designer',
   // The document frame
   documentHeader: '.document-header',
+  /** The header's kind of document ("Folder Properties") and the fact line. */
   documentSubtitle: '.document-subtitle',
+  documentFacts: '.document-facts',
   /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
   statusPill: '.status-pill',
   documentBanner: '.document-banner',
@@ -482,6 +484,10 @@ export const documentFrame = (page, title) => page.getByRole('region', named(tit
 /** The header row, for its height (it has no role of its own inside the frame's region). */
 export const documentHeader = frame => frame.locator(part.documentHeader)
 export const documentCrumbs = frame => frame.getByRole('navigation', { name: 'Location', exact: true }).getByRole('listitem')
+/** The header's age of what it shows (a StaleBadge), beside its state pill (documentState). */
+export const documentStaleBadge = frame => documentHeader(frame).locator(part.staleBadge)
+/** The fact line's values, in order. */
+export const documentFactValues = frame => frame.locator(part.documentFacts).locator('dd')
 export const sectionList = frame => frame.getByRole('navigation', { name: 'Sections', exact: true })
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
@@ -503,9 +509,9 @@ export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
 export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
 /** Muted words after the title ("Database Properties"). */
 export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
-/** The header's state pill ("Normal", "Restoring, Standby"). */
+/** The header's state pill ("Normal", "Restoring, Standby", Loading, Not found). */
 export const documentState = frame => documentHeader(frame).locator(part.statusPill)
-/** The line under the header for what the document's last action said. */
+/** What the document says between its header and content: its last action's outcome, a failure with its actions, or a note. */
 export const documentBanner = frame => frame.locator(part.documentBanner)
 /** A verb in the header, whose group is named "<title> actions". */
 export const documentVerb = (frame, title, name) => frame.getByRole('group', named(title + ' actions')).getByRole('button', named(name))

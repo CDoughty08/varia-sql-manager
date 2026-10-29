@@ -9,7 +9,7 @@ import type { CommandArgs, CommandId } from '../core/types'
 import { useCommandsEnabled, useCommandsToggled } from '../core/useCommand'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import { revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
+import { restoredSection, revealBy, scrolledTo, sectionKey, sectionLabel, selectSection, setScriptOpen, spySection, toggleSection, resizeScript, verbTooltip, type FrameState, type SectionInfo } from './document-frame'
 import ScriptDrawer, { type ScriptDrawerProps } from './ScriptDrawer'
 
 /** One step of the path to the document's object: the server (connection), a folder, a database. Its tooltip is `title`, or the label, which may be cut. */
@@ -38,7 +38,12 @@ export interface FrameSection extends SectionInfo {
   readonly content: ReactNode
   /** Its heading opens and closes it; a collapsed section's content is not rendered. */
   readonly collapsible?: boolean
-  /** Beside the heading: a count, a StaleBadge, a section's own actions. */
+  /**
+   * How many items the section lists, drawn right after its title ("Packages 2") and named in words for assistive
+   * technology ("Packages (2 packages)"), as Object Explorer names a folder's count.
+   */
+  readonly count?: { readonly text: string; readonly label: string }
+  /** At the far end of the heading row: a StaleBadge, a section's own actions. */
   readonly aside?: ReactNode
 }
 
@@ -165,12 +170,13 @@ function firstTabbable(root: HTMLElement | null | undefined): HTMLElement | unde
 export function FrameSectionView({ id, section, collapsed, onToggle }: { readonly id: string; readonly section: FrameSection; readonly collapsed: boolean; readonly onToggle: () => void }) {
   const domId = sectionDomId(id, section.id), headingId = `${domId}-heading`, bodyId = `${domId}-body`
   const open = !section.collapsible || !collapsed
+  const count = section.count && <span className="document-section-count"><span aria-hidden="true">{section.count.text}</span><span className="visually-hidden"> ({section.count.label})</span></span>
   return <section className="document-section" id={domId} role="group" aria-labelledby={headingId} data-section={section.id}>
     <div className="document-section-head">
       <h2 className="document-section-title" id={headingId}>
         {section.collapsible
-          ? <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}><Icon name={open ? 'chevron-down' : 'chevron-right'} />{section.title}</button>
-          : section.title}
+          ? <button type="button" aria-expanded={open} aria-controls={bodyId} onClick={onToggle}><Icon name={open ? 'chevron-down' : 'chevron-right'} />{section.title}{count}</button>
+          : <>{section.title}{count}</>}
       </h2>
       {section.aside}
     </div>
@@ -225,8 +231,11 @@ function SectionedBody({ id, title, sections, frame, onFrame, hint }: { readonly
   // The latest frame and handler for the scroll callback, which runs a frame after the render that set it up.
   const latest = useRef({ frame, onFrame, sections })
   latest.current = { frame, onFrame, sections }
-  const chosen = useRef<string | undefined>(undefined)
-  const reveal = useRef<string | undefined>(undefined)
+  // A tab switched back to remounts its frame: the column starts at the top, so it scrolls to the section its list marks
+  // (the effect below), which counts as chosen so the end of the scroll keeps it marked.
+  const restored = useRef(restoredSection(frame, sections)).current
+  const chosen = useRef<string | undefined>(restored)
+  const reveal = useRef<string | undefined>(restored)
   const pending = useRef<(() => void) | undefined>(undefined)
   useEffect(() => () => pending.current?.(), [])
   // After a choice has rendered (a collapsed section opens first), its heading goes to the top of the column.

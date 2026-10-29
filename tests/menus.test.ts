@@ -332,6 +332,8 @@ describe('menu state', () => {
       'notifications.focus', 'notifications.clearAll',
       // The table designer's menu and toolbar strip; its menubar menu is a follow-up.
       'tableDesigner.setPrimaryKey', 'tableDesigner.removePrimaryKey', 'tableDesigner.insertColumn', 'tableDesigner.deleteColumn', 'tableDesigner.generateChangeScript', 'tableDesigner.properties', 'tableDesigner.stop',
+      // The SSIS Catalog's Properties on its tree nodes, and the properties documents' Refresh (their header and F5).
+      'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties', 'ssis.refreshProperties',
       // The Database Properties document's header verbs.
       'databaseProperties.apply', 'databaseProperties.discard', 'databaseProperties.refresh', 'databaseProperties.stop',
       // The Activity Monitor's header verbs and keys; only opening it is in the menu bar.

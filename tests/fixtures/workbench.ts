@@ -50,6 +50,8 @@ import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialog
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
+import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
+import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
@@ -254,6 +256,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
+    // No catalog unless a test says otherwise.
+    describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
+    cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     checkSqlFiles: vi.fn<VariaApi['checkSqlFiles']>(async () => ({ ok: true, value: [] })),
     reloadSqlFile: vi.fn<VariaApi['reloadSqlFile']>(async () => ({ ok: false, error: 'Not in this fixture.' })),
     confirmReload: vi.fn<VariaApi['confirmReload']>(async () => ({ ok: true, value: 'no' })),
@@ -294,6 +299,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
+  const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
@@ -375,6 +381,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
+    ssisProperties,
     properties,
     notifications,
     activity
@@ -397,6 +404,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     scriptingContribution(workbench),
     actionsContribution(workbench),
     designerContribution(workbench),
+    ssisContribution(workbench),
     activityContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
@@ -428,6 +436,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     designers.dispose()
+    ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
     bookmarks.dispose()
@@ -459,6 +468,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     designers,
+    ssisProperties,
     properties,
     activity,
     liveViews,
