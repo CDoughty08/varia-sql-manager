@@ -50,6 +50,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['button.foreground'], ['editorWidget.background', 'button.background'], ['editorWidget.background', 'button.hoverBackground']),
   ...text(['titleBar.activeForeground'], titleBar),
   ...text(['titleBar.inactiveForeground'], ['titleBar.inactiveBackground']),
+  ...text(['sideBarTitle.foreground'], sideBar),
+  ...text(['commandCenter.foreground'], ['titleBar.activeBackground', 'commandCenter.background'], ['titleBar.activeBackground', 'commandCenter.activeBackground']),
   ...text(['menubar.selectionForeground'], ['titleBar.activeBackground', 'menubar.selectionBackground']),
   ...text(['menu.foreground'], ['menu.background']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
@@ -222,6 +224,9 @@ export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
   // The highlighted menu item follows the pointer and the keyboard alike.
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
+  // The search box stands out from the title bar by its outline, and shows the pointer by a fill that changes from its own.
+  ...pairs(1.2, ['commandCenter.border'], titleBar),
+  ...pairs(1.2, ['commandCenter.activeBackground'], titleBar, ['titleBar.activeBackground', 'commandCenter.background']),
   // Loading placeholders say only that something is coming, so they are held to the same floor.
   ...pairs(1.2, ['skeleton.background'], ...contentSurfaces)
 ]

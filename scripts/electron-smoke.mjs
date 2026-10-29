@@ -2,7 +2,11 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { activeDocument, anyResultGrid, closeDocumentButton, documentTabs, emptyState, emptyStateIcon, emptyStateTitle, primaryAction, workspaceEmpty, editorText as editorTextOf, errorMessages, executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, queryDatabase, queryServer, resultGrid, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import {
+  activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
+  executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryDatabase, queryServer, queryStatus, resultGrid, toolbarButton,
+  unsavedMark, workspaceEmpty
+} from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'electron-profile-'))
@@ -62,7 +66,7 @@ try {
   const page = await application.firstWindow()
   const failures = []
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok).toBe(true)
@@ -139,7 +143,7 @@ try {
   await expect(shellFailure.getByRole('status')).toHaveText('Details copied.')
   expect(await application.evaluate(({ clipboard }) => clipboard.readText())).toMatch(/Error: Workbench test fault\.[\s\S]*Component stack:/)
   await shellFailure.getByRole('button', { name: 'Reload', exact: true }).click()
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await expect(shellFailure).toHaveCount(0)
   await expect(page.locator('.app-header')).toHaveCount(0)
@@ -154,15 +158,28 @@ try {
     const safe = overlay.getTitlebarAreaRect()
     const content = document.querySelector(part.titleBarContent)
     const rect = content.getBoundingClientRect()
-    return { nativeControls: overlay.visible, top: rect.top, right: rect.right, safeRight: safe.x + safe.width, drag: getComputedStyle(content).webkitAppRegion, menus: getComputedStyle(document.querySelector(part.menubar)).webkitAppRegion, toolbarTop: document.querySelector(part.toolbar).getBoundingClientRect().top, height: document.querySelector(part.titleBar).getBoundingClientRect().height }
+    const header = document.querySelector(part.titleBar), toolbar = document.querySelector(part.toolbar), search = header.querySelector('button[aria-label="Search"]')
+    return { nativeControls: overlay.visible, top: rect.top, right: rect.right, safeRight: safe.x + safe.width, drag: getComputedStyle(content).webkitAppRegion, menus: getComputedStyle(document.querySelector(part.menubar)).webkitAppRegion,
+      toolbar: [header.contains(toolbar), getComputedStyle(toolbar).webkitAppRegion], search: getComputedStyle(search).webkitAppRegion, height: header.getBoundingClientRect().height }
   }, part)
   expect(titleBar.nativeControls).toBe(true)
   expect(titleBar.top).toBe(0)
   expect(titleBar.right).toBeLessThanOrEqual(titleBar.safeRight + 1)
   expect(titleBar.drag).toBe('drag')
   expect(titleBar.menus).toBe('no-drag')
-  expect(titleBar.toolbarTop).toBe(titleBar.height)
-  expect(titleBar.height).toBeLessThanOrEqual(34)
+  // One header row: the Standard toolbar and the search box share it with the menus, and take clicks rather than drags.
+  expect([titleBar.toolbar, titleBar.search]).toEqual([[true, 'no-drag'], 'no-drag'])
+  expect(titleBar.height).toBe(40)
+  // Options › Show the classic toolbar puts the text toolbar, with Layouts, back on a row of its own below the header.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': true }))).toMatchObject({ ok: true })
+  await expect(toolbarButton(page, 'Layouts')).toBeVisible()
+  expect(await page.evaluate(part => {
+    const header = document.querySelector(part.titleBar), toolbar = document.querySelector(part.toolbar)
+    return [header.contains(toolbar), toolbar.getBoundingClientRect().top >= header.getBoundingClientRect().bottom - 0.5, document.querySelectorAll(part.toolbar).length]
+  }, part)).toEqual([false, true, 1])
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'environment.layout.classicToolbar': null }))).toMatchObject({ ok: true })
+  await expect(toolbarButton(page, 'Layouts')).toHaveCount(0)
+  await expect(toolbarButton(page, 'New query')).toBeVisible()
   // The renderer draws the title-bar menus: no native popup or menu-focus channel is left to call.
   expect(await page.evaluate(() => ({ showMenu: typeof window.varia.showMenu, onMenuFocus: typeof window.varia.onMenuFocus }))).toEqual({ showMenu: 'undefined', onMenuFocus: 'undefined' })
   const editorText = () => editorTextOf(page)
@@ -205,6 +222,27 @@ try {
   await redoToText(typed)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(1)
   await expect(kindIcon(activeDocument(page), 'Transact-SQL')).toHaveAttribute('data-icon', 'database')
+  // The unsaved dot sits in the Close button's place; pointing at the tab brings the × back in its stead.
+  const dirtyName = await activeDocument(page).getAttribute('aria-label'), dirtyClose = closeDocumentButton(page, dirtyName)
+  const [dot, closeBox] = [await unsavedMark(activeDocument(page)).boundingBox(), await dirtyClose.boundingBox()]
+  expect([Math.abs(dot.x + dot.width / 2 - (closeBox.x + closeBox.width / 2)) < 1, Math.abs(dot.y + dot.height / 2 - (closeBox.y + closeBox.height / 2)) < 1]).toEqual([true, true])
+  const closeGlyph = () => dirtyClose.locator('[data-icon="close"]').evaluate(glyph => getComputedStyle(glyph).visibility)
+  await page.mouse.move(0, 300)
+  expect(await closeGlyph()).toBe('hidden')
+  await activeDocument(page).hover()
+  expect([await closeGlyph(), await unsavedMark(activeDocument(page)).evaluate(mark => getComputedStyle(mark).opacity)]).toEqual(['visible', '0'])
+  await page.mouse.move(0, 300)
+  // Under forced colours the dot is drawn in a system colour, not Canvas on Canvas: with the X hidden it is all there is.
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await unsavedMark(activeDocument(page)).evaluate(mark => {
+    const probe = document.body.appendChild(document.createElement('div'))
+    probe.style.cssText = 'background: Canvas; forced-color-adjust: none'
+    const canvas = getComputedStyle(probe).backgroundColor, style = getComputedStyle(mark)
+    probe.remove()
+    return { drawn: style.backgroundColor !== canvas && style.backgroundColor !== 'rgba(0, 0, 0, 0)', opacity: style.opacity }
+  })).toEqual({ drawn: true, opacity: '1' })
+  expect(await closeGlyph()).toBe('hidden')
+  await page.emulateMedia({ forcedColors: null })
   await page.keyboard.press('F10')
   await expect(page.getByRole('menuitem', { name: 'File', exact: true })).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -244,7 +282,8 @@ try {
   await dialogs({ savePath: savedPath })
   await menu('file.save')
   await expect(documentTabs(page).getByRole('tab', { name: 'saved-query.sql', exact: true })).toBeVisible()
-  await expect(page.locator(part.titleBarCaption)).toContainText('saved-query.sql')
+  // The window's title names the document; the header has no caption on Windows and Linux, where the menus are.
+  await expect.poll(() => page.title()).toBe('saved-query.sql — Varia SQL Manager')
   expect(await readFile(savedPath, 'utf8')).toBe('SELECT 42 AS answer;')
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
   // Delay Save As while typing; the revision written stays the saved undo boundary.
@@ -549,11 +588,17 @@ try {
   await typeSql('WAIT_FOR_CANCEL')
   await toolbarButton(page, /Execute/).click()
   await expect(executingMark(documentTabs(page))).toHaveCount(2)
+  // Running is a spinner, unlike the unsaved dot, and the status bar takes its executing tint for the active query.
+  await expect(executingMark(documentTabs(page)).first()).toHaveAttribute('data-icon', 'loading')
+  await expect(page.getByRole('contentinfo', { name: 'Status bar', exact: true })).toHaveAttribute('data-state', 'executing')
   await toolbarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(1)
   await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
   await toolbarButton(page, 'Cancel').click()
   await expect(executingMark(documentTabs(page))).toHaveCount(0)
+  // Tabs are whole pixels wide, so each tab's kind icon starts on a whole pixel, as the first one's does.
+  const iconOffsets = await documentTabs(page).evaluate((strip, icon) => [...strip.querySelectorAll(icon)].map(glyph => glyph.getBoundingClientRect().left % 1), part.tabIcon)
+  expect([iconOffsets.length > 1, iconOffsets.every(offset => offset === 0)]).toEqual([true, true])
   await typeSql('SELECT 1;')
   await toolbarButton(page, /Execute/).click()
   await expect(anyResultGrid(page)).toContainText('server-a')
@@ -573,12 +618,12 @@ try {
   await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(1024)
   const alignment = await page.evaluate(part => {
     const center = element => { const box = element.getBoundingClientRect(); return box.y + box.height / 2 }
-    const label = document.querySelector('label[for="query-database"]')
-    const select = document.querySelector('#query-database')
+    // The header's controls (search box, buttons, server and database lists) sit on its middle line.
+    const header = document.querySelector(part.titleBarContent), controls = [...header.querySelectorAll('button, select')].filter(element => element.getBoundingClientRect().width > 0)
     const headings = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].filter(element => element.getBoundingClientRect().height > 0)
     const distances = headings.flatMap(element => [element.querySelector(part.explorerLabel), element.querySelector(part.explorerSublabel), element.querySelector(part.explorerTwistie)].filter(Boolean).map(item => Math.abs(center(element.querySelector(part.explorerIcon)) - center(item))))
     const safe = navigator.windowControlsOverlay.getTitlebarAreaRect()
-    return { field: Math.abs(center(label) - center(select)), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector(part.titleBarContent).getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
+    return { field: Math.max(...controls.map(control => Math.abs(center(control) - center(header)))), tree: Math.max(...distances), headingCount: headings.length, titleBarFits: document.querySelector(part.titleBarContent).getBoundingClientRect().right <= safe.x + safe.width + 1, overflow: document.documentElement.scrollWidth > window.innerWidth }
   }, part)
   expect(alignment.field).toBeLessThan(1)
   expect(alignment.headingCount).toBeGreaterThan(6)
@@ -586,8 +631,28 @@ try {
   expect(alignment.overflow).toBe(false)
   expect(alignment.titleBarFits).toBe(true)
   await page.screenshot({ path: artifact('workbench-compact.png') })
+  // With a connected query's facts in the status bar, every other segment still fits whole; only the facts give way,
+  // and they ellipsize. The search box shows as much of its label as fits, never a label cut short.
+  await documentTabs(page).getByRole('tab', { name: tabA, exact: true }).click()
+  await expect(queryStatus(page)).toContainText('server-a')
+  const clipped = () => page.evaluate(part => {
+    const cut = element => element.scrollWidth > element.clientWidth + 0.5
+    const bar = document.querySelector(part.statusBar), right = bar.getBoundingClientRect().right
+    const status = [...bar.children].filter(segment => !segment.matches(part.queryStatus) && (cut(segment) || segment.getBoundingClientRect().right > right + 0.5)).map(segment => segment.className)
+    const box = document.querySelector(part.titleBar + ' button[aria-label="Search"]')
+    const search = [...box.children].filter(child => child instanceof HTMLElement && getComputedStyle(child).display !== 'none' && cut(child)).map(child => child.textContent)
+    return { status, search }
+  }, part)
+  expect(await clipped()).toEqual({ status: [], search: [] })
+  // Windows shrinks a window to fit a small display (1024x768 on CI), so only the widths that fit are tried.
+  const workWidth = await application.evaluate(({ screen }) => screen.getPrimaryDisplay().workAreaSize.width)
+  for (const width of [1100, 1280, 1440].filter(width => width + 16 <= workWidth)) {
+    await application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setContentSize(value, 700), width)
+    await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width)
+    expect(await clipped(), String(width)).toEqual({ status: [], search: [] })
+  }
   expect(failures).toEqual([])
-  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, and alignment.')
+  console.log('Electron regression checks passed: the content security policy from main\'s header and the page\'s own <meta>, the startup failure screen (also for a workbench chunk that cannot load) and the workbench error boundary, integrated title bar and native controls, menu IPC and keyboard access, protocol v2 health and error codes, tab-switch undo/redo, save while typing and saved undo boundaries, file shortcuts and round trips, inactive-tab close with pending confirmation, unsaved close/quit, tab focus, selection execution and query shortcuts, zero timeout, retarget execution guard, two-server routing, the Object Explorer tree keys, lazy folders, per-folder errors, retry and refresh, per-tab execution sessions, partial results with statistics and batch errors, escaped XML plans, concurrent cancellation, alignment, the unsaved dot under forced colours, and whole status bar segments and search box labels from 1024 px up.')
 } catch (error) {
   const page = await application.firstWindow()
   await page.screenshot({ path: artifact('workbench-failure.png') }).catch(() => {})

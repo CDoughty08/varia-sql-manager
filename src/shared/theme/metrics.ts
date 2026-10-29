@@ -82,8 +82,9 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-select .tab-readonly', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon', '.editor-status .codicon',
-    '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon', '.tile-caption > .codicon'
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon',
+    '.editor-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
+    '.tile-caption > .codicon'
   ],
   md: ['.icon'],
   lg: []
@@ -111,7 +112,11 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
-  header: [], bar: ['.query-tabs', '.document-script-head'], control: ['.icon-button', '.document-verb', '.property-input'], row: ['.explorer-row', '.skeleton-row', '.document-nav-item'], status: ['.status-bar', '.query-status-bar']
+  header: ['.title-bar'],
+  bar: ['.query-tabs', '.explorer-header', '.document-script-head'],
+  control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute', '.document-verb', '.property-input'],
+  row: ['.explorer-row', '.skeleton-row', '.document-nav-item'],
+  status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */
 export const densities = {
@@ -120,6 +125,15 @@ export const densities = {
 } as const satisfies Record<string, DensityMetrics>
 export type Density = keyof typeof densities
 export const defaultDensity: Density = 'compact'
+/**
+ * The native window controls, centred in a header of this density: the window-controls overlay's height on Windows and
+ * Linux, and the traffic lights' position on macOS (16 px tall). Main sets them when it creates a window; a density
+ * setting must set them again (setTitleBarOverlay, setWindowButtonPosition) when it changes.
+ */
+export function windowControls(density: Density = defaultDensity): { readonly overlayHeight: number; readonly trafficLights: { readonly x: number; readonly y: number } } {
+  const { header } = densities[density]
+  return { overlayHeight: header, trafficLights: { x: 12, y: (header - 16) / 2 } }
+}
 
 const px = (value: number) => `${value}px`
 const ms = (value: number) => `${value}ms`

@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
 import { documentKind, isCustomKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
-import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
 import QueryEditor from './QueryEditor'
 import QueryStatusBar from './QueryStatusBar'
@@ -24,6 +23,8 @@ import BackendBanner from './BackendBanner'
 import OutputPane from './results/OutputPane'
 import MemoryIndicator from './results/MemoryIndicator'
 import TitleBar from './TitleBar'
+import StandardToolbar, { CommandCentre, lostHint } from './ShellToolbar'
+import PaneMenuButton from './PaneMenuButton'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
 import EnvironmentDialog from './EnvironmentDialog'
@@ -39,18 +40,16 @@ import { connectionDefaults } from '../../shared/connections'
 const emptyTab: QueryTab = { id: '', name: '', dirty: false, savedVersionId: null, database: 'master' }
 function unwrap<T>(result: ApiResult<T>): T { if (!result.ok) throw new Error(result.error); return result.value }
 function errorText(error: unknown): string { return error instanceof Error ? error.message : 'The operation failed.' }
-const lostHint = "This query's connection was lost when the SQL backend restarted. Reconnect to run queries."
+/** The status bar's backend segment: Ready (the runtime is in its tooltip), or what the backend is doing. */
 function backendStatusText(state: BackendState): string {
   switch (state.status) {
     case 'starting': return 'Starting SQL backend…'
-    case 'ready': return `${state.runtime} · Ready`
+    case 'ready': return 'Ready'
     case 'unresponsive': return 'SQL backend not responding…'
     case 'restarting': return 'Restarting SQL backend…'
     default: return 'SQL backend unavailable'
   }
 }
-/** Tooltip text with the command's key on this platform, such as "Open SQL files (Ctrl+O)". */
-function withKey(text: string, label: { text: string } | undefined): string { return label ? `${text} (${label.text})` : text }
 /** A callback with a stable identity that always runs the latest render's logic, so memoized panes skip unrelated renders. */
 function useStableCallback<A extends unknown[], R>(callback: (...args: A) => R): (...args: A) => R {
   const latest = useRef(callback)
@@ -66,12 +65,12 @@ export default function App() {
   const connections = useServiceSnapshot(workbench.connections)
   const { state: backendState } = useServiceSnapshot(workbench.backend)
   const [health, setHealth] = useState<BackendHealth>()
-  const databaseLists = useServiceSnapshot(workbench.databaseList)
   const filterFolder = useServiceSnapshot(workbench.explorer.filterDialog)
   const optionsDialog = useServiceSnapshot(workbench.settings.dialog)
   const editorDialogs = useServiceSnapshot(workbench.editorDialogs)
   const { open: recoveryOpen } = useServiceSnapshot(workbench.recovery)
   const { values: settings } = useServiceSnapshot(workbench.settings)
+  const shell = useServiceSnapshot(workbench.shellOptions)
   const toasts = useServiceSnapshot(workbench.notifications)
   const [explorerError, setExplorerError] = useState('')
   const [showConnect, setShowConnect] = useState(false)
@@ -85,11 +84,6 @@ export default function App() {
   const { error: fileError, kind: fileKind } = useServiceSnapshot(files)
   const { error: commandError, kind: commandKind } = useServiceSnapshot(commands)
   const workspaceRef = useRef<WorkspaceHandle | null>(null)
-  const enabled = {
-    connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
-    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel')
-  }
-  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
   // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
@@ -104,12 +98,13 @@ export default function App() {
   const activeRunning = queryState[active.id]?.running
   // Also re-renders App when the theme changes, which the per-tab accents below rely on.
   const accent = useConnectionAccent(connection?.color)
-  const databases = liveConnection ? databaseLists.get(liveConnection.id) ?? [] : []
-  const availableDatabases = databases.some(value => value.name === active.database) ? databases : [{ name: active.database, isSystem: false }, ...databases]
+  const versions = health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined
 
-  // SSMS's query window status bar, below the query unless Options puts it above; its tooltip names the SMO and SqlClient versions.
+  // The active query's facts are in the window's status bar. Options can bring back SSMS's query window status bar, below
+  // the query unless it puts it above. Either way the tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const statusBar = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
+  const queryStatus = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={versions} variant={shell.queryStatusBar ? 'bar' : 'segment'} /> : null
+  const statusBar = shell.queryStatusBar ? queryStatus : null
 
   function activate(id: string) { documents.activate(id) }
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
@@ -133,7 +128,9 @@ export default function App() {
     closePane: pane => workspaceRef.current?.close(pane),
     paneLocation: pane => workspaceRef.current?.location(pane) ?? 'closed',
     floatPane: pane => workspaceRef.current?.float(pane),
-    dockPane: pane => workspaceRef.current?.dock(pane)
+    dockPane: pane => workspaceRef.current?.dock(pane),
+    dockPaneAt: (pane, side) => workspaceRef.current?.dockAt(pane, side),
+    tabPaneWith: (pane, other) => workspaceRef.current?.tabWith(pane, other)
   }), [disconnectServer, workbench])
   // One callback for every query tab: the tab names its query.
   const tabTarget = useMenuTarget<HTMLDivElement>(element => {
@@ -179,6 +176,30 @@ export default function App() {
     if (box.left < view.left) strip.scrollLeft -= view.left - box.left
     else if (box.right > view.right) strip.scrollLeft += box.right - view.right
   }, [activeId, tabs.length])
+  // A tab is as wide as its name, so every tab after the first would start on a fractional pixel and blur its kind icon.
+  // Each name's box is rounded up to whole pixels (the rest of a tab already is), measured from its text so that no tab
+  // shrinks meanwhile and the strip keeps its scroll position. A strip parked while its panel is closed has no layout to
+  // measure, so it is measured again once it is shown, and once the fonts have loaded.
+  const strip = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const element = strip.current
+    if (!element) return
+    const snap = () => {
+      if (!element.getClientRects().length) return
+      for (const name of element.querySelectorAll<HTMLElement>('.tab-name')) {
+        const text = document.createRange()
+        text.selectNodeContents(name)
+        const width = text.getBoundingClientRect().width
+        if (width > 0) name.style.width = `${Math.ceil(width - 0.01)}px`
+      }
+    }
+    snap()
+    let current = true
+    void document.fonts?.ready.then(() => { if (current) snap() })
+    const shown = typeof ResizeObserver === 'function' ? new ResizeObserver(snap) : undefined
+    shown?.observe(element)
+    return () => { current = false; shown?.disconnect() }
+  }, [tabs])
 
   function connected(info: ConnectionInfo, chosen: ConnectionOptions) {
     setOptions(chosen)
@@ -234,26 +255,8 @@ export default function App() {
   }
 
   return <div className="app">
-    <TitleBar title={windowTitle} />
-    <div className="toolbar" role="toolbar" aria-label="Standard">
-      <div className="toolbar-actions">
-        <button className="primary" disabled={!enabled.connect} onClick={() => run('connection.connect')}><Icon name="add" />Connect</button>
-        <span className="toolbar-divider" />
-        <button disabled={!enabled.newQuery} onClick={() => run('file.new')}><Icon name="add" />New query</button>
-        <button disabled={!enabled.open} onClick={() => run('file.open')} title={withKey('Open SQL files', keys.open)}><Icon name="folder-opened" />Open</button>
-        <button disabled={!enabled.save} onClick={() => run('file.save')} title={withKey('Save SQL query', keys.save)}><Icon name="save" />Save</button>
-        <button disabled={!enabled.saveAll} onClick={() => run('file.saveAll')} title={withKey('Save all queries with unsaved changes', keys.saveAll)}><Icon name="save" />Save All</button>
-        <span className="toolbar-divider" />
-        <button className="execute" disabled={!enabled.execute} title={connection?.lost ? lostHint : undefined} onClick={() => run('query.execute')}><Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
-        <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
-        <span className="toolbar-divider" />
-        <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
-      </div>
-      <div className="toolbar-context">
-        <label className="context-field" htmlFor="query-server">Server</label><select id="query-server" aria-label="Query server" disabled={!active.id || !isQuery || !!activeRunning || documentBusy} value={connection?.id ?? ''} onChange={event => void targets.changeConnection(active.id, event.target.value || undefined)}><option value="">Disconnected</option>{connections.filter(value => !value.lost || value === connection).map(value => <option key={value.id} value={value.id} disabled={value.lost}>{value.displayName ? `${value.displayName} (${value.server})` : value.server}{value.lost ? ' (connection lost)' : ''}</option>)}</select>
-        <label className="context-field" htmlFor="query-database">Database</label><select id="query-database" aria-label="Query database" disabled={!isQuery || !liveConnection || !!activeRunning || documentBusy} value={active.database} onChange={event => targets.changeDatabase(active.id, event.target.value)}>{availableDatabases.map(value => <option key={value.name}>{value.name}</option>)}</select>
-      </div>
-    </div>
+    <TitleBar title={windowTitle} center={<CommandCentre />} actions={shell.classicToolbar ? null : <StandardToolbar variant="header" />} />
+    {shell.classicToolbar && <StandardToolbar variant="classic" />}
     <BackendBanner />
     {fileError && (fileKind === 'warning'
       ? <div className="global-error warning" role="status"><span>{fileError}</span><button aria-label="Dismiss file notice" onClick={() => files.clearError()}><Icon name="close" /></button></div>
@@ -263,10 +266,10 @@ export default function App() {
       : <div className="global-error" role="alert"><span>{commandError}</span><button aria-label="Dismiss command error" onClick={() => commands.clearError()}><Icon name="close" /></button></div>)}
     <ThemeNotice />
     <DockWorkspace ref={workspaceRef} explorer={<aside className="explorer"><ExplorerPane error={explorerError} activeConnectionId={liveConnection?.id} /></aside>} editor={<main className="workspace">
-        <div className="query-tabs" role="tablist" aria-label="Query documents">{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id}>
-          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}{queryState[tab.id]?.running && <span className="status-dot online" role="img" aria-label="Executing" />}</button>
+        <div className="document-strip pane-header"><div className="query-tabs" role="tablist" aria-label="Query documents" ref={strip}>{tabs.map((tab, index) => { const tabConnection = connections.find(value => value.id === tab.connectionId), environment = tabConnection?.options.environment; return <div className={`query-tab ${activeId === tab.id ? 'active' : ''}`} style={{ borderTopColor: workbench.theme.accent(tabConnection?.color) }} role="presentation" key={tab.id} ref={tabTarget} data-tab-id={tab.id} data-dirty={tab.dirty || undefined}>
+          <button id={`tab-${tab.id}`} className="tab-select" role="tab" aria-label={tab.name} aria-description={environmentTag(environment)?.description} aria-selected={activeId === tab.id} tabIndex={activeId === tab.id ? 0 : -1} title={`${tab.file?.path ?? tab.name}${tab.file?.readOnly ? ' (read-only)' : ''}${tab.dirty ? ' (unsaved changes)' : ''}`} onClick={() => activate(tab.id)} onKeyDown={event => tabKey(event, index)}><Icon name={kindInfo[documentKind(tab)].icon} className="tab-icon" label={kindInfo[documentKind(tab)].label} /><span className="tab-name">{tab.name}</span><EnvironmentTag environment={environment} place="tab" />{tab.file?.readOnly && <Icon name="lock" className="tab-readonly" label="Read-only" />}{queryState[tab.id]?.running && <Icon name="loading" spin className="tab-running" label="Executing" />}{tab.dirty && <span className="dirty-dot" role="img" aria-label="Unsaved changes" />}</button>
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
-        </div> })}</div>
+        </div> })}</div><PaneMenuButton pane="editor" /></div>
         {active.id ? <>
           {statusTop && statusBar}
           {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or Database Properties shows. */}
@@ -276,7 +279,12 @@ export default function App() {
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
-    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}><span><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}{environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}</span><ScriptingStatus /><EditorStatus /><MemoryIndicator /></footer>
+    {/* Neutral until work runs: tinted while the active query executes, or while the backend is down. */}
+    <footer className="status-bar" aria-label="Status bar" data-state={backendDown ? 'error' : activeRunning ? 'executing' : !liveConnection ? 'disconnected' : 'ready'} style={{ borderTop: accent ? `2px solid ${accent}` : undefined }}>
+      <span className="backend-status" title={backendState.status === 'ready' ? ['SQL backend: ' + backendState.runtime, versions].filter(Boolean).join('\n') : undefined}><span className={`status-dot ${backendState.status === 'ready' ? 'online' : ''}`} />{backendStatusText(backendState)}</span>
+      {environmentTag(connection?.options.environment) && <span className="status-environment"><span className="visually-hidden">Active connection environment: </span><EnvironmentTag environment={connection?.options.environment} place="status" about={connection?.displayName || connection?.server} /></span>}
+      {!shell.queryStatusBar && queryStatus}<ScriptingStatus /><EditorStatus /><MemoryIndicator />
+    </footer>
     {environmentFor && <EnvironmentDialog key={environmentFor} connectionId={environmentFor} onClose={() => setEnvironmentFor(undefined)} />}
     {showConnect && <ConnectDialog initial={options} onConnected={connected} onClose={() => { setShowConnect(false); setReconnecting(undefined); setPendingExecute(undefined) }} />}
     {filterFolder !== undefined && <FilterDialog key={filterFolder} folderId={filterFolder} />}

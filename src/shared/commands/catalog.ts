@@ -547,10 +547,29 @@ export const commandCatalog = {
   },
   // A click or Enter on an XML, JSON or plan cell opens its whole value, formatted, in a new tab (the grid runs it).
   'output.openValue': { title: 'Open Value in New Tab', category: 'Query', icon: 'go-to-file', palette: false },
-  // A panel tab's menu: the panel comes from the menu's target, so these have no keys and are not in the palette.
+  // A panel's menu, from its tab or its ⋯ button: the panel comes from the menu's target, so these have no keys and are
+  // not in the palette. The Dock and Tab with items replace the panel header's old "Move…" list.
+  'pane.dockLeft': { title: 'Dock Left', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 1, mnemonic: 'l' }] },
+  'pane.dockRight': { title: 'Dock Right', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 2, mnemonic: 'r' }] },
+  'pane.dockTop': { title: 'Dock Top', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 3, mnemonic: 't' }] },
+  'pane.dockBottom': { title: 'Dock Bottom', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_move', order: 4, mnemonic: 'b' }] },
+  'pane.tabWithExplorer': { title: 'Tab with Object Explorer', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 1, mnemonic: 'o', when: "pane != 'explorer'" }] },
+  'pane.tabWithEditor': { title: 'Tab with Query Editor', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 2, mnemonic: 'e', when: "pane != 'editor'" }] },
+  'pane.tabWithOutput': { title: 'Tab with Query Output', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '0_tab', order: 3, mnemonic: 'u', when: "pane != 'output'" }] },
   'pane.float': { title: 'Float', category: 'View', icon: 'multiple-windows', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 1, mnemonic: 'f', when: '!paneFloating' }] },
   'pane.dock': { title: 'Dock', category: 'View', palette: false, menus: [{ menu: 'dockTab.context', group: '1_dock', order: 2, mnemonic: 'd', when: 'paneFloating' }] },
-  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] }
+  'pane.close': { title: 'Close', category: 'View', icon: 'close', palette: false, menus: [{ menu: 'dockTab.context', group: '2_close', order: 1, mnemonic: 'c' }] },
+  // A panel alone in its dock group hides its tab, as VS Code's single views do; this shows those tabs again for dragging.
+  'window.togglePanelTabs': {
+    title: 'Toggle Panel Tabs', category: 'View', icon: 'layout', keywords: ['panel', 'tab', 'header', 'dock', 'drag'], toggled: 'panelTabsVisible',
+    menus: [{ menu: 'window', group: '1_panes', order: 5, title: 'Panel Tabs', mnemonic: 't' }, { menu: 'dockTab.context', group: '3_tabs', order: 1, title: 'Show Panel Tabs', mnemonic: 's' }]
+  },
+  // The header's search box: open queries, commands, and the Object Explorer nodes already loaded. SSMS 22's search box
+  // (the Visual Studio shell's) is Ctrl+Q; Linux and macOS keep that key for quitting.
+  'workbench.search': {
+    title: 'Search…', category: 'View', icon: 'search', keywords: ['find', 'objects', 'tables', 'goto', 'launch'],
+    keybindings: [{ win: 'ctrl+q' }], menus: [{ menu: 'view', group: '0_palette', order: 3, mnemonic: 'a' }]
+  }
 } as const satisfies Record<string, CommandDescriptor>
 
 export type CommandId = keyof typeof commandCatalog

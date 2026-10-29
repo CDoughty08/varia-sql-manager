@@ -26,7 +26,12 @@ export interface ShellHost {
   floatPane(pane: PaneId): void
   /** Returns a floating panel to where it was docked. */
   dockPane(pane: PaneId): void
+  /** Docks a panel at a side of the query editor (of Object Explorer, for the editor itself), as the old Move list did. */
+  dockPaneAt(pane: PaneId, side: DockSide): void
+  /** Moves a panel into another panel's group, as a tab beside it. */
+  tabPaneWith(pane: PaneId, other: PaneId): void
 }
+export type DockSide = 'left' | 'right' | 'top' | 'bottom'
 
 /**
  * Undo and Redo act on the focused text field outside the editor, otherwise on the query editor. While a dialog is open
@@ -57,8 +62,12 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, shellOptions }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'shellOptions'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
+  const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
+  const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
+  // Beside another open panel, never itself.
+  const tabWith = (other: PaneId) => ({ when: (args?: CommandArgs) => open(args) && paneOf(args) !== other && host.paneLocation(other) !== 'closed', run: onPane(pane => host.tabPaneWith(pane, other)) })
   /** The lost server a menu was opened for (undefined without one); null when the menu's node is not one, or no longer. */
   const lostNode = (args: CommandArgs | undefined) => {
     const node = explorerNodeOf(args)
@@ -151,7 +160,15 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     }),
     commands.register('pane.float', { when: args => located(args, 'grid'), run: onPane(pane => host.floatPane(pane)) }),
     commands.register('pane.dock', { when: args => located(args, 'floating'), run: onPane(pane => host.dockPane(pane)) }),
-    commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) })
+    commands.register('pane.close', { when: args => !!paneOf(args) && !located(args, 'closed'), run: onPane(pane => host.closePane(pane)) }),
+    commands.register('pane.dockLeft', dockAt('left')),
+    commands.register('pane.dockRight', dockAt('right')),
+    commands.register('pane.dockTop', dockAt('top')),
+    commands.register('pane.dockBottom', dockAt('bottom')),
+    commands.register('pane.tabWithExplorer', tabWith('explorer')),
+    commands.register('pane.tabWithEditor', tabWith('editor')),
+    commands.register('pane.tabWithOutput', tabWith('output')),
+    commands.register('window.togglePanelTabs', { run: () => shellOptions.togglePanelTabs() })
   ]
   return { dispose: () => registrations.forEach(registration => registration.dispose()) }
 }

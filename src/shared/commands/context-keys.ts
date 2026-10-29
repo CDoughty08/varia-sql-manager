@@ -68,6 +68,7 @@ export const contextKeys = {
   hasResults: { type: 'boolean', scope: 'state', description: 'The active query has result sets, and they were not closed (Close Results) or lost with a run the SQL backend stopped.' },
   anyDocumentConnected: { type: 'boolean', scope: 'state', description: "Some open query's server is connected." },
   outputPaneVisible: { type: 'boolean', scope: 'state', description: 'The Query Output panel is open and showing: its tab is selected, and no other panel is maximized.' },
+  panelTabsVisible: { type: 'boolean', scope: 'state', description: 'Window › Panel Tabs is on: a panel alone in its dock group shows its tab.' },
   editorWordWrap: { type: 'boolean', scope: 'state', description: 'Word wrap is on in the query editor.' },
   editorWhitespace: { type: 'boolean', scope: 'state', description: 'View White Space is on in the query editor.' },
   editorLineNumbers: { type: 'boolean', scope: 'state', description: 'Line numbers show in the query editor.' },
@@ -112,7 +113,8 @@ export const contextKeys = {
   },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
-  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel whose tab the menu is for is floating.' }
+  pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'output', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output." },
+  paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' }
 } as const satisfies Record<string, ContextKeyDeclaration>
 
 type Declarations = typeof contextKeys

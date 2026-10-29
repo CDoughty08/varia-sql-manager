@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { dialogLifecycle, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
-import { anyResultGrid, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneTab, part, quickInput, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
+import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
 if (process.env.VARIA_TEST_SQL_SERVER && liveUser && process.env.VARIA_TEST_SQL_PASSWORD === undefined) throw new Error('VARIA_TEST_SQL_PASSWORD is required when VARIA_TEST_SQL_USER is set.')
@@ -97,7 +97,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   await application.evaluate(({ dialog }) => {
     globalThis.variaReloadPrompts = 0
@@ -188,9 +188,9 @@ try {
   await expect(textbox()).toBeFocused()
   await page.keyboard.insertText('xyz')
   await expect.poll(editorText).toBe('xyz')
-  // Tab reaches the menubar too (Shift+Tab from the toolbar's first button), which then takes the same keys as after
-  // F10; Escape walks back to the toolbar.
-  const connectButton = toolbarButton(page, 'Connect')
+  // Tab reaches the menubar too (Shift+Tab from the header's search box, which follows it), which then takes the same
+  // keys as after F10; Escape walks back to the search box.
+  const connectButton = searchBox(page)
   await connectButton.focus()
   await page.keyboard.press('Shift+Tab')
   await expect(menubarItem('File')).toBeFocused()
@@ -207,7 +207,7 @@ try {
   await page.keyboard.press('Escape')
   await expect(connectButton).toBeFocused()
   // Tab and Shift+Tab also move on from the menubar in the page's order, as from any control: Shift+Tab from Edit wraps
-  // to the window's last control, and from there Tab reaches File and then the toolbar.
+  // to the window's last control, and from there Tab reaches File and then the search box.
   await page.keyboard.press('Shift+Tab')
   await expect(menubarItem('File')).toBeFocused()
   await page.keyboard.press('ArrowRight')
@@ -442,15 +442,17 @@ try {
   // in a shown window, where the hidden menu's accelerators work.
   await page.evaluate(() => { window.variaSentinel = 42 })
   await typeSql('SELECT 2;')
-  const outputTab = paneTab(page, 'output')
-  await expect(outputTab).toBeVisible()
+  // Alone in its group, the output panel shows no dock tab; its ⋯ button shows while it does.
+  const outputTab = paneTab(page, 'output'), outputButton = paneMenuButton(page, 'output')
+  await expect(outputButton).toBeVisible()
+  await expect(outputTab).toBeHidden()
   await expect.poll(() => nativeItem('view.toggleResultsPane')).toMatchObject({ checked: true })
   await page.keyboard.press('Control+R')
-  await expect(outputTab).toHaveCount(0)
+  await expect(outputButton).toBeHidden()
   await expect(textbox()).toBeFocused()
   await expect.poll(() => nativeItem('view.toggleResultsPane')).toMatchObject({ checked: false })
   await page.keyboard.press('Control+R')
-  await expect(outputTab).toBeVisible()
+  await expect(outputButton).toBeVisible()
   await page.keyboard.press('Control+Shift+R')
   await settle()
   // Window › Show Results Pane is the same toggle, checked while the pane shows.
@@ -459,9 +461,9 @@ try {
   await expect(showResults).toHaveAttribute('aria-checked', 'true')
   await expect(showResults).toContainText('Ctrl+R')
   await showResults.click(fast)
-  await expect(outputTab).toHaveCount(0)
+  await expect(outputButton).toBeHidden()
   await page.keyboard.press('Control+R')
-  await expect(outputTab).toBeVisible()
+  await expect(outputButton).toBeVisible()
   expect((await page.evaluate(() => window.varia.health())).ok).toBe(true)
   expect(await page.evaluate(() => window.variaSentinel)).toBe(42)
   expect(await application.evaluate(() => globalThis.variaReloadPrompts)).toBe(0)
@@ -554,29 +556,77 @@ try {
   await expect.poll(clipboard).toBe(savedPath)
   console.log('Menus checks: query tab menus close other queries, save, copy the path, and open the folder.')
 
-  // 9. Panel tab menus replace Dockview's: Float, then Dock, then Close, by mouse and keyboard. Dockview moves the tab
-  // as it lays out each change, so right-clicks on it keep Playwright's checks: one without them can land on the editor.
-  const panelMenu = menu('Panel tab'), rightClickOutputTab = () => outputTab.click({ button: 'right' })
+  // 9. A panel's ⋯ button opens its menu: the moves that replaced the "Move…" list, Float, Close, and Panel Tabs. A click
+  // opens it as a pointer menu (no item active, access keys not underlined); Enter opens it with its first item focused
+  // and access keys shown, and Escape returns to the button. The button says whether its menu is open.
+  const panelMenu = menu('Panel tab')
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
+  await outputButton.click(fast)
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
+  await expect(activeMenuItem(page)).toHaveCount(0)
+  await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'hidden')
+  await page.keyboard.press('Escape')
+  await expect(panelMenu).toHaveCount(0)
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'false')
+  await outputButton.focus()
+  await page.keyboard.press('Enter')
+  await expect(panelMenu.getByRole('menuitem', { name: 'Dock Left', exact: true })).toBeFocused()
+  await expect(page.locator(part.menuLayer)).toHaveAttribute('data-mnemonics', 'visible')
+  await expect(outputButton).toHaveAttribute('aria-expanded', 'true')
+  await page.keyboard.press('Escape')
+  await expect(outputButton).toBeFocused()
+  // Show Panel Tabs brings the dock tabs back, and stays on for the rest of the suite. Panel tab menus replace
+  // Dockview's: Float, then Dock, then Close, by mouse and keyboard. Dockview moves the tab as it lays out each change, so
+  // right-clicks on it keep Playwright's checks: one without them can land on the editor.
+  await outputButton.click(fast)
+  await panelMenu.getByRole('menuitemcheckbox', { name: 'Show Panel Tabs', exact: true }).click(fast)
+  await expect(outputTab).toBeVisible()
+  await expect.poll(() => nativeItem('window.togglePanelTabs')).toMatchObject({ checked: true })
+  const rightClickOutputTab = () => outputTab.click({ button: 'right' })
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Float', 'Close'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
   // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
-  expect(await page.locator('.dv-tab[data-menu-target]').evaluate(tab => {
+  const outlineShows = async () => page.locator('.dv-tab[data-menu-target]').evaluate((tab, menuBox) => {
     const box = tab.getBoundingClientRect(), style = getComputedStyle(tab), inset = -parseFloat(style.outlineOffset) - parseFloat(style.outlineWidth) + 0.5
-    // A quarter of the way along each edge: the menu opened at the tab's center covers the rest of its right and bottom.
-    const edges = [[box.left + inset, box.top + box.height / 4], [box.right - inset, box.top + box.height / 4], [box.left + box.width / 4, box.top + inset], [box.left + box.width / 4, box.bottom - inset]]
+    // A quarter of the way along each edge. The menu opens at the tab's center, below the pointer or, with no room below,
+    // above it, so it covers the quarter of the tab right of center on that side: the right edge is sampled in the other.
+    const opensAbove = menuBox.y + menuBox.height <= box.top + box.height / 2 + 1, right = opensAbove ? box.bottom - box.height / 4 : box.top + box.height / 4
+    const edges = [[box.left + inset, box.top + box.height / 4], [box.right - inset, right], [box.left + box.width / 4, box.top + inset], [box.left + box.width / 4, box.bottom - inset]]
     return style.outlineStyle !== 'none' && edges.every(([x, y]) => tab.contains(document.elementFromPoint(x, y)))
-  })).toBe(true)
+  }, await panelMenu.boundingBox())
+  expect(await outlineShows()).toBe(true)
+  // Again in the smallest window (1024x700, as on a 1024x768 display), where the nine items have no room below the
+  // tab's center and the menu opens above it, over the tab's upper right.
+  const contentSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  const resizeTo = async ([width, height]) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+    await settle()
+  }
+  await page.keyboard.press('Escape')
+  await expect(panelMenu).toHaveCount(0)
+  await resizeTo([1024, 700])
+  await rightClickOutputTab()
+  await expect(panelMenu).toBeVisible()
+  const smallTab = await page.locator('.dv-tab[data-menu-target]').boundingBox(), aboveTab = await panelMenu.boundingBox()
+  expect(aboveTab.y + aboveTab.height).toBeLessThanOrEqual(smallTab.y + smallTab.height / 2 + 1)
+  expect(await outlineShows()).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(panelMenu).toHaveCount(0)
+  await resizeTo(contentSize)
+  await rightClickOutputTab()
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click(fast)
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await rightClickOutputTab()
-  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock', 'Close'])
+  await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Dock', 'Close', 'Show Panel Tabs'])
   await panelMenu.getByRole('menuitem', { name: 'Dock', exact: true }).click(fast)
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(0)
   await settle()
   const outputDockTab = page.locator('.dv-tab').filter({ has: outputTab })
   await outputDockTab.focus()
   await page.keyboard.press('Shift+F10')
-  await expect(panelMenu.getByRole('menuitem', { name: 'Float', exact: true })).toBeFocused()
+  await expect(panelMenu.getByRole('menuitem', { name: 'Dock Left', exact: true })).toBeFocused()
   await expect(outputDockTab).toHaveAttribute('data-menu-target', '')
   await page.keyboard.press('Escape')
   await expect(outputDockTab).toBeFocused()
@@ -587,7 +637,7 @@ try {
   await expect(outputTab).toBeVisible()
   await settle()
   expect(await page.locator('.dv-context-menu').count()).toBe(0)
-  console.log('Menus checks: panel tab menus float, dock, and close panels.')
+  console.log('Menus checks: panel ⋯ buttons and panel tab menus move, float, dock, and close panels, and show the tabs; a panel tab is outlined on every side under its menu, also when the menu opens above it in a 1024x700 window.')
 
   // 10. Text fields in a dialog have their own menu above the dialog; the title-bar menus stay closed there.
   await choose('File', 'Connect to Server…')
@@ -1100,7 +1150,7 @@ try {
   page = await application.firstWindow()
   page.setDefaultTimeout(10000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText('fake · Ready')).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   expect(await page.evaluate(() => window.varia.menuStyle)).toBe('native')
   await application.evaluate(({ Menu }) => {
     globalThis.variaPopups = []
@@ -1253,7 +1303,7 @@ try {
     page = await application.firstWindow()
     page.setDefaultTimeout(10000)
     page.on('pageerror', error => failures.push(error.message))
-    await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+    await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
     // The typed query makes exit ask about saving; answer Don't Save.
     await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     await toolbarButton(page, 'Connect').click(fast)

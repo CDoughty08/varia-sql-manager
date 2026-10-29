@@ -7,7 +7,7 @@
 /**
  * Varia's icons, drawn to codicon metrics: a 16 px grid with the drawing inside 1-15 px, `iconStroke` px strokes with
  * round caps and joins, `currentColor`, no fills. Straight lines sit on half pixels, so they are sharp at 100 % zoom where
- * the icon's box starts on a whole pixel; one placed after text of fractional width (document tabs after the first) is not.
+ * the icon's box starts on a whole pixel, which is why the document tab strip rounds each tab's name up to whole pixels.
  * An id here replaces the codicon of the same name (server, database, table, key): objects look the same in Object
  * Explorer, menus, the palette and dialogs.
  */
@@ -33,15 +33,16 @@ export const iconStroke = 1
 
 /** The codicons Varia draws; tests/icons.test.ts checks each exists in the bundled font. */
 export const codiconIcons = [
-  'add', 'archive', 'arrow-left', 'arrow-small-down', 'bell', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right', 'circle-filled',
-  'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code', 'collapse-all', 'comment', 'copy',
-  'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'error', 'file', 'file-code', 'filter',
-  'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph', 'history', 'info', 'insert', 'json', 'law',
-  'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock', 'milestone', 'multiple-windows', 'new-file', 'output',
-  'package', 'pass', 'person', 'play', 'plug', 'project', 'redo', 'references', 'refresh', 'remote', 'remove', 'replace', 'save', 'save-all',
-  'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty', 'star-full', 'symbol-color', 'symbol-constant',
-  'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric', 'symbol-operator', 'symbol-parameter',
-  'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'tag', 'tools', 'trash', 'triangle-right', 'type-hierarchy', 'verified',
+  'add', 'archive', 'arrow-left', 'arrow-small-down', 'bell', 'book', 'bookmark', 'case-sensitive', 'check', 'chevron-down', 'chevron-right',
+  'circle-filled', 'circle-outline', 'circle-slash', 'circuit-board', 'clear-all', 'clippy', 'close', 'close-all', 'cloud', 'code', 'collapse-all',
+  'comment', 'copy', 'debug-disconnect', 'debug-pause', 'debug-restart', 'debug-stop', 'device-camera', 'discard', 'edit', 'ellipsis', 'error',
+  'file', 'file-code', 'filter', 'filter-filled', 'folder', 'folder-library', 'folder-opened', 'git-compare', 'go-to-file', 'graph', 'history',
+  'info', 'insert', 'json', 'law', 'layers', 'layout', 'link', 'list-flat', 'list-ordered', 'list-tree', 'loading', 'lock', 'milestone',
+  'multiple-windows', 'new-file', 'output', 'package', 'pass', 'person', 'play', 'plug', 'project', 'redo', 'references', 'refresh', 'remote',
+  'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty', 'star-full',
+  'symbol-color', 'symbol-constant', 'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric',
+  'symbol-operator', 'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'tag', 'tools', 'trash',
+  'triangle-right', 'type-hierarchy', 'verified',
   'warning', 'watch', 'whitespace', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
 ] as const
 export type CodiconId = typeof codiconIcons[number]
@@ -83,8 +84,8 @@ export function renderIconDocs(): string {
     'Catalogues (commands, Object Explorer kinds and folders, document kinds, dialog pages) name icons only by these ids, and',
     'the renderer draws them only through `Icon.tsx`. Varia\'s own icons are drawn to codicon metrics: a 16 px grid with the',
     `drawing inside 1-15 px, ${iconStroke} px strokes with round caps and joins, \`currentColor\` and no fills. Straight lines sit on`,
-    'half pixels, so they are sharp at 100 % zoom where the icon\'s box starts on a whole pixel; one placed after text of',
-    'fractional width (document tabs after the first) is not. An id below replaces the codicon of the',
+    'half pixels, so they are sharp at 100 % zoom where the icon\'s box starts on a whole pixel, which is why the document',
+    'tab strip rounds each tab\'s name up to whole pixels. An id below replaces the codicon of the',
     'same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured',
     'with theme keys; Microsoft\'s SSMS icons are never used.',
     '',

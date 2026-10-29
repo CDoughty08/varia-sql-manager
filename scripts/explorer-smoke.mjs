@@ -4,7 +4,10 @@ import { resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { expandExplorerPath, explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import { explorerStubData, installExplorerStub } from './fixtures/explorer-stub.mjs'
-import { copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerLabel, explorerToolbar, messages, outputView, part, quickInput, serverRows, primaryAction, toolbarButton as mainToolbarButton } from './fixtures/ui.mjs'
+import {
+  backendReady, copyOutcome, documentTabs, editorText as editorTextOf, emptyState, emptyStateDetail, emptyStateIcon, errorMessages, explorerEmpty, explorerFault, explorerLabel,
+  explorerToolbar, messages, outputView, paneMenuButton, part, primaryAction, quickInput, serverRows, toolbarButton as mainToolbarButton
+} from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -27,7 +30,7 @@ async function launch() {
   page = await application.firstWindow()
   page.setDefaultTimeout(15000)
   page.on('pageerror', error => failures.push(error.message))
-  await expect(page.getByText(/\.NET 10\..*Ready/)).toBeVisible({ timeout: 30000 })
+  await expect(backendReady(page)).toBeVisible({ timeout: 30000 })
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   // Unsaved queries make exit ask first; answer Don't Save.
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
@@ -262,6 +265,9 @@ try {
   await expect(explorerTree(page).locator(part.explorerProgressRow)).toBeVisible()
   // Stop by keyboard: it disables itself, and focus moves on to the next enabled button instead of the page.
   await expect(tree()).toBeFocused()
+  // The header's ⋯ button sits between the toolbar and the tree.
+  await page.keyboard.press('Shift+Tab')
+  await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   for (let step = 0; step < 6 && await focusedTool() !== 'Stop'; step++) await page.keyboard.press('ArrowRight')
   expect(await focusedTool()).toBe('Stop')
@@ -269,6 +275,8 @@ try {
   await expect(stopped).toBeVisible()
   await expect(toolbarButton('Stop')).toBeDisabled()
   await expect.poll(focusedTool).toBe('Filter Settings')
+  await page.keyboard.press('Tab')
+  await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: folders load only when expanded, collapsing cancels a running load, Stop (by mouse and by keyboard, which keeps focus in the toolbar) shows how far a folder got, and Enter continues.')
@@ -563,9 +571,12 @@ try {
     await page.keyboard.press('Escape')
     await expect(tree()).toBeFocused()
   }
-  // The toolbar is one tab stop: Shift+Tab from the tree reaches it, the arrows, Home and End move between its enabled
-  // buttons (wrapping), Tab goes on to the tree, and the toolbar remembers the button last used.
+  // The toolbar is one tab stop: Shift+Tab from the tree reaches it past the header's ⋯ button, the arrows, Home and End
+  // move between its enabled buttons (wrapping), Tab goes on to ⋯ and then the tree, and the toolbar remembers the button
+  // last used.
   await tree().focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(paneMenuButton(page, 'explorer')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   const tools = await enabledTools(), first = tools.indexOf(await focusedTool())
   expect(first).toBeGreaterThanOrEqual(0)
@@ -580,9 +591,13 @@ try {
   await page.keyboard.press('End')
   expect(await focusedTool()).toBe(tools.at(-1))
   await page.keyboard.press('Tab')
+  await expect(paneMenuButton(page, 'explorer')).toBeFocused()
+  await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press('Shift+Tab')
   expect(await focusedTool()).toBe(tools.at(-1))
+  await page.keyboard.press('Tab')
   await page.keyboard.press('Tab')
   await expect(tree()).toBeFocused()
   console.log('Object Explorer checks: Ctrl+N on a database, F8, Filter Settings in the palette, and the toolbar\'s arrow keys.')
