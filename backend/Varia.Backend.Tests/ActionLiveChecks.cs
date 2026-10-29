@@ -265,9 +265,20 @@ internal static class ActionLiveChecks
         // only after the DROP); with it, the tab's session ends and the database goes. Stop while msdb's history is locked
         // answers with what completed: the connections closed and the database dropped, the history kept.
         var history = $"SELECT COUNT(*) FROM msdb.dbo.backupset WHERE database_name = {Literal(db)};";
-        async Task<SqlRun> Backup(string name) => await sql("DECLARE @device nvarchar(20) = CASE WHEN EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info') "
-            + "AND (SELECT host_platform FROM sys.dm_os_host_info) = N'Linux' THEN N'/dev/null' ELSE N'NUL' END;\n"
-            + "BACKUP DATABASE " + Bracket(name) + " TO DISK = @device WITH COPY_ONLY;", "master", null);
+        // To the null device on Windows, to a file named after the database on Linux (which cannot back up to /dev/null), deleted afterwards.
+        Task<SqlRun> Plain(string text, string database) => sql(text, database, null);
+        var backups = new List<ScratchDatabase.Backup>();
+        async Task<SqlRun> Backup(string name)
+        {
+            var target = await ScratchDatabase.Backup.ForAsync(Plain, name);
+            backups.Add(target);
+            return await sql(target.DatabaseSql("COPY_ONLY"), "master", null);
+        }
+        async Task DeleteBackups()
+        {
+            foreach (var target in backups) await target.ForgetAsync(Plain);
+            backups.Clear();
+        }
         var tab = Guid.NewGuid().ToString();
         var historyHolder = Guid.NewGuid().ToString();
         try
@@ -301,18 +312,23 @@ internal static class ActionLiveChecks
         {
             await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(historyHolder), json), json);
             await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json);
-            // The history Stop left behind for the dropped name.
+            // The backup file (Linux), and the history Stop left behind for the dropped name.
+            await DeleteBackups();
             await sql("EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Literal(db) + ";", "msdb", null);
         }
 
         // A second database (the renamed name, which the sweep also knows): Close existing connections and the history go too.
         var second = await scratch.CreateActionsRenamedAsync();
         var secondHistory = $"SELECT COUNT(*) FROM msdb.dbo.backupset WHERE database_name = {Literal(second)};";
-        var secondBackup = await Backup(second);
-        var secondBefore = (await Exec(secondHistory)).Scalar;
-        var droppedSecond = await client.Delete(new ObjectRefDto("database", Name: second), close: true, history: true);
-        var after = (await Exec(secondHistory)).Scalar;
-        check(Done(droppedSecond) && droppedSecond.Steps.Count == 3 && (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(second) + ";")).Scalar == "0" && after == "0"
-            && (secondBackup.Status != "completed" || secondBefore != "0"), "with Close existing connections the database is dropped, then its backup history (" + secondBefore + " then " + after + ")");
+        try
+        {
+            var secondBackup = await Backup(second);
+            var secondBefore = (await Exec(secondHistory)).Scalar;
+            var droppedSecond = await client.Delete(new ObjectRefDto("database", Name: second), close: true, history: true);
+            var after = (await Exec(secondHistory)).Scalar;
+            check(Done(droppedSecond) && droppedSecond.Steps.Count == 3 && (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(second) + ";")).Scalar == "0" && after == "0"
+                && (secondBackup.Status != "completed" || secondBefore != "0"), "with Close existing connections the database is dropped, then its backup history (" + secondBefore + " then " + after + ")");
+        }
+        finally { await DeleteBackups(); }
     }
 }
