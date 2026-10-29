@@ -201,9 +201,9 @@ export function Label({ text, match }: { text: string; match: string | undefined
 export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel'>): string | undefined => node.lost ? '(connection lost)' : node.brief ?? node.sublabel
 
 /**
- * The row's end, right-aligned and never shrunk for the label: first the indicators (`children`: E2's environment tag,
- * later E3's state chips), then the active query's glyph (`active`), the item count and the connection dot, then
- * `actions` (a lost server's buttons). It takes at most 60% of the row; an indicator shrinks within that
+ * The row's end, right-aligned: first the indicators (`children`: E3's state chips, then E2's environment tag), then the
+ * active query's glyph (`active`), the item count and the connection dot, then `actions` (a lost server's buttons). It
+ * takes the room the label leaves (the label keeps a share, see `.oe-label`); an indicator shrinks within that
  * (`flex: 0 1 auto; min-width: 0`) under a cap such as `max-width: min(40cqw, 12em)` (the row is an inline-size
  * container), never a percentage, which would resolve against this content-sized box (explorer-smoke 10b measures the
  * environment tag here).

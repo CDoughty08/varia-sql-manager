@@ -446,7 +446,8 @@ describe('smoke-test backends', () => {
     try {
       fake.stdout.resume()
       fake.stdin.write(encodeFrame(FrameKind.REQUEST, 1, 0, encodeControl({ method: 'entra.cache.import', params: { data: 'token-cache-marker' } })))
-      await expect.poll(async () => (await readFile(join(directory, 'calls.jsonl'), 'utf8')).includes('entra.cache.import')).toBe(true)
+      // A cold node start: a loaded Windows runner took more than the default second to log the call.
+      await expect.poll(async () => (await readFile(join(directory, 'calls.jsonl'), 'utf8')).includes('entra.cache.import'), { timeout: 10000 }).toBe(true)
     } finally { fake.kill() }
     const log = await readFile(join(directory, 'calls.jsonl'), 'utf8')
     expect(log).not.toContain('token-cache-marker')
