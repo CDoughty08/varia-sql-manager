@@ -44,12 +44,15 @@ is reserved on Windows and Linux.
 
 ## Dialogs
 
-| Dialog | Title | Action | Pages |
-| --- | --- | --- | --- |
-| `deleteObject` | Delete Object | `delete` | General |
-| `databaseProperties` | Database Properties - <name> | `properties` | General, Files, Filegroups, Options |
+| Dialog | Title | Opens as | Action | Pages |
+| --- | --- | --- | --- | --- |
+| `deleteObject` | Delete Object | Modal dialog | `delete` | General |
+| `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General, Files, Filegroups, Options |
 
-The Script button scripts to a new query window; its arrow lists Script Action to New Query Window, Script Action to File, Script Action to Clipboard. Script never runs anything.
+A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
+pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
+
+In a modal dialog, the Script button scripts to a new query window; its arrow lists Script Action to New Query Window, Script Action to File, Script Action to Clipboard. Script never runs anything.
 OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statement in SQL Server.
 
 Delete Object for a database also offers "Delete backup and restore history information for databases" (checked,
@@ -62,16 +65,33 @@ The Table Designer (New › Table…) uses the same requests without being a dia
 
 ## Database Properties
 
-Database Properties opens on General (read-only facts: backups, name, status, owner, date created, size, space available,
-number of users, memory-optimized memory and collation). Files and Filegroups list the database's files and
-filegroups read-only in this version; Owner on the Files page is editable. Options shows Collation, Recovery model,
-Compatibility level and Containment type above SSMS's property grid. OK and Script send only the values that changed,
-as SSMS does; Script with nothing changed says "There is no action to be scripted." A snapshot, a database that is not online or
+Database Properties opens as a document tab, one per database and connection (Properties on a database whose
+document is open brings that tab forward). Its header names the server and the database, shows the database's
+state in SMO's words ("Normal", "Restoring, Standby", "Normal, Read-Only"), and offers Refresh, Discard Changes and
+Apply; Stop replaces them while the changes run. Its sections are SSMS's pages. General shows read-only facts as
+text: backups, name, status, owner, date created, size, space available, number of users, memory-optimized memory and
+collation. Files and Filegroups list the database's files and filegroups read-only in this version; Owner in Files is
+editable (typed, suggested from the server's logins, or chosen in Select Database Owner). Options shows Collation,
+Recovery model, Compatibility level and Containment type, then every option under its category: a boolean as a
+switch, an enum of four values or fewer as a segmented control, a longer or server-supplied one as a list, a number as
+a number field, and what Varia does not change as text. A row's whole description shows in a strip under the
+sections while the pointer or focus is in the row, and as the label's tooltip; why a row is greyed and what is wrong
+with a value show under it, and a section with a problem is marked in the list. Changed values are bold and say
+"Changed" (part of the control's description for screen readers), and the tab shows unsaved changes.
+
+Apply (also File › Save, Ctrl+S, and the close prompt's Save, which bring the document forward with its Stop) is
+SSMS's OK that keeps the document open: it runs only the values that changed, reloads the Databases listing, and
+reads the database again; if that read fails, the message says the changes were applied. File › Save All leaves the
+document out, because its ALTER DATABASE can wait on locks. Refresh waits until the changes are applied or discarded.
+When whether an Apply completed is unknown (the server or backend went, or Stop got no answer in time), the fields lock
+until a Refresh, and the message says to Discard Changes, then Refresh. The Script drawer previews what Apply would
+run while it is open,
+once typing pauses; with nothing changed it says "There is no action to be scripted." A snapshot, a database that is not online or
 not accessible, a database the login may not ALTER, and Azure SQL Managed Instance open read-only with a note.
 Compatibility level is greyed for a login outside sysadmin (SSMS ignores the change silently), and Containment type
 when the server's contained database authentication is off. The owner of master, model, tempdb cannot change.
 On a read-only database only Database Read-Only and Restrict Access change, and the owner is greyed. Turning Database
-Read-Only on cannot share an OK with a change SQL Server applies after it and refuses on a read-only database (the
+Read-Only on cannot share an Apply with a change SQL Server applies after it and refuses on a read-only database (the
 "Read-only" column below, and the owner): SSMS would leave the database read-only with that change failed, so Varia
 says why and runs nothing.
 
@@ -156,11 +176,11 @@ from this catalogue, and a collation only as `sys.fn_helpcollations()` names it.
 
 ### Open Connections
 
-When OK changes an exclusive option and the database has sessions (or they cannot be counted), Varia asks "To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?"
+When Apply changes an exclusive option and the database has sessions (or they cannot be counted), Varia asks "To change the database properties, SQL Server must close all other connections to the database. Are you sure you want to change the properties and close all other connections?"
 (Yes or No; No is the default, because Yes rolls back the other sessions' transactions, and Escape answers No).
 No runs nothing. Yes writes the SET options WITH ROLLBACK IMMEDIATE. SSMS counts the connections when OK is pressed, so
-the backend counts them again before anything runs: when sessions have joined since the dialog opened with none, it
-answers `IN_USE` at once and the dialog asks. The backend first closes its own idle pooled connections in the database
+the backend counts them again before anything runs: when sessions have joined since the document read none, it
+answers `IN_USE` at once and the document asks. The backend first closes its own idle pooled connections in the database
 and, because SQL Server lists their sessions for a few milliseconds after that, counts again every 50 ms for up to a
 second while the count is above zero. Without the prompt, WITH NO_WAIT makes SQL Server refuse (`IN_USE`)
 rather than wait for the other sessions' transactions; SQL Server gives up after about 20 seconds. That failure advises
@@ -174,8 +194,9 @@ DDL runs on its own unpooled connection (the program name plus " - Object Action
 scripting's pools, after a preflight in the same connection that finds the object again, re-derives its subtype and
 checks permissions and name collisions. Statements are built by SQL Server from constant text: names are nvarchar(128)
 parameters passed through `QUOTENAME`. DDL waits for locks without a timeout, as SSMS does, and Stop is always
-available: the dialog's Stop, or the status bar's Stop for a rename. A stopped action answers once SQL Server has
-ended the statement, with each step done, cancelled or skipped, so the dialog says what completed before Stop.
+available: the dialog's or document's Stop, or the status bar's Stop for a rename. A stopped action answers once SQL
+Server has ended the statement, with each step done, cancelled or skipped, so the dialog or document says what completed
+before Stop.
 
 Deleting a database runs SSMS's statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK
 IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history

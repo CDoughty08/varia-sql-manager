@@ -205,7 +205,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
   ...text(['errorForeground'], hovered(...editor)),
   ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
-  ...graphic(['sash.hoverBorder'], panel)
+  ...graphic(['sash.hoverBorder'], panel),
+  // Property sheets in a document (Database Properties): a switch's outline and track, on and off, and its thumb in each
+  // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
+  ...graphic(['input.border', 'button.background'], editor),
+  ...graphic(['descriptionForeground'], input),
+  ...graphic(['button.foreground'], [...editor, 'button.background'])
 ]
 
 /**

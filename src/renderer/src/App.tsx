@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import type { ApiResult, BackendHealth, BackendState, ConnectionInfo, ConnectionOptions } from '../../shared/contracts'
 import { isCommandId } from '../../shared/commands/catalog'
 import { shellContribution, type ShellHost } from './contributions/shell'
-import { documentKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
+import { documentKind, isCustomKind, isQueryDocument, kindInfo, type QueryTab } from './documents'
 import { useConnectionAccent, useServiceSnapshot, useWorkbench } from './core/WorkbenchContext'
 import { useCommandEnabled, useKeybindingLabel } from './core/useCommand'
 import type { CommandArgs, CommandId } from './core/types'
@@ -16,6 +16,7 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import TableDesigner from './designer/TableDesigner'
+import DatabaseProperties from './properties/DatabaseProperties'
 import GoToLineDialog from './editor/GoToLineDialog'
 import RecoveryDialog from './RecoveryDialog'
 import ScriptingStatus from './scripting/ScriptingStatus'
@@ -91,9 +92,10 @@ export default function App() {
   const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
-  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer has
-  // a server and database, but they are its own: the toolbar's pickers do not change them.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner'
+  // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
+  // Database Properties have a server and database, but they are their own: the toolbar's pickers do not change them.
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties'
+  const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
   const liveConnection = connection?.lost ? undefined : connection
@@ -107,7 +109,7 @@ export default function App() {
 
   // SSMS's query window status bar, below the query unless Options puts it above; its tooltip names the SMO and SqlClient versions.
   const statusTop = settings['textEditor.statusBar.location'] === 'top'
-  const statusBar = active.id && !isDesigner ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
+  const statusBar = active.id && !isCustom ? <QueryStatusBar tab={active} connection={connection} versions={health ? `SMO ${health.smoVersion} / SqlClient ${health.sqlClientVersion}` : undefined} /> : null
 
   function activate(id: string) { documents.activate(id) }
   const disconnectServer = useStableCallback((id: string) => disconnect(id))
@@ -205,6 +207,9 @@ export default function App() {
 
   async function disconnect(id: string) {
     if (queries.isConnectionRunning(id)) return
+    // A document's Apply or Save on it would be cancelled partway without asking (its menu item is greyed for the same reason).
+    const busy = documents.connectionBusy(id)
+    if (busy) { setExplorerError(busy); return }
     try {
       await documents.runTask(async () => {
         // Its queries' open transactions are asked about once, then each is committed or rolled back in its own session;
@@ -264,9 +269,10 @@ export default function App() {
         </div> })}</div>
         {active.id ? <>
           {statusTop && statusBar}
-          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer shows. */}
-          <div className="editor-container" hidden={isDesigner}><QueryEditor /></div>
+          {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or Database Properties shows. */}
+          <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
+          {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />

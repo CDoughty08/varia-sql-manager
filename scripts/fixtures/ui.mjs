@@ -141,6 +141,14 @@ export const part = {
   tableDesigner: '.table-designer',
   // The document frame
   documentHeader: '.document-header',
+  documentSubtitle: '.document-subtitle',
+  /** The states kit's pill (src/renderer/src/kit/StatusPill.tsx), as a document header shows its state. */
+  statusPill: '.status-pill',
+  documentBanner: '.document-banner',
+  // Property sheets in documents (src/renderer/src/kit/PropertyField.tsx)
+  propertyField: '.property-field',
+  propertyFact: '.property-fact',
+  fieldHint: '.field-hint',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -372,6 +380,21 @@ export const scriptSplitter = frame => frame.getByRole('separator', { name: 'Res
 export const scriptActions = (frame, name) => scriptDrawer(frame).getByRole('group', { name: 'Script', exact: true }).getByRole('button', name === undefined ? {} : named(name))
 export const scriptNotice = frame => scriptDrawer(frame).getByRole('status')
 export const scriptText = frame => scriptDrawer(frame).getByRole('textbox', { name: 'Script text', exact: true })
+/** Muted words after the title ("Database Properties"). */
+export const documentSubtitle = frame => documentHeader(frame).locator(part.documentSubtitle)
+/** The header's state pill ("Normal", "Restoring, Standby"). */
+export const documentState = frame => documentHeader(frame).locator(part.statusPill)
+/** The line under the header for what the document's last action said. */
+export const documentBanner = frame => frame.locator(part.documentBanner)
+/** A verb in the header, whose group is named "<title> actions". */
+export const documentVerb = (frame, title, name) => frame.getByRole('group', named(title + ' actions')).getByRole('button', named(name))
+/** A property sheet's row (label, control, notes), by its control's label. */
+export const propertyRow = (frame, label) => frame.locator(part.propertyField).filter({ has: frame.page().getByLabel(label, { exact: true }) })
+const exactly = text => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+/** A read-only fact's value, by its label. */
+export const propertyFact = (frame, label) => frame.locator(part.propertyFact).filter({ has: frame.page().getByRole('term').filter({ hasText: exactly(label) }) }).getByRole('definition')
+/** The strip under a property sheet's sections that shows the hovered or focused row's whole description. */
+export const fieldHint = frame => frame.locator(part.fieldHint)
 
 // Menus and the quick input
 
