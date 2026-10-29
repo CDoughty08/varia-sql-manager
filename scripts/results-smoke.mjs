@@ -10,7 +10,7 @@ import { shapes } from '../tests/fixtures/backend/shapes.mjs'
 import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocument, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice, jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar, outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'results-profile-'))
@@ -627,6 +627,82 @@ try {
   await expect(jobProgress(page)).toHaveCount(0)
   expect((await readFile(join(saveDir, 'kept.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
   expect(await files()).toEqual(['kept.csv', 'w1.csv', 'w1.json', 'w1.txt'])
+  // The saves above ended in view and showed no toast. One that ends while its query is in the background says so in a
+  // toast with Show results, which Focus Notifications reaches from the keyboard.
+  const toast = toasts(page)
+  await expect(toast).toHaveCount(0)
+  await run('-- varia-fake: sets=W1*5000')
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await page.keyboard.press('Control+N')
+  await expect(queryTabs()).toHaveCount(2)
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(toast).toHaveAttribute('data-severity', 'info')
+  // Focused, it says its severity and then its sentence.
+  await expect(toast).toHaveAccessibleName('Information')
+  await expect(toast).toHaveAccessibleDescription('Saved 5,000 rows to background.csv.')
+  await expect(toastMessage(toast)).toHaveText('Saved 5,000 rows to background.csv.')
+  await expect(toastAnnouncer(page)).toHaveText('Saved 5,000 rows to background.csv.')
+  // Above the status bar, inside the window, and not focused: a toast never takes focus by itself.
+  const [toastBox, statusBox] = [await toast.boundingBox(), await statusBar(page).boundingBox()]
+  expect(toastBox.y + toastBox.height).toBeLessThanOrEqual(statusBox.y)
+  expect(toastBox.x + toastBox.width).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth))
+  await expect(toast).not.toBeFocused()
+  // Drawn over the dock (and, below, over a grid): what is laid out there must also be what the pointer reaches.
+  const onTop = () => toast.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return [[0.5, 0.5], [0.05, 0.1], [0.95, 0.9]].map(([x, y]) => element.contains(document.elementFromPoint(box.left + box.width * x, box.top + box.height * y)))
+  })
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast.png') })
+  const focusNotifications = async () => {
+    await page.keyboard.press('F1')
+    await page.keyboard.type('focus notifications')
+    await expect(quickInputActive(page)).toContainText('View: Focus Notifications')
+    await page.keyboard.press('Enter')
+    await expect(toast).toBeFocused()
+  }
+  // The focused toast takes the theme's focus ring, as its buttons do; Tab reaches Show results, and Escape there
+  // dismisses the toast and gives focus back to the query it came from.
+  await textbox().focus()
+  await focusNotifications()
+  expect(await toast.evaluate(element => { const style = getComputedStyle(element); return [style.outlineStyle, style.outlineWidth, style.outlineColor] }))
+    .toEqual(['solid', '2px', await tokenColor('focusBorder')])
+  await page.keyboard.press('Tab')
+  await expect(toast.getByRole('button', { name: 'Show results', exact: true })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(toast).toHaveCount(0)
+  await expect(textbox()).toBeFocused()
+  // The dismissed toast's sentence leaves the live region, so the same sentence again (below) changes it and is read.
+  const politeRegion = toastAnnouncer(page)
+  await expect(politeRegion).toHaveText('')
+  // Again, held while the second query shows a grid where the toast appears, and this time Show results, clicked with
+  // the pointer (which waits until nothing covers it), goes back to the first.
+  await run('-- varia-fake: sets=W1*5000')
+  await queryTabs().first().click()
+  await writeFile(join(control, 'hold', 'results.export'), '')
+  await choose(join(saveDir, 'background.csv'))
+  await cell(0, 0).click()
+  await page.keyboard.press('Control+S')
+  await expect(jobProgress(page)).toContainText('Saving background.csv…')
+  await queryTabs().nth(1).click()
+  await expect(cell(0, 0)).toBeVisible()
+  await rm(join(control, 'hold', 'results.export'))
+  await expect(toast).toHaveCount(1, { timeout: 30000 })
+  await expect(politeRegion).toHaveText('Saved 5,000 rows to background.csv.')
+  expect(await onTop()).toEqual([true, true, true])
+  await page.screenshot({ path: resolve('artifacts', 'results-toast-grid.png') })
+  await toast.getByRole('button', { name: 'Show results', exact: true }).click({ timeout: 5000 })
+  await expect(toast).toHaveCount(0)
+  await expect(queryTabs().first()).toHaveAttribute('aria-selected', 'true')
+  expect((await readFile(join(saveDir, 'background.csv'), 'utf8')).split('\r\n')).toHaveLength(5002)
+  await queryTabs().nth(1).click()
+  await page.keyboard.press('Control+W')
+  await expect(queryTabs()).toHaveCount(1)
   // Back to the default (null resets), so the copies below have no header line.
   expect((await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': null }))).ok).toBe(true)
   // Close Results (from the palette) frees the results and their windows; Messages stay.

@@ -66,6 +66,9 @@ export const part = {
   /** Object Explorer's fault view (an InlineError) and the outcome line of its Copy details. */
   explorerFault: '.explorer-fault',
   inlineErrorStatus: '.inline-error-status',
+  /** An InlineError's sentence (the live region) and the note read with it. */
+  inlineErrorMessage: '.inline-error-message',
+  inlineErrorNote: '.inline-error-note',
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
@@ -87,6 +90,9 @@ export const part = {
   explorerError: '.explorer-error',
   // Menus and the quick input
   menuLayer: '.menu-layer',
+  // Toasts (src/renderer/src/kit/Toasts.tsx): the layer holds the stack and the two live regions that announce them.
+  toastLayer: '.toast-layer',
+  toastMessage: '.toast-message',
   menuMnemonic: '.menu-mnemonic',
   menuKeybinding: '.menu-keybinding',
   quickInput: '.quick-input',
@@ -105,6 +111,8 @@ export const part = {
   statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
+  /** The Connect dialog's failure: its InlineError and the Error details under it. */
+  connectFailure: '.connect-failure',
   /** The Connect and Connection Environment dialogs' scrolling form, and the Environment field's preview of the tag. */
   connectionScroll: '.connection-scroll',
   environmentPreview: '.environment-preview',
@@ -289,8 +297,14 @@ export const renameBox = page => explorerTree(page).getByRole('textbox', { name:
 // Dialogs
 
 /** The Connect dialog's Error details expander under a failed connect, or under the database note (Load databases). */
-export const connectErrorDetails = dialog => dialog.locator('[role="alert"] + details')
+export const connectErrorDetails = dialog => dialog.locator(`${part.connectFailure} > details`)
 export const databaseErrorDetails = dialog => dialog.locator('[role="status"] + details')
+/** The Connect dialog's failure box, and its sentence and note (the note is read with the sentence and lines up with it). */
+export const connectFailure = dialog => dialog.locator(part.connectFailure)
+export const connectFailureSentence = dialog => connectFailure(dialog).locator(part.inlineErrorMessage)
+export const connectFailureNote = dialog => connectFailure(dialog).locator(part.inlineErrorNote)
+/** The outcome line of the Connect failure's Copy details. */
+export const connectFailureCopyStatus = dialog => connectFailure(dialog).locator(part.inlineErrorStatus)
 /** An object dialog's Connection and Progress boxes (Delete Object, Database Properties). */
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
@@ -304,6 +318,15 @@ export const optionsDescription = dialog => dialog.locator(part.optionsDescripti
 export const savedConnections = (dialog, text) => dialog.locator(part.connectionChoice, { hasText: text })
 /** A connection's environment tag (its pill) in a place: explorer, tab, query or status. */
 export const environmentPill = (scope, place) => scope.locator(`${part.environmentTag}[data-place="${place}"] ${part.statusPill}`)
+
+// Toasts
+
+/** The toast stack (a region named Notifications) and its toasts, each a group named by its severity. */
+export const toastStack = page => page.getByRole('region', { name: 'Notifications', exact: true })
+export const toasts = page => toastStack(page).getByRole('group')
+export const toastMessage = toast => toast.locator(part.toastMessage)
+/** The live region that reads toasts politely (info and warning), or at once (errors) with `assertive`. */
+export const toastAnnouncer = (page, assertive = false) => page.locator(`${part.toastLayer} > [role="${assertive ? 'alert' : 'status'}"]`)
 
 // Menus and the quick input
 

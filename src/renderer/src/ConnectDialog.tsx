@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import type { AdvancedConnectionOptions, ApiResult, ConnectionInfo, ConnectionOptions, DatabaseInfo, DiscoveredServer, ErrorDetails } from '../../shared/contracts'
+import type { ErrorCode } from '../../shared/ipc/wire/protocol'
 import { advancedDefaults, advancedToStore, canRememberPassword, connectionDefaults, connectionKey, credentialBinding, rememberedProfile, type ConnectionLibrary, type ConnectionLibraryView, type ConnectionProfile, type SecretStorageState } from '../../shared/connections'
 import { connectionPickerColor, connectionPresets } from '../../shared/theme/connection-colors'
 import Icon from './Icon'
+import InlineError, { type ErrorAction } from './kit/InlineError'
+import { connectFix } from './connect-fix'
 import { EnvironmentField } from './EnvironmentDialog'
 import EnvironmentTag from './EnvironmentTag'
 import { entryKey, parseEnvironment, savedEntry } from './services/environments'
@@ -28,10 +31,14 @@ const sections: { title: string; fields: Field[] }[] = [
   { title: 'Security', fields: [{ key: 'ipAddressPreference', label: 'IP address preference', choices: ['IPv4First', 'IPv6First', 'UsePlatformDefault'] }, { key: 'serverCertificate', label: 'Server certificate (file path)', maxLength: 1024 }] },
   { title: 'Source', fields: [{ key: 'attachDbFilename', label: 'Attach DB filename', maxLength: 1024 }, { key: 'failoverPartner', label: 'Failover partner', maxLength: 256 }, { key: 'failoverPartnerSpn', label: 'Failover partner SPN', maxLength: 512 }, { key: 'multiSubnetFailover', label: 'Multi subnet failover', boolean: true }, { key: 'serverSpn', label: 'Server SPN', maxLength: 512 }, { key: 'userInstance', label: 'User instance', boolean: true }] }
 ]
-/** SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out. */
-function FailureDetails({ details }: { details: ErrorDetails }) {
-  const rows: [string, string | number | undefined][] = [['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]]
-  return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.filter(([, value]) => value !== undefined && value !== '').map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
+/**
+ * SQL Server's facts about a failed connection, as SSMS shows them under its error; absent facts are left out, and with
+ * none (a BACKEND_ERROR carries only its exception types, which Copy details has) there is no expander at all.
+ */
+export function FailureDetails({ details }: { details: ErrorDetails }) {
+  const rows = ([['Error number', details.number], ['Severity', details.class], ['State', details.state], ['Server', details.server]] as const).filter(([, value]) => value !== undefined && value !== '')
+  if (!rows.length) return null
+  return <details className="connect-error-details"><summary>Error details</summary><dl>{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></details>
 }
 const storageNotes: Record<NonNullable<SecretStorageState['reason']>, string> = {
   'no-keyring': 'Remember password needs a system keyring (GNOME Keyring or KWallet), and none was found. Passwords are used for this connection only.',
@@ -45,6 +52,12 @@ const userPlaceholders: Partial<Record<AuthenticationMode, string>> = {
 }
 const mfaWaiting = 'Complete the sign-in in your web browser. Waiting up to 3 minutes…'
 const cancelledNotice = 'Connection cancelled.'
+const trustLabel = 'Trust server certificate and connect'
+/** Strict encryption validates the certificate whatever Trust server certificate says, so the dialog can only explain. */
+const strictCertificate = "Strict encryption always validates the server's certificate. Install a certificate this computer trusts, set Host Name in Certificate to the name the certificate was issued for, or choose Mandatory encryption and Trust server certificate."
+/** A pinned certificate or name is a check the person chose: trusting would skip it, so the dialog only explains. */
+const pinnedCertificate = "The server's certificate did not match the Server Certificate or the Host Name in Certificate set for this connection, so it was not trusted. Check that this is the server you meant and that those settings are current; Trust server certificate would skip that check."
+const trustNeedsPassword = 'Trust server certificate is now checked. The saved password is kept for the old settings only, so enter the password, then connect.'
 const choiceLabels: Record<string, string> = { default: '<default>', tcp: 'TCP/IP', np: 'Named pipes', lpc: 'Shared memory', IPv4First: 'IPv4 first', IPv6First: 'IPv6 first', UsePlatformDefault: 'Platform default' }
 
 /** Advanced Properties. A command timeout the profile does not set is left empty, showing Tools › Options' Execution time-out. */
@@ -97,8 +110,9 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   const [busy, setBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  // The failed connection's details, shown only while its message is the dialog's error.
-  const [failure, setFailure] = useState<{ error: string; details: ErrorDetails }>()
+  // The failed connection's code and details, shown only while its message is the dialog's error.
+  const [failure, setFailure] = useState<{ error: string; code?: ErrorCode; details?: ErrorDetails; server: string; options: ConnectionOptions }>()
+  const failureBox = useRef<HTMLDivElement>(null)
   const [notice, setNotice] = useState('')
   const [databases, setDatabases] = useState<DatabaseInfo[]>([])
   const [dbBusy, setDbBusy] = useState(false)
@@ -265,10 +279,10 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
   }
   /** The form's options with the environment as stored (a preset by its own name), or undefined after saying why a
    *  Custom label cannot be one. */
-  function labelledOptions(): ConnectionOptions | undefined {
-    const environment = parseEnvironment(options.environment)
+  function labelledOptions(from: ConnectionOptions = options): ConnectionOptions | undefined {
+    const environment = parseEnvironment(from.environment)
     if (!environment.ok) { setError(environment.error); return undefined }
-    return { ...options, environment: environment.environment }
+    return { ...from, environment: environment.environment }
   }
   async function saveProfile(favorite?: boolean, registered?: boolean, profile?: ConnectionProfile) {
     const labelled = profile ? profile.options : labelledOptions()
@@ -289,31 +303,49 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     catch (reason) { if (alive.current) setError(message(reason)) }
     finally { if (alive.current) setSaving(false) }
   }
-  async function connect(event: FormEvent) {
-    event.preventDefault()
-    const labelled = labelledOptions()
+  /** Connects with the form's options, or with `chosen` when a fix changed them in the same click. */
+  async function connect(chosen: ConnectionOptions = options) {
+    const labelled = labelledOptions(chosen)
     if (!labelled) return
     // Only Stop's notice is about the last attempt; the library's warnings and a forgotten password's notice stay.
     setBusy(true); setError(''); setNotice(current => current === cancelledNotice ? '' : current)
     const requestId = crypto.randomUUID()
     connectRequest.current = requestId
+    const saved = chosen === options ? match : rememberedProfile(library.profiles, savedIds, chosen, selectedId)
     try {
-      const result = await window.varia.connect(labelled, { ...match ? { profileId: match.id } : {}, remember: remember && rememberable, requestId, ...ownsEnvironment() ? { setsEnvironment: true } : {} })
+      const result = await window.varia.connect(labelled, { ...saved ? { profileId: saved.id } : {}, remember: remember && rememberable, requestId, ...ownsEnvironment() ? { setsEnvironment: true } : {} })
       if (!alive.current) return
       // Main says which label the entry kept when the form had none (the history had not loaded yet).
       if (result.ok) { const { environment: kept, ...info } = result.value; onConnected(info, { ...labelled, password: '', environment: labelled.environment ?? kept }) }
       // Stop: the form is the user's again, with nothing to report.
       else if (result.code === 'CANCELLED') setNotice(cancelledNotice)
       else {
-        setError(result.error); setFailure(result.details ? { error: result.error, details: result.details } : undefined)
+        setError(result.error); setFailure({ error: result.error, code: result.code, details: result.details, server: chosen.server, options: chosen })
         if (result.passwordForgotten) passwordRejected()
       }
-    } catch (reason) { if (alive.current) setError(message(reason)) }
+    } catch (reason) { if (alive.current) { setError(message(reason)); setFailure(undefined) } }
     finally {
       if (connectRequest.current === requestId) connectRequest.current = undefined
       if (alive.current) setBusy(false)
     }
   }
+  /** Trust server certificate and connect: checks the box, as the person would, and connects again with it. */
+  function trustAndConnect() {
+    const next = { ...options, trustServerCertificate: true }
+    setOptions(next)
+    // Main fills a remembered password in only for the certificate settings it was saved with.
+    if (usesPassword(next.authentication) && !next.password && match && rememberedProfile(library.profiles, savedIds, next, selectedId)?.id !== match.id) {
+      setError(''); setNotice(trustNeedsPassword)
+      dialog.current?.querySelector<HTMLInputElement>('#connect-password')?.focus()
+      return
+    }
+    void connect(next)
+  }
+  const shownFailure = error && failure?.error === error ? failure : undefined
+  const fix = shownFailure && connectFix(shownFailure.options, shownFailure.details)
+  const fixActions: ErrorAction[] = fix === 'trust' ? [{ label: trustLabel, run: trustAndConnect }] : []
+  // The error sits at the end of the scrolled form, next to Connect: bring it into view, as people look there first.
+  useEffect(() => { if (error) failureBox.current?.scrollIntoView({ block: 'nearest' }) }, [error])
   const matches = (text: string) => text.toLowerCase().includes(filter.toLowerCase())
   const filtered = library.profiles.filter(profile => matches([profile.options.displayName, profile.options.server, profile.options.database, profile.options.username].join(' ')))
   const recent = filtered.filter(profile => profile.lastConnected).sort((a, b) => b.lastConnected!.localeCompare(a.lastConnected!))
@@ -333,7 +365,7 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
     trapFocus(event)
   }
   return <>
-    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={event => void connect(event)} onKeyDown={trap}>
+    <div className="modal-backdrop"><form ref={dialog} className="connection-modal connect-dialog" role="dialog" aria-labelledby="connect-title" aria-modal="true" inert={advanced} onSubmit={(event: FormEvent) => { event.preventDefault(); void connect() }} onKeyDown={trap}>
       <div className="connection-heading"><h2 id="connect-title">Connect</h2><button type="button" className="icon-button" aria-label="Close connection dialog" disabled={locked} onClick={onClose}><Icon name="close" /></button></div>
       <div className="connection-scroll">
         <div className="connection-tabs" role="tablist" aria-label="Connection sources">{(['history', 'browse'] as const).map(value => <button type="button" role="tab" key={value} aria-selected={tab === value} aria-controls="connection-sources" disabled={locked} onClick={() => setTab(value)}>{value === 'history' ? 'History' : 'Browse'}</button>)}</div>
@@ -375,7 +407,12 @@ export default function ConnectDialog({ initial, onConnected, onClose }: Props) 
           <div className="property-row"><label htmlFor="connect-environment">Environment</label><EnvironmentField id="connect-environment" value={options.environment} disabled={locked} onChange={environment => { labelServer.current = null; environmentOwner.current = options.server.trim().toLowerCase(); update({ environment }) }} /></div>
         </div><div className="connection-save-actions"><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(!selected?.favorite)}><Icon name={selected?.favorite ? 'star-full' : 'star-empty'} />{selected?.favorite ? 'Remove favorite' : 'Add favorite'}</button><button type="button" disabled={locked || !loaded || !authReady} onClick={() => void saveProfile(undefined, !selected?.registered)}>{selected?.registered ? 'Unregister server' : 'Register server'}</button>{selected && <button type="button" disabled={locked} onClick={() => void saveProfile()}>Save changes</button>}</div></fieldset>
         {busy && <p className="field-note" role="status">{options.authentication === 'entraMfa' ? mfaWaiting : 'Connecting…'}</p>}
-        {notice && <p className="field-note" role="status">{notice}</p>}{error && <p className="connect-error" role="alert">{error}</p>}{error && failure?.error === error && <FailureDetails details={failure.details} />}
+        {notice && <p className="field-note" role="status">{notice}</p>}
+        {error && <div ref={failureBox} className="connect-failure">
+          <InlineError message={error} code={shownFailure?.code} details={shownFailure?.details} context={shownFailure ? `Connecting to ${shownFailure.server}` : undefined} actions={fixActions}
+            note={fix === 'strict' ? strictCertificate : fix === 'pinned' ? pinnedCertificate : undefined} />
+          {shownFailure?.details && <FailureDetails details={shownFailure.details} />}
+        </div>}
       </div>
       <div className="connection-footer"><button type="button" disabled={locked} onClick={() => { setSelectedId(undefined); labelServer.current = null; setOptions(connectionDefaults(platform)); setError('') }}>Reset</button><span /><button ref={connectButton} className="primary" type="submit" disabled={locked || !authReady}>{busy ? 'Connecting…' : 'Connect'}</button><button ref={stopButton} type="button" disabled={saving} onClick={busy ? stop : onClose}>{busy ? 'Stop' : 'Cancel'}</button></div>
     </form></div>

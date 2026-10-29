@@ -501,6 +501,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .checkbox-label input { width: 16px; height: 16px; margin: 0; accent-color: var(--varia-button-background); }
 .field-note { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin: 0; }
 .connect-error { font-size: var(--varia-size-sm); line-height: 1.6; color: var(--varia-inputValidation-errorForeground); background: var(--varia-inputValidation-errorBackground); padding: 10px; border-radius: var(--varia-radius-sm); overflow-wrap: anywhere; }
+/* A failed connect: the error with its fix and Copy details, then SQL Server's facts; next to Connect, at the form's end. */
+.connect-failure { display: flex; flex-direction: column; gap: var(--varia-space-1); scroll-margin-bottom: var(--varia-space-3); }
+.connect-failure > .inline-error { padding: var(--varia-space-2) 0; }
 .connect-error-details { font-size: var(--varia-size-xs); line-height: 1.6; color: var(--varia-descriptionForeground); margin-top: 6px; }
 .connect-error-details summary { cursor: pointer; width: max-content; }
 .connect-error-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0 0; }
@@ -683,6 +686,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .inline-error > .codicon { flex: none; color: var(--varia-errorForeground); }
 .inline-error-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-1); min-width: 0; }
 .inline-error-message { margin: 0; user-select: text; }
+.inline-error-note { display: block; margin-top: var(--varia-space-1); color: var(--varia-descriptionForeground); }
 .inline-error-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
 .inline-error-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
 .inline-error-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
@@ -768,4 +772,27 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .live-pill[data-state="live"] .live-dot { animation: none; }
   /* On a selected row a pill follows the row's text. */
   [aria-selected="true"] .status-pill { color: inherit; border-color: currentColor; background: transparent; }
+}
+/* Toasts: bottom right, above the status bar and under the quick input, dialogs and menus. */
+/* Fixed, so its hidden live regions never sit in the page flow below the status bar and make it scroll. Being fixed
+   makes it a stacking context, so the layer itself carries the z-index: on the stack it would rank only inside the layer,
+   under the dock and the grid. */
+.toast-layer { position: fixed; right: 0; bottom: 0; z-index: 14000; }
+.toast-stack { position: fixed; right: var(--varia-space-3); bottom: calc(var(--varia-status) + var(--varia-space-3)); display: flex; flex-direction: column; align-items: flex-end; gap: var(--varia-space-2); width: min(380px, calc(100vw - 2 * var(--varia-space-3))); pointer-events: none; }
+.toast { display: flex; align-items: flex-start; gap: var(--varia-space-2); width: 100%; padding: var(--varia-space-2) var(--varia-space-2) var(--varia-space-2) var(--varia-space-3); pointer-events: auto; background: var(--varia-notifications-background); color: var(--varia-notifications-foreground); border: 1px solid var(--varia-notifications-border); border-radius: var(--varia-radius-lg); box-shadow: var(--varia-shadow-popover) var(--varia-widget-shadow); font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); animation: varia-appear var(--varia-motion-base) var(--varia-motion-ease); }
+.toast:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.toast > .toast-icon { flex: none; margin-top: 2px; }
+.toast[data-severity="info"] > .toast-icon { color: var(--varia-notificationsInfoIcon-foreground); }
+.toast[data-severity="warning"] > .toast-icon { color: var(--varia-notificationsWarningIcon-foreground); }
+.toast[data-severity="error"] > .toast-icon { color: var(--varia-notificationsErrorIcon-foreground); }
+.toast-body { display: flex; flex: 1; flex-direction: column; gap: var(--varia-space-1); min-width: 0; padding-top: 2px; }
+.toast-message { margin: 0; overflow-wrap: anywhere; user-select: text; }
+.toast-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-1); }
+.toast-actions button { padding: 2px 8px; border-color: var(--varia-button-border); }
+.toast-status { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.toast-close { flex: none; }
+.toast-more { margin: 0; padding: 2px var(--varia-space-2); pointer-events: auto; border-radius: var(--varia-radius-sm); background: var(--varia-notifications-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+@media (forced-colors: active) {
+  /* A toast keeps its outline, and its glyph says the severity as its role's label does. */
+  .toast { border-color: CanvasText; }
 }

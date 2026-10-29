@@ -498,6 +498,15 @@ export const commandCatalog = {
     title: 'Toggle Full Screen', category: 'View', icon: 'screen-full', role: 'togglefullscreen', keybindings: [{ win: 'f11', linux: 'f11', mac: 'ctrl+meta+f', native: true }],
     menus: [{ menu: 'view', group: '4_zoom', order: 4, title: 'Full Screen', mnemonic: 'f' }]
   },
+  // Toasts never take focus by themselves: this moves it to the newest, where Tab reaches its buttons and Escape dismisses it.
+  'notifications.focus': {
+    title: 'Focus Notifications', category: 'View', icon: 'bell', keywords: ['toast', 'notification', 'message'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
+  },
+  'notifications.clearAll': {
+    title: 'Clear All Notifications', category: 'View', icon: 'clear-all', keywords: ['toast', 'notification', 'dismiss'], precondition: 'hasNotifications',
+    unavailableHint: 'There are no notifications.'
+  },
   // No key: Ctrl+R and ⌘R toggle the results pane, as in SSMS.
   'developer.reloadWindow': { title: 'Reload Window', category: 'Developer', role: 'reload', menus: [{ menu: 'view', group: 'z_developer', order: 1, mnemonic: 'e' }] },
   'developer.toggleDevTools': {

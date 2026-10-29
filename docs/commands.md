@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (144)
+## Commands (146)
 
 ### File
 
@@ -83,6 +83,8 @@ keys it uses are listed below.
 | Zoom Out | `view.zoomOut` | Ctrl+- * | Ctrl+- * | ⌘- * | Always | View › Zoom Out |
 | Reset Zoom | `view.resetZoom` | Ctrl+0 * | Ctrl+0 * | ⌘0 * | Always | View › Reset Zoom |
 | Toggle Full Screen | `view.toggleFullScreen` | F11 * | F11 * | ⌃⌘F * | Always | View › Full Screen |
+| Focus Notifications | `notifications.focus` | — | — | — | `hasNotifications` | — |
+| Clear All Notifications | `notifications.clearAll` | — | — | — | `hasNotifications` | — |
 | Float (not in the palette) | `pane.float` | — | — | — | Always | Panel tab context menu › Float |
 | Dock (not in the palette) | `pane.dock` | — | — | — | Always | Panel tab context menu › Dock |
 | Close (not in the palette) | `pane.close` | — | — | — | Always | Panel tab context menu › Close |
@@ -587,7 +589,7 @@ Right-click a text field, including those in dialogs and the editor's find widge
 | `2_clipboard` | **D**elete | `edit.delete` | Always |
 | `3_select` | Select **A**ll | `edit.selectAll` | Always |
 
-## Context keys (72)
+## Context keys (73)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -660,6 +662,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerLoading` | boolean | state | Object Explorer is loading or waiting to load nodes. |
 | `scriptingRunning` | boolean | state | A Script As request is running. |
+| `hasNotifications` | boolean | state | A notification toast is showing or waiting to show. |
 | `explorerNode` | `'background'`, `'folder'`, `'server'`, `'login'`, `'serverRole'`, `'credential'`, `'cryptographicProvider'`, `'audit'`, `'serverAuditSpecification'`, `'backupDevice'`, `'linkedServer'`, `'serverTrigger'`, `'database'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'schema'`, `'assembly'`, `'asymmetricKey'`, `'certificate'`, `'symmetricKey'`, `'columnMasterKey'`, `'columnEncryptionKey'`, `'databaseAuditSpecification'`, `'databaseTrigger'`, `'externalDataSource'`, `'externalFileFormat'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'partitionScheme'`, `'partitionFunction'`, `'searchPropertyList'`, `'planGuide'`, `'table'`, `'view'`, `'synonym'`, `'procedure'`, `'function'`, `'sequence'`, `'type'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'column'`, `'key'`, `'constraint'`, `'trigger'`, `'index'`, `'statistic'`, `'parameter'`, `'returnValue'`, `'ssisCatalog'`, `'ssisFolder'`, `'ssisProject'`, `'ssisPackage'`, `'ssisEnvironment'`, `''` | target | The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers. |
 | `explorerServerLost` | boolean | target | The menu is for a server whose connection was lost when the SQL backend restarted. |
 | `explorerFolderFilterable` | boolean | target | The menu is for an Object Explorer folder that Filter Settings can filter. |

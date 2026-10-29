@@ -4,7 +4,7 @@ import type { ResolvedTheme, ThemePreferencePatch, ThemePreview, ThemeState } fr
 import type { CommandId, RendererRole } from './commands/catalog'
 import type { ContextMenuCommand, ContextMenuRequest, MenuState } from './commands/menus'
 import type { MenuStyle } from './menu-style'
-import type { ErrorCode } from './ipc/wire/protocol'
+import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
@@ -305,9 +305,11 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 export interface BackendMethods extends RpcMethods, PortMethods, JobMethods, AuthMethods, DebugMethods {}
 export type BackendMethod = keyof BackendMethods
-/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), and the
- *  server that answered (at most 256 characters). Never the connection string or the password. */
-export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string }
+/** Facts about a failed connection for the Connect dialog: SQL Server's error number, state and class (level), the
+ *  server that answered (at most 256 characters), and `reason` 'certificate' when the server's TLS certificate was not
+ *  trusted. `exception` comes only with BACKEND_ERROR: the unexpected exception's types and HRESULTs (at most 512
+ *  characters), for Copy details. Never the connection string, the password, or an exception's message. */
+export interface ErrorDetails { number?: number; state?: number; class?: number; server?: string; reason?: ErrorReason; exception?: string }
 /** Backend failures carry a code (docs/ipc.md); the message is always a complete sentence to show as is.
  *  `passwordForgotten`: SQL Server rejected the remembered password main filled in, so main forgot it. */
 export type ApiResult<T> = { ok: true; value: T } | { ok: false; error: string; code?: ErrorCode; details?: ErrorDetails; passwordForgotten?: true }

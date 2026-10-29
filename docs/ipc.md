@@ -1365,11 +1365,21 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 
 Failures reach the renderer as `{ ok: false, error, code, details? }`. Messages are complete sentences shown as they are.
 
-`details` comes only with a failed `connections.connect` or `connections.databases` open. The Connect dialog shows them in
-**Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does for both. They are
-`{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256 }`, SqlClient's first error and the
-server that answered (the server typed when SqlClient names none). It never holds the connection string or the password.
-Main refuses (as a contained violation) details with any other member or out of these bounds.
+`details` comes with a failed `connections.connect` or `connections.databases` open, and with `BACKEND_ERROR`. The Connect
+dialog shows them in **Error details** under a failed Connect, and under a failed **Load databases**' note, as SSMS does
+for both. They are `{ number?: int32, state?: 0–255, class?: 0–255, server?: str ≤ 256, reason?: 'certificate',
+exception?: str ≤ 512 }`: SqlClient's first error and the server that answered (the server typed when SqlClient names
+none), and `reason` 'certificate' when the TLS handshake failed because the server's certificate is not trusted, by its
+chain or its name (SqlClient's error number `SEC_E_UNTRUSTED_ROOT` or `SEC_E_WRONG_PRINCIPAL`, which the managed SNI on
+Linux and macOS also uses for any certificate its validation rejects, `CERT_E_UNTRUSTEDROOT` or `CERT_E_CHAINING`, which
+Windows' SNI reports once Host Name in Certificate is set, or an `AuthenticationException` about the certificate; never
+`CERT_E_WRONG_USAGE`, a pinned certificate that does not match); the Connect dialog then offers **Trust server
+certificate and connect**, except under Strict encryption, which ignores that setting, and when the connection pins a
+Server Certificate or a Host Name in Certificate, which trusting would skip: there it explains instead. `BACKEND_ERROR` for an exception the backend did not expect carries only `exception`: the types
+and HRESULTs from the outer exception inwards, at most four (`System.InvalidOperationException (0x80131509) >
+System.DllNotFoundException (0x80131524)`), for **Copy details**, because its sentence is generic; never the exceptions'
+messages, which can hold paths, names or SQL text. Details never hold the connection string or the password. Main
+refuses (as a contained violation) details with any other member or out of these bounds.
 
 Integrated authentication on Linux and macOS uses Kerberos through SqlClient's managed SNI. When the Negotiate token cannot
 be built, SqlClient reports only error 0, class 11, "Cannot generate SSPI context." (procedure `GenClientContext`), so the

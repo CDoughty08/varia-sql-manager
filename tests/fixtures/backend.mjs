@@ -10,6 +10,8 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+//   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
+//                       certificate does (reason 'certificate')
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -131,6 +133,11 @@ function request(id, deadline, { method, params, credit }) {
       break
     // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
     case 'error-details':
+      if (method === 'connections.connect' && params.server === 'certificate') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: 'certificate', reason: 'certificate' } } })
+      if (method === 'connections.connect' && params.server === 'crash') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'The backend operation failed.', details: { exception: 'System.DllNotFoundException (0x80131524)' } } })
+      // Out of bounds: a reason main does not know, and an exception summary longer than 512 characters.
+      if (method === 'connections.connect' && params.server === 'reason') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'Failed.', details: { reason: 'firewall' } } })
+      if (method === 'connections.connect' && params.server === 'exception') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'Failed.', details: { exception: 'x'.repeat(513) } } })
       if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
       break
     case 'events':
@@ -656,6 +663,9 @@ async function workbench(id, method, params, credit) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
+      if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
+        return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
+      }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }

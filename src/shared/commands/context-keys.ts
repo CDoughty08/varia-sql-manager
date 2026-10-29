@@ -93,6 +93,7 @@ export const contextKeys = {
   ...actionKeys,
   explorerLoading: { type: 'boolean', scope: 'state', description: 'Object Explorer is loading or waiting to load nodes.' },
   scriptingRunning: { type: 'boolean', scope: 'state', description: 'A Script As request is running.' },
+  hasNotifications: { type: 'boolean', scope: 'state', description: 'A notification toast is showing or waiting to show.' },
   explorerNode: {
     type: 'enum', scope: 'target', menu: 'explorer.context', values: ['background', 'folder', ...nodeKinds, ''],
     description: "The kind of Object Explorer node the menu is for: 'folder', an object kind from `src/shared/explorer/catalog.ts`, or 'background' for the empty area below the servers."
