@@ -28,6 +28,7 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   typeAheadMs: 'Type-ahead buffer reset, in ms',
   typeAheadMax: 'Type-ahead buffer length',
   rowHeight: 'Row height, in px',
+  serverRowHeight: 'Height of a server row, in px',
   indent: 'Indentation per level, in px',
   overscan: 'Rows rendered beyond each edge of the viewport',
   deleteSlice: 'Nodes removed per task when a subtree is dropped',
@@ -36,7 +37,8 @@ const limitNotes: Readonly<Record<keyof typeof explorerLimits, string>> = {
   sublabel: 'Characters in a sublabel',
   detail: 'Characters in tooltip details',
   message: 'Characters in an error message',
-  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128'
+  maxName: 'UTF-16 code units in the longest name a kind may declare; every other kind keeps 128',
+  quickFilter: 'Characters in the Filter loaded objects box'
 }
 
 const lists = (id: FolderId) => {

@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type RefCallback, type SyntheticEvent } from 'react'
-import { explorerLimits, kindSpecs } from '../../../shared/explorer/catalog.ts'
+import { memo, useEffect, useRef, type DragEvent, type FocusEvent, type KeyboardEvent, type MouseEvent, type ReactNode, type RefCallback, type SyntheticEvent } from 'react'
+import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
@@ -9,6 +9,8 @@ import { useConnectionAccent } from '../core/WorkbenchContext'
 import { useCommandEnabled } from '../core/useCommand'
 import ExplorerIcon, { type BadgeName } from './ExplorerIcon'
 import { RowKind, type TreeNode } from './tree-model'
+
+const numbers = new Intl.NumberFormat('en-US')
 
 /** Row actions the tree carries out: selection, the chevron, and a lost server's buttons. */
 export interface RowActions {
@@ -26,7 +28,8 @@ export interface RowActions {
 export interface RowProps {
   readonly rowId: number
   readonly kind: RowKind
-  readonly index: number
+  /** The row's offset from the top of the tree, in px (servers are taller than other rows). */
+  readonly top: number
   readonly level: number
   readonly posinset: number
   readonly setsize: number
@@ -48,6 +51,10 @@ export interface RowProps {
   readonly menuTarget: RefCallback<HTMLDivElement>
   /** The label is the inline Rename box. */
   readonly renaming?: boolean
+  /** The Filter loaded objects text (`filterText`), whose match in the label is highlighted. */
+  readonly match?: string
+  /** The filter shows only some of the node's children (`FilteredRows.partial`), so its item count is left out. */
+  readonly partial?: boolean
 }
 
 const statusWords = { disabled: ', disabled', unavailable: ', unavailable', noAccess: ', no access', readOnly: '' } as const
@@ -60,24 +67,41 @@ const statusSentences = {
 const lostSentence = 'The connection was lost when the SQL backend restarted. Reconnect, or remove the server.'
 const clip = (text: string) => text.length > explorerLimits.detail ? text.slice(0, explorerLimits.detail - 1) + '…' : text
 
-/** What the tooltip says after the name: kind and creation date, facts, status, and any error. */
-function tooltipFacts(node: TreeNode): string[] {
+/**
+ * How many objects a listing folder holds, as its first page counted them (with any Filter Settings applied), without
+ * its static subfolders; undefined for other rows and before the folder has loaded.
+ */
+export function itemCount(node: Pick<TreeNode, 'kind' | 'folder' | 'total' | 'staticCount'>): number | undefined {
+  if (node.kind !== 'folder' || !node.folder || !folderSpecs[node.folder].list || node.total === undefined) return undefined
+  return Math.max(0, node.total - node.staticCount)
+}
+const items = (value: number) => `${numbers.format(value)} item${value === 1 ? '' : 's'}`
+/** A server's connection, as the dot at the end of its row shows it. */
+export type ConnectionState = 'online' | 'error' | 'lost'
+export const connectionState = (node: Pick<TreeNode, 'lost' | 'connectionError'>): ConnectionState => node.lost ? 'lost' : node.connectionError ? 'error' : 'online'
+const connectionWords: Readonly<Record<ConnectionState, string>> = { online: 'Connected', error: 'Connection failed', lost: 'Connection lost' }
+
+/**
+ * What the tooltip says after the name: kind and creation date, facts, item count (unless `counted` is false, while the
+ * filter shows only some of the items), status, and any error.
+ */
+function tooltipFacts(node: TreeNode, counted: boolean): string[] {
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
-  const error = node.error ?? node.connectionError
-  return [kind, node.detail && displayText(node.detail), node.lost ? lostSentence : node.status && statusSentences[node.status], error && `Could not load: ${displayText(error.message)}`]
-    .filter((line): line is string => !!line)
+  const error = node.error ?? node.connectionError, count = counted ? itemCount(node) : undefined
+  return [kind, node.detail && displayText(node.detail), count !== undefined && items(count), node.lost ? lostSentence : node.status && statusSentences[node.status],
+    error && `Could not load: ${displayText(error.message)}`].filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, and any error. */
-export function rowTooltip(node: TreeNode): string {
+export function rowTooltip(node: TreeNode, counted = true): string {
   const name = node.lost ? `${node.label} (connection lost)` : node.sublabel ? `${node.label} ${node.sublabel}` : node.label
-  return clip([displayText(name), ...tooltipFacts(node)].join('\n'))
+  return clip([displayText(name), ...tooltipFacts(node, counted)].join('\n'))
 }
 /**
  * The row's accessible description: the tooltip without the name, which the accessible name already says (a title
  * alone would be the description, so screen readers would read the name twice).
  */
-export function rowDescription(node: TreeNode): string | undefined {
-  return clip(tooltipFacts(node).join('\n')) || undefined
+export function rowDescription(node: TreeNode, counted = true): string | undefined {
+  return clip(tooltipFacts(node, counted).join('\n')) || undefined
 }
 /** The row's accessible name: the label and sublabel as shown, then its state. */
 export function rowName(node: TreeNode): string {
@@ -137,9 +161,40 @@ function RenameBox({ rowId, name, title, actions }: { rowId: number; name: strin
     onKeyDown={keyDown} onBlur={blur} onMouseDown={stop} onDoubleClick={stop} onCopy={stop} onCut={stop} onPaste={stop} onDragStart={stop} />
 }
 
+/** The label, with the part that matches the Filter loaded objects box in bold. */
+export function Label({ text, match }: { text: string; match: string | undefined }) {
+  const shown = displayText(text), lower = shown.toLocaleLowerCase()
+  // Only where lower-casing keeps the length, so offsets in the lower-cased text are the shown text's.
+  const at = match && lower.length === shown.length ? lower.indexOf(match) : -1
+  if (at < 0) return <bdi className="oe-label">{shown}</bdi>
+  const end = at + match!.length
+  return <bdi className="oe-label">{shown.slice(0, at)}<span className="oe-match">{shown.slice(at, end)}</span>{shown.slice(end)}</bdi>
+}
+
+/** The text after a node's label: a server's version and login in brief (its name keeps SSMS's full text), or a lost one's state. */
+export const shownSublabel = (node: Pick<TreeNode, 'lost' | 'brief' | 'sublabel'>): string | undefined => node.lost ? '(connection lost)' : node.brief ?? node.sublabel
+
+/**
+ * The row's end, right-aligned and never shrunk for the label: first the indicators (`children`: E2's environment tag,
+ * later E3's state chips), then the active query's glyph (`active`), the item count and the connection dot, then
+ * `actions` (a lost server's buttons). It takes at most 60% of the row; an indicator shrinks within that
+ * (`flex: 0 1 auto; min-width: 0`) under a cap such as `max-width: min(40cqw, 12em)` (the row is an inline-size
+ * container), never a percentage, which would resolve against this content-sized box (explorer-smoke 10b measures the
+ * environment tag here).
+ */
+export function RowEnd({ count, connection, active, children, actions }: { count?: number; connection?: ConnectionState; active?: boolean; children?: ReactNode; actions?: ReactNode }) {
+  return <span className="oe-end">
+    {children}
+    {active && <span className="oe-active" title="Server of the active query" aria-hidden="true"><Icon name="file-code" /></span>}
+    {count !== undefined && <span className="oe-count" aria-hidden="true">{numbers.format(count)}</span>}
+    {connection && <span className="oe-dot" data-state={connection} title={connectionWords[connection]} aria-hidden="true" />}
+    {actions}
+  </span>
+}
+
 /** One windowed row of the tree: a node, or a loading, error, progress, stopped, capped, or paused row. */
-function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text, selected, draggable, active, color, environment, actions, menuTarget, renaming }: RowProps) {
-  const style = { transform: `translateY(${index * explorerLimits.rowHeight}px)` }
+function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node, text, selected, draggable, active, color, environment, actions, menuTarget, renaming, match, partial }: RowProps) {
+  const style = { transform: `translateY(${top}px)` }
   const indent = <span className="oe-indent" style={{ width: (level - 1) * explorerLimits.indent }} />
   const select = (event: MouseEvent) => { if (!(event.target as Element).closest('.oe-twistie')) actions.select(rowId) }
   if (kind !== RowKind.Node || !node) {
@@ -155,11 +210,12 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
   const expandable = node.hasChildren && !node.lost, folder = node.kind === 'folder', root = node.parent === 0
   const toggle = (event: MouseEvent) => { event.stopPropagation(); if (expandable) actions.toggle(rowId) }
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
+  const sublabel = shownSublabel(node), counted = !partial
   const tag = root ? environmentTag(environment) : undefined
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
     className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
-    aria-busy={node.load === 'loading' || undefined} aria-label={tag ? `${rowName(node)}, ${tag.description}` : rowName(node)} aria-description={rowDescription(node)} title={tag ? clip(`${rowTooltip(node)}\n${tag.description}`) : rowTooltip(node)} style={style} draggable={(draggable && !renaming) || undefined}
+    aria-busy={node.load === 'loading' || undefined} aria-label={tag ? `${rowName(node)}, ${tag.description}` : rowName(node)} aria-description={rowDescription(node, counted)} title={tag ? clip(`${rowTooltip(node, counted)}\n${tag.description}`) : rowTooltip(node, counted)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId) }}
     onDragStart={draggable ? (event: DragEvent) => { if (!actions.dragStart(rowId, event.dataTransfer)) event.preventDefault() } : undefined}>
     {root && <Accent color={color} />}
@@ -168,11 +224,12 @@ function ExplorerRow({ rowId, kind, index, level, posinset, setsize, node, text,
     <ExplorerIcon name={folder && node.expanded ? 'folder-opened' : node.icon} folder={folder} badge={badgeOf(node)} />
     {renaming && node.ref.type === 'object' && node.kind !== 'folder'
       ? <RenameBox rowId={rowId} name={node.ref.object.name ?? ''} title={kindSpecs[node.kind].title} actions={actions} />
-      : <bdi className="oe-label">{displayText(node.label)}</bdi>}
+      : <Label text={node.label} match={match} />}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
-    {node.lost ? <span className="oe-sublabel">(connection lost)</span> : node.sublabel && <span className="oe-sublabel">{displayText(node.sublabel)}</span>}
-    {tag && <EnvironmentTag environment={environment} place="explorer" />}
-    {node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}
+    {sublabel && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+    <RowEnd count={counted ? itemCount(node) : undefined} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
+      {tag && <EnvironmentTag environment={environment} place="explorer" />}
+    </RowEnd>
   </div>
 }
 

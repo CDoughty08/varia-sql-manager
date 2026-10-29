@@ -79,7 +79,7 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `shadow` | Shadows. | `#00000085` | `#10182824` |
 | `backdrop` | Modal scrim. | `#0a0c10b3` | `#1c1f2652` |
 
-## Color keys (237)
+## Color keys (241)
 
 ### Base
 
@@ -170,14 +170,18 @@ key that uses it. Keys marked (VS Code) mean the same as the VS Code key of that
 | `list.focusHighlightForeground` | VS Code | `@quickInputList.focusForeground` | `#d9dce3` | `#1c1f26` | Matching characters on the focused row of the editor's suggestions. The row's own text color by default, as the command palette's active row does: the match color is faint on that fill. |
 | `list.filterMatchBackground` | VS Code | `$accent/20` | `#8f9cff33` | `#4453d033` | Rows that match a filter. Not used yet; reserved for the command palette and the Object Explorer tree. |
 | `tree.indentGuidesStroke` | VS Code | `$borderSubtle` | `#1f2228` | `#eceef2` | Tree indent guides. Not used yet; reserved for the Object Explorer tree. |
-| `objectExplorer.activeConnectionBackground` | Varia | `$accentSurface` | `#232842` | `#dde1f9` | Row of the active query's server. |
+| `objectExplorer.activeConnectionBackground` | Varia | `$sideBar` | `#111317` | `#f7f8fa` | Row of the active query's server, under hover and selection; untinted by default, as its glyph marks it (a tint would read as a selection). |
+| `objectExplorer.activeConnectionForeground` | Varia | `$accent` | `#8f9cff` | `#4453d0` | Glyph at the end of the active query's server row. |
 | `objectExplorer.headingForeground` | Varia | `$text` | `#d9dce3` | `#1c1f26` | Folder row labels. |
 | `objectExplorer.sublabelForeground` | Varia | `$textSecondary` | `#bcc1cb` | `#3a404b` | Text after a row's label, such as a column's type or a database's state. |
-| `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | The (filtered) marker and loading progress next to folder labels. |
+| `objectExplorer.countForeground` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Item counts at the end of folder rows, the (filtered) marker and loading progress. |
 | `objectExplorer.chevronForeground` | Varia | `$iconMuted` | `#7f8694` | `#6b7280` | Expand and collapse chevrons. |
 | `objectExplorer.folderIconForeground` | Varia | `$iconFolder` | `#bfa878` | `#7d6532` | Folder glyphs. |
 | `objectExplorer.objectIconForeground` | Varia | `$icon` | `#a3a9b5` | `#4d5461` | Glyphs of tables and other objects. |
 | `objectExplorer.actionForeground` | Varia | `$textTertiary` | `#a3a9b5` | `#4d5461` | Object Explorer toolbar icons. |
+| `objectExplorer.connectedIndicator` | Varia | `$success` | `#74d19c` | `#146f3b` | Dot at the end of a connected server's row. |
+| `objectExplorer.connectionErrorIndicator` | Varia | `@errorForeground` | `#f39a9a` | `#b42229` | Ring at the end of a server's row while its connection fails to load. |
+| `objectExplorer.disconnectedIndicator` | Varia | `$textMuted` | `#9298a4` | `#5c6370` | Ring at the end of a server's row once its connection was lost with the SQL backend. |
 
 ### Dock and docking compass
 

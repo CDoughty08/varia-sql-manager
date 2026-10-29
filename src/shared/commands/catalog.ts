@@ -304,6 +304,10 @@ export const commandCatalog = {
     title: 'Filter Settings…', category: 'Object Explorer', icon: 'filter', keywords: ['filter', 'narrow', 'search'], precondition: 'hasConnection', unavailableHint: 'Select a folder that can be filtered.',
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 1, mnemonic: 'i', when: 'explorerFolderFilterable' }]
   },
+  // Narrows the tree to rows already loaded, by name; it asks the server for nothing (Filter Settings does).
+  'explorer.filterLoaded': {
+    title: 'Filter Loaded Objects', category: 'Object Explorer', icon: 'search', keywords: ['find', 'search', 'filter', 'quick'], precondition: 'hasConnection', unavailableHint: noServer
+  },
   'explorer.removeFilter': {
     title: 'Remove Filter', category: 'Object Explorer', icon: 'clear-all', keywords: ['filter', 'clear'], precondition: 'hasConnection', unavailableHint: 'This folder has no filter.',
     menus: [{ menu: 'explorer.context', group: '3_filter', order: 2, mnemonic: 'v', when: 'explorerFolderFiltered' }]

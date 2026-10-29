@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type Ref } from 'react'
+import { explorerLimits } from '../../../shared/explorer/catalog.ts'
+import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import { useCommandEnabled, useCommandsEnabled, useKeybindingLabel } from '../core/useCommand'
 import type { CommandArgs, CommandId } from '../core/types'
@@ -7,8 +9,10 @@ import { useMenuTarget } from '../menus/useMenuTarget'
 import Icon from '../Icon'
 import PaneMenuButton from '../PaneMenuButton'
 import EmptyState from '../kit/EmptyState'
+import { StaleBadge } from '../kit/LivePill'
 import ExplorerErrorBoundary, { FaultProbe, focusLost } from './ExplorerErrorBoundary'
 import ExplorerTree from './ExplorerTree'
+import { filterMatch, RowKind } from './tree-model'
 
 interface Tool { readonly id: CommandId; readonly icon: IconId; readonly label: string; readonly args?: CommandArgs }
 
@@ -68,6 +72,68 @@ function ExplorerToolbar({ tools }: { tools: readonly Tool[] }) {
 }
 
 /**
+ * Filter loaded objects: narrows the tree to the loaded rows whose name contains the text (Filter Settings, by contrast,
+ * asks the server for a narrower list). ↓ or Enter moves to the tree on the first match; Escape clears the text, or,
+ * when there is none, returns to the tree. Text that matches nothing says so below the box, which a tree of bare server
+ * rows would not.
+ */
+function QuickFilter() {
+  const { explorer } = useWorkbench()
+  const { input: value, focus } = useServiceSnapshot(explorer.quickFilter)
+  const { filter: applied } = useServiceSnapshot(explorer)
+  const input = useRef<HTMLInputElement>(null)
+  const clear = () => { explorer.setQuickFilter(''); input.current?.focus() }
+  // Filter Loaded Objects asks for focus, perhaps before this pane was shown.
+  useLayoutEffect(() => { if (explorer.takeQuickFilterFocus()) input.current?.focus() }, [explorer, focus])
+  const toTree = (first: boolean) => {
+    const { rows, filter } = explorer.getSnapshot()
+    if (first && filter) {
+      const index = rows.nodes.findIndex((node, at) => rows.kinds[at] === RowKind.Node && !!node && node.parent !== 0 && filterMatch(node, filter.text) >= 0)
+      if (index >= 0) explorer.select(rows.ids[index], { reveal: true })
+    }
+    document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+  }
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return
+    if (event.key === 'Escape' && value) explorer.setQuickFilter('')
+    else if (event.key === 'Escape') toTree(false)
+    else if (event.key === 'ArrowDown' || event.key === 'Enter') toTree(true)
+    else return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  return <>
+    <div className="explorer-filter" role="search">
+      <Icon name="search" />
+      <input ref={input} type="text" aria-label="Filter loaded objects" placeholder="Filter loaded objects" maxLength={explorerLimits.quickFilter} spellCheck={false} autoComplete="off"
+        value={value} onChange={event => explorer.setQuickFilter(event.target.value)} onKeyDown={onKeyDown} />
+      {value && <button type="button" className="icon-button" tabIndex={-1} aria-label="Clear filter" title="Clear filter (Escape)" onClick={clear}><Icon name="close" /></button>}
+    </div>
+    {/* The live region announces the count; this is for the eye. */}
+    {applied?.matches === 0 && value.trim() && <EmptyState className="explorer-no-match" icon="search" detail={<>No loaded objects match <bdi>“{displayText(value.trim())}”</bdi></>}
+      actions={[{ label: 'Clear filter', run: clear }]} />}
+  </>
+}
+
+/**
+ * The footer: how fresh the listing that shows the selected row is ("Tables · Updated 4 s ago", or "Stale since …" after
+ * a refresh failed and kept the old rows), and how many servers are connected.
+ */
+function ExplorerFooter({ servers, live }: { readonly servers: number; readonly live: number }) {
+  const { explorer } = useWorkbench()
+  const { selected } = useServiceSnapshot(explorer)
+  const fresh = explorer.listingFreshness(selected)
+  return <div className="explorer-footer">
+    {fresh && <span className="explorer-freshness">
+      <bdi className="explorer-freshness-scope">{displayText(fresh.label)}</bdi>
+      <span aria-hidden="true">·</span>
+      <StaleBadge updatedAt={fresh.updatedAt} {...(fresh.staleSince !== undefined ? { stale: { since: fresh.staleSince } } : {})} />
+    </span>}
+    <span className="explorer-servers">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers ? 'No connected servers' : 'Windows & SQL authentication'}</span>
+  </div>
+}
+
+/**
  * Object Explorer: SSMS's toolbar (Connect, Disconnect, Stop, Filter, Refresh, Collapse All) over the tree of connected
  * servers, or a prompt to connect. Disconnect acts on the selected node's server; with nothing selected it asks which.
  * Filter shows a filled funnel while the selected folder has a filter.
@@ -102,14 +168,21 @@ export default function ExplorerPane({ error, activeConnectionId }: { readonly e
     }
     wasEmpty.current = empty
   }, [empty])
+  // The box shows while Filter Loaded Objects can run (`hasConnection`): lost servers have no rows to narrow. Focus it
+  // held when the last connection went moves to the tree.
+  const filterable = live > 0
+  useLayoutEffect(() => {
+    if (!filterable && !empty && focusLost()) document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()
+  }, [filterable, empty])
   return <>
     <div className="explorer-header pane-header"><span className="pane-title">Object Explorer</span><ExplorerToolbar tools={tools} /><PaneMenuButton pane="explorer" /></div>
+    {filterable && <QuickFilter />}
     <div className="explorer-body" ref={background}>
       {servers.length ? <ExplorerErrorBoundary onReload={() => explorer.reset()} onReloaded={() => document.querySelector<HTMLElement>('[data-explorer-tree]')?.focus()}>
         <FaultProbe /><ExplorerTree activeConnectionId={activeConnectionId} /></ExplorerErrorBoundary>
         : <EmptyState className="explorer-empty" icon="server" detail="Connect to SQL Server to browse databases and objects." actions={[{ label: 'Connect to server', run: () => void commands.execute('connection.connect', undefined, 'toolbar'), disabled: !connect, buttonRef: connectButton, primary: true }]} />}
       {error && <p className="explorer-error" role="alert">{error}</p>}
     </div>
-    <div className="explorer-footer">{live ? `${live} connected server${live === 1 ? '' : 's'}` : servers.length ? 'No connected servers' : 'Windows & SQL authentication'}</div>
+    <ExplorerFooter servers={servers.length} live={live} />
   </>
 }
