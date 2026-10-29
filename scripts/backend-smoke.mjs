@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, connectionDot, errorMessages, explorerFilterBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, toolbarButton } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerFilterBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -63,14 +63,14 @@ async function typeSql(sql) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
 }
-const execute = () => toolbarButton(page, /Execute/)
+const execute = () => queryBarButton(page, /Execute/)
 async function messages() {
   await outputView(page, /^Messages/).click()
   return messagesOf(page)
 }
 /** A data cell of the first results grid, by row and column. */
 const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).first()
-const running = () => expect(outputStatus(page)).toContainText('Executing query…')
+const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
   await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -100,7 +100,7 @@ try {
   step = 'real backend'
   // The real backend with its test hooks: debug.results.synthesize stores rows without a SQL Server.
   await launch({ VARIA_BACKEND_TEST_HOOKS: '1' })
-  await expect(statusBar()).toContainText(/\.NET 10\..* · Ready/, { timeout: 30000 })
+  await expect(backendReady(page)).toHaveText('Ready', { timeout: 30000 })
   const health = await page.evaluate(() => window.varia.health())
   expect(health.ok && health.value.protocolVersion).toBe(2)
   expect(health.ok && health.value.smoVersion).toMatch(/^\d+\./)
@@ -198,7 +198,7 @@ try {
   await expect(page.locator('.monaco-editor')).toBeVisible({ timeout: 30000 })
   const reloaded = await ready(2)
   expect(reloaded.pid).not.toBe(first.pid)
-  await expect(statusBar()).toContainText('Ready')
+  await expect(backendReady(page)).toHaveText('Ready')
   await expect(banner()).toHaveCount(0)
 
   // 8. Live: a real session is lost with its backend, nothing is re-run, and Reconnect opens a new session.
@@ -226,8 +226,11 @@ try {
     await lostServerRows(page).getByRole('button', { name: /^Reconnect/ }).click()
     dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
     await expect(dialog.getByLabel('Server Name', { exact: true })).toHaveValue(process.env.VARIA_TEST_SQL_SERVER)
-    await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
-    if (liveUser) await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    // Windows Authentication has no Password field; SQL Server Authentication's starts empty.
+    if (liveUser) {
+      await expect(dialog.getByLabel('Password', { exact: true })).toHaveValue('')
+      await dialog.getByLabel('Password', { exact: true }).fill(process.env.VARIA_TEST_SQL_PASSWORD)
+    } else await expect(dialog.getByLabel('Password', { exact: true })).toHaveCount(0)
     await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
     await expect(dialog).toHaveCount(0, { timeout: 30000 })
     await expect(lostServerRows(page)).toHaveCount(0)
@@ -247,7 +250,7 @@ try {
   await mkdir(join(control, 'hold'))
   const calls = async () => (await readFile(join(control, 'calls.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, VARIA_BACKEND_LIVENESS_MS: '2000' })
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   let dialog = await connectDialog()
   await fillLogin(dialog, 'crash-server', 'reader', 'smoke-password-marker')
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
@@ -272,7 +275,7 @@ try {
   expect(history.slice(history.indexOf('restarting:1'))).toEqual(expect.arrayContaining(['restarting:1', 'starting:2', 'ready:2']))
   expect(history.indexOf('restarting:1')).toBeLessThan(history.indexOf('starting:2'))
   expect(await app.evaluate(() => globalThis.__variaTest.states.find(state => state.status === 'restarting')?.lost)).toEqual({ generation: 1, reason: 'crash', connections: 1, queries: 1 })
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   // Object Explorer keeps the server's row, collapsed and dimmed, with Reconnect and Remove (in its menu too).
   const lostRow = lostServerRows(page)
   await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (connection lost)')
@@ -333,6 +336,11 @@ try {
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
+  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
+  // whole inside the pane.
+  const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
+  await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => shown(gridCell(0, 1))).toBe(true)
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])
@@ -437,7 +445,7 @@ try {
   const lock = () => quitting.evaluate(({ app }) => app.hasSingleInstanceLock() ? 'held' : 'released').catch(() => 'exited')
   await expect.poll(lock, { timeout: 10000, intervals: [50] }).toBe('released')
   await launch({ VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }, profile)
-  await expect(statusBar()).toContainText('fake · Ready')
+  await expect(backendReady(page, 'fake')).toHaveText('Ready')
   await expect.poll(() => alive(stuck.pid), { timeout: 5000 }).toBe(false)
   await Promise.race([quitting.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 5000))])
   await close()

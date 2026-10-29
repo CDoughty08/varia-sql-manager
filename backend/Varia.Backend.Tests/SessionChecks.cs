@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.Data.SqlClient;
 
 namespace Varia.Backend.Tests;
 
@@ -16,5 +17,19 @@ internal static class SessionChecks
             "a statement error, cancellation or invalid operation alone does not lose an open session");
         check(SqlService.IsSessionLost(statement, ConnectionState.Broken) && SqlService.IsSessionLost(new InvalidOperationException(), ConnectionState.Closed),
             "a connection already closed or broken loses the session regardless of the error severity");
+
+        // What a lost session says became of its transaction (the live checks drive each path in a real session).
+        using var connection = new SqlConnection();
+        var session = new QuerySession(Guid.NewGuid().ToString(), connection);
+        check(SqlService.LostMessage(session, committing: false, commit: false) == SqlService.LostRolledBack
+            && SqlService.LostMessage(session, committing: false, commit: true) == SqlService.LostNothingCommitted
+            && SqlService.LostMessage(session, committing: true, commit: true) == SqlService.LostWhileCommitting,
+            "a session lost before a commit was sent says SQL Server rolled back its transaction, and one lost while the commit ran that the outcome is unknown");
+        session.CommitInDoubt = true;
+        check(SqlService.LostMessage(session, committing: false, commit: false) == SqlService.LostAfterUnfinishedCommit
+            && SqlService.LostMessage(session, committing: false, commit: true) == SqlService.LostAfterUnfinishedCommit
+            && SqlService.LostMessage(session, committing: true, commit: true) == SqlService.LostWhileCommitting
+            && !SqlService.LostAfterUnfinishedCommit.Contains("Nothing was committed", StringComparison.Ordinal),
+            "after a commit that never answered, a session found lost never says that nothing was committed");
     }
 }

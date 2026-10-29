@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 848 offline
-  checks; how many depends on the server version and authentication (1346 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 883 offline
+  checks; how many depends on the server version and authentication (1404 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -189,16 +189,22 @@ pages, limits, error codes, display formats, benchmarks).
   gates; `activity.kill` runs on the object actions' unpooled, never-retried connection, one guarded batch per session that
   checks the session's identity (login time, host process id), refuses its own, system and this backend's pool sessions (of every connection, whatever its Application Name), and
   only then runs a dynamic KILL built on the server from an int parameter. Neither logs session ids, logins, hosts or SQL.
-- SSIS Catalog semantics (code tables, `ssis.describe` views, error codes, features, limits) live only in
+- SSIS Catalog semantics (code tables, `ssis.describe` views, `ssis.execute` verbs, error codes, features, limits) live only in
   `src/shared/ssis/catalog.ts`; its tree kinds and folders are Object Explorer's catalogue. After changing it, regenerate
   the generated part of `docs/integration-services.md` (below its marker line; the part above is hand-written) and the
-  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read only on
-  the SSIS read pool (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
+  backend's embedded `Ssis/ssis-catalog.json` with `npx vitest run tests/ssis-catalog.test.ts -u`. SSISDB is read on the
+  SSIS read pool (and by a write's preflight in its own connection) (the application name plus " - Integration Services", Initial Catalog the catalog's database), never
   the explorer pool, from `SsisSql`'s constant text and the explorer's SSIS listings, both linted by `SsisSql.Lint`
   (values as parameters, no metadata built-ins, no `datetime` conversions, no dynamic SQL, no writes, never
   `SYNCHRONIZED`); tree listings run `READ UNCOMMITTED`, describes `READ UNCOMMITTED` (`READ COMMITTED` when SSISDB has
   RCSI), both with `LOCK_TIMEOUT 5000`, the profile's role checks with 1000. The SSIS pool keeps idle connections in SSISDB
-  until disconnect. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
+  until disconnect. SSISDB changes only in `SsisActionService` (`ssis.execute`, sensitive): on its own unpooled connection
+  (the application name plus " - Integration Services Actions", Initial Catalog the catalog's database, never retried), never
+  a pool; after a preflight in the same connection (READ COMMITTED, `LOCK_TIMEOUT 10000`, 25 s); with steps only from
+  `SsisSql.WriteTemplates`, each calling only its verb's catalog procedures (`SsisSql.LintWrite`), values as parameters, no
+  outer transaction; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`) until Stop, whose reply waits for SQL Server and
+  lists the steps completed (`AnswersStop`); a verb SSISDB refuses to SQL Server logins answers `WINDOWS_AUTH_REQUIRED` on a
+  box server before connecting. The catalog's database name comes only from the internal `SsisOptions.CatalogDatabase`
   (SSISDB, or the checks' fake catalog), never a request field; there is no 32-bit runtime option anywhere. Never log
   names, values, SQL or messages.
 - Settings live only in `src/shared/settings/` (pages in `pages.ts`, definitions per area, aggregated by `catalog.ts`;
@@ -244,11 +250,12 @@ pages, limits, error codes, display formats, benchmarks).
   as errors. LF line endings (`.editorconfig`, `.gitattributes`). Comments explain why, sparingly.
 - One `claude/<topic>` branch per PR, off `main` or, for a stacked PR, off the branch it builds on. Merge with merge
   commits (never squash or rebase), so stacked branches need no rebase; imperative commit subjects.
-- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) runs on
-  every PR (any base branch, so stacked PRs are tested) and every push to main. Windows and macOS run on push to main,
-  manual runs, and non-draft PRs only, because the repository is private and their minutes bill at 2x and 10x; macOS
-  skips the smoke tests until they cover its window chrome. Keep PRs in draft while iterating. `sql-matrix.yml` (manual
-  runs only) repeats the .NET checks against SQL Server 2017, 2019, 2022 and 2025.
+- CI (`.github/workflows/ci.yml`): the Linux job (live SQL Server service, sandboxed smoke tests under xvfb) and the
+  Windows and macOS jobs run on every PR, drafts included (any base branch, so stacked PRs are tested), every push to
+  main and manual runs; the repository is public, so their minutes cost nothing. macOS skips the smoke tests until they
+  cover its window chrome. Once `npm run check` passes, the smoke suites and the benchmarks each run even when the other
+  failed first, so one run reports both (`tests/ci-workflow.test.ts`). `sql-matrix.yml` (manual runs only) repeats the
+  .NET checks against SQL Server 2017, 2019, 2022 and 2025.
 - No license has been chosen; do not add one.
 
 ## Product direction (agreed with the owner)

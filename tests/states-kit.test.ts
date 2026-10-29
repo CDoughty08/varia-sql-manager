@@ -14,6 +14,7 @@ import { contrastPairs } from '../src/shared/theme/contrast-pairs'
 import { motion } from '../src/shared/theme/metrics'
 import { colorRegistry, cssVariable, type ColorKey } from '../src/shared/theme/registry'
 import { isStatusTone, statusTones, tileTones, toneKeys } from '../src/shared/theme/tones'
+import { computed, specificity } from './fixtures/css-cascade'
 import { stylesheetRules } from './fixtures/css-rules'
 
 const html = (element: ReactElement) => renderToStaticMarkup(element)
@@ -23,53 +24,6 @@ const valueOf = (selector: string, property: string, at: readonly string[] = [])
 const forced = ['@media (forced-colors: active)']
 const at = (hours: number, minutes: number, seconds: number) => new Date(2026, 9, 22, hours, minutes, seconds).getTime()
 
-/** A selector list split at its top-level commas (`:not(a, b)` stays whole). */
-function selectorParts(list: string): string[] {
-  const parts: string[] = []
-  let depth = 0, part = ''
-  for (const char of list) {
-    if (char === ',' && depth === 0) { parts.push(part.trim()); part = ''; continue }
-    if (char === '(') depth++
-    if (char === ')') depth--
-    part += char
-  }
-  return [...parts, part.trim()]
-}
-/** Specificity of a compound selector, enough for styles.css: ids; classes, attributes and pseudo-classes (`:not()` counts its argument); types and pseudo-elements. */
-function specificity(selector: string): [number, number, number] {
-  let a = 0, b = 0, c = 0
-  const rest = selector.replace(/:not\(([^)]*)\)/g, (_, inner: string) => {
-    const most = selectorParts(inner).map(specificity).sort(compare).at(-1) ?? [0, 0, 0]
-    a += most[0]; b += most[1]; c += most[2]; return ''
-  }).replace(/\[[^\]]*\]/g, () => { b++; return '' }).replace(/::[\w-]+/g, () => { c++; return '' }).replace(/#[\w-]+/g, () => { a++; return '' })
-    .replace(/[.:][\w-]+/g, () => { b++; return '' })
-  c += rest.match(/[a-z][\w-]*/gi)?.length ?? 0
-  return [a, b, c]
-}
-const compare = (x: readonly number[], y: readonly number[]) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2]
-/** Shorthands set the colour longhand the cascade below compares. */
-const colorProperty: Record<string, string> = { background: 'background-color', outline: 'outline-color', border: 'border-color' }
-/**
- * The cascade for one element: the declarations of every rule in styles.css whose selector is one compound made only of
- * the given simple selectors (so `button:hover:not(:disabled)` applies to a hovered chip, `.dock-empty button` does not),
- * at the top level or, with `forcedColors`, also inside the forced-colors block; the winner by specificity, then order.
- */
-function computed(simple: readonly string[], forcedColors = false): Map<string, string> {
-  const winners = new Map<string, { value: string; rank: [number, number, number]; order: number }>()
-  rules.forEach((rule, order) => {
-    if (rule.at.length && !(forcedColors && rule.at.join(' ') === forced[0])) return
-    for (const part of selectorParts(rule.selector)) {
-      const tokens = part.match(/:not\([^)]*\)|\[[^\]]*\]|::?[\w-]+|[.#][\w-]+|^[a-z][\w-]*/gi) ?? []
-      if (tokens.join('') !== part || !tokens.every(token => simple.includes(token))) continue
-      const rank = specificity(part)
-      for (const { property, value } of rule.declarations) {
-        const name = colorProperty[property] ?? property, current = winners.get(name)
-        if (!current || compare(rank, current.rank) > 0 || (compare(rank, current.rank) === 0 && order >= current.order)) winners.set(name, { value, rank, order })
-      }
-    }
-  })
-  return new Map([...winners].map(([name, { value }]) => [name, value]))
-}
 const onChip = ['button', '.chip', '[aria-pressed="true"]', ':not(:disabled)']
 
 describe('states kit words', () => {
@@ -104,6 +58,11 @@ describe('states kit words', () => {
       .toBe('Loading Tables on localhost\nCode: SQL_ERROR\nMessage: Invalid object name \'dbo.Nope\'.\nSQL Server: Msg 208, Level 16, State 1, Server localhost')
     expect(errorDetailsText({ message: 'The backend stopped.' })).toBe('Message: The backend stopped.')
     expect(errorDetailsText({ message: 'Failed.', code: 'BACKEND_ERROR', extra: '  System.IO.FileNotFoundException\n' })).toBe('Code: BACKEND_ERROR\nMessage: Failed.\n\nSystem.IO.FileNotFoundException')
+    // The backend's exception types for BACKEND_ERROR (the generic sentence hides them), and a connect failure's reason.
+    expect(errorDetailsText({ message: 'The backend operation failed.', code: 'BACKEND_ERROR', details: { exception: 'System.DllNotFoundException (0x80131524)' }, context: 'Connecting to localhost' }))
+      .toBe('Connecting to localhost\nCode: BACKEND_ERROR\nMessage: The backend operation failed.\nException: System.DllNotFoundException (0x80131524)')
+    expect(errorDetailsText({ message: 'Not trusted.', code: 'SQL_ERROR', details: { number: -2146893019, class: 20, state: 0, server: 'sql01', reason: 'certificate' } }))
+      .toBe('Code: SQL_ERROR\nMessage: Not trusted.\nSQL Server: Msg -2146893019, Level 20, State 0, Server sql01\nReason: certificate')
     const long = errorDetailsText({ message: 'x'.repeat(40_000) })
     expect(long).toHaveLength(maxErrorDetails)
     expect(long.endsWith('…')).toBe(true)
@@ -145,6 +104,9 @@ describe('states kit components', () => {
     expect(markup.startsWith('<div class="inline-error">')).toBe(true)
     const quiet = html(createElement(InlineError, { message: 'Shown again.', role: 'status', copy: false }))
     expect(quiet).toBe('<div class="inline-error"><span class="codicon codicon-error" data-icon="error" aria-hidden="true"></span><div class="inline-error-body"><p class="inline-error-message" role="status">Shown again.</p></div></div>')
+    // A note (why nothing here fixes it) is part of the live sentence, so it is read with it and lines up with it.
+    expect(html(createElement(InlineError, { message: 'Not trusted.', note: 'Install a trusted certificate.', copy: false })))
+      .toContain('<p class="inline-error-message" role="alert">Not trusted.<span class="inline-error-note">Install a trusted certificate.</span></p>')
   })
   it('draw bounded placeholder rows that say what is loading', () => {
     expect(html(createElement(Skeleton, { label: 'Loading databases' }))).toBe('<div class="skeleton" role="status"><span class="visually-hidden">Loading databases…</span>'

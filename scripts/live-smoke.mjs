@@ -10,7 +10,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
-import { activeDocumentName, backendBanner, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
+import { activeDocumentName, backendBanner, backendReady, documentTab, documentTabs, environmentPill, explorerLabel, explorerSublabel, explorerTree, part, queryStatus, statusBar, statusChips, toolbarButton } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'live-profile-'))
@@ -57,7 +57,7 @@ async function connect(password = 'live-smoke-password', server = 'live-server',
 }
 
 try {
-  await expect(statusBar(page)).toContainText('fake · Ready', { timeout: 30000 })
+  await expect(backendReady(page, 'fake')).toBeVisible({ timeout: 30000 })
   await connect()
   await expect(queryStatus(page)).toContainText('live-server')
   // Background throttling is off in smoke runs, so the hidden window counts as visible: only the hook can hide it.

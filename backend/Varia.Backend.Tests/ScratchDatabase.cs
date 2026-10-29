@@ -97,6 +97,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public static bool IsScratchName(string name) =>
         name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Lists every database by name, for "the server is unchanged" checks through <see cref="Lasting"/>.</summary>
+    public const string DatabaseNamesSql = "SELECT name FROM sys.databases ORDER BY name;";
+
+    /// <summary>The database names no other run creates or drops, from <see cref="DatabaseNamesSql"/>. Other runs on the
+    /// same server add and drop scratch databases at any moment, so a count of every database is not this run's to check.</summary>
+    public static string Lasting(SqlRun run) =>
+        string.Join("\n", (run.Sets.Count > 0 ? run.Sets[0] : []).Select(row => row[0] ?? "").Where(name => !IsScratchName(name)));
+
     private static string RandomPassword()
     {
         const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";

@@ -10,6 +10,8 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+//   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
+//                       certificate does (reason 'certificate')
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -135,6 +137,11 @@ function request(id, deadline, { method, params, credit }) {
       break
     // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
     case 'error-details':
+      if (method === 'connections.connect' && params.server === 'certificate') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: 'certificate', reason: 'certificate' } } })
+      if (method === 'connections.connect' && params.server === 'crash') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'The backend operation failed.', details: { exception: 'System.DllNotFoundException (0x80131524)' } } })
+      // Out of bounds: a reason main does not know, and an exception summary longer than 512 characters.
+      if (method === 'connections.connect' && params.server === 'reason') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'Failed.', details: { reason: 'firewall' } } })
+      if (method === 'connections.connect' && params.server === 'exception') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'Failed.', details: { exception: 'x'.repeat(513) } } })
       if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
       break
     case 'events':
@@ -260,6 +267,10 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
+// With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
+// option's text, whose spaces are collapsed and trimmed, would name another database or none.
+const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
@@ -381,6 +392,9 @@ function storeResults(id, sets) {
   })
 }
 const info = text => ({ text, kind: 'info' })
+// What a script printed (PRINT, RAISERROR), and SQL Server's other messages (STATISTICS, warnings), as the real backend marks them.
+const print = text => ({ text, kind: 'print' })
+const server = text => ({ text, kind: 'server' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
   database, messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
@@ -490,7 +504,7 @@ async function runDirective(id, params, directive) {
       if (status === 'cancelled') break
     }
     const messages = [
-      ...Array.from({ length: directive.messages }, (_, i) => info(`Message ${i + 1}`)),
+      ...Array.from({ length: directive.messages }, (_, i) => print(`Message ${i + 1}`)),
       ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
     ].slice(0, 1000)
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
@@ -515,9 +529,9 @@ async function runDirective(id, params, directive) {
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
     // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
-    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
+    messages: [server('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), server("Table '#temp'. Scan count 1, logical reads 2."),
       { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
-      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+      print('third batch')], elapsedMs: 3, status: 'completedWithErrors',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
@@ -684,6 +698,9 @@ async function workbench(id, method, params, credit) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
+      if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
+        return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
+      }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
@@ -693,7 +710,7 @@ async function workbench(id, method, params, credit) {
     case 'connections.databases':
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      return respond(id, workbenchDatabases)
+      return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
@@ -737,7 +754,7 @@ async function workbench(id, method, params, credit) {
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
-    case 'databases.list': return respond(id, workbenchDatabases)
+    case 'databases.list': return respond(id, await databaseRows())
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
     case 'actions.describe':

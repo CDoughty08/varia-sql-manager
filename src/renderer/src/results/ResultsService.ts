@@ -15,6 +15,12 @@ import { completionSentence, formatCount, plural } from './status'
 export type RunStatus = 'running' | QueryStatus | 'lost' | 'closed'
 /** One result set of the run; `index` is its position in the stack (the grid's `data-result-index`). */
 export interface ResultSetEntry { readonly index: number; readonly descriptor: ResultDescriptor; readonly handle: ResultHandle }
+/** A set that has all its rows, for sizing the stack to them: its rows, and whether its grid shows a strip (truncated or incomplete). */
+export interface SettledSet { readonly rows: number; readonly strip: boolean }
+/** The output pane's views: the stacked grids, Messages, and the run's execution plans (shown only when it returned some). */
+export type OutputViewName = 'results' | 'messages' | 'plan'
+/** A set's key in a run: its generation and result id. */
+export const setKey = (descriptor: Pick<ResultDescriptor, 'generation' | 'resultId'>): string => descriptor.generation + ':' + descriptor.resultId
 /**
  * A copy or save of one result set. Its strip shows once it has run for 300 ms (`visible`); a save's clock starts when
  * main reports its file (`fileName`), after the save dialog closed.
@@ -30,7 +36,17 @@ export interface TabResults {
   /** How many of `messages`, first, are Varia's own notices (a new session) rather than SQL Server's. */
   readonly notices: number
   readonly completedBatches: number; readonly totalBatches: number; readonly summary?: QueryResult; readonly error?: string
-  readonly view: 'results' | 'messages'; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
+  readonly view: OutputViewName; readonly manualView: boolean; readonly jobs: readonly ResultJob[]; readonly announcement: string
+  /** Whether the Messages strip under the results is open: it opens itself when an error, PRINT or RAISERROR output arrives,
+   *  until the user opens or closes it in this run (`stripChosen`). Only the user's choice opens it in a pane too short to show it. */
+  readonly strip: boolean
+  readonly stripChosen: boolean
+  /** When the run ended, for its duration when it has no summary (main failed it, or the backend was lost). */
+  readonly endedAt?: number
+  /** How a run whose results were closed had ended. */
+  readonly closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
+  /** The sets that have all their rows, by `setKey`. */
+  readonly settled: ReadonlyMap<string, SettledSet>
   /** When `announcement` was set, on a counter that only grows (0 before the run's first), so the live region reads out
    *  only sentences newer than the moment it was shown. */
   readonly announced: number
@@ -42,7 +58,8 @@ export interface GridViewState {
   topRow: number; virtualTop: number; scrollLeft: number; widths?: Float64Array
   userSized?: Set<number>; sized: boolean; selection?: GridSelection
 }
-export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState> }
+/** `collapsed` holds the sets shown as their caption alone, by index (a set's caption toggles it). */
+export interface TabViewState { stackScrollTop: number; weights?: number[]; focusedIndex: number; grids: Map<number, GridViewState>; collapsed: ReadonlySet<number> }
 /** A mounted grid, for the commands that act on it. */
 export interface GridController { selectAll(): void; repaint(): void }
 /** How a run ended: the summary, or main's failure (`code` BACKEND_LOST when the backend stopped), plus a notice to show first. */
@@ -67,15 +84,24 @@ interface Run {
   totalBatches: number
   summary?: QueryResult
   error?: string
-  view: 'results' | 'messages'
+  view: OutputViewName
   manualView: boolean
+  strip: boolean
+  stripManual: boolean
+  settled: Map<string, SettledSet>
+  /** `settled` is held by a published snapshot, so the next change copies it first. */
+  settledPublished: boolean
   jobs: ResultJob[]
   announcement: string
   announced: number
   jobNotice: string
   subscription?: Disposable
+  endedAt?: number
+  closedFrom?: Exclude<RunStatus, 'running' | 'closed'>
 }
 interface RunningJob { job: ResultJob; readonly tabId: string; timer?: unknown }
+
+const emptyView = (): TabViewState => ({ stackScrollTop: 0, focusedIndex: 0, grids: new Map(), collapsed: new Set() })
 
 /** Result sets a run keeps (the backend keeps the same number) and the Messages entries it shows: the backend's, the errors
  *  it keeps past its cap, and its notes. */
@@ -119,6 +145,7 @@ export function suggestedName(baseName: string, index: number): string {
  */
 export class ResultsService extends SnapshotStore<Readonly<Record<string, TabResults>>> implements Disposable {
   private readonly client: Pick<ResultClient, 'open' | 'onQueryEvent' | 'applySummary' | 'release' | 'onGeneration'>
+  private readonly events: EventBus
   private readonly api: Pick<VariaApi, 'copyResults' | 'saveResults' | 'cancelResultsJob' | 'onResultsJob'>
   private readonly documents: Pick<DocumentService, 'openText'> | undefined
   /** The last number each value tab name used (XML_F52E2B61-…3.xml), for the window's lifetime. */
@@ -129,6 +156,8 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   private readonly newId: () => string
   private readonly runs = new Map<string, Run>()
   private readonly views = new Map<string, TabViewState>()
+  /** Each tab's last choice to open or close the Messages strip: a strip the user opened starts open in the next run. */
+  private readonly stripChoices = new Map<string, boolean>()
   private readonly controllers = new Map<string, GridController>()
   private readonly dirty = new Set<string>()
   private readonly announcements = new Map<string, unknown>()
@@ -154,6 +183,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   }) {
     super({})
     this.client = o.client
+    this.events = o.events
     this.api = o.api
     this.documents = o.documents
     this.frame = o.frame ?? (callback => { requestAnimationFrame(() => callback()) })
@@ -174,10 +204,11 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.disposeRun(tabId)
     this.clearJobNotice(tabId)
     this.selectionAnnounced.delete(tabId)
-    this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    this.views.set(tabId, emptyView())
     const run: Run = {
       queryId, startedAt: this.now(), status: 'running', sets: [], setKeys: new Set(), setsPublished: false, rowsRead: new Map(), messages: [], notices: [], messagesTruncated: false,
-      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
+      completedBatches: 0, totalBatches: 0, view: 'messages', manualView: false, strip: this.stripChoices.get(tabId) === true, stripManual: false,
+      settled: new Map(), settledPublished: false, jobs: this.savesOf(tabId), announcement: '', announced: 0, jobNotice: ''
     }
     run.subscription = this.client.onQueryEvent(queryId, event => this.event(tabId, run, event))
     this.runs.set(tabId, run)
@@ -198,6 +229,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       this.client.applySummary(summary)
       for (const descriptor of summary.resultSets) {
         this.opened(run, descriptor)
+        this.settle(run, descriptor)
         run.rowsRead.set(descriptor.resultId, descriptor.rowsRead)
       }
       if (!sameMessages(run.messages, summary.messages)) run.messages = summary.messages.slice(0, resultLimits.messages)
@@ -214,7 +246,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       run.messages = [...run.messages, { text: run.error, kind: 'error' as const }].slice(-resultLimits.messages)
     }
     if (end.notice) run.notices = [{ text: end.notice, kind: 'info' }]
-    if (!run.manualView) run.view = run.sets.length === 0 || run.status !== 'completed' ? 'messages' : 'results'
+    run.endedAt = this.now()
+    this.openStripFor(run, run.messages)
+    // A run with sets stays on Results even when it failed: the strip under the grids shows its errors beside them.
+    if (!run.manualView) run.view = run.sets.length === 0 ? 'messages' : 'results'
     this.announce(tabId, completionSentence(run.status, run.sets.length, this.totalRows(run)))
     this.publishNow(tabId)
   }
@@ -224,6 +259,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     this.clearJobNotice(tabId)
     this.disposeRun(tabId)
     this.views.delete(tabId)
+    this.stripChoices.delete(tabId)
     this.selectionAnnounced.delete(tabId)
     const timer = this.announcements.get(tabId)
     if (timer !== undefined) this.timers.clearTimeout(timer)
@@ -237,20 +273,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
   /** Close Results: the memory is freed now; Messages stay. */
   closeResults(tabId: string): void {
     const run = this.runs.get(tabId)
-    if (!run || run.status === 'running') return
+    if (!run || run.status === 'running' || run.status === 'closed') return
     this.closeHandles(run)
     run.sets = []
     run.setKeys.clear()
+    run.closedFrom = run.status
     run.status = 'closed'
     run.view = 'results'
-    this.views.set(tabId, { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    run.settled = new Map()
+    run.settledPublished = false
+    this.views.set(tabId, emptyView())
     this.publishNow(tabId)
   }
 
   /** The tab's view state, created on first use. */
   viewState(tabId: string): TabViewState {
     let view = this.views.get(tabId)
-    if (!view) this.views.set(tabId, view = { stackScrollTop: 0, focusedIndex: 0, grids: new Map() })
+    if (!view) this.views.set(tabId, view = emptyView())
     return view
   }
   /** One grid's state: scroll, widths and selection. */
@@ -261,12 +300,23 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     return state
   }
 
-  /** The user picked Results or Messages: automatic switching stops until the next run. */
-  setView(tabId: string, view: 'results' | 'messages'): void {
+  /** The user picked Results, Messages or Execution plan: automatic switching stops until the next run. */
+  setView(tabId: string, view: OutputViewName): void {
     const run = this.runs.get(tabId)
     if (!run || (run.view === view && run.manualView)) return
     run.view = view
     run.manualView = true
+    this.publishNow(tabId)
+  }
+
+  /** The user opened or closed the Messages strip: it stays so for this run, and a strip opened starts open next time. */
+  setStrip(tabId: string, open: boolean): void {
+    const run = this.runs.get(tabId)
+    if (!run) return
+    this.stripChoices.set(tabId, open)
+    if (run.strip === open && run.stripManual) return
+    run.strip = open
+    run.stripManual = true
     this.publishNow(tabId)
   }
 
@@ -357,7 +407,10 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     if (result.ok) {
       if (!result.value) return undefined
       const { rows, truncatedCells, fileName } = result.value
-      this.notify(running.tabId, `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`)
+      const text = `Saved ${formatCount(rows)} ${plural(rows, 'row')} to ${fileName}.${truncatedClause(truncatedCells)}`
+      this.notify(running.tabId, text)
+      // Also when the tab has closed meanwhile (the save outlives it), which leaves no toolbar to say so.
+      this.events.emit({ type: 'results.saved', tabId: running.tabId, text })
       return undefined
     }
     if (result.code === 'CANCELLED') { this.notify(running.tabId, saveCancelled); return undefined }
@@ -446,6 +499,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     switch (event.type) {
       case 'resultSet.opened': case 'resultSet.closed':
         this.opened(run, event.descriptor)
+        this.settle(run, event.descriptor)
         run.rowsRead.set(event.descriptor.resultId, event.descriptor.rowsRead)
         if (!run.manualView && run.sets.length > 0) run.view = 'results'
         break
@@ -457,6 +511,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
       case 'messages':
         if (run.messages.length + event.messages.length > resultLimits.messages) run.messagesTruncated = true
         run.messages = [...run.messages, ...event.messages].slice(0, resultLimits.messages)
+        this.openStripFor(run, event.messages)
         break
     }
     this.schedule(tabId)
@@ -464,7 +519,7 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   /** Opens a set's handle once, keeping the sets in the backend's order; sets past the limit are not kept. */
   private opened(run: Run, descriptor: ResultDescriptor): void {
-    const key = `${descriptor.generation}:${descriptor.resultId}`
+    const key = setKey(descriptor)
     if (run.setKeys.has(key) || run.sets.length >= resultLimits.sets) return
     run.setKeys.add(key)
     const handle = this.client.open(descriptor)
@@ -474,6 +529,21 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
     while (at > 0 && (run.sets[at - 1].descriptor.index - descriptor.index || run.sets[at - 1].descriptor.resultId - descriptor.resultId) > 0) at--
     run.sets.splice(at, 0, { index: at, descriptor, handle })
     for (let index = at + 1; index < run.sets.length; index++) run.sets[index] = { ...run.sets[index], index }
+  }
+
+  /** Records a set that has all its rows (once): the stack sizes it to them from then on. */
+  private settle(run: Run, descriptor: ResultDescriptor): void {
+    const key = setKey(descriptor)
+    if (descriptor.state !== 'complete' || !run.setKeys.has(key) || run.settled.has(key)) return
+    if (run.settledPublished) { run.settled = new Map(run.settled); run.settledPublished = false }
+    run.settled.set(key, { rows: descriptor.rowsStored, strip: descriptor.incomplete || descriptor.truncated !== undefined })
+  }
+
+  /** An error, PRINT or RAISERROR output opens the strip, unless the user opened or closed it in this run. SQL Server's other
+   *  messages (warnings, SET STATISTICS output) show in it without opening it. */
+  private openStripFor(run: Run, entries: readonly MessageEntry[]): void {
+    if (run.strip || run.stripManual) return
+    if (entries.some(entry => entry.kind === 'error' || entry.kind === 'print')) run.strip = true
   }
 
   private totalRows(run: Run): number {
@@ -598,10 +668,12 @@ export class ResultsService extends SnapshotStore<Readonly<Record<string, TabRes
 
   private snapshotOf(run: Run): TabResults {
     run.setsPublished = true
+    run.settledPublished = true
     return {
       queryId: run.queryId, startedAt: run.startedAt, status: run.status, sets: run.sets, messages: run.notices.length ? [...run.notices, ...run.messages] : run.messages, notices: run.notices.length,
       messagesTruncated: run.messagesTruncated, rowsRead: this.totalRows(run), completedBatches: run.completedBatches, totalBatches: run.totalBatches,
-      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
+      ...run.summary ? { summary: run.summary } : {}, ...run.error ? { error: run.error } : {}, view: run.view, manualView: run.manualView, strip: run.strip, stripChosen: run.stripManual, settled: run.settled,
+      ...run.endedAt !== undefined ? { endedAt: run.endedAt } : {}, ...run.closedFrom ? { closedFrom: run.closedFrom } : {}, jobs: run.jobs, announcement: run.announcement, announced: run.announced,
       jobNotice: run.jobNotice
     }
   }

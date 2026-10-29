@@ -17,9 +17,15 @@ internal static class SsisErrors
         ["DATABASE_UNAVAILABLE"] = [922, 924, 926, 927, 942, 945, 952, 976, 978],
         // A catalog view that is not there: the database is not an SSIS Catalog, or an incomplete one.
         ["CATALOG_MISSING"] = [208],
+        // "The operation cannot be started by an account that uses SQL Server Authentication" (S0: every catalog procedure that
+        // changes something raises it for a SQL Server login).
+        ["WINDOWS_AUTH_REQUIRED"] = [27123],
         ["TIMEOUT"] = [-2],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]
     };
+    /// <summary>catalog.stop_operation's refusals: the operation is not running (or not valid), or it is already stopping. The
+    /// action reads the operation again to say which.</summary>
+    public static readonly int[] NotStoppable = [27124, 27126];
     /// <summary>"Could not continue scan with NOLOCK due to data movement": a READ UNCOMMITTED read met the catalog's cleanup
     /// deleting rows; a describe reads once more (D-ssis 4.2).</summary>
     public const int DataMovement = 601;
@@ -38,7 +44,11 @@ internal static class SsisErrors
     }
 
     /// <param name="subject">What the request read, as the tree labels it ("Folder Finance").</param>
-    public static SsisError FromSql(SsisCatalog catalog, SqlException error, SqlConnection? connection, string catalogName, string subject)
+    /// <param name="action">For a write, what it does ("stop operation 42"): permission errors name it, and a lost connection
+    /// leaves its outcome unknown once its step was <paramref name="sent"/>.</param>
+    /// <param name="sent">False for what a write runs before its first step (prologue, preflight): a lost connection there
+    /// changed nothing.</param>
+    public static SsisError FromSql(SsisCatalog catalog, SqlException error, SqlConnection? connection, string catalogName, string subject, string? action = null, bool sent = true)
     {
         var code = CodeOf(error, connection);
         var text = string.Join(" ", error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(item => item.Message).Distinct());
@@ -46,17 +56,22 @@ internal static class SsisErrors
         var message = code switch
         {
             "BLOCKED" => "Another session holds a lock in " + catalogName + " (a deployment, an execution starting, or the catalog's cleanup). Retry when it finishes.",
-            "PERMISSION_DENIED" => "You do not have permission to read " + subject + " (" + text + ").",
+            "PERMISSION_DENIED" => "You do not have permission to " + (action ?? "read " + subject) + " (" + text + ").",
+            "WINDOWS_AUTH_REQUIRED" => WindowsAuthRequired,
             "NO_DB_ACCESS" => NoAccess(catalogName),
             "DATABASE_UNAVAILABLE" => NotAvailable(catalogName, text),
             "CATALOG_MISSING" => catalogName + " is not a complete SSIS Catalog (" + text + ").",
             "TIMEOUT" => Timeout(catalog),
-            "CONNECTION_LOST" => "The connection to the server was lost. Try again.",
+            "CONNECTION_LOST" => action is null ? "The connection to the server was lost. Try again."
+                : !sent ? "The connection to the server was lost before Varia could " + action + ", so nothing changed. Try again."
+                : "The connection to the server was lost before SQL Server answered, so whether it did " + action + " is not known. Check before you retry.",
             _ => "Msg " + error.Number + ": " + text
         };
         return Create(catalog, code, message);
     }
 
+    /// <summary>D-ssis 5.2's wording for 27123 and for a verb refused before it connects.</summary>
+    public const string WindowsAuthRequired = "SSISDB on SQL Server needs Windows authentication for this. Reconnect with Windows authentication.";
     public static string NotAvailable(string catalogName, string reason) => "Database " + catalogName + " is not available (" + Clip(reason, 200) + "). Retry when it is back online.";
     public static string NoAccess(string catalogName) => "The current login cannot access database " + catalogName + ".";
     public static string Missing(string catalogName) => "The SSIS Catalog (" + catalogName + ") does not exist on this server.";

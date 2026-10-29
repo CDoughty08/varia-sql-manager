@@ -28,7 +28,7 @@ icon.foreground #a3a9b5 #4d5461|widget.shadow #00000085 #10182824|widget.border 
 sash.hoverBorder #8f9cff #4453d0|scrollbarSlider.background #9298a466 #5c637066|scrollbarSlider.hoverBackground #9298a48c #5c63708c
 scrollbarSlider.activeBackground #9298a4b3 #5c6370b3|titleBar.activeBackground #111317 #f7f8fa|titleBar.activeForeground #9298a4 #5c6370
 titleBar.inactiveBackground #111317 #f7f8fa|titleBar.inactiveForeground #9298a4 #5c6370|titleBar.border #262a31 #e3e6eb
-titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|menubar.selectionBackground #30343e #d6dae0
+titleBar.iconForeground #8f9cff #4453d0|titleBar.controlsForeground #d9dce3 #1c1f26|commandCenter.background #1c1f25 #f1f3f6|commandCenter.foreground #a3a9b5 #4d5461|commandCenter.activeBackground #30343e #d6dae0|commandCenter.border #6b728673 #878e9b73|menubar.selectionBackground #30343e #d6dae0
 menubar.selectionForeground #f5f6f8 #0a0c10|menubar.selectionBorder #8f9cff00 #4453d000|menu.background #1d2026 #ffffff
 menu.foreground #d9dce3 #1c1f26|menu.selectionBackground #30343e #d6dae0|menu.selectionForeground #f5f6f8 #0a0c10
 menu.selectionBorder #8f9cff00 #4453d000|menu.separatorBackground #30343c #dcdfe5|menu.border #6b7286 #d4d8df|toolbar.background #111317 #f7f8fa
@@ -127,10 +127,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 237 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 241 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(237)
-    expect(new Set(colorKeys).size).toBe(237)
+    expect(colorKeys).toHaveLength(241)
+    expect(new Set(colorKeys).size).toBe(241)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -145,7 +145,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(237)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(241)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -247,7 +247,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(237)
+      expect(Object.keys(theme.colors)).toHaveLength(241)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

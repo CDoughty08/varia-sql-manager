@@ -33,8 +33,11 @@ const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBac
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
   'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
 const tile: ColorKey[] = ['tile.background']
-/** Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar state and tiles. */
-const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile]
+/**
+ * Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar
+ * state, tiles, and the query bar's connection pill (an input's surface), which holds the environment tag.
+ */
+const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile, input]
 /** Chips, live labels and tiles sit in documents, panels, side bars and dialogs. */
 const contentSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, dock, tile]
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
@@ -50,6 +53,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['button.foreground'], ['editorWidget.background', 'button.background'], ['editorWidget.background', 'button.hoverBackground']),
   ...text(['titleBar.activeForeground'], titleBar),
   ...text(['titleBar.inactiveForeground'], ['titleBar.inactiveBackground']),
+  ...text(['sideBarTitle.foreground'], sideBar),
+  ...text(['commandCenter.foreground'], ['titleBar.activeBackground', 'commandCenter.background'], ['titleBar.activeBackground', 'commandCenter.activeBackground']),
   ...text(['menubar.selectionForeground'], ['titleBar.activeBackground', 'menubar.selectionBackground']),
   ...text(['menu.foreground'], ['menu.background']),
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
@@ -91,7 +96,11 @@ export const contrastPairs: readonly ContrastPair[] = [
     ['panel.background', 'resultsGrid.inactiveSelectionBackground'], [...striped, 'resultsGrid.inactiveSelectionBackground']),
   ...text(['errorForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
   ...text(['editorWidget.foreground', 'dialog.descriptionForeground', 'dialog.labelForeground', 'settings.headerForeground', 'infoForeground', 'pickerGroup.foreground'], widget),
-  ...text(['notifications.foreground'], ['notifications.background']),
+  // A toast: its sentence, a copy outcome or the count of waiting toasts, its buttons' labels at rest and hovered (Dismiss's
+  // glyph too), their outline, and the focus ring. A theme can set notifications.background apart from editorWidget's.
+  ...text(['notifications.foreground', 'descriptionForeground', 'button.secondaryForeground'], ['notifications.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('notifications.background')),
+  ...graphic(['button.border', 'focusBorder'], ['notifications.background']),
   ...text(['keybindingLabel.foreground'], toolbar, hover),
   ...text(['toolbar.labelForeground', 'titleBar.controlsForeground', 'successForeground'], toolbar),
   ...text(['descriptionForeground'], sideBar, widget, panelTitle, editor),
@@ -131,12 +140,20 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A saved connection's row keeps its button text when selected; the dock's Move list sits on the tab strip.
   ...text(['button.secondaryForeground'], activeSelection),
   ...text(['input.foreground'], ['editorGroupHeader.tabsBackground']),
+  // A query's own bar sits on the editor's background (its buttons are checked there above); the database glyph in its
+  // connection pill sits on an input's.
+  ...graphic(['icon.foreground'], input),
   // The query context bar, the empty workspace and the closed-panels note are drawn on the dock group.
   ...text(['breadcrumb.foreground', 'breadcrumb.separatorForeground', 'emptyState.foreground', 'button.secondaryForeground'], dock),
   // The Output title bar's Cancel; errors in Messages and the results strip; the grid's truncation marker and lost overlay.
   ...text(['foreground'], panelTitle),
   ...text(['errorForeground'], panel),
   ...text(['resultsGrid.truncationForeground', 'emptyState.foreground'], grid),
+  // The results head's selected view, and the facts in set captions, the Messages strip and the Execution plan list.
+  ...text(['panelTitle.activeForeground'], ['panelTitle.background', 'list.inactiveSelectionBackground']),
+  ...text(['descriptionForeground', 'warningForeground', 'successForeground'], panel, panelTitle),
+  // The results head's icon for a run that failed, timed out or was lost.
+  ...text(['errorForeground'], panelTitle),
   // Hovered column and row headers.
   ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], headerHover),
   // Dialogs: the Filter dialog's problems, the layout notice, and Tools › Options' selected page and focused row.
@@ -197,7 +214,22 @@ export const contrastPairs: readonly ContrastPair[] = [
   // The stale badge also goes in the status bar (every state) and on Object Explorer rows.
   ...text(['live.staleForeground'], ...kitSurfaces.map(surface => [...surface, 'live.staleBackground'] as ColorKey[])),
   // A tile's threshold outline and glyph.
-  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile)
+  ...graphic(['tile.warningBorder', 'tile.criticalBorder'], tile),
+
+  // The document frame (src/renderer/src/kit): the current section in its list, its accent edge (beside it, or under it
+  // in a narrow document), a section's problem glyph and the focus ring on it; the Script drawer's splitter, hovered or focused.
+  // A pressed header verb takes the current section's colours; a danger verb keeps its words in the error colour when hovered.
+  // The document's title is in the strong text of the focused tab, as Calm Pro draws it.
+  ...text(['tab.activeForeground'], editor),
+  ...text(['list.inactiveSelectionForeground'], [...editor, 'list.inactiveSelectionBackground']),
+  ...text(['errorForeground'], hovered(...editor)),
+  ...graphic(['panelTitle.activeBorder', 'errorForeground', 'focusBorder'], [...editor, 'list.inactiveSelectionBackground']),
+  ...graphic(['sash.hoverBorder'], panel),
+  // Property sheets in a document (Database Properties): a switch's outline and track, on and off, and its thumb in each
+  // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
+  ...graphic(['input.border', 'button.background'], editor),
+  ...graphic(['descriptionForeground'], input),
+  ...graphic(['button.foreground'], [...editor, 'button.background'])
 ]
 
 /**
@@ -206,9 +238,12 @@ export const contrastPairs: readonly ContrastPair[] = [
  */
 export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
-  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
+  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar, editor),
   // The highlighted menu item follows the pointer and the keyboard alike.
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
+  // The search box stands out from the title bar by its outline, and shows the pointer by a fill that changes from its own.
+  ...pairs(1.2, ['commandCenter.border'], titleBar),
+  ...pairs(1.2, ['commandCenter.activeBackground'], titleBar, ['titleBar.activeBackground', 'commandCenter.background']),
   // Loading placeholders say only that something is coming, so they are held to the same floor.
   ...pairs(1.2, ['skeleton.background'], ...contentSurfaces)
 ]

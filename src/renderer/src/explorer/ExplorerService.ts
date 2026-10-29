@@ -368,6 +368,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     else this.publish({ ...this.getSnapshot(), version: ++this.version, selected: id, ...(this.reveals ? { reveal: this.reveals } : {}) })
     this.updateContext()
   }
+  /**
+   * The snapshot, with rows a change left for the next frame published now. The tree's keys read it, so a key that
+   * arrives before that frame (typed fast, or queued behind a long task) acts on what the key before it did.
+   */
+  settle(): ExplorerSnapshot {
+    if (this.dirty) this.guard(() => this.flush())
+    return this.getSnapshot()
+  }
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
     const node = this.selectedNode()
@@ -514,6 +522,37 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.loadFirst(node, 'keep', 'user')
     this.announce(filter ? `Filter applied to ${node.label}` : `Filter removed from ${node.label}`)
     this.invalidate()
+  }
+
+  /**
+   * The objects already loaded in the tree, in tree order, each with the path of the server, folders and objects above
+   * it, for the header's search. Folders are left out (their names repeat under every database), and so is anything not
+   * loaded: listing them never queries a server. At most `limit` nodes.
+   */
+  loadedObjects(limit: number): { readonly id: number; readonly label: string; readonly path: string; readonly icon: TreeNode['icon'] }[] {
+    const found: { id: number; label: string; path: string; icon: TreeNode['icon'] }[] = []
+    const walk = (node: TreeNode, path: string): boolean => {
+      if (found.length >= limit) return false
+      if (node.kind !== 'folder') found.push({ id: node.id, label: node.label, path, icon: node.icon })
+      const below = path ? `${path} › ${node.label}` : node.label
+      for (const child of node.children ?? []) if (!walk(child, below)) return false
+      return true
+    }
+    for (const id of this.roots) { const root = this.nodes.get(id); if (root && this.attached(root) && !walk(root, '')) break }
+    return found
+  }
+  /**
+   * Shows a loaded node: expands its collapsed ancestors, outermost first, as clicks on them would (so a folder whose
+   * loading a collapse interrupted carries on loading), then selects it and scrolls it into view.
+   */
+  reveal(id: number): boolean {
+    const node = this.nodes.get(id)
+    if (!node || !this.attached(node)) return false
+    const ancestors: TreeNode[] = []
+    for (let parent = node.parent ? this.nodes.get(node.parent) : undefined; parent; parent = parent.parent ? this.nodes.get(parent.parent) : undefined) ancestors.unshift(parent)
+    for (const parent of ancestors) if (!parent.expanded) this.expand(parent.id)
+    this.select(id, { reveal: true })
+    return true
   }
 
   /** The text of a synthetic row, as shown: names and server messages in it get `displayText`'s markers. */
