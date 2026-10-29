@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { liveUnits, type LiveProbeId } from '../src/shared/live/catalog'
 import { chartSeriesColors } from '../src/shared/theme/charts'
@@ -745,5 +746,16 @@ describe('ChartView', () => {
     other.view.key({ key: 'End', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false })
     view.invalidate()
     expect(env.frames).toHaveLength(0)
+  })
+})
+
+describe('chart smoke suite', () => {
+  it('polls a chart\'s name for longer than the chart takes to rename itself', () => {
+    const source = readFileSync('scripts/chart-smoke.mjs', 'utf8')
+    const timeout = Number(/const labelSettles = \{ timeout: ([\d_]+) \}/.exec(source)?.[1].replaceAll('_', ''))
+    expect(timeout).toBeGreaterThanOrEqual(chartLimits.labelMs + 5000)
+    const polls = source.split('\n').filter(line => /expect\.poll\(.*\.label\b/.test(line))
+    expect(polls.length).toBeGreaterThan(0)
+    expect(polls.filter(line => !line.includes('labelSettles'))).toEqual([])
   })
 })
