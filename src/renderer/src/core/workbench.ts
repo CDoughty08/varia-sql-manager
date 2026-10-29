@@ -25,6 +25,7 @@ import { PaneService } from '../services/panes'
 import { ExplorerService } from '../explorer/ExplorerService'
 import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
+import { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
 import { queryContribution } from '../contributions/query'
@@ -120,6 +121,8 @@ export interface Workbench extends Disposable {
   readonly explorer: ExplorerService
   /** Object Explorer's live status chips: one background live view per connected server while the pane shows. */
   readonly explorerStatus: ExplorerStatusService
+  /** The SSIS Catalog's live tree: one catalog probe per connection whose SSISDB node is open, reconciling what changed. */
+  readonly ssisTree: SsisTreeProbe
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -182,6 +185,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
+  const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -294,6 +298,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     panes,
     explorer,
     explorerStatus,
+    ssisTree,
     databaseList,
     resultSelection,
     settings,
@@ -326,6 +331,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
+      ssisTree.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultClient.dispose()

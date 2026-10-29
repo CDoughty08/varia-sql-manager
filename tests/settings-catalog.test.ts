@@ -37,7 +37,8 @@ const expectedTree = [
   'SQL Server Object Explorer',
   '  Commands (objectExplorer.commands)',
   '  Scripting (objectExplorer.scripting)',
-  'Activity Monitor (activityMonitor)'
+  'Activity Monitor (activityMonitor)',
+  'SQL Server Integration Services (integrationServices)'
 ]
 function treeLines(): string[] {
   const lines: string[] = []

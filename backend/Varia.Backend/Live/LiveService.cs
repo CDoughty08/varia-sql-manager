@@ -33,6 +33,8 @@ internal interface ILiveHost
     /// <summary>The session ids this backend's pooled and Object Actions connections to the connection's server were given when
     /// they opened: what Varia knows of its own sessions without trusting what a client claims at login.</summary>
     IReadOnlySet<int> OwnSessions(string connectionId) => new HashSet<int>();
+    /// <summary>The SSIS Catalog's database, which SSISDB sources open: SSISDB, or the checks' fake catalog.</summary>
+    string SsisCatalog => Ssis.SsisCatalog.Current.CatalogDatabase;
 }
 
 /// <summary>A connection's Application Name and the workstation id SqlClient sends with it (its Workstation ID, else this
@@ -690,7 +692,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
-        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
+        _ when source.Scope is "server" or "ssisdb" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
             source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
     };

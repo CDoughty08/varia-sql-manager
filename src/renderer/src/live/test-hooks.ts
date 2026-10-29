@@ -1,13 +1,15 @@
-// Test mode's `window.__variaLive` (scripts/live-smoke.mjs, scripts/chart-smoke.mjs, scripts/live-grid-smoke.mjs): live
-// views on the backend's debug.synthetic source, owned by a tab, charts of them in a box over the workbench, a grid of a
-// view's table above the workbench, and the window's visibility, which smoke runs cannot change for real (their windows
-// keep background throttling off, so the page always counts as visible). Main enables test mode only in unpackaged smoke
+// Test mode's `window.__variaLive` (scripts/live-smoke.mjs, scripts/chart-smoke.mjs, scripts/live-grid-smoke.mjs,
+// scripts/electron-smoke.mjs): live views on the backend's debug.synthetic source, owned by a tab, charts of them in a
+// box over the workbench, a grid of a view's table above the workbench, the SSIS tree's views, and the window's
+// visibility, which smoke runs cannot change for real (their windows keep background throttling off, so the page always
+// counts as visible). Main enables test mode only in unpackaged smoke
 // runs, and only its test schemas accept the synthetic source.
 import { liveProbes, type LiveProbeId, type LiveUnit } from '../../../shared/live/catalog'
 import type { ChartSurface } from '../../../shared/theme/charts'
 import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import type { DocumentService } from '../services/documents'
 import type { PaneService } from '../services/panes'
+import type { SsisTreeProbe } from '../ssis/SsisTreeProbe'
 import { chartColor, type ChartLabels, type ChartStyle, type ChartView } from './ChartView'
 import type { LiveChartProps } from './LiveChart'
 import type { LiveGridSnapshot, LiveGridState } from './LiveGrid'
@@ -88,7 +90,7 @@ function backgroundOf(element: Element): string {
   return ''
 }
 
-export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState) => TestGrid, renderChart?: RenderChart) {
+export function liveTestHooks(live: LiveService, documents: DocumentService, panes: PaneService, mount?: (handle: LiveHandle, probe: LiveProbeId, table: number, state?: LiveGridState) => TestGrid, renderChart?: RenderChart, ssisTree?: SsisTreeProbe) {
   const handles = new Map<string, LiveHandle>()
   let mounted: TestGrid | undefined
   /** Grid states an owner keeps across remounts (mountGrid's keepState), by view, probe and table. */
@@ -116,6 +118,8 @@ export function liveTestHooks(live: LiveService, documents: DocumentService, pan
   return {
     // Any open view's snapshot, the Activity Monitor's included, not only the views these hooks opened.
     snapshot: (id?: string) => id === undefined ? live.getSnapshot() : (handle(id) ?? live.get(id))?.getSnapshot(),
+    /** The SSIS tree's views: one per connection whose SSISDB node is open. */
+    ssisTree: () => (ssisTree?.connections ?? []).map(connectionId => ({ connectionId, id: ssisTree?.handle(connectionId)?.id })),
     frames: (id: string) => live.frames(id),
     setPageHidden: (hidden?: boolean) => live.setPageHidden(hidden),
     subscribeSynthetic: (o: SyntheticOptions = {}): string => {

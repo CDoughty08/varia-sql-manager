@@ -1,11 +1,12 @@
 // Renders the generated part of docs/integration-services.md from the catalogue: everything after `generatedMarker`.
 // tests/ssis-catalog.test.ts keeps the file in sync and leaves the hand-written part above the marker as it is.
 import {
-  catalogDatabase, describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
+  catalogDatabase, catalogFingerprints, catalogProbeFinalCodes, catalogProbeRetryMs,describeTargets, describeViews, executableResults, loggingLevels, messageSourceTypes, messageTypes, operationStatuses, operationTypes, openStatuses,
   parameterObjectTypes, permissionTypes, referenceTypes, securableTypes, ssisErrorCodes, ssisErrorRetryable, ssisFeatureSources, ssisFeatures, ssisLimits, systemParameters,
   valueTypes, finalStatuses, ssisActions, ssisActionVerbs, ssisCommandEntries, ssisDocumentKinds, ssisDocumentSpecs, ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, stoppableOperationTypes, validationStatuses, type CodeLabel
 } from './catalog.ts'
 import { folderSpecs, kindSpecs } from '../explorer/catalog.ts'
+import { liveProbes } from '../live/catalog.ts'
 
 export const generatedMarker = '<!-- Generated below from src/shared/ssis/catalog.ts. Regenerate with: npx vitest run tests/ssis-catalog.test.ts -u -->'
 
@@ -15,6 +16,8 @@ const table = (header: readonly string[], rows: readonly (readonly string[])[]) 
 const code = (value: string | number) => '`' + value + '`'
 const codes = (rows: readonly CodeLabel[]) => table(['Code', 'Meaning'], rows.map(item => [code(item.code), item.label]))
 const versions: Readonly<Record<number, string>> = { 13: '2016', 14: '2017', 15: '2019', 16: '2022', 17: '2025' }
+const treeProbe = liveProbes['ssis.catalogProbe']
+const seconds = (ms: number) => `${ms / 1000} s`
 
 const limitNotes: Readonly<Record<keyof typeof ssisLimits, string>> = {
   name: 'UTF-16 code units in a folder, project, environment, parameter or variable name (sysname)',
@@ -76,6 +79,36 @@ export function renderSsisDocs(): string {
     'catalog\'s database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog row itself is read from `sys.databases` on the Object',
     'Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in',
     'use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.',
+    '',
+    '### The live tree (`ssis.catalogProbe`)',
+    '',
+    'While a connection\'s SSISDB node is open (expanded, or listed with no folders) and shows (its server and Integration Services',
+    'Catalogs folder are expanded), Object Explorer holds one live view of the `ssis.catalog` source for that connection (docs/live.md):',
+    `every ${seconds(treeProbe.intervalMs.default)} by default (Tools › Options › SQL Server Integration Services; ${treeProbe.intervalMs.min / 1000} to ${seconds(treeProbe.intervalMs.max)}, or off), one`,
+    'query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per row, over the columns',
+    'the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.',
+    '`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it): anyone',
+    'else\'s sample runs a second constant query without it, so its fingerprint stays 0 and 0 for them. The first sample of a connection',
+    'is its baseline, unless it came late: when SSISDB was already listed as the view opened (a view refused or ended and opened again,',
+    'live updates turned on while browsing) or the view failed or paused before it sampled, that sample reloads SSISDB deeply, since',
+    'what changed meanwhile would otherwise never show. A later sample, or the first of a new view on the same connection (SSISDB closed',
+    'and opened again, Object Explorer shown again), reloads in the background only the listed nodes that show a view whose fingerprint',
+    'changed, keeping expansion and selection and announcing what was added or removed; a reload never opens a node, one that a',
+    'collapsed node hides waits until it shows, and one with a listing on its way in it, above it or below it (a first listing, the',
+    'user\'s Refresh, an earlier reload, any of which may have read the catalog before the change) reloads once those listings answer, so',
+    'a Refresh is never restarted or made shallower. The view pauses 2 s',
+    'after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog\'s database, READ',
+    'UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view',
+    '(`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or',
+    'restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server',
+    `or the window has no room for another live view, the backend restarted it) opens again after ${seconds(catalogProbeRetryMs.first)}, doubling to ${seconds(catalogProbeRetryMs.max)} while it keeps`,
+    'ending before a sample. One that no retry would fix stops for good: the login cannot read the catalog or its sign-in is refused, the',
+    'catalog lacks a view or column the probe reads, the request was refused as malformed, or the window closed',
+    `(${catalogProbeFinalCodes.map(code).join(', ')}). SSISDB then reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of`,
+    'the Integration Services Catalogs folder or of its server, or closing and opening SSISDB, tries again (a Refresh elsewhere does not).',
+    '',
+    table(['Fingerprint', 'Catalog view', 'Object Explorer reloads'], catalogFingerprints.map(fingerprint => [code(fingerprint.id), code(fingerprint.view),
+      [...(fingerprint.reloads.kinds ?? []).map(kind => kindSpecs[kind].title + ' (deeply)'), ...(fingerprint.reloads.folders ?? []).map(folder => folderSpecs[folder].label)].join(', ') || 'Nothing in the tree (documents)'])),
     '',
     '### Reads (`ssis.describe`)',
     '',

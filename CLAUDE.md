@@ -27,8 +27,8 @@ pages, limits, error codes, display formats, benchmarks).
   installs both, runs `npm install`, builds the backend (Debug and Release; a failed build is reported, not fatal), and
   puts `/opt/node24/bin` on PATH. After clear or compact it only refreshes the exported variables.
 - Live SQL checks run when `VARIA_TEST_SQL_SERVER` is set: SQL authentication with `VARIA_TEST_SQL_USER` and
-  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 944 offline
-  checks; how many depends on the server version and authentication (1491 against a local SQL Server 2025 in Mixed Mode, which
+  `VARIA_TEST_SQL_PASSWORD`, otherwise Windows authentication. The .NET suite then reports more than its 952 offline
+  checks; how many depends on the server version and authentication (1511 against a local SQL Server 2025 in Mixed Mode, which
   adds the low-privilege login checks, with Windows authentication and `VARIA_TEST_SQL_SCRATCH=1`, which adds the Object Explorer, Script As and object action
   scratch-database checks (the last in their own `VariaScratch_…_act` database) and the script goldens in `tests/fixtures/scripting/`; `VARIA_UPDATE_SCRIPT_GOLDENS=1`
   rewrites the goldens whose manifest source is `varia`),
@@ -47,7 +47,7 @@ pages, limits, error codes, display formats, benchmarks).
   database `VARIA_TEST_ENTRA_DATABASE` names) run the Service Principal checks, and `VARIA_TEST_ENTRA_DEFAULT=1` adds Entra Default after `az login`. Never
   print the secret. Without them the offline checks cover Entra through a fake token source.
 - SSIS: `VARIA_TEST_SQL_SCRATCH=1` also builds the fake SSIS catalog (`VariaScratch_…_ssis`, from
-  `tests/fixtures/ssisdb/`); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` and of the Integration Services
+  `tests/fixtures/ssisdb/`); `VARIA_TEST_SSIS=1` adds the drift check of the real `SSISDB` (and its tree probe, read only) and of the Integration Services
   catalog backup (restored as `VariaScratch_…_ssisref`) against `manifest.json`, which `VARIA_UPDATE_SSIS_MANIFEST=1`
   rewrites (then regenerate `schema.sql` with `npx vitest run tests/ssisdb-fixtures.test.ts -u`). These checks never
   create, alter or drop `SSISDB`; only the opt-in Create Catalog check (`VARIA_TEST_SSIS_CREATE=1`, PR S9a) may, on a
@@ -113,9 +113,10 @@ pages, limits, error codes, display formats, benchmarks).
   constant text per probe and band in `Live/LiveSql.cs`, or for the Activity Monitor in `Activity/ActivitySql.cs`, run statement
   by statement through `ActivityReader`, where a statement the login may not run fails alone (each offline lint refuses metadata built-ins, temporary tables,
   writes, DDL, transactions, waits, dynamic SQL and TOP without ORDER BY); it runs on its scope's own pool (" - Activity
-  Monitor" for server DMVs) with the scope's prologue (READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under
-  the live gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values
-  that back off.
+  Monitor" for server DMVs, " - Integration Services" in the catalog's database for SSISDB) with the scope's prologue
+  (READ UNCOMMITTED, or READ COMMITTED for an SSISDB with RCSI; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW), under the live
+  gates and one budget per probe (an `ActivityReader` probe's statements share it), and its failures are values that back
+  off.
   Views open live data only through `LiveService` (`src/renderer/src/live/`), which pauses hidden views, ends dormant
   ones and follows Reconnect; badges and summaries read `LiveService.peek` and never subscribe by themselves. Charts draw
   only through `ChartView` (`live/ChartView.ts`): a canvas read from the probe's ring, at most one draw a frame and none

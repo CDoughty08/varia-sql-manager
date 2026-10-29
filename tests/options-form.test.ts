@@ -16,16 +16,18 @@ const fixture = (patch: Partial<SettingDef> & Pick<SettingDef, 'key'>): SettingD
 
 describe('Options page tree', () => {
   it('shows top-level categories collapsed, and a category\'s children once expanded', () => {
-    expect(treeRows(new Set()).map(row => row.page.title)).toEqual(['Environment', 'Text Editor', 'Query Execution', 'Query Results', 'SQL Server Object Explorer', 'Activity Monitor'])
+    expect(treeRows(new Set()).map(row => row.page.title)).toEqual(['Environment', 'Text Editor', 'Query Execution', 'Query Results', 'SQL Server Object Explorer', 'Activity Monitor', 'SQL Server Integration Services'])
     const open = treeRows(new Set(['textEditor', 'textEditor.transactSql']))
     expect(open.map(row => `${row.level}:${row.page.title}:${row.expandable ? row.expanded : '-'}`)).toEqual([
-      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Editor Tab and Status Bar:-', '2:Transact-SQL:true', '3:General:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false', '1:Activity Monitor:-'
+      '1:Environment:false', '1:Text Editor:true', '2:General:-', '2:Editor Tab and Status Bar:-', '2:Transact-SQL:true', '3:General:-', '3:Tabs:-', '1:Query Execution:false', '1:Query Results:false', '1:SQL Server Object Explorer:false', '1:Activity Monitor:-', '1:SQL Server Integration Services:-'
     ])
   })
   it('shows a category\'s first page when it is selected, with the path to it expanded', () => {
     expect(firstPage('queryExecution')).toBe('queryExecution.sqlServer.general')
     expect(firstPage('textEditor.transactSql')).toBe('textEditor.transactSql.general')
     expect(firstPage('objectExplorer.scripting')).toBe('objectExplorer.scripting')
+    // A top-level page with no children is its own first page.
+    expect(firstPage('integrationServices')).toBe('integrationServices')
     expect(ancestorIds('queryExecution.sqlServer.general')).toEqual(['queryExecution', 'queryExecution.sqlServer'])
   })
 })

@@ -3,7 +3,7 @@
 // read it, the backend embedding ssisCatalogJson() as Ssis/ssis-catalog.json (a vitest file snapshot keeps that copy in
 // sync). The tree's SSIS kinds and folders are Object Explorer's (src/shared/explorer/catalog.ts). Erasable TypeScript (no
 // enums), so Node's type stripping can load it too.
-import type { NodeKind } from '../explorer/catalog.ts'
+import type { FolderId, NodeKind } from '../explorer/catalog.ts'
 import type { IconId } from '../icons.ts'
 
 /** SSMS fixes the catalog's name; only the backend's internal test option points it at a fake catalog. */
@@ -295,6 +295,39 @@ export type SsisActionVerb = keyof typeof ssisActions
 export const ssisActionVerbs = Object.keys(ssisActions) as SsisActionVerb[]
 /** catalog.operations.operation_type values Stop Operation applies to: executions and validations. */
 export const stoppableOperationTypes = [200, 300, 301] as const
+
+/**
+ * What the tree's live probe (`ssis.catalogProbe` in src/shared/live/catalog.ts) fingerprints: one catalog view each, sent
+ * as two status values, `<id>Count` (its rows) and `<id>Checksum` (a checksum of the columns the tree and its documents
+ * show), and what Object Explorer reloads when one changes: rows of these kinds, or these folders. References, parameters
+ * and catalog properties show in no tree row; documents that show them read the same fingerprints.
+ */
+export interface CatalogFingerprint {
+  readonly id: string
+  readonly view: string
+  readonly reloads: { readonly kinds?: readonly NodeKind[]; readonly folders?: readonly FolderId[] }
+}
+export const catalogFingerprints: readonly CatalogFingerprint[] = [
+  { id: 'folders', view: 'catalog.folders', reloads: { kinds: ['ssisCatalog'] } },
+  { id: 'projects', view: 'catalog.projects', reloads: { folders: ['ssisProjects'] } },
+  { id: 'packages', view: 'catalog.packages', reloads: { folders: ['ssisPackages'] } },
+  { id: 'environments', view: 'catalog.environments', reloads: { folders: ['ssisEnvironments'] } },
+  // An environment's row shows its variable count.
+  { id: 'variables', view: 'catalog.environment_variables', reloads: { folders: ['ssisEnvironments'] } },
+  { id: 'references', view: 'catalog.environment_references', reloads: {} },
+  { id: 'parameters', view: 'catalog.object_parameters', reloads: {} },
+  { id: 'properties', view: 'catalog.catalog_properties', reloads: {} }
+]
+/** A tree view of the catalog that ended for now (no room for it on the server or in the window, the backend restarted it)
+ *  opens again after `first` ms, doubling to `max` while it keeps ending before a sample. */
+export const catalogProbeRetryMs = { first: 2_000, max: 60_000 } as const
+/**
+ * Why a tree view of the catalog ends for good, which no retry fixes: the login's access or sign-in, a catalog that lacks
+ * a view or column the probe reads (NOT_SUPPORTED), a request refused as malformed, or a workbench that closed.
+ */
+export const catalogProbeFinalCodes = ['PERMISSION_DENIED', 'LOGIN_FAILED', 'NOT_SUPPORTED', 'INVALID_PARAMS', 'PORT_CLOSED'] as const
+/** The status values of `ssis.catalogProbe`, in order: each fingerprint's count, then its checksum. */
+export const catalogFingerprintStatus: readonly string[] = catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum'])
 
 /** SSIS failures as values (D-ssis 5.2), and whether retrying can help. */
 export const ssisErrorRetryable = {

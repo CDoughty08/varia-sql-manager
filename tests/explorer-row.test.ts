@@ -55,6 +55,17 @@ describe('Object Explorer rows', () => {
     expect(rowDescription(node({ kind: 'folder', folder: 'tables', label: 'Tables' }))).toBeUndefined()
     expect(rowDescription(node({ detail: 'x'.repeat(2000) }))).toHaveLength(512)
   })
+  it('show a note another service keeps on a node after its sublabel, and its sentence in the tooltip and description', () => {
+    const noted = node({ kind: 'ssisCatalog', label: 'SSISDB', note: { label: '(not updating)', sentence: 'Live updates stopped. This login cannot read the SSIS Catalog.' } })
+    expect(rowName(noted)).toBe('SSISDB (not updating)')
+    expect(rowTooltip(noted)).toBe('SSISDB (not updating)\nIntegration Services Catalog\nLive updates stopped. This login cannot read the SSIS Catalog.')
+    expect(rowDescription(noted)).toBe('Integration Services Catalog\nLive updates stopped. This login cannot read the SSIS Catalog.')
+    const html = renderToStaticMarkup(createElement(ExplorerRow, {
+      rowId: 7, kind: RowKind.Node, top: 0, level: 3, posinset: 1, setsize: 1, node: noted, rev: 0, text: '', selected: false, draggable: false, active: false, color: undefined,
+      actions: { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }, menuTarget: () => {}
+    }))
+    expect(html).toContain('<span class="oe-sublabel">(not updating)</span>')
+  })
   it('render the inline Rename box in place of the label: the name without its schema, at most 128 units, named for the kind', () => {
     const actions: RowActions = { select: vi.fn(), toggle: vi.fn(), activate: vi.fn(), reconnect: vi.fn(), remove: vi.fn(), dragStart: vi.fn(() => true), commitRename: vi.fn(async () => true), cancelRename: vi.fn() }
     const render = (renaming: boolean) => renderToStaticMarkup(createElement(ExplorerRow, {

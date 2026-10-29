@@ -13,9 +13,9 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import type { LiveConnection } from '../services/connections'
 import { ExplorerLoader, type ExplorerLimitValues, type LoaderLimits, type LoadOutcome, type LoadPriority, type LoadTask } from './loader'
-import { emptyRows, filterText, flatten, flattenFiltered, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
+import { emptyRows, filterText, flatten, flattenFiltered, rowIndex, rowKindOf, rowOwner, RowKind, siblingPlan, type NodeError, type NodeNote, type NodeTable, type TreeNode, type VisibleRows } from './tree-model'
 
-export type { TreeNode } from './tree-model'
+export type { NodeNote, TreeNode } from './tree-model'
 /** A sentence for the tree's live region; `id` changes with every announcement, so a repeated sentence is heard again. */
 export interface Announcement { readonly text: string; readonly id: number }
 export interface ExplorerSnapshot {
@@ -298,6 +298,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       this.pendingSelect = { folder: node.id, key: refKey(node.connectionId, options.select), name: object?.name }
     }
     this.reconcileNode(node, options, options.background ? 'background' : 'user')
+    this.invalidate()
+  }
+  /** Sets or clears another service's note on a node (shown after its sublabel and in its tooltip); reconciles keep it. */
+  setNote(nodeId: number, note: NodeNote | undefined): void {
+    const node = this.nodes.get(nodeId)
+    if (!node || (node.note?.label === note?.label && node.note?.sentence === note?.sentence)) return
+    node.note = note
+    node.rev++
     this.invalidate()
   }
   /** Stops every load. Partly loaded folders show a Stopped row, and first pages that never arrived collapse. */
@@ -1121,10 +1129,19 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.holdPaging(node)
     node.error = undefined
     if (node.load === 'error') node.load = node.children?.length ? 'loaded' : 'none'
-    if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
+    // A node that listed nothing has no expander. Varia's own change opens the folder on what it made; a background
+    // reconcile (a probe saw a change) never opens anything: the node only gets its expander back, and lists when opened.
+    if (options.background && !node.hasChildren && node.children !== undefined) { node.hasChildren = true; node.load = 'none' }
+    else if (node.kind === 'folder' && !node.hasChildren) { node.hasChildren = true; node.expanded = true }
     if (options.select && node.hasChildren) node.expanded = true
-    // A node never listed (one that could not load, say) has its first load, with nothing to announce as added.
-    if (node.expanded) this.loadFirst(node, node.children !== undefined || this.pendingSelect?.folder === node.id ? 'reconcile' : 'keep', priority, deep)
+    // A node never listed (one that could not load, say) has its first load, with nothing to announce as added. A background
+    // reconcile of an expanded node that a collapsed one above hides waits until it shows, as a collapsed one does.
+    if (node.expanded && options.background && !this.visible(node)) {
+      node.load = 'none'
+      state.pendingMode = node.children !== undefined ? 'reconcile' : 'keep'
+      state.deep = deep || undefined
+      this.stalled.add(node.id)
+    } else if (node.expanded) this.loadFirst(node, node.children !== undefined || this.pendingSelect?.folder === node.id ? 'reconcile' : 'keep', priority, deep)
     else if (node.children?.length) {
       node.load = 'none'
       state.pendingMode = 'reconcile'
@@ -1133,7 +1150,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.rev++
     if (priority !== 'user') return
     const scope: RefreshScope = node.kind === 'server' ? 'server' : node.folder && databaseFolders.has(node.folder) ? 'databases' : 'other'
-    try { this.events.emit({ type: 'explorer.refreshed', connectionId: node.connectionId, scope }) } catch (error) { onUnexpectedError(error) }
+    try { this.events.emit({ type: 'explorer.refreshed', connectionId: node.connectionId, scope, nodeId: node.id }) } catch (error) { onUnexpectedError(error) }
   }
 
   /**

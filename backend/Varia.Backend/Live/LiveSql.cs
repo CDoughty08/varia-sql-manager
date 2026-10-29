@@ -15,27 +15,36 @@ internal sealed record LiveSeriesColumn(string Series, string Column, string? Ba
 /// probe declares (rows filtered in memory), or null for all rows.</summary>
 internal sealed record LiveTableRead(int Table, string? Tail = null, Func<string, LiveRow, bool>? View = null);
 
+/// <summary>A status value of a probe read from its query's single row: the catalogue's status id and its column.</summary>
+internal sealed record LiveStatusColumn(string Status, string Column);
+
 /// <summary>One probe's constant text for one band: the statement after the prologue, the columns its one metrics row has (in
 /// order; none when the probe has no series), the server clock columns (ms_ticks and the start time in ticks, null where the
-/// probe cannot read them), where each catalogue series comes from, and the result sets that follow it, one per table, in
-/// order. Filtered: the text takes @filter, a LIKE pattern of a restart-mode filter's text (NULL without one), so the
+/// probe cannot read them), where each catalogue series comes from, each status value its row holds (whole numbers), and the
+/// result sets that follow it, one per table, in order. <c>Restricted</c>, where there is one, is the statement for a login
+/// that is not an admin of what the probe reads (SSISDB: sysadmin or ssis_admin): it leaves out what only admins may read,
+/// as zeros, rather than gate it with a parameter, which would run the command through sp_executesql and scope the
+/// prologue's SET options to it. Filtered: the text takes @filter, a LIKE pattern of a restart-mode filter's text (NULL without one), so the
 /// statement's own columns are the ones it filters.</summary>
-internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series)
+internal sealed record LiveQuery(string Probe, int Band, string Body, string[] Columns, string? MsTicks, string? StartTicks, LiveSeriesColumn[] Series, LiveStatusColumn[]? Status = null,
+    string? Restricted = null)
 {
     public LiveTableRead[] Tables { get; init; } = [];
     public bool Filtered { get; init; }
 
-    public string Text(string prologue) => prologue + Body;
+    public string Text(string prologue, bool admin = true) => prologue + (admin || Restricted is null ? Body : Restricted);
 
-    /// <summary>Every command the probe runs: its batch, and each append table's tail statement.</summary>
-    public IEnumerable<string> Texts(string prologue) => [Text(prologue), .. Tables.Where(table => table.Tail is not null).Select(table => prologue + table.Tail)];
+    /// <summary>Every command the probe runs: its batch (and the restricted one), and each append table's tail statement.</summary>
+    public IEnumerable<string> Texts(string prologue) =>
+        [Text(prologue), .. Restricted is null ? [] : new[] { Text(prologue, admin: false) }, .. Tables.Where(table => table.Tail is not null).Select(table => prologue + table.Tail)];
 
     /// <summary>Why this query does not fit its catalogue entry: its tables, in order, by index and mode, a tail only for an
     /// append table, and only column types live tables store.</summary>
     public List<string> Problems(LiveProbeJson spec)
     {
         var problems = new List<string>();
-        if (Columns.Length == 0 != (spec.Series.Count == 0)) problems.Add("has a metrics row without series, or series without one");
+        if (Columns.Length == 0 != (spec.Series.Count == 0 && Status is not { Length: > 0 })) problems.Add("has a metrics row without series or status values, or series or status values without one");
+        if (Status?.FirstOrDefault(status => !spec.Status.Contains(status.Status) || !Columns.Contains(status.Column)) is { } stray) problems.Add("reads a status value its entry does not declare, or from no column: " + stray.Status);
         var indexes = Tables.Select(table => table.Table).ToList();
         if (!indexes.SequenceEqual(Enumerable.Range(0, spec.Tables.Count))) problems.Add("does not read every table once, in order");
         foreach (var table in Tables.Where(table => table.Table >= 0 && table.Table < spec.Tables.Count))
@@ -74,14 +83,25 @@ internal static partial class LiveSql
     /// <summary>SSISDB with READ_COMMITTED_SNAPSHOT: versioned reads never wait on writers.</summary>
     public const string CommittedPrologue = "SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;\n";
 
-    /// <summary>Once per opened connection: its session id and whether the login may read server state (the permission name
-    /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance).</summary>
-    public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0));";
+    /// <summary>Once per opened connection: its session id, whether the login may read server state (the permission name
+    /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance),
+    /// and for an SSISDB source (@catalog; NULL for server DMVs, which reads no row and no role) whether the catalog's database
+    /// has READ_COMMITTED_SNAPSHOT on, which picks the prologue of its later commands, and whether the login is sysadmin or in
+    /// ssis_admin, the only ones who may read catalog.catalog_properties. A sysadmin's IS_MEMBER is never evaluated, so a
+    /// pending change to the role's members cannot block it; anyone else's waits at most the 1 s lock timeout (BLOCKED).</summary>
+    public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0)),"
+        + " (SELECT CONVERT(int, d.is_read_committed_snapshot_on) FROM sys.databases AS d WHERE d.name = @catalog),"
+        + " CASE WHEN @catalog IS NULL THEN 0 WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE CONVERT(int, ISNULL(IS_MEMBER(N'ssis_admin'), 0)) END;";
+
+    /// <summary>An SSISDB source whose connection could not open the catalog's database: its state and user access, read on
+    /// a connection in the login's own database. No row: there is no catalog.</summary>
+    public const string CatalogState = "SELECT d.state, d.user_access FROM sys.databases AS d WHERE d.name = @catalog;";
 
     public const string DatabasesProbe = "explorer.databases";
     public const string ProgressProbe = "explorer.progress";
     public const string AgentProbe = "explorer.agent";
     public const string AvailabilityProbe = "explorer.availability";
+    public const string CatalogProbe = "ssis.catalogProbe";
 
     // Object Explorer's status chips (docs/object-explorer.md, Live status). Only the databases a chip is for: anything not
     // online, not open to every user, read-only or standby. Names come as they are; the renderer matches them to its nodes.
@@ -124,11 +144,61 @@ internal static partial class LiveSql
         + "LEFT JOIN sys.dm_hadr_availability_replica_states AS r ON r.group_id = g.group_id AND r.is_local = 1\n"
         + "ORDER BY g.name;";
 
+    /// <summary>What ssis.catalogProbe fingerprints, in the catalogue's order (src/shared/ssis/catalog.ts catalogFingerprints):
+    /// each view's columns that the tree and its documents show, as text, and its sql_variant values as their bytes (text would
+    /// round a datetime to the minute). An admin-only view (catalog_properties: ssis_admin and sysadmin only) is left out of
+    /// everyone else's text (LiveQuery.Restricted), so their samples never touch it (a permission error would end the view) and
+    /// it reads 0 and 0 for them.</summary>
+    private static readonly (string Id, string From, string Text, string[] Values, bool Admin)[] Fingerprints =
+    [
+        ("folders", "[catalog].[folders]", "x.folder_id, x.name, x.description", [], false),
+        ("projects", "[catalog].[projects]", "x.project_id, x.folder_id, x.name, x.description, x.deployed_by_name, x.last_deployed_time, x.object_version_lsn", [], false),
+        ("packages", "[catalog].[packages]", "x.package_id, x.project_id, x.name, x.entry_point, x.description", [], false),
+        ("environments", "[catalog].[environments]", "x.environment_id, x.folder_id, x.name, x.description", [], false),
+        ("variables", "[catalog].[environment_variables]", "x.variable_id, x.environment_id, x.name, x.description, x.type, x.sensitive", ["x.value"], false),
+        ("references", "[catalog].[environment_references]", "x.reference_id, x.project_id, x.reference_type, x.environment_folder_name, x.environment_name", [], false),
+        ("parameters", "[catalog].[object_parameters]",
+            "x.parameter_id, x.project_id, x.object_type, x.object_name, x.parameter_name, x.data_type, x.required, x.sensitive, x.description, x.value_type, x.value_set, x.referenced_variable_name",
+            ["x.design_default_value", "x.default_value"], false),
+        ("properties", "[catalog].[catalog_properties]", "x.property_name, x.property_value", [], true)
+    ];
+
+    /// <summary>The view ids ssis.catalogProbe fingerprints, in order (the checks compare them with the catalogue).</summary>
+    public static IEnumerable<string> FingerprintIds => Fingerprints.Select(view => view.Id);
+
+    // One row: per view, its row count and a checksum, the sum of the first 3 bytes of each row's SHA-256 (under 2^53 for any
+    // row count below 2^29, so it is exact in JavaScript). CHECKSUM_AGG would be cheaper, but it XORs: two equal rows cancel,
+    // and BINARY_CHECKSUM misses changes past a long string's first characters. Rows are what row-level security shows the
+    // login, so a fingerprint changes only when something it may see does.
+    private static readonly string Catalog = BuildCatalog(admin: true);
+    private static readonly string CatalogRestricted = BuildCatalog(admin: false);
+    private static readonly string[] CatalogColumns = [.. Fingerprints.SelectMany(view => new[] { view.Id + "_count", view.Id + "_checksum" })];
+    private static readonly LiveStatusColumn[] CatalogStatus = [.. Fingerprints.SelectMany(view => new LiveStatusColumn[] { new(view.Id + "Count", view.Id + "_count"), new(view.Id + "Checksum", view.Id + "_checksum") })];
+
+    private static string BuildCatalog(bool admin)
+    {
+        static string Row((string Id, string From, string Text, string[] Values, bool Admin) view)
+        {
+            var text = "CONVERT(varbinary(max), CONCAT(" + string.Join(", NCHAR(31), ", view.Text.Split(", ")) + "))";
+            return string.Concat(view.Values.Select(value => " + 0x1F + ISNULL(CONVERT(varbinary(8000), " + value + "), 0x)").Prepend(text));
+        }
+        var read = Fingerprints.Where(view => admin || !view.Admin).ToList();
+        var selects = Fingerprints.Select(view => read.IndexOf(view) is var index and >= 0
+            ? "v" + (index + 1) + ".n AS " + view.Id + "_count, v" + (index + 1) + ".h AS " + view.Id + "_checksum"
+            : "CONVERT(bigint, 0) AS " + view.Id + "_count, CONVERT(bigint, 0) AS " + view.Id + "_checksum");
+        var sources = read.Select((view, index) => "(SELECT COUNT_BIG(*) AS n, ISNULL(SUM(CONVERT(bigint, SUBSTRING(HASHBYTES('SHA2_256', " + Row(view) + "), 1, 3))), 0) AS h\n"
+            + "    FROM " + view.From + " AS x) AS v" + (index + 1));
+        return "SELECT " + string.Join(",\n    ", selects) + "\nFROM " + string.Join("\nCROSS JOIN ", sources) + ";";
+    }
+
     /// <summary>The probe's query at a band, or null when the probe has none there (not a one-batch probe, or below its gate).
     /// The Activity Monitor's probes run several statements each (Activity/ActivityReader.cs and ActivitySql), and the live
-    /// checks register their own (LiveTestSql).</summary>
-    public static LiveQuery? For(string probe, int band) => band is < MinBand or > MaxBand ? null : probe switch
+    /// checks register their own (LiveTestSql). The SSIS Catalog's views are the same on every version, and Azure SQL Database
+    /// reports 12, so its probe runs at any band.</summary>
+    public static LiveQuery? For(string probe, int band) => probe switch
     {
+        CatalogProbe when band is >= MinBand - 1 and <= MaxBand => new(probe, band, Catalog, CatalogColumns, null, null, [], CatalogStatus, CatalogRestricted),
+        _ when band is < MinBand or > MaxBand => null,
         DatabasesProbe => new(probe, band, Databases, [], null, null, []) { Tables = [new(0)] },
         ProgressProbe => new(probe, band, Progress, [], null, null, []) { Tables = [new(0)] },
         AgentProbe => new(probe, band, Agent, ["running_jobs"], null, null, [new("runningJobs", "running_jobs")]),

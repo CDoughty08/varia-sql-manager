@@ -9,6 +9,7 @@ import { limits } from '../src/shared/ipc/wire/protocol'
 import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveTones, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
+import { catalogFingerprints } from '../src/shared/ssis/catalog'
 
 const L = limits.live
 const catalogId = /^[a-z][A-Za-z0-9]{0,31}$/
@@ -113,7 +114,7 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity', 'explorer'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer', 'ssis.catalog'])
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
     // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
     // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
@@ -160,6 +161,19 @@ describe('live catalogue', () => {
     // The opened frame carries a pending probe's note.
     for (const note of Object.values(pendingProbes)) expect(note.length).toBeLessThanOrEqual(L.noteCharacters)
     expect(liveProbes['activity.overview'].series?.find(series => series.id === 'pageLifeExpectancy')).toMatchObject({ unit: 'seconds', counter: 'gauge' })
+  })
+  it('fingerprints the SSIS Catalog for the tree every 30 s, on its own pool and with no args', () => {
+    // Owner decision 12: the tree probe runs every 30 s; D-ssis 7.3 bounds it at 10 s to 300 s. SSISDB's budget is 10 s.
+    expect(liveSources['ssis.catalog']).toMatchObject({ testOnly: false, scope: 'ssisdb', probes: ['ssis.catalogProbe'] })
+    expect(liveProbes['ssis.catalogProbe']).toMatchObject({ intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 } })
+    const probe = liveProbes['ssis.catalogProbe']
+    expect(probe.series ?? []).toEqual([])
+    expect(probe.tables ?? []).toEqual([])
+    expect(probe.permission).toBeUndefined()
+    // Two status values per fingerprint, exactly what the status limit allows, so another view needs another probe.
+    expect(probe.status).toEqual(catalogFingerprints.flatMap(fingerprint => [fingerprint.id + 'Count', fingerprint.id + 'Checksum']))
+    expect(probe.status).toHaveLength(L.statuses)
+    expect(liveArgsSchemas['ssis.catalog'].safeParse({}).success).toBe(false)
   })
   it('stays erasable TypeScript that plain Node loads, as the fake backend does', () => {
     const file = join('src', 'shared', 'live', 'catalog.ts')

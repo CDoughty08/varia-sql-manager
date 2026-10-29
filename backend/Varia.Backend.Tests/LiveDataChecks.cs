@@ -55,11 +55,12 @@ internal static class LiveDataChecks
             + "IF EXISTS (SELECT 1 FROM sys.dm_exec_sessions AS s WHERE s.session_id = @spid AND s.session_id <> @@SPID AND s.host_process_id = @pid AND s.program_name LIKE N'% - Activity Monitor')\n"
             + "BEGIN\n    DECLARE @kill nvarchar(40) = N'KILL ' + CONVERT(nvarchar(11), @spid) + N';';\n    EXEC (@kill);\n    SELECT 1 AS killed;\nEND\nELSE SELECT 0 AS killed;")).Scalar;
 
-        // Every live query at the server's band returns the columns it declares, by name, in order and numeric (the sampler
-        // reads values by declared position).
+        // Every live query of server DMVs at the server's band returns the columns it declares, by name, in order and numeric
+        // (the sampler reads values by declared position). SSISDB's run against the fake catalog (SsisTreeLiveChecks).
         var band = LiveConnections.Band((service as ILiveHost).Profile(info.Id)!);
         var shapes = new List<string>();
-        foreach (var query in LiveSql.All(LiveCatalog.Current).Where(query => query.Band == band))
+        var catalog = LiveCatalog.Current;
+        foreach (var query in LiveSql.All(catalog).Where(query => query.Band == band && catalog.Sources[catalog.Probes[query.Probe].Source].Scope == "server"))
         {
             var result = await Execute(query.Text(LiveSql.UncommittedPrologue));
             // A metrics row first (when the probe has series), then one result set per table, each with its table's columns

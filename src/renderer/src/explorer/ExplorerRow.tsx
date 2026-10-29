@@ -98,11 +98,12 @@ function tooltipFacts(node: TreeNode, counted: boolean, note?: string): string[]
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
   const error = node.error ?? node.connectionError, count = counted ? itemCount(node) : undefined
   return [kind, node.detail && displayText(node.detail), count !== undefined && items(count), node.lost ? lostSentence : node.status && statusSentences[node.status], note,
-    error && `Could not load: ${displayText(error.message)}`].filter((line): line is string => !!line)
+    error && `Could not load: ${displayText(error.message)}`, node.note && displayText(node.note.sentence)].filter((line): line is string => !!line)
 }
-/** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), and any error. */
+/** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another
+ *  service's note on the node. */
 export function rowTooltip(node: TreeNode, counted = true, note?: string): string {
-  const name = node.lost ? `${node.label} (connection lost)` : node.sublabel ? `${node.label} ${node.sublabel}` : node.label
+  const name = node.lost ? `${node.label} (connection lost)` : [node.label, node.sublabel, node.note?.label].filter(Boolean).join(' ')
   return clip([displayText(name), ...tooltipFacts(node, counted, note)].join('\n'))
 }
 /**
@@ -133,7 +134,8 @@ function StatusChips({ chips }: { chips: readonly StatusChip[] }) {
 export function rowName(node: TreeNode): string {
   const sublabel = node.lost ? '(connection lost)' : node.sublabel
   const state = node.load === 'error' || node.more === 'error' || node.connectionError ? ', could not load' : node.status ? statusWords[node.status] : ''
-  return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${state}`
+  const note = !node.lost && node.note ? ' ' + displayText(node.note.label) : ''
+  return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${note}${state}`
 }
 function badgeOf(node: TreeNode): BadgeName | undefined {
   if (node.lost) return 'lost'
@@ -262,6 +264,7 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
       : <Label text={node.label} match={match} />}
     {node.filtered && <span className="oe-filtered">(filtered)</span>}
     {sublabel && !live && <span className="oe-sublabel">{displayText(sublabel)}</span>}
+    {!node.lost && node.note && <span className="oe-sublabel">{displayText(node.note.label)}</span>}
     <RowEnd count={counted ? itemCount(node) : undefined} connection={root ? connectionState(node) : undefined} active={active} actions={node.lost && <LostActions rowId={rowId} label={node.label} actions={actions} />}>
       {chips && chips.length > 0 && <StatusChips chips={chips} />}
       {tag && <EnvironmentTag environment={environment} place="explorer" />}

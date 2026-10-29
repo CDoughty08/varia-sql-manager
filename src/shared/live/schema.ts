@@ -43,7 +43,9 @@ export const liveArgsSchemas = {
   // defaults (system sessions, Varia's pools and benign waits hidden).
   activity: activityLiveArgsSchema,
   // Object Explorer's status chips take no args.
-  explorer: z.never()
+  explorer: z.never(),
+  // The catalog probe fingerprints all of the catalog the login may see: no args.
+  'ssis.catalog': z.never()
 } as const satisfies { readonly [S in LiveSourceId]: z.ZodType }
 export type LiveArgs = z.infer<typeof liveArgsSchemas[LiveSourceId]>
 

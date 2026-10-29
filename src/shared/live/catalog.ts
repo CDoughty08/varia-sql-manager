@@ -7,6 +7,7 @@ import {
   activityBands, activityEditions, activityLiveProbes, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, waitCategories
 } from '../activity/catalog.ts'
 import { limits } from '../ipc/wire/protocol.ts'
+import { catalogFingerprintStatus } from '../ssis/catalog.ts'
 
 /** Where a source reads: server DMVs, the SSISDB catalog, or nothing (a test source that touches no SQL Server). */
 export type LiveScope = 'server' | 'ssisdb' | 'none'
@@ -119,11 +120,11 @@ export const defaultSnapshotRows = 5000
 export const defaultSettle = { ticks: 2, ms: 5000 } as const
 export const defaultBatchRows = 5000
 
-export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer'] as const
+export const liveSourceIds = ['debug.synthetic', 'activity', 'explorer', 'ssis.catalog'] as const
 export type LiveSourceId = typeof liveSourceIds[number]
 export const liveProbeIds = [
   'debug.synthetic.metrics', 'debug.synthetic.table', 'debug.synthetic.status', 'debug.synthetic.grid', 'debug.synthetic.log', 'debug.synthetic.wide', ...activityLiveProbes,
-  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'
+  'explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability', 'ssis.catalogProbe'
 ] as const
 export type LiveProbeId = typeof liveProbeIds[number]
 
@@ -139,6 +140,10 @@ export const liveSources: { readonly [S in LiveSourceId]: LiveSourceSpec } = {
   explorer: {
     id: 'explorer', label: 'Object Explorer status', scope: 'server', testOnly: false, probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'],
     description: 'The states Object Explorer shows as chips on its nodes (docs/object-explorer.md, Live status): one view per connected server and login while Object Explorer shows, on the server pool (" - Activity Monitor": READ UNCOMMITTED, LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW) opened in master on box servers and Managed Instance, so it never holds the database a connection opened in. It never reloads the tree.'
+  },
+  'ssis.catalog': {
+    id: 'ssis.catalog', label: 'SSIS Catalog', scope: 'ssisdb', testOnly: false, probes: ['ssis.catalogProbe'],
+    description: 'The SSIS Catalog\'s views, read on the connection\'s " - Integration Services" pool in the catalog\'s database, SSISDB (READ UNCOMMITTED, or READ COMMITTED when the catalog has READ_COMMITTED_SNAPSHOT on; LOCK_TIMEOUT 1000, DEADLOCK_PRIORITY LOW). Object Explorer holds one per connection while an SSISDB node is open. A catalog that no longer exists ends it (CATALOG_MISSING).'
   }
 }
 
@@ -247,6 +252,11 @@ export const liveProbes: { readonly [P in LiveProbeId]: LiveProbeSpec } = {
     id: 'explorer.availability', source: 'explorer', label: 'Availability group health', intervalMs: { default: 10_000, min: 5000, max: 300_000 }, gates: { minMajor: 13, editions: [2, 3] }, permission: 'serverState',
     description: 'Each availability group\'s synchronization health (0 not healthy, 1 partially healthy, 2 healthy) and this replica\'s role (0 resolving, 1 primary, 2 secondary), from sys.dm_hadr_availability_group_states and sys.dm_hadr_availability_replica_states. A server without Always On has no rows.',
     tables: [{ id: 'groups', mode: 'snapshot', key: ['name'], rowCap: 100, columns: [column('name', 'sysname'), column('health', 'tinyint'), column('role', 'tinyint')] }]
+  },
+  'ssis.catalogProbe': {
+    id: 'ssis.catalogProbe', source: 'ssis.catalog', label: 'Catalog changes', intervalMs: { default: 30_000, min: 10_000, max: 300_000 }, budgetMs: { min: 500, max: 10_000 },
+    description: 'A fingerprint of each catalog view the SSIS tree and its documents show, in one query: its row count and a checksum of the columns they show (catalogFingerprints in src/shared/ssis/catalog.ts), over the rows row-level security lets the login see; catalog properties only for a sysadmin or ssis_admin, the only ones who may read them. Object Explorer reloads only what changed, keeping expansion and selection.',
+    status: catalogFingerprintStatus
   }
 }
 

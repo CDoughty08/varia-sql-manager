@@ -333,7 +333,13 @@ Explorer pool, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`; packages page by `p
 (≤ 260) can be longer than a sysname cursor key. On SQL Server on Linux, and on Azure SQL Database without a visible
 catalog, the folder answers a `NOT_SUPPORTED` value that says why; a catalog node whose database is gone answers
 `NOT_FOUND`, one whose database is offline, restoring or single-user in use `DATABASE_UNAVAILABLE` (retryable), and one the
-login may not open `NO_DB_ACCESS`. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
+login may not open `NO_DB_ACCESS`. While a catalog node is open, the renderer keeps the tree current through the `ssis.catalog`
+live source ([Live subscriptions](#live-subscriptions)): a catalog view whose fingerprint changed reconciles, in the
+background, only the listed nodes that show it (docs/integration-services.md, The live tree). The view runs only while the
+catalog node shows; one that ends opens again after a back-off (2 s doubling to 60 s), unless it ended `PERMISSION_DENIED`,
+`LOGIN_FAILED`, `NOT_SUPPORTED` (the catalog lacks a view or column the probe reads), `INVALID_PARAMS` or `PORT_CLOSED`
+(`catalogProbeFinalCodes`): the catalog node then notes why until a refresh of it, of a node in it or of its server (`explorer.refreshed`
+names the refreshed node), or until it is closed and opened again. `ssis.describe { connectionId, requestId, view: 'catalog' | 'folder' | 'project' | 'package' | 'environment',
 target }` (the target an Object Explorer ref of the view's own SSIS kind; the catalog only by its database's name) answers
 `{ model?, revision?, elapsedMs, error? }`: one batch per view on the same pool, READ COMMITTED when the catalog's database
 runs RCSI and READ UNCOMMITTED otherwise, read once more after error 601. `model.view` names it: the catalog's profile
@@ -838,8 +844,9 @@ A subscription names one **source** and 1 to 8 of its **probes**, each with its 
 `src/shared/live/catalog.ts` declares every source and probe and what they emit; it generates [docs/live.md](live.md) and the
 backend's embedded `Live/live-catalog.json` (`npx vitest run tests/live-catalog.test.ts -u`), and the schemas in
 `src/shared/live/schema.ts` are built from it. The production schemas accept only sources that are not test-only: the
-Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, and `activity.resources`, declared but not sampled yet) and Object Explorer's `explorer` (the
-status chips: database states, restore progress, running Agent jobs, availability group health). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
+Activity Monitor's `activity` (server DMVs: `activity.overview`, `activity.sessions`, and `activity.resources`, declared but not sampled yet), Object Explorer's `explorer` (the
+status chips: database states, restore progress, running Agent jobs, availability group health) and the SSIS tree's
+`ssis.catalog` (scope `ssisdb`; its `ssis.catalogProbe` fingerprints the catalog for Object Explorer). The test source `debug.synthetic` is accepted only by main's test schemas (`ResultsPortHost` with
 `testSources`, set only in unpackaged smoke runs) and by a backend with `VARIA_BACKEND_TEST_HOOKS=1`, as
 `debug.results.synthesize` is. Both methods are port methods (`PortMethods`): the renderer reaches them only through the
 results port, and a backend whose HELLO lacks either is refused.
@@ -1050,11 +1057,11 @@ checks drive it on a fake clock):
   quick second sample), the source gives back its connection (to the pool, healthy), and opens one again when a probe comes
   due. A subscription whose probes all start paused opens none until one resumes.
 
-**SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source): one pooled connection per subscription
-from the connection's own **" - Activity Monitor"** pool (registered with the connection's pools, so a disconnect clears
-it), held while it samples so its session id is known (`live.opened`'s `spid`; a tick carries `spid` when it reopened).
-SSISDB sources (later) use the **" - Integration Services"** pool in `SSISDB` with their own prologue
-(`LiveConnections`). Every command starts with its prologue, since a pooled connection can carry another command's SET
+**SQL sources** (`Live/SqlSampler.cs`; scope `server`, the `activity` source, and scope `ssisdb`, the `ssis.catalog` source): one
+pooled connection per subscription from the scope's pool, the connection's own **" - Activity Monitor"** pool for server DMVs
+and its **" - Integration Services"** pool (the SSIS tree's and `ssis.describe`'s, with Initial Catalog the catalog's
+database, `SSISDB`) for SSISDB (`LiveConnections`; both registered with the connection's pools, so a disconnect clears them),
+held while it samples so its session id is known (`live.opened`'s `spid`; a tick carries `spid` when it reopened). Every command starts with its prologue, since a pooled connection can carry another command's SET
 state: `SET NOCOUNT ON; SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED; SET LOCK_TIMEOUT 1000; SET DEADLOCK_PRIORITY LOW;`
 for server DMVs and SSISDB without READ_COMMITTED_SNAPSHOT, `READ COMMITTED` instead for SSISDB with it. Connecting takes
 no live gate (a server that stopped answering a login never holds one that views on other servers need) and has its own
@@ -1062,7 +1069,17 @@ no live gate (a server that stopped answering a login never holds one that views
 is reported for that tick's other due probes rather than tried again at once. Opening connects and runs one session
 probe (2 s budget, under a gate; with the gates full, the first tick runs it): `@@SPID` and `HAS_PERMS_BY_NAME` for VIEW
 SERVER PERFORMANCE STATE (SQL Server 2022 and later) or VIEW SERVER STATE (earlier, Managed Instance), the permission name
-a parameter. The Activity Monitor's source runs its capability probe in its place (Activity/ActivitySql.cs `Capabilities`):
+a parameter; for an SSISDB source it also reads the catalog's `is_read_committed_snapshot_on` (`sys.databases` by the catalog's
+name, a parameter), which picks the prologue of its later commands and `live.opened`'s `isolation`, and whether the login is
+sysadmin or in ssis_admin (`IS_SRVROLEMEMBER` first, so a sysadmin's `IS_MEMBER` is never evaluated): only they may read
+`catalog.catalog_properties`. The catalog probe has two constant texts, neither taking a parameter (a parameter would run the
+command through `sp_executesql`, which scopes the prologue's SET options to it): one that reads catalog_properties, for them,
+and one without it (its count and checksum 0) for everyone else, so nobody else's sample touches it. An SSISDB source whose connection cannot open the catalog's database without saying why (4060,
+916) reads why on a connection of the same pool in the login's own database (`sys.databases` state and user access, under a gate
+and the probe's budget): no row is `CATALOG_MISSING` (terminal), a database that is not online, single-user or restricted
+`DATABASE_UNAVAILABLE` (retried), and an online one the login may not open `PERMISSION_DENIED` (terminal), each with its own
+sentence; an open whose errors already say the database is unavailable (942, 976 and the others below) is not looked up; when that read fails too, the open's
+own error is classified as below. The Activity Monitor's source runs its capability probe in its place (Activity/ActivitySql.cs `Capabilities`):
 the session id and whether the login reads server state, may end sessions (ALTER ANY CONNECTION) and sees every file's name
 (VIEW ANY DEFINITION), and whether the query statistics have spills; its sessions probe sends the first two as the status
 values `serverState` and `canKill` with every sample (each new connection's capability probe reads them again), so a
@@ -1075,7 +1092,7 @@ connection's session probe finds the permission gone. SqlSampler checks this for
 A connection that fails to open there is reported by the first tick instead. Each statement waits for a live gate (at most
 its budget, else `BUSY`), then runs with `CommandTimeout` 0 under a cancellation token that fires at its budget: 0.8 ×
 the asked interval within the probe's `budgetMs` (500 ms to 5 s by default; never above 10 s), so a 2 s overview has 1.6 s,
-more than `LOCK_TIMEOUT`. A source with several statements per probe (`ILiveSqlReader`; the Activity Monitor's
+more than `LOCK_TIMEOUT`; the catalog probe's range is 500 ms to 10 s, SSISDB's budget. A source with several statements per probe (`ILiveSqlReader`; the Activity Monitor's
 `ActivityReader`) runs them one at a time on the same connection within that one budget and builds the probe's series and
 rows in C#; its statements are `ActivitySql`'s constant text, checked by their own lint and the live lint, each read checked
 against the columns it declares (a mismatch is a bug: `BACKEND_ERROR`). A statement the login may not run (`PERMISSION_DENIED`)
@@ -1086,8 +1103,10 @@ error stops the probe's statements: what was read arrives and the error names th
 its first error and backs off; a lost connection or the budget fails the probe as below. Without server state the sessions
 probe reads one statement (the caller's own session: SQL Server shows such a login nothing else) and reports Blocking and
 Active Expensive Queries as `PERMISSION_DENIED` beside each sample without SQL. Probe SQL of the other sources is constant
-text per probe and band in `Live/LiveSql.cs` (none ships yet; the live checks register theirs): one batch per probe, its metrics
-row (when it has series) with the columns it declares, mapped to the catalogue's series, then one result set per table, in
+text per probe and band in `Live/LiveSql.cs` (Object Explorer's status probes and the SSIS tree's catalog probe; the live
+checks register theirs): one batch per probe, its metrics row (when it has series or status values) with the columns it
+declares, mapped to the catalogue's series and status values (whole numbers, sent as they are; a probe of status values
+alone sends no metrics and no `baseline` or `resumed` gap, so it has no quick second sample), then one result set per table, in
 catalogue order, whose column names and types must be the table's (the types live tables store: integers, text, bit, float,
 real, decimal, the date and time types and uniqueidentifier; a column of another type, or a query that does not read each of
 its probe's tables once, in order, fails the open as a bug). An append table's read takes `@after{i}`, `@top{i}` and
@@ -1103,10 +1122,11 @@ comments and bracketed or quoted names as SQL Server does, so a quote in one hid
 from its parenthesis still counts. Values are read by the column's declared position, so every read first checks the
 result's columns against the declaration (names, order, count, numeric types); a mismatch is a bug, which ends the view
 `failed` with `BACKEND_ERROR` rather than put one series' value in another's. The live checks also run every query at the
-server's band and compare its columns.
+server's band and compare its columns (the SSISDB ones against the fake catalog).
 
 **Errors** (`Live/LiveErrors.cs`): 1222 and 1205 are `BLOCKED`; the budget is `TIMEOUT`; 297, 300, 229 and 262
-`PERMISSION_DENIED` and 207 and 208 `NOT_SUPPORTED` (both terminal; so are an SSIS source's `CATALOG_MISSING` and `NOT_FOUND`); 4060, 911, 942, 952 and the other offline,
+`PERMISSION_DENIED` (for an SSISDB source, with its own sentence: the login cannot read the catalog) and 207 and 208
+`NOT_SUPPORTED` (both terminal; so are an SSIS source's `CATALOG_MISSING`, above, and `NOT_FOUND`); 4060, 911, 942, 952 and the other offline,
 restoring and single-user numbers `DATABASE_UNAVAILABLE`; severity 20 and above and transport errors
 `CONNECTION_LOST`; a Kerberos or Entra sign-in failure while reconnecting `AUTH_KERBEROS` or `AUTH_ENTRA` with its own
 advice; a login SQL Server refuses while reconnecting (18456 failed, 18486 locked out, 18487 and 18488 password expired or
@@ -1147,7 +1167,10 @@ and results worker](#results-port-and-results-worker)). Views never call it them
 - **Open.** `live.open(spec, owner)` subscribes at once with each probe's catalogue default interval unless the view asks
   for another (clamped to the probe's minimum and maximum). The owner says whether the view can be seen and what it follows:
   `documentOwner(tabId)` is visible while its tab is the active document and the editor area shows, follows the tab's
-  connection, and closes with the tab. At most 16 views hold a slot in a window (main's 16 streams on the port). A
+  connection, and closes with the tab. The SSIS tree's views (`SsisTreeProbe`, `src/renderer/src/ssis/`, one per
+  connection whose SSISDB node is open, at most one per server row) belong to Object Explorer: visible while its pane
+  shows, and following the connection while its server row is in the tree; closing SSISDB disposes the view. They are not
+  `background` views: each holds an ordinary slot. At most 16 views hold a slot in a window (main's 16 streams on the port). A
   `background` view (`LiveSpec.background`: Object Explorer's status, one per connected server and login, owned by the
   pane, which `ExplorerStatusService` opens, moves to the next connection of the same server and login when its own goes,
   and disposes once it ends, opening it again on Refresh) takes only a slot no other view wants, at most 8 of them: one

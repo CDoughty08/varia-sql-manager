@@ -157,6 +157,44 @@ catalog's database, at READ UNCOMMITTED with `LOCK_TIMEOUT 5000`. The catalog ro
 Explorer pool. A catalog that was dropped answers `NOT_FOUND` (refresh the parent); one that is offline, restoring or single-user in
 use, `DATABASE_UNAVAILABLE` (retry); one the login cannot open, `NO_DB_ACCESS`.
 
+### The live tree (`ssis.catalogProbe`)
+
+While a connection's SSISDB node is open (expanded, or listed with no folders) and shows (its server and Integration Services
+Catalogs folder are expanded), Object Explorer holds one live view of the `ssis.catalog` source for that connection (docs/live.md):
+every 30 s by default (Tools › Options › SQL Server Integration Services; 10 to 300 s, or off), one
+query fingerprints each catalog view below as its row count and a checksum (the sum of a SHA-256 prefix per row, over the columns
+the tree and its documents show, sql_variant values as their bytes), over the rows row-level security lets the login see.
+`catalog.catalog_properties` is read only for a login that is sysadmin or in ssis_admin (the only ones SSIS lets read it): anyone
+else's sample runs a second constant query without it, so its fingerprint stays 0 and 0 for them. The first sample of a connection
+is its baseline, unless it came late: when SSISDB was already listed as the view opened (a view refused or ended and opened again,
+live updates turned on while browsing) or the view failed or paused before it sampled, that sample reloads SSISDB deeply, since
+what changed meanwhile would otherwise never show. A later sample, or the first of a new view on the same connection (SSISDB closed
+and opened again, Object Explorer shown again), reloads in the background only the listed nodes that show a view whose fingerprint
+changed, keeping expansion and selection and announcing what was added or removed; a reload never opens a node, one that a
+collapsed node hides waits until it shows, and one with a listing on its way in it, above it or below it (a first listing, the
+user's Refresh, an earlier reload, any of which may have read the catalog before the change) reloads once those listings answer, so
+a Refresh is never restarted or made shallower. The view pauses 2 s
+after Object Explorer or the window hides, as every live view does. It runs on the SSIS read pool in the catalog's database, READ
+UNCOMMITTED (READ COMMITTED with READ_COMMITTED_SNAPSHOT on), `LOCK_TIMEOUT 1000`. A catalog that no longer exists ends the view
+(`CATALOG_MISSING`) and the Integration Services Catalogs folder lists again; one that is offline, restoring, single-user or
+restricted, or a replica that cannot be read, is retried (`DATABASE_UNAVAILABLE`). A view that ends for another reason (the server
+or the window has no room for another live view, the backend restarted it) opens again after 2 s, doubling to 60 s while it keeps
+ending before a sample. One that no retry would fix stops for good: the login cannot read the catalog or its sign-in is refused, the
+catalog lacks a view or column the probe reads, the request was refused as malformed, or the window closed
+(`PERMISSION_DENIED`, `LOGIN_FAILED`, `NOT_SUPPORTED`, `INVALID_PARAMS`, `PORT_CLOSED`). SSISDB then reads "(not updating)", its tooltip says why, and a Refresh of SSISDB, of anything in it, of
+the Integration Services Catalogs folder or of its server, or closing and opening SSISDB, tries again (a Refresh elsewhere does not).
+
+| Fingerprint | Catalog view | Object Explorer reloads |
+| --- | --- | --- |
+| `folders` | `catalog.folders` | Integration Services Catalog (deeply) |
+| `projects` | `catalog.projects` | Projects |
+| `packages` | `catalog.packages` | Packages |
+| `environments` | `catalog.environments` | Environments |
+| `variables` | `catalog.environment_variables` | Environments |
+| `references` | `catalog.environment_references` | Nothing in the tree (documents) |
+| `parameters` | `catalog.object_parameters` | Nothing in the tree (documents) |
+| `properties` | `catalog.catalog_properties` | Nothing in the tree (documents) |
+
 ### Reads (`ssis.describe`)
 
 One request reads one view in one batch, under the SSIS gates, and answers its model with a `revision`, or an error value. The

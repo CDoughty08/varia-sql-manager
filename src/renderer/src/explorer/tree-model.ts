@@ -71,8 +71,16 @@ export interface TreeNode {
   updatedAt?: number
   /** When a refresh that kept the old children failed (epoch ms); cleared by the next first page. */
   staleSince?: number
+  note?: NodeNote
 }
 export interface NodeTable { get(id: number): TreeNode | undefined }
+/** What another service says about a node (the SSIS live tree: why it stopped updating), kept across reconciles. */
+export interface NodeNote {
+  /** Shown after the sublabel, in parentheses. */
+  readonly label: string
+  /** The tooltip's and the accessible description's sentence. */
+  readonly sentence: string
+}
 
 /** Rows that are not nodes: their id is −(owner id · 8 + kind). */
 export const RowKind = { Node: 0, Loading: 1, Error: 2, More: 3, Stopped: 4, Capped: 5, Paused: 6, MoreError: 7 } as const
