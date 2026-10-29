@@ -49,7 +49,9 @@ export function LiveGridPane({ live, probe, table = 0, label, toneLabel, state, 
       createView: (first, hooks) => {
         const view = new GridView({
           root: rootRef.current!, scroller: scrollRef.current!, handle: first.handle, client: resultClient, descriptor: first.descriptor, state: own,
-          resultIndex: 0, resultCount: 1, label, platform, followTail: first.mode === 'append',
+          // No SQL type hints: a live catalogue's columns name a type without its length, so a header would invent one
+          // ("nvarchar(max)"), and live views follow SSMS's monitors, whose headers are names alone.
+          resultIndex: 0, resultCount: 1, label, platform, followTail: first.mode === 'append', showTypes: false,
           onSelection: hooks.onSelection, onViewport: hooks.onViewport,
           onCopy: () => { void created.copy(false).then(result => setNotice(result && !result.ok && result.code !== 'CANCELLED' ? 'Could not copy the rows: ' + result.error : undefined), onUnexpectedError) },
           onEscape: () => false,
