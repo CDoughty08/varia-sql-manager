@@ -13,8 +13,8 @@ import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, backendReady, documentTabs, emptyState, emptyStateDetail, emptyStateIcon, emptyStateTitle, errorMessages, gridCell, gridCellSelector, gridPart, jobNotice,
   jobProgress, kindIcon, lostServerRows, matching, memoryIndicator, menuItemNames, messageLines, messages, outputAnnouncer, outputEmpty, outputPane, outputStatus, outputToolbar,
-  outputView, paneTab, part, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toastAnnouncer, toastMessage, toasts, toolbarButton,
-  unsavedMark
+  outputView, paneTab, part, queryBar, queryBarButton, queryFacts, queryStatus, quickInput, quickInputActive, resultSplitters, statusBar, statusSegment, toastAnnouncer, toastMessage,
+  toasts, toolbarButton, unsavedMark
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -771,9 +771,9 @@ try {
   await expect(kindIcon(activeDocument(page), 'XML document')).toHaveAttribute('data-icon', 'code')
   await expect(activeDocument(page)).toHaveAccessibleName(forXmlName)
   await expect(unsavedMark(activeDocument(page))).toHaveCount(0)
-  await expect(server()).toBeDisabled()
-  await expect(server()).toHaveValue('')
-  await expect(toolbarButton(page, /^Execute/)).toBeDisabled()
+  // A value has no server and never executes: it has no query bar.
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(server()).toHaveCount(0)
   await expect(outputEmpty(page)).toContainText('Query results appear here for query tabs.')
   await expect(emptyStateTitle(emptyState(outputEmpty(page)))).toHaveText('Query results')
   // Varia's own table icon, as in Object Explorer.
@@ -1265,7 +1265,7 @@ try {
   // A cancelled run keeps the rows it read, marked incomplete in the grid's strip.
   await run('-- varia-fake: sets=W1*200000@20000', { running: true })
   await expect(cell(0, 0)).toHaveText('0')
-  await toolbarButton(page, 'Cancel').click()
+  await queryBarButton(page, 'Cancel').click()
   await expect(status()).toContainText('Query was cancelled.')
   await outputTab(/^Results/).click()
   await expect(strip()).toContainText('This result is incomplete')
@@ -1412,7 +1412,7 @@ try {
     await expect.poll(rowsRead, { timeout: 120000 }).toBe(1_000_000)
     await expect(status()).toContainText('Executing query…')
     await page.screenshot({ path: resolve('artifacts', 'results-live.png') })
-    await toolbarButton(page, 'Cancel').click()
+    await queryBarButton(page, 'Cancel').click()
     await expect(status()).toContainText('Query was cancelled.', { timeout: 30000 })
     await outputTab(/^Results/).click()
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')

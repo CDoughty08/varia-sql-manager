@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { actionsStubData, designerScript, installActionsStub } from './fixtures/actions-stub.mjs'
-import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, documentTabs, kindIcon, menuItemNames, part, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
+import { activeDocument, activeDocumentName, backendReady, closeDocumentButton, documentTabs, kindIcon, menuItemNames, part, queryBar, toolbarButton, unsavedMark } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
 const profile = await mkdtemp(resolve('artifacts', 'table-designer-profile-'))
@@ -82,9 +82,10 @@ try {
   await expect(tabs()).toHaveCount(before + 1)
   await expect(page.getByRole('tab', { name: 'server-a.AppData - dbo.Table_1', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect((await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'tableDesigner', target: { kind: 'database', name: 'AppData' } })
-  // The query editor is hidden, and the Server and Database pickers belong to queries.
+  // The query editor is hidden, and so is the query bar: its Execute and its server and database lists belong to queries.
   await expect(page.locator(part.editorPane)).toBeHidden()
-  await expect(page.getByLabel('Query database', { exact: true })).toBeDisabled()
+  await expect(queryBar(page)).toHaveCount(0)
+  await expect(page.getByLabel('Query database', { exact: true })).toHaveCount(0)
   console.log('Table designer checks: Tables › New › Table… opens the designer tab at once with the grid focused.')
 
   // 2. Keyboard only: Id int without nulls, then Name nvarchar(50) from the empty last row.

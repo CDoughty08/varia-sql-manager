@@ -33,8 +33,11 @@ const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBac
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
   'editorBracketHighlight.foreground5', 'editorBracketHighlight.foreground6', 'editorBracketHighlight.unexpectedBracket.foreground']
 const tile: ColorKey[] = ['tile.background']
-/** Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar state and tiles. */
-const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile]
+/**
+ * Where the states kit draws: documents, panels, dialogs, the tree on every row state, the tab strips, every status bar
+ * state, tiles, and the query bar's connection pill (an input's surface), which holds the environment tag.
+ */
+const kitSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, strip, ['documentTabs.background', 'documentTabs.activeBackground'], dock, treeHover, treeServer, treeActive, treeInactive, ...statusBars, tile, input]
 /** Chips, live labels and tiles sit in documents, panels, side bars and dialogs. */
 const contentSurfaces: ColorKey[][] = [editor, panel, sideBar, widget, dock, tile]
 const pairs = (minimum: number, foregrounds: ContrastPair['foreground'][], ...backgrounds: ColorKey[][]): ContrastPair[] =>
@@ -137,6 +140,9 @@ export const contrastPairs: readonly ContrastPair[] = [
   // A saved connection's row keeps its button text when selected; the dock's Move list sits on the tab strip.
   ...text(['button.secondaryForeground'], activeSelection),
   ...text(['input.foreground'], ['editorGroupHeader.tabsBackground']),
+  // A query's own bar sits on the editor's background (its buttons are checked there above); the database glyph in its
+  // connection pill sits on an input's.
+  ...graphic(['icon.foreground'], input),
   // The query context bar, the empty workspace and the closed-panels note are drawn on the dock group.
   ...text(['breadcrumb.foreground', 'breadcrumb.separatorForeground', 'emptyState.foreground', 'button.secondaryForeground'], dock),
   // The Output title bar's Cancel; errors in Messages and the results strip; the grid's truncation marker and lost overlay.
@@ -221,7 +227,7 @@ export const contrastPairs: readonly ContrastPair[] = [
  */
 export const hoverPairs: readonly ContrastPair[] = [
   ...pairs(1.2, ['toolbar.hoverBackground'], ['editorGroupHeader.tabsBackground'], ...dockTabBackgrounds.map(dockTabs)),
-  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar),
+  ...pairs(1.2, ['button.secondaryHoverBackground'], toolbar, titleBar, panelTitle, ['editorGroupHeader.tabsBackground'], strip, sideBar, editor),
   // The highlighted menu item follows the pointer and the keyboard alike.
   ...pairs(1.2, ['menu.selectionBackground'], ['menu.background']),
   // The search box stands out from the title bar by its outline, and shows the pointer by a fill that changes from its own.

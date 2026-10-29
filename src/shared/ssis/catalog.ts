@@ -267,10 +267,10 @@ export function ssisCommandEntries(): { readonly [K in SsisCommandId]: SsisComma
     }
     return [spec.command, entry]
   }))
-  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus) still executes.
+  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes.
   const refresh: SsisCommandEntry = {
     title: 'Refresh Properties', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'catalog'], precondition: 'backendReady && activeDocumentIsSsis',
-    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus" }]
+    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus" }]
   }
   return { ...verbs, 'ssis.refreshProperties': refresh } as { readonly [K in SsisCommandId]: SsisCommandEntry }
 }

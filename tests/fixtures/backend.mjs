@@ -266,6 +266,10 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
+// With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
+// option's text, whose spaces are collapsed and trimmed, would name another database or none.
+const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
 // these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
@@ -725,7 +729,7 @@ async function workbench(id, method, params, credit) {
     case 'connections.databases':
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      return respond(id, workbenchDatabases)
+      return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
@@ -769,7 +773,7 @@ async function workbench(id, method, params, credit) {
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
-    case 'databases.list': return respond(id, workbenchDatabases)
+    case 'databases.list': return respond(id, await databaseRows())
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
     case 'actions.describe':

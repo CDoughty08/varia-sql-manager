@@ -45,7 +45,7 @@ export default function QueryStatusBar({ tab, connection, versions, variant = 's
   const model = queryStatusModel({ connection, database: tab.database, session, run, running, now, settings: values })
   return <div className={className} role="status" aria-label="Query status" data-tone={model.tone} data-location={location} style={edge} title={[model.place, versions].filter(Boolean).join('\n')}>
     <span className="query-status-state"><Icon name={model.icon} spin={model.icon === 'loading'} /><span className="query-status-text">{model.text}</span></span>
-    <span className="query-status-segments">{bar && environmentTag(connection?.options.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={connection?.options.environment} place="query" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
+    <span className="query-status-segments">{bar && environmentTag(connection?.options.environment) && <span className="query-status-environment"><span className="visually-hidden">Environment: </span><EnvironmentTag environment={connection?.options.environment} place="queryStatus" /></span>}{model.segments.map(segment => <span key={segment.key} className={`query-status-segment query-status-${segment.key}`} aria-live={segment.key === 'time' || segment.key === 'rows' ? 'off' : undefined}>
       <span className="visually-hidden">{segment.label}: </span>{segment.key === 'login' ? <span className="status-session">{segment.text}</span> : segment.text}
     </span>)}</span>
   </div>

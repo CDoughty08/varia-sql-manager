@@ -12,6 +12,7 @@
 export const part = {
   menubar: '[role="menubar"][aria-label="Application menu"]',
   toolbar: '[role="toolbar"][aria-label="Standard"]',
+  queryBar: '[role="toolbar"][aria-label="SQL Editor"]',
   documentTabs: '[role="tablist"][aria-label="Query documents"]',
   statusBar: 'footer[aria-label="Status bar"]',
   queryStatus: '[role="status"][aria-label="Query status"]',
@@ -113,8 +114,9 @@ export const part = {
   statusPillLabel: '.status-pill-label',
   /** The states kit's age label ("Updated 3 s ago"), which a stale one marks with data-stale. */
   staleBadge: '.stale-badge',
-  /** The status bars' spans that hold the tag with its visually hidden prefix. */
-  queryEnvironment: '.query-status-environment',
+  /** The spans that hold the tag with its visually hidden prefix: the query bar's, the classic query status bar's, and the window status bar's. */
+  queryEnvironment: '.query-bar-environment',
+  queryStatusEnvironment: '.query-status-environment',
   statusEnvironment: '.status-environment',
   // Dialogs
   connectionChoice: '.connection-choice',
@@ -223,11 +225,16 @@ export const titleBar = page => page.locator(part.titleBar)
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
- * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All, the server and
- * database pickers, Execute and Cancel; with the classic toolbar on, the same names as text buttons plus Layouts.
+ * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All; with the classic
+ * toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and database lists.
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
+/** A query's own bar (SSMS's SQL Editor toolbar): Execute, Cancel, and the Connection group with the server and database lists. */
+export const queryBar = page => page.getByRole('toolbar', { name: 'SQL Editor', exact: true })
+export const queryBarButton = (page, name) => queryBar(page).getByRole('button', named(name))
+export const queryConnection = page => queryBar(page).getByRole('group', { name: 'Connection', exact: true })
+/** The active query's server and database lists: in its query bar, or in the classic toolbar when that is on. */
 export const queryServer = page => page.getByLabel('Query server', { exact: true })
 export const queryDatabase = page => page.getByLabel('Query database', { exact: true })
 export const banner = page => page.locator(part.banner)

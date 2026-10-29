@@ -113,8 +113,8 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
-  bar: ['.query-tabs', '.explorer-header', '.document-script-head'],
-  control: ['.icon-button', '.command-centre', '.header-context select', '.header-toolbar .execute', '.document-verb', '.property-input'],
+  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.document-script-head'],
+  control: ['.icon-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item'],
   status: ['.status-bar', '.query-status-bar']
 }
