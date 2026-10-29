@@ -5,7 +5,7 @@ import { ResultsPortHost, supervisorResults, type PortMainLike } from '../src/ma
 import { ResultClient, type PortMessageEvent, type ResultHandle, type WorkerLike } from '../src/renderer/src/results/ResultClient'
 import { ResultsWorkerCore } from '../src/renderer/src/results/worker-core'
 import type { WorkerRequest, WorkerResponse } from '../src/renderer/src/results/worker-protocol'
-import type { PortMessage } from '../src/shared/ipc/port-messages'
+import type { PortMessage, PortRequest } from '../src/shared/ipc/port-messages'
 import { liveSources, type LiveProbeId } from '../src/shared/live/catalog'
 import type { LiveSubscribeParams, LiveTick } from '../src/shared/live/schema'
 import { defaultSettings } from '../src/shared/settings/catalog'
@@ -139,12 +139,21 @@ describe('live subscriptions through main', () => {
 /** Main's end of the port, delivering to the worker core in order, a task later, as structured clones (like a MessagePort). */
 class LoopPort implements PortMainLike {
   core: ResultsWorkerCore | undefined
+  readonly liveIds = new Set<number>()
+  readonly held: PortRequest[] = []
+  hold: ((request: PortRequest) => boolean) | undefined
   private listener: ((event: { data: unknown }) => void) | undefined
   postMessage(message: unknown): void { const copy = structuredClone(message) as PortMessage; setTimeout(() => this.core?.receive(copy), 0) }
   on(event: 'message' | 'close', listener: never): unknown { if (event === 'message') this.listener = listener; return this }
   start(): void {}
   close(): void {}
-  fromWorker(data: unknown): void { const copy = structuredClone(data); setTimeout(() => this.listener?.({ data: copy }), 0) }
+  fromWorker(data: unknown): void {
+    const copy = structuredClone(data) as PortRequest
+    if (copy.t === 'live') this.liveIds.add(copy.rid)
+    if (this.hold?.(copy)) { this.held.push(copy); return }
+    setTimeout(() => this.listener?.({ data: copy }), 0)
+  }
+  flush(): void { this.hold = undefined; for (const request of this.held.splice(0)) this.fromWorker(request) }
 }
 /** The results worker in this thread: the real core between ResultClient and main's port. */
 class LoopWorker implements WorkerLike {
@@ -293,8 +302,20 @@ describe('live subscriptions through the results worker and ResultClient', () =>
       expect(gaps[0]).toBe('baseline')
       expect(handle.getSnapshot().status).toBe('live')
       expect(handle.ring('debug.synthetic.metrics')!.length).toBeGreaterThanOrEqual(3)
+      // An acknowledged snapshot can retire before an asynchronous read reaches main. Exercise that ordering explicitly.
+      port.hold = request => request.t === 'read'
+      const retiring = handle.table('debug.synthetic.table')!
+      const delayed = retiring.handle.getWindow(0, 10).then(() => undefined, error => error)
+      await expect.poll(() => port.held.length).toBe(1)
+      await expect.poll(() => retiring.handle.getSnapshot().state).toBe('released')
+      port.flush()
+      expect(await delayed).toMatchObject({ code: 'RESULT_RELEASED' })
+      // Stop-and-wait fences the newest table's lifetime while it is read, regardless of port delivery latency.
+      port.hold = request => request.t === 'credit' && port.liveIds.has(request.rid)
+      await expect.poll(() => port.held.length).toBe(1)
       const table = handle.table('debug.synthetic.table')!
       expect((await table.handle.getWindow(0, 10)).count).toBe(3)
+      port.flush()
 
       shown = false
       notify()

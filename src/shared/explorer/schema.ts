@@ -3,8 +3,8 @@
 import { z } from 'zod'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
 import {
-  childParentKinds, dateFilterOps, explorerLimits, filterProperties, folderIds, folderOwnerKinds, folderSpecs, kindSpecs, nodeKinds, nodeSubtypes, parentKinds,
-  queryIds, scopeFields, textFilterOps, type FilterProperty, type RefField
+  childParentKinds, dateFilterOps, explorerLimits, filterProperties, folderIds, folderOwnerKinds, folderSpecs, kindSpecs, maxNameOf, nodeKinds, nodeSubtypes,
+  parentKinds, queryIds, scopeFields, textFilterOps, type FilterProperty, type KindSpec, type NodeKind, type RefField
 } from './catalog.ts'
 import type { ExplorerCancelParams, ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from './refs.ts'
 
@@ -13,21 +13,31 @@ const utf16 = (max: number) => z.string().min(1).refine(value => value.length <=
 /** An identifier as the server stores it: 1–128 UTF-16 code units, used verbatim (`' '` is a legal name), never U+0000. */
 export const ident = utf16(maxIdentifierLength).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.')
 
+/** A ref's own name, up to the longest any kind allows; `objectRefProblems` applies the kind's bound. */
+const refName = utf16(explorerLimits.maxName).refine(value => !value.includes('\u0000'), 'A name cannot contain U+0000.')
+
+/** The catalogue's kinds; tests pass a variant to check mechanisms no shipped kind uses yet. */
+export type KindSpecs = { readonly [K in NodeKind]: KindSpec }
+
 const parentRefSchema = z.object({ kind: z.enum(parentKinds), schema: ident, name: ident }).strict()
-/** Problems with a ref's shape: the fields its kind's scope requires or forbids, and a child's parent kind. */
-export function objectRefProblems(ref: ObjectRef): string[] {
-  if (!Object.hasOwn(kindSpecs, ref.kind)) return ['Unknown kind.']
-  const { required, forbidden } = scopeFields[kindSpecs[ref.kind].scope]
+/** Problems with a ref's shape: the fields its kind's scope requires or forbids, the kind's name bound, and a child's parent kind. */
+export function objectRefProblems(ref: ObjectRef, specs: KindSpecs = kindSpecs): string[] {
+  if (!Object.hasOwn(specs, ref.kind)) return ['Unknown kind.']
+  const spec = specs[ref.kind]
+  const { required, forbidden } = scopeFields[spec.scope]
   const has = (field: RefField) => ref[field] !== undefined
   const problems = [
     ...required.filter(field => !has(field)).map(field => `A ${ref.kind} needs a ${field}.`),
     ...forbidden.filter(has).map(field => `A ${ref.kind} has no ${field}.`)
   ]
+  if (ref.name !== undefined && ref.name.length > maxNameOf(spec)) problems.push(`A ${ref.kind} name has at most ${maxNameOf(spec)} UTF-16 code units.`)
   if (ref.parent && !childParentKinds(ref.kind).includes(ref.parent.kind)) problems.push(`A ${ref.kind} cannot belong to a ${ref.parent.kind}.`)
   return problems
 }
-export const objectRefSchema = z.object({ kind: z.enum(nodeKinds), database: ident.optional(), schema: ident.optional(), name: ident.optional(), parent: parentRefSchema.optional() })
-  .strict().superRefine((ref, context) => { for (const message of objectRefProblems(ref)) context.addIssue({ code: 'custom', message }) }) satisfies z.ZodType<ObjectRef>
+export const objectRefSchema = z.object({
+  kind: z.enum(nodeKinds), database: ident.optional(), schema: ident.optional(), name: refName.optional(), parent: parentRefSchema.optional(),
+  ssisFolder: ident.optional(), ssisProject: ident.optional()
+}).strict().superRefine((ref, context) => { for (const message of objectRefProblems(ref)) context.addIssue({ code: 'custom', message }) }) satisfies z.ZodType<ObjectRef>
 export const nodeRefSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('object'), object: objectRefSchema }).strict(),
   z.object({ type: z.literal('folder'), owner: objectRefSchema, folder: z.enum(folderIds) }).strict()
@@ -55,16 +65,26 @@ export const explorerChildrenParamsSchema = z.object({
   cursor: z.string().max(explorerLimits.cursorLength).regex(cursorPattern).optional(), pageSize: z.number().int().min(1).max(explorerLimits.pageSize).optional(),
   filter: explorerFilterSchema.optional()
 }).strict().superRefine((params, context) => {
-  const issue = (path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
+  for (const [path, message] of childrenParamsProblems(params)) context.addIssue({ code: 'custom', path: [path], message })
+}) satisfies z.ZodType<ExplorerChildrenParams>
+
+/**
+ * What a children request may carry for its node: a subtype of the object's kind, a cursor of the query the node lists (a
+ * folder's, or a kind's whose rows follow its static folders), and a filter of the folder's properties.
+ */
+export function childrenParamsProblems(params: ExplorerChildrenParams, specs: KindSpecs = kindSpecs): [path: string, message: string][] {
+  const problems: [string, string][] = []
   const { node } = params
-  if (params.subtype !== undefined && (node.type !== 'object' || !kindSpecs[node.object.kind].subtypes?.includes(params.subtype))) issue('subtype', 'This node has no such subtype.')
+  if (params.subtype !== undefined && (node.type !== 'object' || !specs[node.object.kind].subtypes?.includes(params.subtype))) problems.push(['subtype', 'This node has no such subtype.'])
   const folder = node.type === 'folder' ? folderSpecs[node.folder] : undefined
-  if (params.cursor !== undefined && (!folder?.list || params.cursor.split('.')[1] !== folder.list)) issue('cursor', 'The cursor is not for this folder.')
+  const list = node.type === 'folder' ? folder?.list : specs[node.object.kind].list
+  if (params.cursor !== undefined && (!list || params.cursor.split('.')[1] !== list)) problems.push(['cursor', 'The cursor is not for this node.'])
   if (params.filter) {
     const allowed: readonly FilterProperty[] = folder?.filter ?? []
-    for (const property of filterProperties) if (params.filter[property] !== undefined && !allowed.includes(property)) issue('filter', `This folder cannot be filtered by ${property}.`)
+    for (const property of filterProperties) if (params.filter[property] !== undefined && !allowed.includes(property)) problems.push(['filter', `This folder cannot be filtered by ${property}.`])
   }
-}) satisfies z.ZodType<ExplorerChildrenParams>
+  return problems
+}
 
 export const explorerCancelParamsSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(explorerLimits.cancelBatch).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')

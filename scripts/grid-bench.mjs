@@ -3,9 +3,9 @@ import { cpus, totalmem } from 'node:os'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { shapes } from '../tests/fixtures/backend/shapes.mjs'
-import { connectLive, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
+import { connectLive, liveColumns, liveRow, liveRowsSql } from './fixtures/live-rows.mjs'
 import { enlargeOutput } from './fixtures/results-pane.mjs'
-import { documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import { backendReady, documentTabs, gridCell, gridCellSelector, gridPart, jobNotice, outputStatus, part, statusBar, toolbarButton } from './fixtures/ui.mjs'
 
 // End-to-end results grid benchmarks (npm run bench:grid): the built app in test mode at 1600 × 1000 (or the screen, if
 // smaller), its grids fed by the fake backend's synthetic sets (tests/fixtures/backend.mjs, `-- varia-fake:` scripts).
@@ -62,7 +62,7 @@ async function run(sql, timeout = 60000) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText(sql)
   await page.keyboard.press('F5')
-  await expect(status()).toContainText(/^Query executed successfully\./, { timeout })
+  await expect(status()).toContainText(/^Completed · /, { timeout })
 }
 
 async function launch(env) {
@@ -79,7 +79,7 @@ async function launch(env) {
   })
   // Closing a typed query asks first; answer Don't Save.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
-  await statusBar(page).getByText(/· Ready/).waitFor({ timeout: 60000 })
+  await backendReady(page).waitFor({ timeout: 60000 })
   await page.evaluate(gridPart => {
     /** What grid 0 shows: its first row and column in view, how many cells in view still load, and how many rows show. */
     window.__benchView = () => {
@@ -186,7 +186,7 @@ try {
   await page.keyboard.insertText('-- varia-fake: sets=W1*1000000@250000')
   const streamStart = { task: await taskSeconds(), wall: performance.now() }
   await page.keyboard.press('F5')
-  await expect(status()).toContainText('Query executed successfully.', { timeout: 60000 })
+  await expect(status()).toContainText(/^Completed · /, { timeout: 60000 })
   const streamSeconds = (performance.now() - streamStart.wall) / 1000, streamBusy = await taskSeconds() - streamStart.task
   await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
   record('grid.stream.busyPercent', streamBusy / streamSeconds * 100, '%', `main-thread task time ${streamBusy.toFixed(2)} s of ${streamSeconds.toFixed(1)} s while 1,000,000 rows streamed at 250,000 a second`)
@@ -393,6 +393,9 @@ try {
     const saveRows = 1_000_000, file = join(saves, 'grid-bench.csv')
     await run(liveRowsSql(saveRows), 180000)
     await expect(grid()).toHaveAttribute('aria-label', 'Result 1 of 1, 1,000,000 rows, 8 columns')
+    // Copy above uses the default without headers; this export measures a CSV with its column names included.
+    expect(await page.evaluate(() => window.varia.updateSettings({ 'queryResults.grid.includeColumnHeaders': true })))
+      .toMatchObject({ ok: true, value: { values: { 'queryResults.grid.includeColumnHeaders': true } } })
     await app.evaluate(({ dialog }, path) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: path }) }, file)
     await cell(0, 0).click()
     const saveStarted = performance.now()
@@ -403,6 +406,10 @@ try {
     let lineCount = 0
     for (let index = saved.indexOf(10); index !== -1; index = saved.indexOf(10, index + 1)) lineCount++
     if (lineCount !== saveRows + 1) throw new Error(`The saved CSV has ${lineCount} lines, not ${saveRows + 1}.`)
+    const csvField = value => value === null ? '' : value === '' || /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value
+    const csvLine = values => values.map(csvField).join(',') + '\r\n'
+    expect(saved.subarray(0, 4096).toString('utf8').startsWith('\uFEFF' + csvLine(liveColumns) + csvLine(liveRow(1)))).toBe(true)
+    expect(saved.subarray(saved.lastIndexOf(10, saved.length - 2) + 1).toString('utf8')).toBe(csvLine(liveRow(saveRows)))
     record('grid.live.saveMs', saveMs, 'ms', `${saveRows.toLocaleString('en-US')} rows × 8 columns as CSV, ${(saved.length / 1e6).toFixed(0)} MB`)
     await close()
   }

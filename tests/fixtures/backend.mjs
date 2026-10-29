@@ -10,6 +10,8 @@
 //                       redacted
 //   reject-passwords    server 'password-check' refuses every login (18456), as after a password change; otherwise it
 //                       accepts only the password correct-horse-marker
+//   untrusted-certificate  server 'password-check' refuses a connect without Trust server certificate, as a self-signed
+//                       certificate does (reason 'certificate')
 //   hold/<method>       the method waits while this file exists; a directive with `hold` waits after its sets and
 //                       messages, and results.export after each page (so a test can cancel it mid-save)
 //   allow/audits        explorer.children may list audits (otherwise they fail as a permission error would)
@@ -28,7 +30,10 @@
 // table stored per sample (two revisions alive), live.update for pause, intervals, refresh, sort, tracking and args, and
 // an end on CANCEL (cancelled or shutdown), a disconnect (disconnected) or args.endAfterTicks (sourceEnded). It implements
 // the metrics, table and status probes only, and refuses the others (INVALID_PARAMS) rather than send frames main would
-// count as protocol violations.
+// count as protocol violations. Object Explorer's `explorer` source runs only while the control directory holds
+// explorer-status.json, `{ databases?: [name, state, userAccess, readOnly, standby][], progress?: [name, command, percent][],
+// jobs?: number, groups?: [name, health, role][] }`, read again at every sample; without it the source is refused as an
+// unknown one, so suites that do not look at status chips see one refused subscription per connection and nothing else.
 // Echo-mode live.subscribe sends live.opened and `ticks` (default 3) status ticks, each after the previous one's credit;
 // modes live-overrun (a tick before the opened frame's credit), live-data (a DATA frame), live-big (a 300 KiB EVENT) and
 // live-seq-gap (tick 2 after the opened frame's credit) break the protocol on purpose.
@@ -36,7 +41,7 @@
 // SHOWPLAN_* ON and OFF: every summary carries its spid and login, query.session.state answers its @@TRANCOUNT (unchecked
 // while such an option is ON, SESSION_BUSY while a script waits in it, SESSION_CLOSED for none), and query.session.close
 // commits or rolls back what is open.
-import { appendFileSync, existsSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { access, appendFile, open, rename, rm, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { FrameKind, FrameParser, encodeFrame } from '../../src/shared/ipc/wire/frames.ts'
@@ -46,6 +51,7 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { liveProbes } from '../../src/shared/live/catalog.ts'
 
 const [mode = 'echo', argument] = process.argv.slice(2)
 const parser = new FrameParser({ maxBody: 4 * 1024 * 1024, direction: 'toBackend' })
@@ -131,6 +137,11 @@ function request(id, deadline, { method, params, credit }) {
       break
     // connections.connect fails with details (docs/ipc.md); server 'long' sends a server name over the 256-character bound.
     case 'error-details':
+      if (method === 'connections.connect' && params.server === 'certificate') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: 'certificate', reason: 'certificate' } } })
+      if (method === 'connections.connect' && params.server === 'crash') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'The backend operation failed.', details: { exception: 'System.DllNotFoundException (0x80131524)' } } })
+      // Out of bounds: a reason main does not know, and an exception summary longer than 512 characters.
+      if (method === 'connections.connect' && params.server === 'reason') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'Failed.', details: { reason: 'firewall' } } })
+      if (method === 'connections.connect' && params.server === 'exception') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'BACKEND_ERROR', message: 'Failed.', details: { exception: 'x'.repeat(513) } } })
       if (method === 'connections.connect') return write(FrameKind.RESPONSE, id, 0, { error: { code: 'AUTH_KERBEROS', message: 'Your Kerberos ticket has expired.', details: params.server === 'long' ? { number: 0, server: 'x'.repeat(257) } : { number: 0, state: 0, class: 11, server: params.server } } })
       break
     case 'events':
@@ -256,9 +267,15 @@ const workbenchDatabases = [
   { name: 'master', isSystem: true, isSnapshot: false }, { name: 'model', isSystem: true, isSnapshot: false }, { name: 'msdb', isSystem: true, isSnapshot: false },
   { name: 'tempdb', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }, { name: 'AppData_Snapshot', isSystem: false, isSnapshot: true }
 ]
+// With the spaced-databases cue, names that differ only in their spaces, as SQL Server allows: a list that took an
+// option's text, whose spaces are collapsed and trimmed, would name another database or none.
+const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(name => ({ name, isSystem: false, isSnapshot: false }))
+const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
 // Object Explorer's fixture tree (explorer.children), on a SQL Server 2022 box: the catalogue's static folders, and
-// these rows in the folders that list them. Every database has dbo.Orders; Audits fails until allow/audits exists.
+// these rows in the folders (and kinds) that list them. Every database has dbo.Orders; Audits fails until allow/audits
+// exists. The SSIS Catalog has one folder, Finance, with the project Loads (an entry point and a child package) and the
+// environment Test.
 const explorerProfile = { band: 16, engine: 'box' }
 const explorerRows = {
   systemDatabases: () => ['master', 'model', 'msdb', 'tempdb'].map(name => explorerObject({ kind: 'database', name }, name, { subtype: 'system', hasChildren: true })),
@@ -273,7 +290,15 @@ const explorerRows = {
   serverRoles: () => serverRoles.map(name => explorerObject({ kind: 'serverRole', name }, name)),
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
-  serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')]
+  serverAuditSpecifications: () => [explorerObject({ kind: 'serverAuditSpecification', name: 'LoginAuditSpec' }, 'LoginAuditSpec')],
+  integrationServicesCatalogs: () => [explorerObject({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', { hasChildren: true })],
+  ssisFolders: () => [explorerObject({ kind: 'ssisFolder', name: 'Finance' }, 'Finance', { hasChildren: true })],
+  ssisProjects: owner => [explorerObject({ kind: 'ssisProject', ssisFolder: owner.name, name: 'Loads' }, 'Loads', { hasChildren: true, sublabel: '(Deployed 2026-10-21 14:05)' })],
+  ssisEnvironments: owner => [explorerObject({ kind: 'ssisEnvironment', ssisFolder: owner.name, name: 'Test' }, 'Test', { sublabel: '(2 variables)' })],
+  ssisPackages: owner => [
+    explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Daily.dtsx' }, 'Daily.dtsx', { subtype: 'entryPoint' }),
+    explorerObject({ kind: 'ssisPackage', ssisFolder: owner.ssisFolder, ssisProject: owner.name, name: 'Child.dtsx' }, 'Child.dtsx', { subtype: 'child', icon: 'symbol-file' })
+  ]
 }
 // What extra/<folder> adds: a role or table created since the folder was first listed.
 const explorerExtras = {
@@ -288,8 +313,10 @@ async function explorerChildren({ node, subtype }) {
   if (node.type === 'folder' && node.folder === 'audits' && !await controlled(join('allow', 'audits'))) {
     return { nodes: statics, elapsedMs: 1, error: { code: 'PERMISSION_DENIED', message: 'You do not have permission to view Audits.', retryable: true } }
   }
+  // A folder lists its rows; an object whose kind lists rows (the SSIS catalog's folders) lists them after its folders.
+  const list = node.type === 'folder' ? node.folder : kindSpecs[node.object.kind].list
   const extra = node.type === 'folder' && explorerExtras[node.folder] && await controlled(join('extra', node.folder)) ? [explorerExtras[node.folder](owner)] : []
-  const nodes = [...statics, ...(node.type === 'folder' ? explorerRows[node.folder]?.(owner) ?? [] : []), ...extra]
+  const nodes = [...statics, ...(list ? explorerRows[list]?.(owner) ?? [] : []), ...extra]
   return { nodes, total: nodes.length, elapsedMs: 1 }
 }
 // Stored results of this process (one backend generation), by resultId, as the real result store keeps them. Rows come
@@ -365,6 +392,9 @@ function storeResults(id, sets) {
   })
 }
 const info = text => ({ text, kind: 'info' })
+// What a script printed (PRINT, RAISERROR), and SQL Server's other messages (STATISTICS, warnings), as the real backend marks them.
+const print = text => ({ text, kind: 'print' })
+const server = text => ({ text, kind: 'server' })
 const summary = (id, database, sets, patch = {}) => ({
   resultSets: storeResults(id, sets), discardedResultSets: 0, messages: [], recordsAffected: -1, elapsedMs: 1, status: 'completed', completedBatches: 1, totalBatches: 1,
   database, messagesTruncated: false, budget: summaryBudget(), completedAt: new Date().toISOString().replace('Z', '0000+00:00'), ...patch
@@ -474,7 +504,7 @@ async function runDirective(id, params, directive) {
       if (status === 'cancelled') break
     }
     const messages = [
-      ...Array.from({ length: directive.messages }, (_, i) => info(`Message ${i + 1}`)),
+      ...Array.from({ length: directive.messages }, (_, i) => print(`Message ${i + 1}`)),
       ...Array.from({ length: directive.errors }, (_, i) => ({ text: `Msg 50000, Level 16, State 1, Line ${i + 1}\nFake error ${i + 1}.`, kind: 'error' }))
     ].slice(0, 1000)
     if (status === 'cancelled') messages.push({ text: 'The script was cancelled. Remaining batches were not executed.', kind: 'error' })
@@ -499,9 +529,9 @@ async function runDirective(id, params, directive) {
 const fixtures = {
   BATCH_STATS_FIXTURE: (id, params) => summary(id, params.database, [{ columns: [column('retained', 'int')], rows: [['42']], batchNumber: 1, iteration: 1 }], {
     // As the real backend logs them: statistics, then the batch's error in SSMS's two-line form, and the third batch still runs.
-    messages: [info('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), info("Table '#temp'. Scan count 1, logical reads 2."),
+    messages: [server('SQL Server Execution Times: CPU time = 1 ms, elapsed time = 2 ms.'), server("Table '#temp'. Scan count 1, logical reads 2."),
       { text: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', kind: 'error' }, info('Batch 2 raised an error; execution continued with the next batch.'),
-      info('third batch')], elapsedMs: 3, status: 'completedWithErrors',
+      print('third batch')], elapsedMs: 3, status: 'completedWithErrors',
     error: { code: 'SQL_ERROR', message: 'Msg 137, Level 15, State 2, Line 8\nMust declare the scalar variable.', batchNumber: 2, iteration: 1 }, completedBatches: 3, totalBatches: 3
   }),
   // scripts/menus-smoke.mjs: Select Top 1000 Rows on dbo.Orders, a grid to select and copy, and a grid with a plan.
@@ -527,25 +557,48 @@ const fixtures = {
 /** Workbench live.subscribe for debug.synthetic's metrics, table and status probes, as Live/SyntheticSampler.cs behaves. */
 function liveSubscribe(id, credit, params) {
   if (credit === undefined) return fail(id, 'INVALID_PARAMS', 'A live subscription is a stream: it needs credit.')
-  if (params.source !== 'debug.synthetic' || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
-  if (params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  const explorer = params.source === 'explorer' && Array.isArray(params.probes) && explorerStatus() !== undefined
+  if ((params.source !== 'debug.synthetic' && !explorer) || !Array.isArray(params.probes)) return fail(id, 'INVALID_PARAMS', 'Unknown live source.')
+  if (!explorer && params.probes.some(probe => !syntheticProbes.includes(probe.probe))) return fail(id, 'INVALID_PARAMS', 'The fake backend does not implement this probe.')
+  if (explorer && !workbenchConnections.has(params.connectionId)) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   if ([...lives.values()].some(live => live.subscriptionId === params.subscriptionId)) return fail(id, 'DUPLICATE_REQUEST', 'This live view is already open.')
   const now = Date.now()
   const live = {
     id, subscriptionId: params.subscriptionId, connectionId: params.connectionId, initial: credit, available: credit, args: { ...params.args }, paused: false,
     probes: new Map(params.probes.map(probe => [probe.probe, { ...probe, dueAt: now, last: -1, resumed: false, samples: 0, tracks: new Map() }])),
-    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0
+    seq: 0, ticks: 0, revisions: [], previous: new Map(), timer: undefined, started: now, sampledAt: 0, source: params.source, kept: new Map()
   }
   live.grant = more => { live.available += more; wakeLive(live) }
   live.end = ended => {
     clearTimeout(live.timer)
     const kept = ended === 'sourceEnded' ? live.revisions.slice(-1) : []
     for (const resultId of live.revisions) if (!kept.includes(resultId)) stored.delete(resultId)
+    for (const ids of live.kept.values()) for (const resultId of ids) stored.delete(resultId)
     respond(id, { ended, ...(ended === 'sourceEnded' ? { kept } : {}), ticks: live.ticks, elapsedMs: Date.now() - live.started })
   }
   lives.set(id, live)
-  sendLive(live, opened([...live.probes.keys()]))
+  sendLive(live, explorer ? explorerOpened([...live.probes.keys()]) : opened([...live.probes.keys()]))
   wakeLive(live)
+}
+const explorerOpened = probes => ({ type: 'live.opened', seq: 0, source: 'explorer', probes: probes.map(probe => ({ probe, intervalMs: liveProbes[probe].intervalMs.default, minIntervalMs: liveProbes[probe].intervalMs.min, maxIntervalMs: liveProbes[probe].intervalMs.max, state: 'ok' })) })
+/** explorer-status.json, or undefined while there is none (or it does not parse). */
+function explorerStatus() {
+  if (!controlDirectory) return undefined
+  try { return JSON.parse(readFileSync(join(controlDirectory, 'explorer-status.json'), 'utf8')) } catch { return undefined }
+}
+/** One explorer probe's sample: its table as a new stored revision (two kept per probe), or the Agent count. */
+function explorerSample(live, probe) {
+  const status = explorerStatus() ?? {}
+  if (probe.probe === 'explorer.agent') return { metrics: [status.jobs ?? 0] }
+  const rows = (probe.probe === 'explorer.databases' ? status.databases : probe.probe === 'explorer.progress' ? status.progress : status.groups) ?? []
+  const columns = liveProbes[probe.probe].tables[0].columns.map(column => ({ name: column.name, dataType: column.dataType, wire: 'text', nullable: true }))
+  const result = storeResult({ columns, rows: rows.map(row => row.map(cell => String(cell))) }, 0)
+  const kept = live.kept.get(probe.probe) ?? []
+  kept.push(result.resultId)
+  const retired = kept.length > 2 ? [kept.shift()] : undefined
+  if (retired) stored.delete(retired[0])
+  live.kept.set(probe.probe, kept)
+  return { tables: [{ table: 0, descriptor: describe(result), revision: probe.samples, ...(retired ? { retired } : {}) }] }
 }
 function sendLive(live, value) {
   const body = encodeControl(value)
@@ -573,7 +626,8 @@ function wakeLive(live) {
     probe.last = now
     probe.resumed = false
     const n = ++probe.samples
-    if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
+    if (live.source === 'explorer') samples.push({ ...sample, ...explorerSample(live, probe) })
+    else if (probe.probe === 'debug.synthetic.metrics') samples.push({ ...sample, metrics: [n, 50 + 50 * Math.sin(n / 4), sample.elapsedMs === undefined || sample.gap === 'resumed' ? null : (50 + 50 * Math.sin(n / 4)) * 1000 / Math.max(1, sample.elapsedMs)] })
     else if (probe.probe === 'debug.synthetic.status') samples.push({ ...sample, status: [{ id: 'phase', value: n % 2 === 0 ? 'even' : 'odd' }, { id: 'samples', value: n }] })
     else if (live.args.errorEvery && n % live.args.errorEvery === 0) errors.push({ probe: probe.probe, code: 'SQL_ERROR', message: 'The synthetic source failed this sample, as the test asked.', retryInMs: probe.intervalMs, terminal: false })
     else samples.push({ ...sample, tables: [liveTable(live, probe, n)] })
@@ -644,6 +698,9 @@ async function workbench(id, method, params, credit) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'connections.connect': {
       if (params.server === 'entra-wait') return entraWait(id, method)
+      if (params.server === 'password-check' && !params.trustServerCertificate && await controlled('untrusted-certificate')) {
+        return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: 'The certificate chain was issued by an authority that is not trusted.', details: { number: -2146893019, state: 0, class: 20, server: params.server, reason: 'certificate' } } })
+      }
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
       // The name and colour come back as the backend echoes them; the environment stays in the renderer's options.
       const info = { id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.0.fake', commandTimeout: params.advanced?.commandTimeout ?? 0, ...params.displayName ? { displayName: params.displayName } : {}, ...params.color ? { color: params.color } : {} }
@@ -653,7 +710,7 @@ async function workbench(id, method, params, credit) {
     case 'connections.databases':
       if (params.server === 'entra-wait') return entraWait(id, method)
       if (params.server === 'password-check' && (params.password !== 'correct-horse-marker' || await controlled('reject-passwords'))) return write(FrameKind.RESPONSE, id, 0, { error: { code: 'SQL_ERROR', message: "Login failed for user 'reader'.", details: { number: 18456, state: 1, class: 14, server: params.server } } })
-      return respond(id, workbenchDatabases)
+      return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
@@ -697,7 +754,7 @@ async function workbench(id, method, params, credit) {
   const connection = workbenchConnections.get(params.connectionId)
   if (!connection) return fail(id, 'NOT_CONNECTED', 'Connect to a SQL Server first.')
   switch (method) {
-    case 'databases.list': return respond(id, workbenchDatabases)
+    case 'databases.list': return respond(id, await databaseRows())
     case 'scripting.script': return respond(id, { text: 'CREATE TABLE dbo.Orders (Id int);', database: params.targets[0].database ?? 'master', warnings: [], commands: 1, elapsedMs: 1 })
     // Object actions: Delete Object's row for the target, its DROP script, and one done step.
     case 'actions.describe':

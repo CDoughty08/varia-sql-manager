@@ -129,13 +129,13 @@ internal sealed partial class ActionService : IDisposable
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null) throw Invalid("rename takes no delete options or changes.");
+                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null || args.Design is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
@@ -146,7 +146,7 @@ internal sealed partial class ActionService : IDisposable
                 DatabaseAlter.Validate(catalog, args);
                 return target;
             case "createTable":
-                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null) throw Invalid("createTable takes only a design.");
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
                 TableDesignValidator.Validate(designer, args.Design);
                 return database;
@@ -560,6 +560,10 @@ internal sealed partial class ActionService : IDisposable
         }
         var row = await Preflight();
         if (row is null) return (null, Error("NOT_FOUND", "The database " + display + " no longer exists. Refresh Object Explorer."));
+        // The properties were read from one database; a rename, drop or restore since can have given its name to another,
+        // which Apply and Script must never change in its place.
+        if (args.Identity is { } read && (row.Int("database_id") != read.Id || DatabaseProperties.Iso(row.Raw("create_date")) != read.Created))
+            return (null, Error("NOT_FOUND", "The database " + display + " is not the one these properties were read from: it was renamed, dropped or replaced since. Read its properties again."));
         if (row.Int("engine_edition") == 8) return (null, Error("NOT_SUPPORTED", "Database Properties on Azure SQL Managed Instance is not supported yet."));
         if (row.Bool("is_snapshot")) return (null, Error("NOT_SUPPORTED", "A database snapshot is read-only."));
         if (row.Int("state") != 0) return (null, Error("DATABASE_UNAVAILABLE", "The database " + display + " is " + (row.Text("state_desc") ?? "unavailable").Replace('_', ' ').ToLowerInvariant() + "."));
@@ -595,10 +599,10 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>Whether the changes include an option SSMS closes other connections for.</summary>
     private bool Exclusive(DatabaseChangesDto changes) => (changes.Options ?? []).Keys.Any(key => catalog.DatabaseOptions.TryGetValue(key, out var option) && option.Exclusive == true);
 
-    /// <summary>The properties preflight, in master: the database's state and kind, the login's access and ALTER permission,
+    /// <summary>The properties preflight, in master: the database's identity, state and kind, the login's access and ALTER permission,
     /// Auto Create Statistics now, the server's edition and version, whether a new owner's login exists, and the sessions in
     /// the database (with VIEW SERVER STATE; this connection is in master).</summary>
-    public const string DatabasePropertiesPreflight = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
+    public const string DatabasePropertiesPreflight = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, d.is_auto_create_stats_on AS auto_create, "

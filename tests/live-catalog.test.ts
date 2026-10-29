@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { activityLiveProbes, activitySource, activityStatuses, liveColumnId, liveColumnTypes, pendingProbes, probeSeries, probeSpecs, seriesSpecs, tableSpecs, type ActivityTable } from '../src/shared/activity/catalog'
 import { limits } from '../src/shared/ipc/wire/protocol'
-import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
+import { defaultBudgetMs, liveCatalogJson, liveCounters, liveDataTypes, liveProbeIds, liveProbes, liveSourceIds, liveSources, liveTones, liveUnits, productionSourceIds } from '../src/shared/live/catalog'
 import { renderLiveDocs } from '../src/shared/live/docs'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 
@@ -80,6 +80,27 @@ describe('live catalogue', () => {
       expect((probe.series ?? []).length + tables.length + (probe.status ?? []).length, id).toBeGreaterThan(0)
     }
   })
+  it('keeps a row tone column last, as text, and out of keys and facets', () => {
+    // The grid hides the last column when it is the tone (GridView), so a tone column anywhere else would show and shift
+    // every column after it.
+    let toned = 0
+    for (const id of liveProbeIds) {
+      for (const table of liveProbes[id].tables ?? []) {
+        const tones = table.columns.filter(column => column.role !== undefined)
+        expect(tones.every(column => column.role === 'tone' && column.dataType === 'nvarchar'), id).toBe(true)
+        expect(tones.length, id).toBeLessThanOrEqual(1)
+        if (tones.length === 0) continue
+        toned++
+        expect(table.columns.at(-1), id).toBe(tones[0])
+        expect(table.columns.length, id).toBeGreaterThan(1)
+        expect(table.key, id).not.toContain(tones[0].id)
+        expect(table.facets ?? [], id).not.toContain(tones[0].id)
+      }
+    }
+    // The synthetic grid and log carry one, so the renderer and smoke tests see tones in both table modes.
+    expect(toned).toBeGreaterThanOrEqual(2)
+    expect(liveTones).toEqual(['error', 'warning', 'running', 'muted'])
+  })
   it('keeps a statusOnly source\'s hidden sampling to probes without tables', () => {
     for (const id of liveSourceIds) {
       const source = liveSources[id]
@@ -92,8 +113,17 @@ describe('live catalogue', () => {
     expect(Object.keys(liveArgsSchemas).sort()).toEqual([...liveSourceIds].sort())
     expect(productionSourceIds).toEqual(liveSourceIds.filter(id => !liveSources[id].testOnly))
     expect(liveSources['debug.synthetic']).toMatchObject({ testOnly: true, scope: 'none' })
-    expect(productionSourceIds).toEqual(['activity'])
+    expect(productionSourceIds).toEqual(['activity', 'explorer'])
     expect(liveSources.activity).toMatchObject({ testOnly: false, scope: 'server', probes: ['activity.overview', 'activity.sessions', 'activity.resources'] })
+    // Object Explorer's status chips: database states need no permission (a low-privilege login still gets them), the
+    // DMV probes need server state, the Agent probe skips Express and the availability probe runs only where Always On can.
+    expect(liveSources.explorer).toMatchObject({ testOnly: false, scope: 'server', probes: ['explorer.databases', 'explorer.progress', 'explorer.agent', 'explorer.availability'] })
+    expect(liveProbes['explorer.databases']).toMatchObject({ intervalMs: { default: 5000, min: 2000 }, gates: { minMajor: 13, editions: [1, 2, 3, 4, 8] } })
+    expect(liveProbes['explorer.databases'].permission).toBeUndefined()
+    expect(liveProbes['explorer.progress']).toMatchObject({ permission: 'serverState', tables: [{ id: 'progress', key: ['name'] }] })
+    expect(liveProbes['explorer.agent']).toMatchObject({ gates: { editions: [1, 2, 3, 8] }, series: [{ id: 'runningJobs', counter: 'gauge' }] })
+    expect(liveProbes['explorer.agent'].permission).toBeUndefined()
+    expect(liveProbes['explorer.availability']).toMatchObject({ permission: 'serverState', gates: { editions: [2, 3] }, tables: [{ id: 'groups', key: ['name'] }] })
     // The Activity Monitor's overview: 2 s by default (owner decision), never below 1 s, a 0.2 load guard, server state.
     expect(liveProbes['activity.overview']).toMatchObject({ intervalMs: { default: 2000, min: 1000 }, maxDutyCycle: 0.2, permission: 'serverState', gates: { minMajor: 13 } })
   })

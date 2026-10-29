@@ -131,9 +131,38 @@ export const activityLimits = {
   statementChars: 4_000, inputBufferChars: 4_000, resourceChars: 512, lastBatchChars: 200,
   facetColumns: 7, facetValues: 100, facetChars: 128,
   filterText: 400, columnFilters: 8, columnFilterValues: 50, columnFilterChars: 256, columnsPerProjection: 64,
-  detailsChars: 1_000_000, detailsWaits: 20, detailsTransactions: 50, detailsLocks: 1_000, killSessions: 64,
+  detailsChars: 1_000_000, detailsPreviewChars: 65_536, detailsWaits: 20, detailsTransactions: 50, detailsLocks: 1_000, detailsBudgetMs: 10_000, detailsRunning: 32,
+  killSessions: 64, killBudgetMs: 25_000, killMessageChars: 2_000, cancelIds: 16, cancelTombstones: 64, cancelTombstoneMs: 60_000,
   sessionId: 32_767
 } as const
+
+/** The session actions (activity.details and activity.kill): Details' sections, the texts it returns in full on request,
+ *  and what each Kill outcome means. The backend embeds the ids and returns only these. */
+export const detailsSections = [
+  { id: 'session', title: 'Identity and Now', reads: 'sys.dm_exec_sessions with sys.dm_exec_connections and its requests (a blocked one, else the lowest, gives the request columns; CPU and reads add them all)' },
+  { id: 'statement', title: 'Current statement', reads: 'sys.dm_exec_sql_text of that request, cut at its statement offsets' },
+  { id: 'batch', title: 'Batch', reads: 'sys.dm_exec_sql_text of that request, whole' },
+  { id: 'inputBuffer', title: 'Last batch', reads: 'sys.dm_exec_input_buffer: the event type, its parameter count and its text' },
+  { id: 'waits', title: 'Session waits', reads: `sys.dm_exec_session_wait_stats, the ${activityLimits.detailsWaits} largest by wait time` },
+  { id: 'transactions', title: 'Transactions', reads: 'sys.dm_tran_session_transactions with sys.dm_tran_active_transactions and sys.dm_tran_database_transactions, one row per transaction and database' },
+  { id: 'tempdb', title: 'tempdb usage', reads: 'sys.dm_db_session_space_usage and sys.dm_db_task_space_usage: pages its objects and its work hold now' },
+  { id: 'locks', title: 'Locks', reads: 'sys.dm_tran_locks grouped by resource type, database, mode and status; only when asked (Load locks), as it is costly' }
+] as const
+export type DetailsSection = typeof detailsSections[number]['id']
+/** The texts Details returns whole (up to detailsChars) when asked for one by name, for Open in Query Editor. */
+export const detailsTexts = ['statement', 'batch', 'inputBuffer'] as const satisfies readonly DetailsSection[]
+export type DetailsText = typeof detailsTexts[number]
+export const killOutcomes = {
+  killed: 'SQL Server accepted KILL. An open transaction rolls back, which can take as long as the work it undoes; Processes shows its progress.',
+  ended: 'No session has that id any more. Nothing was killed.',
+  changed: 'The id now belongs to another session (its login time or host process id differs). Nothing was killed.',
+  own: 'The session Kill itself runs on. Nothing was killed.',
+  system: 'A SQL Server system session: only user sessions can be killed. Nothing was killed.',
+  varia: 'One of this window\'s own pool sessions (Object Explorer, Scripting, Object Actions, Activity Monitor or Integration Services). Nothing was killed.',
+  denied: 'The login lacks ALTER ANY CONNECTION (sysadmin or processadmin). Nothing was killed.',
+  failed: 'Another error, which the message gives; when the connection broke during KILL, whether the session ended is unknown.'
+} as const
+export type KillOutcome = keyof typeof killOutcomes
 
 export type ColumnType = 'int' | 'bigint' | 'decimal' | 'text' | 'datetime' | 'bool'
 /** A column's unit; '' only for text, times and flags. `id` is an identifier, `count` a number of things. */
@@ -717,9 +746,12 @@ export function activityCatalogJson(): string {
     `  "benign": ${line(benignWaits.map(wait => wait.name))},`,
     `  "benignCategories": ${line(benignCategories)},`,
     `  "blockerLabels": ${line(blockerLabels)},`,
+    `  "detailsSections": ${line(detailsSections.map(section => section.id))},`,
+    `  "detailsTexts": ${line(detailsTexts)},`,
     `  "editions": ${line(Object.fromEntries(Object.entries(activityEditions).map(([id, spec]) => [id, { available: spec.available, editions: spec.editions }])))},`,
     `  "exceptions": ${line(waitExceptions.map(({ name, category }) => ({ name, category })))},`,
     `  "hideBenign": ${line({ default: waitToggles.hideBenign.default, tables: waitToggles.hideBenign.tables })},`,
+    `  "killOutcomes": ${line(Object.keys(killOutcomes))},`,
     `  "limits": ${line(activityLimits)},`,
     `  "liveProbes": ${line(activityLiveProbes)},`,
     `  "loadGuard": ${line(activityLoadGuard)},`,
@@ -734,6 +766,7 @@ export function activityCatalogJson(): string {
         textColumns: spec.textColumns, facetColumns: spec.facetColumns, tones: spec.tones, departedLinger: spec.departedLinger }
     }))},`,
     `  "tones": ${line(rowTones)},`,
+    `  "unavailableMessage": ${line(unavailableMessage)},`,
     `  "variaSessions": ${line(variaSessionKinds.map(({ suffix, kind, label }) => ({ suffix, kind, label })))},`,
     `  "version": 1,`,
     `  "views": ${line(viewChips)},`,

@@ -5,6 +5,7 @@ import { colorKeys, colorRegistry, cssVariable, type ColorKey } from '../src/sha
 import { densityVariables, metricVariables, reducedMotionVariables } from '../src/shared/theme/metrics'
 import { editorFontFamily, monoFontFamily, uiFontFamily } from '../src/renderer/src/fonts'
 import { stylesheetRules } from './fixtures/css-rules'
+import { liveTones } from '../src/shared/live/catalog'
 
 const rendererDir = 'src/renderer/src'
 const stylesheet = readFileSync(join(rendererDir, 'styles.css'), 'utf8')
@@ -77,6 +78,12 @@ describe('theme tokens in the renderer', () => {
     expect([...used].filter(key => !colorRegistry[key].consumers.includes('css')), 'keys used by styles.css without consumer css').toEqual([])
     const scripted = new Set(sources.flatMap(({ code }) => variablesIn(code)).map(name => keyByVariable.get(name)))
     for (const key of scripted) if (key) expect(colorRegistry[key].consumers, key).toContain('script')
+  })
+  it('drops the NULL tint on every toned live grid row, which the toned rows\' contrast pairs assume', () => {
+    // contrast-pairs.ts checks resultsGrid.nullForeground over the row tone without resultsGrid.nullBackground: with the
+    // tint stacked on a tone, NULL text falls below 4.5:1.
+    const untinted = new Set(declarations.filter(({ property, value }) => property === 'background' && value === 'none').flatMap(({ selector }) => selector.split(',').map(part => part.trim().replace(/\s+/g, ' '))))
+    expect(liveTones.filter(tone => !untinted.has(`.rg-row.tone-${tone} .rg-c.is-null`))).toEqual([])
   })
   it('overrides every Dockview theme color on the shell, where floating groups inherit it', () => {
     const dockview = readFileSync('node_modules/dockview-react/dist/styles/dockview.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')

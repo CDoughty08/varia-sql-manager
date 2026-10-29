@@ -78,13 +78,63 @@ internal static partial class LiveSql
     /// is a parameter: VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before and on Managed Instance).</summary>
     public const string Session = "SELECT @@SPID, CONVERT(int, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, @permission), 0));";
 
-    /// <summary>One batch per probe and band. No shipped probe reads through one yet: the Activity Monitor's run several
-    /// statements each (Activity/ActivityReader.cs and ActivitySql), the live checks register their own (LiveTestSql), and the
-    /// SSISDB probes join here.</summary>
-    private static readonly Dictionary<(string Probe, int Band), LiveQuery> Queries = [];
+    public const string DatabasesProbe = "explorer.databases";
+    public const string ProgressProbe = "explorer.progress";
+    public const string AgentProbe = "explorer.agent";
+    public const string AvailabilityProbe = "explorer.availability";
 
-    /// <summary>The probe's query at a band, or null when the probe has none there (not a one-batch probe, or below its gate).</summary>
-    public static LiveQuery? For(string probe, int band) => Queries.GetValueOrDefault((probe, band));
+    // Object Explorer's status chips (docs/object-explorer.md, Live status). Only the databases a chip is for: anything not
+    // online, not open to every user, read-only or standby. Names come as they are; the renderer matches them to its nodes.
+    private const string Databases =
+        "SELECT d.name, CONVERT(tinyint, d.state) AS state, CONVERT(tinyint, d.user_access) AS userAccess, d.is_read_only AS readOnly, d.is_in_standby AS standby\n"
+        + "FROM sys.databases AS d\n"
+        + "WHERE d.state <> 0 OR d.user_access <> 0 OR d.is_read_only = 1 OR d.is_in_standby = 1\n"
+        + "ORDER BY d.name;";
+
+    // A database recovering at startup (DB STARTUP) is its request's own database. A RESTORE runs in its session's database
+    // (master, usually) until its last phase, so the database it restores is the one its request holds an exclusive database
+    // lock on. The lock DMV costs a scan of the lock manager each time it is read (tens of milliseconds on an idle server), so
+    // only the RESTORE branch reads it, once per RESTORE request (the APPLY's outer rows are those requests alone): a server
+    // with nothing restoring never scans it, however many databases recover.
+    private const string Progress =
+        "SELECT d.name, r.command, CONVERT(int, r.percent_complete) AS [percent]\n"
+        + "FROM sys.dm_exec_requests AS r\n"
+        + "JOIN sys.databases AS d ON d.database_id = r.database_id\n"
+        + "WHERE r.command = N'DB STARTUP'\n"
+        + "UNION ALL\n"
+        + "SELECT d.name, r.command, CONVERT(int, r.percent_complete)\n"
+        + "FROM sys.dm_exec_requests AS r\n"
+        + "CROSS APPLY (SELECT TOP (1) l.resource_database_id FROM sys.dm_tran_locks AS l\n"
+        + "    WHERE l.request_session_id = r.session_id AND l.resource_type = N'DATABASE' AND l.request_mode = N'X'\n"
+        + "    ORDER BY l.resource_database_id) AS t\n"
+        + "JOIN sys.databases AS d ON d.database_id = t.resource_database_id\n"
+        + "WHERE r.command IN (N'RESTORE DATABASE', N'RESTORE LOG')\n"
+        + "ORDER BY name;";
+
+    // Job Activity Monitor's count: the Agent's current session (a new one starts with every Agent start), so rows a crashed
+    // Agent left without a stop date in an older session are not counted.
+    private const string Agent =
+        "SELECT COUNT(*) AS running_jobs FROM msdb.dbo.sysjobactivity AS a\n"
+        + "WHERE a.session_id = (SELECT MAX(s.session_id) FROM msdb.dbo.syssessions AS s) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL;";
+
+    private const string Availability =
+        "SELECT g.name, CONVERT(tinyint, s.synchronization_health) AS health, CONVERT(tinyint, ISNULL(r.role, 0)) AS role\n"
+        + "FROM sys.availability_groups AS g\n"
+        + "JOIN sys.dm_hadr_availability_group_states AS s ON s.group_id = g.group_id\n"
+        + "LEFT JOIN sys.dm_hadr_availability_replica_states AS r ON r.group_id = g.group_id AND r.is_local = 1\n"
+        + "ORDER BY g.name;";
+
+    /// <summary>The probe's query at a band, or null when the probe has none there (not a one-batch probe, or below its gate).
+    /// The Activity Monitor's probes run several statements each (Activity/ActivityReader.cs and ActivitySql), and the live
+    /// checks register their own (LiveTestSql).</summary>
+    public static LiveQuery? For(string probe, int band) => band is < MinBand or > MaxBand ? null : probe switch
+    {
+        DatabasesProbe => new(probe, band, Databases, [], null, null, []) { Tables = [new(0)] },
+        ProgressProbe => new(probe, band, Progress, [], null, null, []) { Tables = [new(0)] },
+        AgentProbe => new(probe, band, Agent, ["running_jobs"], null, null, [new("runningJobs", "running_jobs")]),
+        AvailabilityProbe => new(probe, band, Availability, [], null, null, []) { Tables = [new(0)] },
+        _ => null
+    };
 
     /// <summary>The prologue of a scope: server DMVs always read uncommitted; SSISDB reads committed when it has
     /// READ_COMMITTED_SNAPSHOT on.</summary>

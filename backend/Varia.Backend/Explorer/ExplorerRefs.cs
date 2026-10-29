@@ -2,16 +2,19 @@ using System.Globalization;
 
 namespace Varia.Backend.Explorer;
 
-/// <summary>A validated explorer.children request: the node, its object (or the folder's owner), the folder, and the
-/// database the request reads (absent for server-scope nodes).</summary>
+/// <summary>A validated explorer.children request: the node, its object (or the folder's owner), the folder, the query whose
+/// rows the node lists (the folder's, or the object kind's own), and the database the request reads (absent for server-scope
+/// nodes).</summary>
 internal sealed record ExplorerRequest(string ConnectionId, string RequestId, NodeRefDto Node, ObjectRefDto Object, CatalogFolder? Folder, string? Database,
-    string? Subtype, string? Cursor, int PageSize, ExplorerFilterDto? Filter);
+    string? Subtype, string? Cursor, int PageSize, ExplorerFilterDto? Filter, string? List = null);
 
 /// <summary>Re-validates what main's zod schemas (src/shared/explorer/schema.ts) accept, against the embedded catalogue.
 /// Every failure is INVALID_PARAMS; profile gates are checked once the connection is known (<see cref="CheckServed"/>).</summary>
 internal static class ExplorerRefs
 {
     public const int MaxIdentifier = 128;
+    /// <summary>The longest name any kind may declare (an SSIS package's 260); every other kind keeps 128.</summary>
+    public const int MaxName = 260;
     public const int MaxPageSize = 2000;
     private static readonly string[] TextOps = ["contains", "equals", "notContains"];
     private static readonly string[] DateOps = ["equals", "lessThan", "lessOrEqual", "greaterThan", "greaterOrEqual", "between", "notBetween"];
@@ -19,7 +22,10 @@ internal static class ExplorerRefs
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid Object Explorer request: " + detail);
 
     /// <summary>An identifier as the server stores it: 1–128 UTF-16 code units, used verbatim, never U+0000.</summary>
-    public static bool Ident(string? value) => value is { Length: >= 1 and <= MaxIdentifier } && !value.Contains('\0');
+    public static bool Ident(string? value) => Ident(value, MaxIdentifier);
+
+    /// <summary>A name of at most <paramref name="max"/> UTF-16 code units, used verbatim, never U+0000.</summary>
+    public static bool Ident(string? value, int max) => value is not null && value.Length >= 1 && value.Length <= max && !value.Contains('\0');
 
     public static ExplorerRequest Validate(ExplorerChildrenArgs args, ExplorerCatalog catalog)
     {
@@ -44,14 +50,16 @@ internal static class ExplorerRefs
         }
         if (args.Subtype is { } subtype && (node.Type != "object" || !catalog.KindOf(target.Kind).Subtypes.Contains(subtype))) throw Invalid("subtype.");
         if (args.PageSize is < 1 or > MaxPageSize) throw Invalid("pageSize.");
-        if (args.Cursor is not null && (folder?.List is null || args.Cursor.Length > ExplorerCursor.MaxLength || !args.Cursor.StartsWith("v1." + folder.List + ".", StringComparison.Ordinal)))
+        var list = folder is null ? catalog.KindOf(target.Kind).List : folder.List;
+        if (args.Cursor is not null && (list is null || args.Cursor.Length > ExplorerCursor.MaxLength || !args.Cursor.StartsWith("v1." + list + ".", StringComparison.Ordinal)))
             throw Invalid("cursor.");
         if (args.Filter is { } filter) Filter(filter, folder);
         var database = target.Kind == "database" ? target.Name : target.Database;
-        return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, args.Filter);
+        return new(args.ConnectionId, args.RequestId, node, target, folder, database, args.Subtype, args.Cursor, args.PageSize ?? MaxPageSize, args.Filter, list);
     }
 
-    /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers, and a child's parent kind.</summary>
+    /// <summary>The ref's shape: the fields its kind's scope requires and forbids, identifiers (the name within the kind's
+    /// bound), and a child's parent kind.</summary>
     public static void Object(ObjectRefDto value, ExplorerCatalog catalog)
     {
         var kind = value.Kind is { } name ? catalog.Kind(name) : null;
@@ -63,10 +71,13 @@ internal static class ExplorerRefs
             "schema" => value.Schema is not null,
             "name" => value.Name is not null,
             "parent" => value.Parent is not null,
+            "ssisFolder" => value.SsisFolder is not null,
+            "ssisProject" => value.SsisProject is not null,
             _ => throw new InvalidOperationException("Unknown ref field " + field)
         };
         if (scope.Required.Any(field => !Has(field)) || scope.Forbidden.Any(Has)) throw Invalid("the fields of a " + kind.Kind + ".");
-        if (value.Database is not null && !Ident(value.Database) || value.Schema is not null && !Ident(value.Schema) || value.Name is not null && !Ident(value.Name))
+        if (value.Database is not null && !Ident(value.Database) || value.Schema is not null && !Ident(value.Schema) || value.Name is not null && !Ident(value.Name, kind.MaxName)
+            || value.SsisFolder is not null && !Ident(value.SsisFolder) || value.SsisProject is not null && !Ident(value.SsisProject))
             throw Invalid("a name.");
         if (value.Parent is { } parent && (!kind.Parents.Contains(parent.Kind ?? "") || !Ident(parent.Schema) || !Ident(parent.Name))) throw Invalid("parent.");
     }

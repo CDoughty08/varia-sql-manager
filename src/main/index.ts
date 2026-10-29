@@ -12,6 +12,8 @@ import { ExplorerRequests } from './backend/explorer-requests'
 import { ResultsJobHost, supervisorJobs } from './results-jobs'
 import { ScriptingRequests } from './backend/scripting-requests'
 import { ActionRequests } from './backend/action-requests'
+import { SsisRequests } from './backend/ssis-requests'
+import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { sanitizeFileName } from './file-names'
@@ -32,6 +34,7 @@ import { SettingsStore } from './settings-store'
 import { RecoveryStore, recoveryDiscardSchema, recoveryTakeSchema, recoveryWriteSchema, retentionDays } from './recovery-store'
 import { lossDetails } from '../shared/files/recovery'
 import { commandTitle } from '../shared/settings/catalog'
+import { windowControls } from '../shared/theme/metrics'
 import { AppearanceService, windowChromeFor } from './appearance'
 import { applicationMenuTemplate, type ApplicationMenuActions } from './application-menu'
 import { NativeMenuBridge } from './native-menu'
@@ -50,6 +53,8 @@ import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptCancelSchema } from '../shared/scripting/schema.ts'
 import { actionCancelSchema } from '../shared/actions/schema.ts'
+import { ssisCancelSchema } from '../shared/ssis/schema.ts'
+import { activityCancelSchema } from '../shared/activity/schema.ts'
 import type { CommandId } from '../shared/commands/catalog'
 import { sanitizeLabel } from '../shared/theme/format'
 import type { ResolvedTheme, ThemeState } from '../shared/theme/types'
@@ -421,12 +426,13 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   rendererLoaded = false
   rendererReady = false
   rendererUnresponsive = false
-  const chrome = appearance.windowChrome()
+  const chrome = appearance.windowChrome(), controls = windowControls()
   mainWindow = new BrowserWindow({
     title: 'Varia SQL Manager', width: 1440, height: 960, ...place.bounds, minWidth: 1024, minHeight: 700,
     backgroundColor: chrome.backgroundColor, show: process.env.VARIA_SMOKE_TEST !== '1',
     titleBarStyle: 'hidden',
-    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : { titleBarOverlay: { ...chrome.overlay, height: 34 } }),
+    // The header is one --varia-header row; the traffic lights and the window-controls overlay are centred in it.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: controls.trafficLights } : { titleBarOverlay: { ...chrome.overlay, height: controls.overlayHeight } }),
     webPreferences: { preload: join(here, '../preload/index.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: process.env.VARIA_SMOKE_TEST !== '1', additionalArguments: [menuStyleArgument(menuStyle), ...(testSeams ? ['--varia-test-mode'] : [])],
       // Every build has developer tools, as VS Code does; the page keeps its sandbox, isolation and CSP under them.
       devTools: true }
@@ -598,7 +604,7 @@ app.whenReady().then(async () => {
   void recent.load()
   recent.onDidChange(() => { buildMenu(); publishRecentFiles() })
   const jobs = resultsJobs = new ResultsJobHost({
-    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), platform: process.platform,
+    backend: supervisorJobs(backend), owns: (generation, resultId) => results.owns(generation, resultId), liveNewest: (generation, resultId) => results.liveNewest(generation, resultId), platform: process.platform,
     writeClipboard: text => clipboard.writeText(text), documentsDir: () => app.getPath('documents'),
     showSaveDialog: options => pageDialog<{ canceled: boolean; filePath?: string }>(window => dialog.showSaveDialog(window, options), { canceled: true }),
     progress: progress => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:results-job', progress) },
@@ -607,6 +613,8 @@ app.whenReady().then(async () => {
   })
   const scriptingRequests = new ScriptingRequests(backend)
   const actionRequests = new ActionRequests(backend)
+  const ssisRequests = new SsisRequests(backend)
+  const activityRequests = new ActivityRequests(backend)
   // The Connect dialog's connect and Load databases, which its Stop cancels (a Microsoft Entra sign-in waits for the browser).
   const connectionRequests = new RendererRequests(backend, connectionRequestLimits, 'connection')
   backend.onState(state => {
@@ -704,10 +712,10 @@ app.whenReady().then(async () => {
       const prepared = await prepareConnection(method, validated, context, { savedPasswords })
       // A script's events reach the results worker; its results become readable by this renderer.
       const queryId = method === 'query.execute' ? (validated as RpcMethods['query.execute']['params']).queryId : undefined
-      // An Object Explorer load, a script, an object action or a connect with a requestId is registered before it is sent,
-      // so its cancel channel can always find it.
-      const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, connections: connectionRequests }, prepared.context?.requestId)
-      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute']['params']).requestId)
+      // An Object Explorer load, a script, an object action, an SSIS Catalog read or write, a session's Details or a connect
+      // with a requestId is registered before it is sent, so its cancel channel can always find it.
+      const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
+      const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'activity.details']['params']).requestId)
       let result: unknown
       let outcome: Settled
       try {
@@ -733,6 +741,10 @@ app.whenReady().then(async () => {
   handle('varia:scripting-cancel', value => ({ cancelled: scriptingRequests.cancel(scriptCancelSchema.parse(value).requestIds) }))
   // Stop in an object dialog: the backend cancels the statement in SQL Server (an attention), so a DROP waiting on a lock ends.
   handle('varia:actions-cancel', value => ({ cancelled: actionRequests.cancel(actionCancelSchema.parse(value).requestIds) }))
+  // Stop on an SSIS Catalog read: the backend sends SQL Server an attention, so a read waiting on SSISDB ends.
+  handle('varia:ssis-cancel', value => ({ cancelled: ssisRequests.cancel(ssisCancelSchema.parse(value).requestIds) }))
+  // Closing an Activity Monitor session's Details: its read stops in SQL Server (an attention) and answers CANCELLED.
+  handle('varia:activity-cancel', value => ({ cancelled: activityRequests.cancel(activityCancelSchema.parse(value).requestIds) }))
   // The Connect dialog's Stop: a connect waiting for SQL Server or for a Microsoft Entra sign-in in the browser ends at once.
   handle('varia:connections-cancel', value => ({ cancelled: connectionRequests.cancel(connectionCancelSchema.parse(value).requestIds) }))
   handle('varia:entra-cache-clear', () => clearEntraTokenCache({

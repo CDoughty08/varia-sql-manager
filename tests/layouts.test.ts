@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve, sep } from 'node:path'
 import { LayoutStore } from '../src/main/layout-store'
-import { emptyLayoutState, layoutFile, paneIds, paneTitles, parseLayoutFile, parseLayoutState, parseWorkspaceLayout, type WorkspaceLayout } from '../src/shared/layouts'
+import { dockReference, emptyLayoutState, hidesHeader, layoutFile, paneIds, paneTitles, parseLayoutFile, parseLayoutState, parseWorkspaceLayout, withoutHeaderState, type WorkspaceLayout } from '../src/shared/layouts'
 
 function fixture(): WorkspaceLayout {
   return parseWorkspaceLayout({
@@ -70,6 +70,36 @@ describe('workspace layout validation', () => {
     expect(() => parseLayoutState({ version: 1, current: fixture(), saved: [saved, { ...saved, id: crypto.randomUUID(), name: 'analysis' }] })).toThrow('unique')
     expect(() => parseLayoutState({ version: 1, current: fixture(), saved: [saved, { ...saved, name: 'Other' }] })).toThrow('unique')
     expect(() => parseLayoutFile({ ...layoutFile(fixture()), kind: 'sql' })).toThrow()
+  })
+})
+
+describe('dock headers', () => {
+  it('hide only for a docked group with one panel, unless panel tabs are shown', () => {
+    expect([hidesHeader({ location: 'grid', panels: 1 }, false), hidesHeader({ location: 'grid', panels: 2 }, false), hidesHeader({ location: 'floating', panels: 1 }, false),
+      hidesHeader({ location: 'popout', panels: 1 }, false), hidesHeader({ location: 'grid', panels: 1 }, true)]).toEqual([true, false, false, false, false])
+  })
+  it('dock a panel beside a docked panel, never inside a floating window, or at the grid\'s edge when none is docked', () => {
+    const at = (id: 'explorer' | 'editor' | 'output', panels: [string, string][]) => dockReference(id, panels.map(([panel, location]) => ({ id: panel, location })))?.id
+    expect(at('output', [['explorer', 'grid'], ['editor', 'grid'], ['output', 'grid']])).toBe('editor')
+    expect(at('editor', [['explorer', 'grid'], ['editor', 'grid'], ['output', 'grid']])).toBe('explorer')
+    // The preferred panel floats: another docked one stands in for it.
+    expect(at('editor', [['explorer', 'floating'], ['editor', 'grid'], ['output', 'grid']])).toBe('output')
+    expect(at('output', [['explorer', 'grid'], ['editor', 'floating'], ['output', 'grid']])).toBe('explorer')
+    expect(at('explorer', [['explorer', 'floating'], ['editor', 'popout'], ['output', 'grid']])).toBe('output')
+    expect(at('editor', [['explorer', 'floating'], ['editor', 'grid']])).toBeUndefined()
+    expect(at('editor', [['explorer', 'floating'], ['editor', 'floating'], ['output', 'floating']])).toBeUndefined()
+  })
+  it('stay out of saved layouts, docked and floating, so loading one follows the rule rather than the save', () => {
+    const layout = fixture()
+    const root = layout.grid.root.data as { type: string; data: { id: string; views: string[]; activeView: string; hideHeader?: boolean } }[]
+    root[0].data.hideHeader = true
+    root.pop()
+    layout.floatingGroups = [{ data: { id: 'floating', views: ['output'], activeView: 'output', hideHeader: false }, position: { left: 20, top: 20, width: 400, height: 260 } }]
+    const stripped = withoutHeaderState(parseWorkspaceLayout(layout))
+    expect(JSON.stringify(stripped)).not.toContain('hideHeader')
+    expect(parseWorkspaceLayout(stripped)).toEqual(stripped)
+    // The input is not changed.
+    expect(root[0].data.hideHeader).toBe(true)
   })
 })
 

@@ -53,9 +53,10 @@ internal sealed class ActivityCatalog
         List<string>? FacetColumns = null, List<string>? Tones = null, bool? DepartedLinger = null);
     private sealed record VariaJson(string Suffix, string Kind, string Label);
     private sealed record WaitJson(string Id, int Value, List<string> Names, List<string> Patterns);
-    private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, Dictionary<string, EditionJson> Editions,
-        List<ExceptionJson> Exceptions, HideBenignJson HideBenign, Dictionary<string, long> Limits, List<string> LiveProbes, LoadGuardJson LoadGuard, Dictionary<string, string> Pending, string PoolSuffix, List<ProbeJson> Probes, string Source,
-        List<string> Statuses, List<TableJson> Tables, Dictionary<string, string> Tones,
+    private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, List<string> DetailsSections,
+        List<string> DetailsTexts, Dictionary<string, EditionJson> Editions, List<ExceptionJson> Exceptions, HideBenignJson HideBenign, List<string> KillOutcomes, Dictionary<string, long> Limits,
+        List<string> LiveProbes, LoadGuardJson LoadGuard, Dictionary<string, string> Pending, string PoolSuffix, List<ProbeJson> Probes, string Source, List<string> Statuses, List<TableJson> Tables,
+        Dictionary<string, string> Tones, string UnavailableMessage,
         List<VariaJson> VariaSessions, List<string> Views, List<WaitJson> Waits);
 
     private readonly FrozenDictionary<string, string> exact;
@@ -86,6 +87,10 @@ internal sealed class ActivityCatalog
         LiveProbes = json.LiveProbes;
         Pending = json.Pending.ToFrozenDictionary(StringComparer.Ordinal);
         Statuses = json.Statuses;
+        DetailsSections = json.DetailsSections;
+        DetailsTexts = json.DetailsTexts.ToFrozenSet(StringComparer.Ordinal);
+        KillOutcomes = json.KillOutcomes;
+        UnavailableMessage = json.UnavailableMessage;
         WaitCategories = [.. json.Waits.Select(wait => wait.Id)];
         var names = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var wait in json.Waits) foreach (var name in wait.Names) names[name] = wait.Id;
@@ -134,6 +139,12 @@ internal sealed class ActivityCatalog
     /// <summary>The status ids the sessions probe sends with its first sample on each connection.</summary>
     public IReadOnlyList<string> Statuses { get; }
     public IReadOnlyList<string> WaitCategories { get; }
+    /// <summary>The Details flyout's sections, the texts it returns whole on request, and Kill's outcomes (activity.details and activity.kill).</summary>
+    public IReadOnlyList<string> DetailsSections { get; }
+    public IReadOnlySet<string> DetailsTexts { get; }
+    public IReadOnlyList<string> KillOutcomes { get; }
+    /// <summary>What the monitor says for a server it does not serve.</summary>
+    public string UnavailableMessage { get; }
     public IEnumerable<string> BenignWaits => benign;
     public IEnumerable<string> BenignCategories => benignCategories;
     /// <summary>Hide benign waits: on unless a filter turns it off, and only for these tables.</summary>
@@ -141,6 +152,11 @@ internal sealed class ActivityCatalog
     public IReadOnlySet<string> HideBenignTables { get; }
     /// <summary>The load guard's counts: slow samples in a row before an interval doubles, cheap ones before it halves back.</summary>
     public (int SlowSamples, int CheapSamples) LoadGuard { get; }
+
+    /// <summary>The program names of this backend's pool sessions for a connection whose Application Name is <paramref name="applicationName"/>:
+    /// each pool suffix appended and cut to 128 characters, as SqlService names its pools. Query tabs (no suffix) are not pools.</summary>
+    public IReadOnlyList<string> PoolProgramNames(string applicationName) =>
+        [.. VariaSuffixes.Where(entry => entry.Kind == "pool").Select(entry => applicationName + entry.Suffix).Select(name => name.Length > 128 ? name[..128] : name)];
 
     public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown Activity Monitor limit " + key);
 
