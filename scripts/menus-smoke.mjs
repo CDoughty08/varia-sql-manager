@@ -587,12 +587,35 @@ try {
   await rightClickOutputTab()
   await expect.poll(() => menuItemNames(panelMenu)).toEqual(['Dock Left', 'Dock Right', 'Dock Top', 'Dock Bottom', 'Tab with Object Explorer', 'Tab with Query Editor', 'Float', 'Close', 'Show Panel Tabs'])
   // The tab's outline shows on every side, although the output tab has splitters above it and to its left.
-  expect(await page.locator('.dv-tab[data-menu-target]').evaluate(tab => {
+  const outlineShows = async () => page.locator('.dv-tab[data-menu-target]').evaluate((tab, menuBox) => {
     const box = tab.getBoundingClientRect(), style = getComputedStyle(tab), inset = -parseFloat(style.outlineOffset) - parseFloat(style.outlineWidth) + 0.5
-    // A quarter of the way along each edge: the menu opened at the tab's center covers the rest of its right and bottom.
-    const edges = [[box.left + inset, box.top + box.height / 4], [box.right - inset, box.top + box.height / 4], [box.left + box.width / 4, box.top + inset], [box.left + box.width / 4, box.bottom - inset]]
+    // A quarter of the way along each edge. The menu opens at the tab's center, below the pointer or, with no room below,
+    // above it, so it covers the quarter of the tab right of center on that side: the right edge is sampled in the other.
+    const opensAbove = menuBox.y + menuBox.height <= box.top + box.height / 2 + 1, right = opensAbove ? box.bottom - box.height / 4 : box.top + box.height / 4
+    const edges = [[box.left + inset, box.top + box.height / 4], [box.right - inset, right], [box.left + box.width / 4, box.top + inset], [box.left + box.width / 4, box.bottom - inset]]
     return style.outlineStyle !== 'none' && edges.every(([x, y]) => tab.contains(document.elementFromPoint(x, y)))
-  })).toBe(true)
+  }, await panelMenu.boundingBox())
+  expect(await outlineShows()).toBe(true)
+  // Again in the smallest window (1024x700, as on a 1024x768 display), where the nine items have no room below the
+  // tab's center and the menu opens above it, over the tab's upper right.
+  const contentSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize())
+  const resizeTo = async ([width, height]) => {
+    await application.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(size[0], size[1]), [width, height])
+    await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height])
+    await settle()
+  }
+  await page.keyboard.press('Escape')
+  await expect(panelMenu).toHaveCount(0)
+  await resizeTo([1024, 700])
+  await rightClickOutputTab()
+  await expect(panelMenu).toBeVisible()
+  const smallTab = await page.locator('.dv-tab[data-menu-target]').boundingBox(), aboveTab = await panelMenu.boundingBox()
+  expect(aboveTab.y + aboveTab.height).toBeLessThanOrEqual(smallTab.y + smallTab.height / 2 + 1)
+  expect(await outlineShows()).toBe(true)
+  await page.keyboard.press('Escape')
+  await expect(panelMenu).toHaveCount(0)
+  await resizeTo(contentSize)
+  await rightClickOutputTab()
   await panelMenu.getByRole('menuitem', { name: 'Float', exact: true }).click(fast)
   await expect(page.locator('.dv-floating-titlebar')).toHaveCount(1)
   await rightClickOutputTab()
@@ -614,7 +637,7 @@ try {
   await expect(outputTab).toBeVisible()
   await settle()
   expect(await page.locator('.dv-context-menu').count()).toBe(0)
-  console.log('Menus checks: panel ⋯ buttons and panel tab menus move, float, dock, and close panels, and show the tabs.')
+  console.log('Menus checks: panel ⋯ buttons and panel tab menus move, float, dock, and close panels, and show the tabs; a panel tab is outlined on every side under its menu, also when the menu opens above it in a 1024x700 window.')
 
   // 10. Text fields in a dialog have their own menu above the dialog; the title-bar menus stay closed there.
   await choose('File', 'Connect to Server…')
