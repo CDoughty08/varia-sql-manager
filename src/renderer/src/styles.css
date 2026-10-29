@@ -1268,11 +1268,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .activity-tiles { display: grid; flex: none; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--varia-space-2); }
 .activity-tile { position: relative; display: flex; min-width: 0; cursor: pointer; }
 .activity-tile > .tile { flex: 1; }
-/* Only the caption's row gives way to the chart button. SSMS's name wraps (to three lines in the narrowest row of
-   eight) rather than being cut; the secondary figures keep to one line, whole in the tile's tooltip and name, so the
-   tiles stay short. */
-.activity-tile .tile-caption { padding-right: calc(var(--varia-control) + var(--varia-space-1) - var(--varia-space-3)); }
+/* Only the caption's first line gives way to the chart button (a float as wide as the button reaches into the caption,
+   one line high), so a word that cannot break ("Requests/sec") has the caption's whole width on the lines below, with
+   room to spare in wider fonts (Linux's DejaVu Sans) in the narrowest row of eight. SSMS's name wraps (to three lines at
+   most) rather than being cut; the secondary figures keep to one line, whole in the tile's tooltip and name, so the tiles
+   stay short. */
 .activity-tile .tile-caption-text { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.activity-tile .tile-caption-text::before { content: ''; float: right; width: calc(var(--varia-control) + var(--varia-space-1) - var(--varia-space-3)); height: var(--varia-line-xs); }
 .activity-tile .tile-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-tile-toggle { position: absolute; top: var(--varia-space-1); right: var(--varia-space-1); display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; color: var(--varia-descriptionForeground); }
 .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
