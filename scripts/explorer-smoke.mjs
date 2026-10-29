@@ -787,27 +787,61 @@ try {
   }
   await pane.evaluate(element => { element.style.width = '' })
   // RowEnd's slot holds E2's environment tag (later E3's chips): with the tag's own markup and rules, a custom label shows
-  // whole where there is room, and in a 200 px pane gives way (ellipsized) while the dot stays inside the row.
+  // whole within the tag's cap, and in a 200 px pane gives way (ellipsized) while the dot stays inside the row. Only the
+  // cap cuts it, E2's 40% of the row (less the active server's glyph) or 12em: the pill is as wide as its label needs or
+  // as the cap, whichever is less. Whether a label reaches the cap depends on the font: Linux's fallback, DejaVu Sans,
+  // sets PRODUCTION about 12 px wider than Segoe UI, past the cap of the active server's row in the default pane. Widths
+  // are fractional layout boxes, since a label within a pixel of its box can report a scrollWidth past its clientWidth.
   const tagFit = text => serverRow.evaluate((row, { text, part }) => {
-    const tag = document.createElement('span'), pill = document.createElement('span'), label = document.createElement('span')
-    tag.className = part.environmentTag.slice(1)
-    tag.dataset.place = 'explorer'
-    pill.className = part.statusPill.slice(1) + ' tag small'
-    pill.dataset.tone = 'neutral'
-    label.className = part.statusPillLabel.slice(1)
-    label.textContent = text
-    pill.append(label)
-    tag.append(pill)
-    row.querySelector(part.explorerEnd).prepend(tag)
-    const result = { whole: label.scrollWidth <= label.clientWidth, dotInside: row.querySelector(part.explorerDot).getBoundingClientRect().right <= row.getBoundingClientRect().right, label: row.querySelector(part.explorerLabel).getBoundingClientRect().width }
+    const make = value => {
+      const tag = document.createElement('span'), pill = document.createElement('span'), label = document.createElement('span')
+      tag.className = part.environmentTag.slice(1)
+      tag.dataset.place = 'explorer'
+      pill.className = part.statusPill.slice(1) + ' tag small'
+      pill.dataset.tone = 'neutral'
+      label.className = part.statusPillLabel.slice(1)
+      label.textContent = value
+      pill.append(label)
+      tag.append(pill)
+      return { tag, pill, label }
+    }
+    const end = row.querySelector(part.explorerEnd), style = getComputedStyle(row), token = name => parseFloat(style.getPropertyValue(name))
+    // What the pill needs: the same pill out of the row's flow, sized by its label alone.
+    const free = make(text).pill
+    Object.assign(free.style, { position: 'absolute', left: '0', top: '0', visibility: 'hidden' })
+    row.append(free)
+    const needed = free.getBoundingClientRect().width
+    free.remove()
+    // The cap, as the rule gives it (cqw is a share of the row's content box) and as the longest label a profile takes
+    // meets it.
+    const widest = make('W'.repeat(32))
+    end.prepend(widest.tag)
+    const content = row.getBoundingClientRect().width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    const glyph = row.querySelector(part.explorerActive) ? token('--varia-glyph-sm') + token('--varia-space-1') : 0
+    const rule = Math.min(0.4 * content - glyph, 12 * parseFloat(getComputedStyle(widest.tag).fontSize))
+    const cap = widest.pill.getBoundingClientRect().width, capped = widest.label.scrollWidth > widest.label.clientWidth
+    widest.tag.remove()
+    const { tag, pill } = make(text)
+    end.prepend(tag)
+    const shown = pill.getBoundingClientRect().width
+    const result = { whole: shown >= needed - 0.5, shown, needed, cap, rule, capped, dotInside: row.querySelector(part.explorerDot).getBoundingClientRect().right <= row.getBoundingClientRect().right, label: row.querySelector(part.explorerLabel).getBoundingClientRect().width }
     tag.remove()
     return result
   }, { text, part })
-  expect(await tagFit('PRODUCTION')).toMatchObject({ whole: true, dotInside: true })
+  // A short custom label is well inside the cap in any font, and shows whole.
+  const short = await tagFit('QA EAST')
+  expect(short).toMatchObject({ whole: true, capped: true, dotInside: true })
+  expect(short.cap).toBeCloseTo(short.rule, 0)
+  expect(short.needed).toBeLessThan(short.cap - 8)
+  // PRODUCTION shows whole where the cap leaves it room (Segoe UI), and otherwise takes all of the cap.
+  const production = await tagFit('PRODUCTION')
+  expect(production).toMatchObject({ capped: true, dotInside: true })
+  expect(production.shown, JSON.stringify(production)).toBeCloseTo(Math.min(production.needed, production.rule), 0)
   await pane.evaluate(element => { element.style.width = '200px' })
   const narrow = await tagFit('PRODUCTION EU WEST')
   await pane.evaluate(element => { element.style.width = '' })
-  expect(narrow).toMatchObject({ whole: false, dotInside: true })
+  expect(narrow).toMatchObject({ whole: false, capped: true, dotInside: true })
+  expect(narrow.shown).toBeCloseTo(narrow.rule, 0)
   expect(narrow.label).toBeGreaterThan(0)
   if (wasExpanded === 'false') { await select('server-a', 'Server Objects'); await press('ArrowLeft', 'Server Objects') }
   await page.screenshot({ path: resolve('artifacts', 'explorer-visuals.png') })
