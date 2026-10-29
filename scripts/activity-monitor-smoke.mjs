@@ -101,8 +101,24 @@ async function fit(width, height) {
   await size(width, height)
   await expect.poll(() => monitor().evaluate(element => Math.round(element.getBoundingClientRect().right) === window.innerWidth)).toBe(true)
 }
-/** The tiles' captions that are cut (two lines at most, each in its tile). */
+/** The tiles' captions that are cut (three lines at most, each in its tile). */
 const cutCaptions = () => tileCaptions(monitor()).evaluateAll(elements => elements.filter(element => element.scrollHeight > element.clientHeight + 1 || element.scrollWidth > element.clientWidth + 1).map(element => element.textContent))
+/** The tiles' captions whose text reaches under their tile's chart button. */
+async function captionsUnderButtons() {
+  const under = []
+  for (const caption of await tileCaptions(monitor()).all()) {
+    const name = await caption.textContent()
+    const button = await box(monitor().getByRole('button', { name: `${name} chart`, exact: true }))
+    const lines = await caption.evaluate(element => { const range = document.createRange(); range.selectNodeContents(element); return [...range.getClientRects()].map(({ left, top, right, bottom }) => ({ left, top, right, bottom })) })
+    if (lines.some(line => line.right > button.x && line.left < button.x + button.width && line.bottom > button.y + 1 && line.top < button.y + button.height - 1)) under.push(name)
+  }
+  return under
+}
+/** Draws the UI in `family`, or in the theme's own fonts again without one. */
+const uiFont = family => page.evaluate(family => family ? document.documentElement.style.setProperty('--varia-font-ui', family) : document.documentElement.style.removeProperty('--varia-font-ui'), family)
+/** Linux draws the UI in DejaVu Sans when none of the theme's fonts is installed (CI's runner); Verdana, which Windows
+ *  and macOS have, matches its widths within about 2 %, so this stack measures that wider face on every platform. */
+const wideFont = "Verdana, 'DejaVu Sans', sans-serif"
 /** How far a banner's glyph sits from its box's left and top edges. */
 async function glyphInset() {
   const banner = activityBanner(monitor())
@@ -266,11 +282,17 @@ try {
     await expect(monitor().getByRole('button', { name: 'Split View', exact: true })).toBeInViewport({ ratio: 1 })
     await page.screenshot({ path: join('artifacts', `activity-monitor-${width}.png`) })
   }
-  // Every tile's caption reads whole, in one row of eight or two of four; the tiles stay short enough that, stacked in
-  // split view, the first pane's tabs show inside the document, and both panes keep a pane's height.
+  // Every tile's caption reads whole, clear of its chart button, in one row of eight or two of four, in the theme's font
+  // and in a wider one (Linux's fallback); the tiles stay short enough that, stacked in split view, the first pane's tabs
+  // show inside the document, and both panes keep a pane's height.
   for (const [width, height] of [[1600, 1000], [1440, 900], [1280, 800], [1024, 768]]) {
     await fit(width, height)
     expect(await cutCaptions(), `captions at ${width} x ${height}`).toEqual([])
+    expect(await captionsUnderButtons(), `captions under their buttons at ${width} x ${height}`).toEqual([])
+    await uiFont(wideFont)
+    expect(await cutCaptions(), `captions in ${wideFont} at ${width} x ${height}`).toEqual([])
+    expect(await captionsUnderButtons(), `captions under their buttons in ${wideFont} at ${width} x ${height}`).toEqual([])
+    await uiFont()
     // The expanded charts give way only down to a usable plot each, side by side or stacked.
     for (const canvas of await charts().locator('canvas').all()) expect((await box(canvas)).height, `chart at ${width} x ${height}`).toBeGreaterThanOrEqual(60)
     if (width === 1024) continue
