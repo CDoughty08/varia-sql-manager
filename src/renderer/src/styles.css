@@ -983,9 +983,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to keep
-   the count and dot in a narrow row; a custom label stops at 40% of the row (cqw: the row is the container; a percentage
-   would resolve against .oe-end) and 12em. */
+/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to the
+   count and dot and to the share the server's name keeps (.oe-label) in a narrow row; a custom label stops at 40% of the row
+   (cqw: the row is the container; a percentage would resolve against .oe-end) and 12em. */
 .environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
 /* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
 .explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
