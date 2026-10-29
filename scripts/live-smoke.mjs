@@ -51,7 +51,13 @@ async function connect(password = 'live-smoke-password', server = 'live-server',
   await dialog.getByLabel('Login', { exact: true }).fill('reader')
   await dialog.getByLabel('Password', { exact: true }).fill(password)
   await dialog.getByLabel('Trust server certificate', { exact: true }).check()
-  if (environment) await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
+  if (environment) {
+    // Environment sits in Custom Properties, which starts collapsed.
+    const custom = dialog.getByRole('button', { name: 'Custom Properties', exact: true })
+    if (await custom.getAttribute('aria-expanded') !== 'true') await custom.click()
+    await expect(custom).toHaveAttribute('aria-expanded', 'true')
+    await dialog.getByLabel('Environment', { exact: true }).selectOption(environment)
+  }
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
 }
