@@ -3,7 +3,10 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { explorerRow, explorerStatics } from './fixtures/explorer-tree.mjs'
-import { activeDocument, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails, environmentPill, explorerLabel, part, queryStatus, savedConnections, statusBar, toolbarButton } from './fixtures/ui.mjs'
+import {
+  activeDocument, backendReady, connectErrorDetails, connectFailure, connectFailureCopyStatus, connectFailureNote, connectFailureSentence, connectOutcome, databaseErrorDetails,
+  environmentPill, explorerLabel, part, queryBar, queryServer, queryStatus, savedConnections, statusBar, toolbarButton
+} from './fixtures/ui.mjs'
 
 // Same rules as the backend live checks: SQL authentication when a test login is supplied, otherwise Windows authentication.
 const liveUser = process.env.VARIA_TEST_SQL_USER?.trim() ? process.env.VARIA_TEST_SQL_USER : undefined
@@ -20,7 +23,9 @@ await writeFile(join(profile, 'connections.json'), JSON.stringify({ version: 1, 
 let app
 let page
 const failures = []
-// Ten minutes: the suite took five on a Linux runner once the Connect dialog's two-pane checks joined it.
+// Ten minutes: the dialog, Remember password and environment labels with the query bar's narrow layouts took about five
+// on Windows and Linux runners once the Connect dialog's two-pane checks joined them, so the bound that catches a hang
+// leaves them room.
 const watchdog = setTimeout(() => { console.error('Connection suite timed out.'); app?.process()?.kill(); process.exitCode = 1 }, 600000)
 // Remember password's phase: its own profile and the fake backend, whose server password-check accepts only one password.
 const passwordProfile = await mkdtemp(resolve('artifacts', 'connections-passwords-'))
@@ -584,7 +589,7 @@ try {
   expect(failures).toEqual([])
   await environmentLabels()
   expect(failures).toEqual([])
-  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs and both status bars, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
+  console.log('Connection dialog checks passed: history/favorites/registration, password omission, provider preview, advanced apply/cancel, restart persistence, local/network browsing, live database choices, stale discovery suppression, error recovery, connection and database discovery failure details, the integrated identity, colors in the query and Object Explorer, timeout routing, compact sizing, keyboard focus, the eight authentication types with their fields, Stop (button and Escape) while a Microsoft Entra sign-in waits, Help › Clear Entra ID Token Cache, and Remember password (saved only as ciphertext after a connect, filled in by main for the same credentials only, kept across restarts, forgotten when rejected, unchecked or removed, and disabled without a keyring or for Windows Authentication), the two-pane layout (one bounded size, Up and Down through the lists, Password only for the types that have one, Advanced and Custom Properties collapsed with their summaries, the error at Connect without moving it, one scroll when stacked or zoomed), and environment labels (chosen in the dialog and from the server menu, saved with the entry, shown on the server, its tabs, the query bar and the status bar, dropped with another server, kept when the server is typed, cut short when long, and bounded in main).')
 } finally {
   clearTimeout(watchdog)
   await app?.close().catch(() => app?.process()?.kill())
@@ -870,7 +875,7 @@ async function rememberPassword() {
 
 /**
  * Environment labels through main's own handlers and the fake backend: chosen in the Connect dialog and saved with the
- * history entry, shown as a tag on the server's Object Explorer row, its query tab, the query status bar and the window's
+ * history entry, shown as a tag on the server's Object Explorer row, its query tab, the query bar and the window's
  * status bar, changed from the server's menu, and dropped when the form moves to another server.
  */
 async function environmentLabels() {
@@ -881,18 +886,44 @@ async function environmentLabels() {
   await launch({ ...launchOptions, env: fake }, 'fake')
   const saved = async () => JSON.parse(await readFile(connectionsFile, 'utf8')).profiles.find(item => item.options.server.toLowerCase() === 'prod-server')?.options.environment
   const tag = place => environmentPill(page, place)
-  // The active query's facts are in the window's status bar, after the backend's state and its tag: the tag shows there
-  // once, not again before the server.
+  // The query bar leads its server with the tag. The active query's facts are in the window's status bar, after the
+  // backend's state and its tag: the tag shows there once, not again before the server, and the classic query status bar
+  // (off by default) shows none.
   async function shows(text, tone) {
-    for (const place of ['explorer', 'tab', 'status']) {
+    for (const place of ['explorer', 'tab', 'query', 'status']) {
       await expect(tag(place), place).toHaveText(text)
       await expect(tag(place), place).toHaveAttribute('data-tone', tone)
     }
     await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
-    await expect(tag('query')).toHaveCount(0)
+    await expect(tag('queryStatus')).toHaveCount(0)
     // Beside the backend's state, not in it: its tooltip and text stay the backend's.
     await expect(backendReady(page, 'fake')).toHaveText('Ready')
   }
+  // Object Explorer dragged wider narrows the editor and its query bar to about `width`; the returned call drags it back.
+  // The same sash both ways: once dragged, Dockview may mark it dv-maximum rather than dv-enabled.
+  async function narrowBar(width) {
+    const sash = await page.locator('.dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash.dv-enabled').first().elementHandle()
+    const drag = async dx => {
+      const box = await sash.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 2
+      await page.mouse.move(x, y); await page.mouse.down()
+      await page.mouse.move(x + dx, y, { steps: 5 }); await page.mouse.up()
+    }
+    const before = (await queryBar(page).boundingBox()).width
+    await drag(before - width)
+    await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeLessThan(width + 12)
+    return async () => {
+      await drag((await queryBar(page).boundingBox()).width - before)
+      await expect.poll(async () => (await queryBar(page).boundingBox()).width).toBeGreaterThan(before - 12)
+    }
+  }
+  // The lists give way first, then a long label is cut short: the tag never runs under the server list, the lists keep
+  // their minimum, and the pill stays inside the bar.
+  const barFit = () => queryBar(page).evaluate((bar, part) => {
+    const box = bar.getBoundingClientRect(), pill = bar.querySelector('[role="group"]').getBoundingClientRect()
+    const tag = bar.querySelector(`${part.environmentTag} ${part.statusPill}`), label = tag.querySelector(part.statusPillLabel), edge = tag.getBoundingClientRect().right
+    const [server, database] = [...bar.querySelectorAll('select')].map(list => list.getBoundingClientRect())
+    return { clear: edge <= server.left + 0.5, inside: pill.left >= box.left - 0.5 && pill.right <= box.right + 0.5, lists: server.width >= 63.5 && database.width >= 63.5 && database.right <= pill.right + 0.5, cut: label.scrollWidth > label.clientWidth }
+  }, part)
   const serverMenu = async row => {
     await explorerLabel(row).click({ button: 'right' })
     await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Environment…', exact: true }).click()
@@ -928,6 +959,12 @@ async function environmentLabels() {
     return result
   }, part)
   expect(look).toEqual({ color: true, fill: true, accent: true, inside: true, whole: true })
+  // The tag is no control, so the query bar's server list, which its keys reach, describes the environment.
+  await expect(queryServer(page)).toHaveAttribute('aria-description', 'Production environment')
+  // PROD stays whole beside both lists in a narrow editor.
+  let widen = await narrowBar(330)
+  expect(await barFit()).toEqual({ clear: true, inside: true, lists: true, cut: false })
+  await widen()
   await page.screenshot({ path: resolve('artifacts', 'environment-production.png') })
   // (2) From the server's menu: a Custom label left blank cannot be saved; one typed is saved and shown everywhere.
   let labelling = await serverMenu(row)
@@ -1009,8 +1046,9 @@ async function environmentLabels() {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(activeDocument(page).locator(part.statusPill)).toHaveText('STAGING')
+  await expect(tag('query')).toHaveText('STAGING')
   await expect(tag('status')).toHaveText('STAGING')
-  await expect(tag('query')).toHaveCount(0)
+  await expect(tag('queryStatus')).toHaveCount(0)
   expect(await saved()).toBe('Staging')
   // A connect without a label (the history not loaded yet) keeps the entry's, and main says which, so it is shown.
   const typed = await page.evaluate(async () => {
@@ -1019,10 +1057,18 @@ async function environmentLabels() {
   })
   expect(typed).toBe('Staging')
   expect(await saved()).toBe('Staging')
-  // The status bar says what the tag labels.
-  await expect(queryStatus(page).locator(part.queryEnvironment)).toHaveCount(0)
+  // The query bar and the status bar say what the tag labels, and the status bar shows it once.
+  await expect(queryBar(page).locator(part.queryEnvironment)).toHaveText('Environment: STAGING')
   await expect(statusBar(page).locator(part.statusEnvironment)).toHaveText('Active connection environment: STAGING')
-  // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bar keep
+  await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
+  // SSMS's query window status bar (for one release) leads its server with the tag too, and the window's keeps its own.
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': true }))).toMatchObject({ ok: true })
+  await expect(queryStatus(page).locator(part.queryStatusEnvironment)).toHaveText('Environment: STAGING')
+  await expect(tag('queryStatus')).toHaveText('STAGING')
+  await expect(statusBar(page).locator(part.environmentTag)).toHaveCount(1)
+  expect(await page.evaluate(() => window.varia.updateSettings({ 'textEditor.statusBar.queryWindow': null }))).toMatchObject({ ok: true })
+  await expect(tag('queryStatus')).toHaveCount(0)
+  // (4d) A 32-character custom label is cut short in every place, so the server's name, the tab and the bars keep
   // their room; the full label stays in the tooltip.
   const long = 'W'.repeat(32)
   labelling = await serverMenu(row)
@@ -1045,11 +1091,21 @@ async function environmentLabels() {
       return name.getBoundingClientRect().width >= Math.min(name.scrollWidth, outer.width * 0.25) - 0.5 && pill.right <= outer.right + 0.5 && pill.width <= outer.width * 0.4 + 0.5
     })
     const tabTag = document.querySelector(`${part.activeDocumentTab} ${part.environmentTag}`), tab = document.querySelector(part.activeDocumentTab).getBoundingClientRect().width
-    const sized = ['status'].map(place => { const element = document.querySelector(`${part.environmentTag}[data-place="${place}"]`); return element.querySelector(part.statusPill).getBoundingClientRect().width <= 12 * em(element) + 0.5 })
+    const sized = ['query', 'status'].map(place => { const element = document.querySelector(`${part.environmentTag}[data-place="${place}"]`); return element.querySelector(part.statusPill).getBoundingClientRect().width <= 12 * em(element) + 0.5 })
     const label = document.querySelector(`${part.environmentTag}[data-place="status"] ${part.statusPillLabel}`)
-    return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth }
+    // The query bar keeps its controls inside it: the label gives way, never the lists.
+    const bar = document.querySelector(part.queryBar), lists = [...bar.querySelectorAll('select')].map(list => list.getBoundingClientRect())
+    const kept = bar.scrollWidth <= bar.clientWidth && lists.every(list => list.width >= 64 - 0.5 && list.right <= bar.getBoundingClientRect().right + 0.5)
+    return { rows, tree: tree.scrollWidth <= tree.clientWidth, tab: tabTag.getBoundingClientRect().width <= 10 * em(tabTag) + 0.5 && tab <= 220 + 10 * em(tabTag) + 120, bars: sized, ellipsis: label.scrollWidth > label.clientWidth, queryBar: kept }
   }, part)
-  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true], ellipsis: true })
+  expect(bounded).toEqual({ rows: [true, true], tree: true, tab: true, bars: [true, true], ellipsis: true, queryBar: true })
+  await expect(queryServer(page)).toHaveAttribute('aria-description', `${long} environment`)
+  for (const width of [580, 430]) {
+    widen = await narrowBar(width)
+    expect(await barFit(), String(width)).toEqual({ clear: true, inside: true, lists: true, cut: true })
+    if (width === 430) await page.screenshot({ path: resolve('artifacts', 'environment-narrow-query-bar.png') })
+    await widen()
+  }
   await page.screenshot({ path: resolve('artifacts', 'environment-long-label.png') })
   // A long name and a long label in history: the name gives way and the tag stays inside the row, as PROD does.
   dialog = await open()

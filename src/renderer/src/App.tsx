@@ -23,7 +23,9 @@ import BackendBanner from './BackendBanner'
 import OutputPane from './results/OutputPane'
 import MemoryIndicator from './results/MemoryIndicator'
 import TitleBar from './TitleBar'
-import StandardToolbar, { CommandCentre, lostHint } from './ShellToolbar'
+import StandardToolbar, { CommandCentre } from './ShellToolbar'
+import QueryBar from './QueryBar'
+import { lostHint } from './query-context'
 import PaneMenuButton from './PaneMenuButton'
 import DockWorkspace, { type WorkspaceHandle } from './DockWorkspace'
 import ConnectDialog from './ConnectDialog'
@@ -87,7 +89,8 @@ export default function App() {
   const run = (id: CommandId, args?: CommandArgs) => { void commands.execute(id, args, 'toolbar') }
   const active: QueryTab = tabs.find(tab => tab.id === activeId) ?? emptyTab
   // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer and
-  // Database Properties have a server and database, but they are their own: the toolbar's pickers do not change them.
+  // Database Properties have a server and database, but they are their own: none has a query bar, and the classic
+  // toolbar's lists do not change them.
   const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties'
   const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
@@ -271,6 +274,8 @@ export default function App() {
           <button className="tab-close" aria-label={`Close ${tab.name}`} title={queryState[tab.id]?.running ? `Close ${tab.name} (its query is executing)` : `Close ${tab.name}`} disabled={documentBusy} onClick={() => void commands.execute('file.close', { tabId: tab.id }, 'toolbar')}><Icon name="close" /></button>
         </div> })}</div><PaneMenuButton pane="editor" /></div>
         {active.id ? <>
+          {/* The query's own bar, unless the classic toolbar brings back the global lists (for one release). */}
+          {isQuery && !shell.classicToolbar && <QueryBar />}
           {statusTop && statusBar}
           {/* The query editor stays mounted (its Monaco instance is the bound editor) and hides while a designer or Database Properties shows. */}
           <div className="editor-container" hidden={isCustom}><QueryEditor /></div>

@@ -5,7 +5,7 @@ interface Props {
   /** The connection's environment label; nothing renders without one. */
   readonly environment: string | undefined
   /** Where it sits, for styling: the tag keeps the kit's look and only its spacing changes. */
-  readonly place: 'explorer' | 'tab' | 'query' | 'status' | 'list'
+  readonly place: 'explorer' | 'tab' | 'query' | 'queryStatus' | 'status' | 'list'
   /** What it labels, where nothing beside it says so: the tooltip reads "${about}: Production environment". */
   readonly about?: string
 }
