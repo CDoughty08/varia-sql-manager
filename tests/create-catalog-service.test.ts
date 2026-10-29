@@ -257,7 +257,7 @@ describe('Create Catalog command', () => {
     const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     const items = (lost: boolean) => resolveMenu('explorer.context', {
-      platform: 'win32', state: contextRecord('win32', { explorerFolder: 'integrationServicesCatalogs', explorerServerLost: lost }), commands: fixture.commands, keybindings: fixture.keybindings
+      platform: 'win32', state: contextRecord('win32', { explorerNode: 'folder', explorerFolder: 'integrationServicesCatalogs', explorerServerLost: lost }), commands: fixture.commands, keybindings: fixture.keybindings
     }).flatMap(item => item.kind === 'command' ? [item.id] : [])
     expect(items(false)).toContain('explorer.createCatalog')
     expect(items(true)).not.toContain('explorer.createCatalog')

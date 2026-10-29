@@ -320,7 +320,7 @@ export const commandCatalog = {
   'explorer.createCatalog': {
     title: 'Create Catalog…', category: 'Object Explorer', icon: 'database', keywords: ['ssis', 'ssisdb', 'integration', 'catalog', 'create'],
     precondition: "backendReady && explorerSelectionFolder == 'integrationServicesCatalogs'", unavailableHint: 'Select Integration Services Catalogs in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 't', when: "explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost" }]
+    menus: [{ menu: 'explorer.context', group: '0_new', order: 2, mnemonic: 't', when: "explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost" }]
   },
   'explorer.stop': { title: 'Stop', category: 'Object Explorer', icon: 'debug-stop', keywords: ['cancel'], precondition: 'explorerLoading', unavailableHint: 'Nothing is loading.' },
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },

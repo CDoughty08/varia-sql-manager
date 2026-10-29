@@ -834,14 +834,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .create-catalog-dialog fieldset:disabled .checkbox-label, .create-catalog-dialog fieldset:disabled .field-note { opacity: .6; }
-.create-catalog-caption { font-size: 11px; color: var(--varia-settings-headerForeground); }
+.create-catalog-caption { font-size: var(--varia-size-xs); color: var(--varia-settings-headerForeground); }
 .create-catalog-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
 .create-catalog-steps li { display: flex; align-items: flex-start; gap: 6px; overflow-wrap: anywhere; user-select: text; }
 .create-catalog-steps .codicon { flex-shrink: 0; margin-top: 1px; }
 .create-catalog-steps li[data-status="pending"], .create-catalog-steps li[data-status="skipped"] { color: var(--varia-descriptionForeground); }
 .create-catalog-steps li[data-status="done"] .codicon { color: var(--varia-successForeground); }
 .create-catalog-steps li[data-status="failed"] .codicon { color: var(--varia-errorForeground); }
-.create-catalog-files { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 4px 0 0; font-size: 11px; }
+.create-catalog-files { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 4px 0 0; font-size: var(--varia-size-xs); }
 .create-catalog-files dt { color: var(--varia-descriptionForeground); }
 .create-catalog-files dd { margin: 0; }
 .create-catalog-path { font-family: var(--varia-font-mono); overflow-wrap: anywhere; user-select: text; }

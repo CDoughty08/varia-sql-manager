@@ -4,10 +4,11 @@ import { ssisActions, ssisLimits } from '../../../shared/ssis/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
+import type { IconId } from '../../../shared/icons.ts'
 import { trapFocus } from '../trap-focus'
 import type { OpenCreateCatalog } from './CreateCatalogService'
 
-const stepIcons: Readonly<Record<ActionStep['status'], string>> = { done: 'check', failed: 'error', cancelled: 'debug-stop', skipped: 'circle-slash' }
+const stepIcons: Readonly<Record<ActionStep['status'], IconId>> = { done: 'check', failed: 'error', cancelled: 'debug-stop', skipped: 'circle-slash' }
 const stepStatus: Readonly<Record<ActionStep['status'], string>> = { done: 'Done', failed: 'Failed', cancelled: 'Stopped', skipped: 'Skipped' }
 
 /** The steps Create Catalog will run on this server: CLR only when it is off. */
@@ -64,7 +65,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
       <button type="button" className="icon-button" aria-label="Close Create Catalog" disabled={executing} onClick={close}><Icon name="close" /></button></div>
     <div className="connection-scroll">
       <p className="field-note">Server: {displayText(open.server)}{open.login ? ` · ${displayText(open.login)}` : ''}</p>
-      {open.phase === 'loading' && <p className="field-note" role="status"><span className="codicon codicon-loading object-dialog-spinner" aria-hidden="true" /> {status}</p>}
+      {open.phase === 'loading' && <p className="field-note" role="status"><Icon name="loading" className="object-dialog-spinner" /> {status}</p>}
       {open.setup && <>
         <fieldset className="property-section" disabled={!editable}>
           <legend>Options</legend>
@@ -88,11 +89,11 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
         </fieldset>
         <section className="property-section create-catalog-plan" aria-labelledby="create-catalog-plan">
           <div className="create-catalog-caption" id="create-catalog-plan">This changes the server</div>
-          <ol className="create-catalog-steps">
+          <ol className="create-catalog-steps" aria-labelledby="create-catalog-plan">
             {(steps.length ? steps.map(step => step.message ?? '') : plannedSteps(open)).map((text, index) => {
               const step = steps[index]
               return <li key={index} data-status={step?.status ?? 'pending'}>
-                <span className={`codicon codicon-${step ? stepIcons[step.status] : 'circle-outline'}`} aria-hidden="true" />
+                <Icon name={step ? stepIcons[step.status] : 'circle-outline'} />
                 <span>{step ? <><span className="visually-hidden">{stepStatus[step.status]}: </span>{text}</> : text}</span>
               </li>
             })}
@@ -104,7 +105,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
           </dl>
         </section>
       </>}
-      {executing && <p className="field-note create-catalog-status" role="status"><span className="codicon codicon-loading object-dialog-spinner" aria-hidden="true" /> {status}</p>}
+      {executing && <p className="field-note create-catalog-status" role="status"><Icon name="loading" className="object-dialog-spinner" /> {status}</p>}
       {open.problem && <p className="connect-error" id="create-catalog-problem" role="alert">{open.problem}</p>}
       {open.error && <p className={'connect-error' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>{open.error.message}</p>}
     </div>

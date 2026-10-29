@@ -480,7 +480,7 @@ try {
   await expect(startup).toBeDisabled()
   await expect(createDialog().getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
   await expect(createDialog().getByText(String.raw`C:\Program Files\Microsoft SQL Server\170\DTS\Binn\SSISDBBackup.bak`, { exact: true })).toBeVisible()
-  await expect(createDialog().locator('.create-catalog-steps li')).toHaveText(['Enable CLR integration', 'Restore the catalog database', 'Create the master key',
+  await expect(createDialog().getByRole('list', { name: 'This changes the server', exact: true }).getByRole('listitem')).toHaveText(['Enable CLR integration', 'Restore the catalog database', 'Create the master key',
     'Register the Integration Services assembly and startup procedure', 'Create the maintenance job'])
   await clr.check()
   await expect(password).toBeEnabled()
@@ -516,7 +516,7 @@ try {
   await createDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(createDialog().getByRole('alert')).toContainText('Msg 15118: Password validation failed.')
   await expect(createDialog().getByRole('alert')).toContainText('Varia removed what Create Catalog had created')
-  expect(await createDialog().locator('.create-catalog-steps li').evaluateAll(items => items.map(item => item.getAttribute('data-status')))).toEqual(['done', 'done', 'failed', 'skipped', 'skipped', 'done'])
+  expect(await createDialog().getByRole('list', { name: 'This changes the server', exact: true }).getByRole('listitem').evaluateAll(items => items.map(item => item.getAttribute('data-status')))).toEqual(['done', 'done', 'failed', 'skipped', 'skipped', 'done'])
   await page.screenshot({ path: resolve('artifacts', 'object-actions-create-catalog-failed-dark.png') })
   await password.fill('Held')
   await retype.fill('Held')
