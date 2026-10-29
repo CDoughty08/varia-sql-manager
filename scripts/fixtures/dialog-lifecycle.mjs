@@ -141,7 +141,7 @@ async function holdSaveWithScriptWaiting(application, page) {
   await page.keyboard.press('Control+A')
   await page.keyboard.insertText('-- varia-fake: sets=W1*10')
   await page.keyboard.press('F5')
-  await expect(outputStatus(page)).toContainText(/^Query executed successfully/)
+  await expect(outputStatus(page)).toContainText(/^Completed · /)
   await gridCell(anyResultGrid(page), 0, 0).first().click()
   await page.keyboard.press('Control+S')
   await expect.poll(() => shown(application)).toEqual(['Save Grid Results'])

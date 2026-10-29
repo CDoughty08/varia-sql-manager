@@ -118,6 +118,7 @@ explorer.context, for a server
   &Environment…  -++-
   ---
   New &Query  -++-
+  Ac&tivity Monitor  -++-
   ---
   Copy N&ame  -+++
   ---
@@ -171,7 +172,7 @@ explorer.context, for a filtered Tables folder
     &Table…  ----
   ---
   F&ilter Settings…  -+++
-  Remo&ve Filter  -+++
+  Remove Fi&lter  -+++
   ---
   Re&fresh  F5  -+++
 explorer.context, for the Programmability folder

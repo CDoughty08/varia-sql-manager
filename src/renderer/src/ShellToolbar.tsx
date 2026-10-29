@@ -29,7 +29,7 @@ function ToolButton({ id, icon, name, title, className, args }: { id: CommandId;
 }
 
 /**
- * The Standard toolbar: Connect, New query and the file commands. In the header it is icon buttons, and each query's own
+ * The Standard toolbar: Connect, New query, the file commands and Activity Monitor. In the header it is icon buttons, and each query's own
  * bar has Execute, Cancel and its server and database. The classic variant (Options › Environment › General, kept for one
  * release) is the text toolbar from before the header row, on a row of its own, with Execute, Cancel and Layouts and the
  * active query's Server and Database lists; query tabs then show no bar of their own. Every button runs a catalogue command.
@@ -41,9 +41,9 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
   const { tab } = useQueryContext()
   const enabled = {
     connect: useCommandEnabled('connection.connect'), newQuery: useCommandEnabled('file.new'), open: useCommandEnabled('file.open'), save: useCommandEnabled('file.save'), saveAll: useCommandEnabled('file.saveAll'),
-    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel')
+    execute: useCommandEnabled('query.execute'), cancel: useCommandEnabled('query.cancel'), monitor: useCommandEnabled('activity.open')
   }
-  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute') }
+  const keys = { open: useKeybindingLabel('file.open'), save: useKeybindingLabel('file.save'), saveAll: useKeybindingLabel('file.saveAll'), execute: useKeybindingLabel('query.execute'), monitor: useKeybindingLabel('activity.open') }
   const run = (id: CommandId) => { void commands.execute(id, undefined, 'toolbar') }
   const lost = !!connections.find(value => value.id === tab?.connectionId)?.lost
 
@@ -60,6 +60,8 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
         <Icon name="play" />Execute{keys.execute && <kbd>{keys.execute.text}</kbd>}</button>
       <button disabled={!enabled.cancel} onClick={() => run('query.cancel')}><Icon name="debug-stop" />Cancel</button>
       <span className="toolbar-divider" />
+      {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
+      <button disabled={!enabled.monitor} onClick={() => run('activity.open')} aria-label="Activity Monitor" title={withKey('Activity Monitor', keys.monitor)}><Icon name="pulse" /></button>
       <button onClick={() => run('layout.load')} title="Save, load, or reset panel layouts"><Icon name="layout" />Layouts</button>
     </div>
     <div className="toolbar-context"><QueryPickers variant="classic" /></div>
@@ -71,5 +73,7 @@ export default function StandardToolbar({ variant }: { variant: 'header' | 'clas
     <ToolButton id="file.open" icon="folder-opened" name="Open" title="Open File…" />
     <ToolButton id="file.save" icon="save" name="Save" title="Save" />
     <ToolButton id="file.saveAll" icon="save-all" name="Save All" title="Save All" />
+    {/* SSMS's toolbar button: the server of the active query, else the one selected in Object Explorer. */}
+    <ToolButton id="activity.open" icon="pulse" name="Activity Monitor" title="Activity Monitor" />
   </div>
 }

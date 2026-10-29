@@ -1,6 +1,9 @@
 namespace Varia.Backend;
 
-internal enum MessageKind { Info, Error }
+/// <summary>Info is Varia's own lines (row counts and notes); Print is what the script printed (PRINT, RAISERROR with severity 10
+/// or less), which opens the Messages strip under the results; Server is SQL Server's other informational messages (warnings
+/// such as 8153, SET STATISTICS output, DBCC), shown without opening it; Error is shown in red.</summary>
+internal enum MessageKind { Info, Server, Print, Error }
 
 /// <summary>The Messages tab of one query, in order: PRINT and informational output, row counts, and SQL errors, cancellation
 /// and timeout as error entries.</summary>
@@ -8,6 +11,8 @@ internal enum MessageKind { Info, Error }
 internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
 {
     public const string Info = "info";
+    public const string Server = "server";
+    public const string Print = "print";
     public const string Error = "error";
     public const int MaxMessages = 1000;
     /// <summary>Error entries kept after the caps are reached (limits.messages.lateErrors in src/shared/ipc/wire/protocol.ts),
@@ -61,7 +66,7 @@ internal sealed class QueryMessages(Action<MessageEntry>? stored = null)
 
     private void Store(string text, MessageKind kind)
     {
-        var entry = new MessageEntry(text, kind == MessageKind.Error ? Error : Info);
+        var entry = new MessageEntry(text, kind switch { MessageKind.Error => Error, MessageKind.Server => Server, MessageKind.Print => Print, _ => Info });
         messages.Add(entry);
         stored?.Invoke(entry);
     }

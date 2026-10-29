@@ -191,8 +191,9 @@ describe('metric tokens', () => {
       for (const selector of densityUse[name]) expect(all.filter(entry => entry.selector === selector && /^(?:min-|max-)?height$/.test(entry.property)).map(({ value }) => value), selector).toEqual([token])
     }
     expect(all.find(entry => entry.selector === '.icon-button' && entry.property === 'width')?.value).toBe('var(--varia-control)')
-    // The tree places its rows by explorerLimits.rowHeight, so the two must agree.
+    // The tree places its rows by explorerLimits.rowHeight, so the two must agree, and servers by serverRowHeight.
     expect(explorerLimits.rowHeight).toBe(densities[defaultDensity].row)
+    expect(all.filter(entry => entry.selector === '.explorer-row.server' && /height$/.test(entry.property)).map(({ value }) => value)).toEqual([`${explorerLimits.serverRowHeight}px`])
   })
   it('starts the query editor at the body text size, so its text keeps the rhythm of the UI', () => {
     expect(defaultSettings['environment.fonts.editorFontSize']).toBe(typeScale.md.size)

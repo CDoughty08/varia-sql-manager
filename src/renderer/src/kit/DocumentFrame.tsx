@@ -80,7 +80,8 @@ export function DocumentHeader({ id, title, crumbs = [], subtitle, state, tools,
       {tools}
       {verbs.map((verb, index) => <button key={verb.key} type="button" className={index === primary ? 'document-verb primary' : verb.emphasis && verb.emphasis !== 'primary' ? `document-verb ${verb.emphasis}` : 'document-verb'}
         title={verb.title} aria-pressed={verb.pressed} disabled={verb.disabled} onClick={verb.run}>
-        {verb.icon && <Icon name={verb.icon} />}{verb.label}
+        {/* A verb with an icon holds its words apart, so a narrow document can show the icon alone (they stay its name). */}
+        {verb.icon ? <><Icon name={verb.icon} /><span className="document-verb-label">{verb.label}</span></> : verb.label}
       </button>)}
     </div>}
   </header>

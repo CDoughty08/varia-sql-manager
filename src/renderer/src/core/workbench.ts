@@ -16,11 +16,14 @@ import { BackendStateService } from '../services/backend'
 import { ResultClient } from '../results/ResultClient'
 import { ResultsService } from '../results/ResultsService'
 import { ResultMemoryService } from '../results/memory'
-import { documentPage, LiveService } from '../live/LiveService'
+import { documentOwner, documentPage, LiveService } from '../live/LiveService'
+import { ActivityMonitorService } from '../activity/ActivityMonitorService'
+import { activityContribution } from '../contributions/activity'
 import ResultsWorker from '../results/results.worker.ts?worker'
 import { GridStats } from '../grid/stats'
 import { PaneService } from '../services/panes'
 import { ExplorerService } from '../explorer/ExplorerService'
+import { ExplorerStatusService } from '../explorer/ExplorerStatusService'
 import { DatabaseListService } from '../services/database-list'
 import { ResultSelectionService } from '../services/result-selection'
 import type { ThemeService } from '../services/theme'
@@ -115,6 +118,8 @@ export interface Workbench extends Disposable {
   readonly panes: PaneService
   /** Object Explorer's tree: its nodes, loads, selection, and context keys. */
   readonly explorer: ExplorerService
+  /** Object Explorer's live status chips: one background live view per connected server while the pane shows. */
+  readonly explorerStatus: ExplorerStatusService
   /** The databases of each connected server, for the toolbar's database picker. */
   readonly databaseList: DatabaseListService
   /** The cells selected in each query's results grid. */
@@ -133,6 +138,8 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** The Activity Monitors: one per connection, each a live view of its server. */
+  readonly activity: ActivityMonitorService
   readonly theme: ThemeService
   /** Toasts for work that finished out of sight, such as a save whose query is not the active document. */
   readonly notifications: NotificationService
@@ -172,7 +179,9 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const resultClient = new ResultClient({ api, createWorker: () => new ResultsWorker(), window, schedule: callback => { frame(callback) } })
   const results = new ResultsService({ client: resultClient, api, events, documents, frame: callback => { frame(callback) } })
   const resultMemory = new ResultMemoryService(resultClient, events)
-  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) } })
+  // The backend caps live views per server it reaches; a typed name is the closest this side knows.
+  const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
+  const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
   const files = new FileService(documents, queries, api, { autoReload: () => settings.getSnapshot().values['environment.documents.autoReload'] })
@@ -206,6 +215,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
+  const activity = new ActivityMonitorService({
+    documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
+  })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -226,6 +239,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designer: designers.context,
     properties: properties.context,
     notifications,
+    activity: activity.context,
     editor: () => documents.boundEditor
   })
   const commands = new CommandService({ state: () => context.getState(), modalOpen })
@@ -279,6 +293,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     inputMode,
     panes,
     explorer,
+    explorerStatus,
     databaseList,
     resultSelection,
     settings,
@@ -288,6 +303,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designers,
     ssisProperties,
     properties,
+    activity,
     theme,
     notifications,
     dispose: () => {
@@ -307,7 +323,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      // Before the live views: each monitor disposes its own; then the client, while the port is still there.
+      activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
+      explorerStatus.dispose()
       live.dispose()
       resultClient.dispose()
       // Before the documents: its prompts resolve as Cancel and its requests are cancelled while their tabs still exist.
@@ -355,6 +374,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actionsContribution(workbench),
     designerContribution(workbench),
     ssisContribution(workbench),
+    activityContribution(workbench),
     settingsContribution(workbench),
     notificationsContribution(workbench)
   ]

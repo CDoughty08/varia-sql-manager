@@ -19,6 +19,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private readonly Func<string, string, Task<SqlRun>> run;
     private readonly List<string> created = [];
     private bool loginCreated;
+    private bool restoringCreated;
 
     private ScratchDatabase(Func<string, string, Task<SqlRun>> run, string suffix)
     {
@@ -31,7 +32,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string ReadOnly => Name + "_ro";
     public string Offline => Name + "_off";
     public string SingleUser => Name + "_su";
+    /// <summary>A database left RESTORING by a tail-log backup WITH NORECOVERY (created on demand, by CreateStatesAsync).</summary>
+    public string Restoring => Name + "_rs";
     public string Snapshot => Name + "_snap";
+    /// <summary>A database Object Explorer's status checks revert to its snapshot <see cref="RevertSnapshot"/>: a RESTORE that
+    /// needs no backup file (created on demand, by CreateRevertAsync).</summary>
+    public string Reverted => Name + "_rv";
+    public string RevertSnapshot => Name + "_rvs";
+    /// <summary>The SQL Server Agent job Object Explorer's status checks run, marked by its description.</summary>
+    public string Job => Name + "_job";
+    /// <summary>What marks a scratch Agent job (its description), as the extended property marks a database.</summary>
+    public const string JobMarker = "varia.scratch";
     /// <summary>Where the Script As round trip runs scripts (created on demand).</summary>
     public string RoundTrip => Name + "_rt";
     /// <summary>Where the Script As injection matrix creates its objects and runs their scripts (created on demand).</summary>
@@ -64,11 +75,18 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
-    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
+    // _live the live tables', _ssis the fake SSIS catalog and _ssisref the restored catalog backup; _rs is left restoring, and
+    // _rv is reverted to its snapshot _rvs.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
+    private static partial Regex JobPattern();
+
+    /// <summary>Whether an Agent job's name is one a run of the checks gave its own job (<see cref="Job"/>); the sweep deletes
+    /// only such jobs that also carry <see cref="JobMarker"/>.</summary>
+    internal static bool IsScratchJob(string name) => JobPattern().IsMatch(name);
 
     /// <summary>Whether the sweep drops a database of this name once it is stale and marked (or not online).</summary>
     internal static bool Sweepable(string name) => Pattern().IsMatch(name);
@@ -186,13 +204,44 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
             + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
         // Snapshots need an edition that has them; the file goes to the instance's default data path.
-        var snapshot = await run("DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));\n"
-            + "DECLARE @logical sysname = (SELECT name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(Name) + ") AND type = 0);\n"
-            + "DECLARE @sql nvarchar(max) = N'CREATE DATABASE ' + QUOTENAME(" + Quote(Snapshot) + ") + N' ON (NAME = ' + QUOTENAME(@logical) + N', FILENAME = ' "
-            + "+ QUOTENAME(@path + " + Quote(Snapshot + ".ss") + ", '''') + N') AS SNAPSHOT OF ' + QUOTENAME(" + Quote(Name) + ") + N';';\nEXEC (@sql);", "master");
-        HasSnapshot = snapshot.Status == "completed";
+        HasSnapshot = await CreateSnapshotAsync(Name, Snapshot);
         if (HasSnapshot) created.Insert(0, Snapshot);
         else Console.WriteLine("Database snapshot checks skipped: this server could not create a snapshot.");
+    }
+
+    /// <summary>A snapshot of a database, its file in the instance's default data path; false when the server cannot create one.</summary>
+    private async Task<bool> CreateSnapshotAsync(string source, string snapshot)
+    {
+        var result = await run("DECLARE @path nvarchar(4000) = CONVERT(nvarchar(4000), SERVERPROPERTY('InstanceDefaultDataPath'));\n"
+            + "DECLARE @logical sysname = (SELECT name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(source) + ") AND type = 0);\n"
+            + "DECLARE @sql nvarchar(max) = N'CREATE DATABASE ' + QUOTENAME(" + Quote(snapshot) + ") + N' ON (NAME = ' + QUOTENAME(@logical) + N', FILENAME = ' "
+            + "+ QUOTENAME(@path + " + Quote(snapshot + ".ss") + ", '''') + N') AS SNAPSHOT OF ' + QUOTENAME(" + Quote(source) + ") + N';';\nEXEC (@sql);", "master");
+        return result.Status == "completed";
+    }
+
+    /// <summary>For a bare scratch name: the marked database to revert (<see cref="Reverted"/>) and its snapshot, which disposal
+    /// drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateRevertAsync()
+    {
+        await CreateMarkedAsync(Reverted);
+        if (!await CreateSnapshotAsync(Reverted, RevertSnapshot)) return false;
+        created.Insert(0, RevertSnapshot);
+        return true;
+    }
+
+    /// <summary>For a bare scratch name, Object Explorer's live status checks: the database itself (online and open), and
+    /// read-only, offline, single-user and restoring ones, each marked before its state is set. RESTORING comes from a full
+    /// and a tail-log backup WITH NORECOVERY, both to the null device, so no backup file is written.</summary>
+    public async Task CreateStatesAsync()
+    {
+        foreach (var name in new[] { Name, ReadOnly, Offline, SingleUser, Restoring }) await CreateMarkedAsync(name);
+        await Exec("ALTER DATABASE " + Bracket(ReadOnly) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;\nALTER DATABASE " + Bracket(Offline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;\n"
+            + "ALTER DATABASE " + Bracket(SingleUser) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;");
+        restoringCreated = true;
+        await Exec("DECLARE @device nvarchar(20) = CASE WHEN EXISTS (SELECT 1 FROM sys.all_objects WHERE name = N'dm_os_host_info') "
+            + "AND (SELECT host_platform FROM sys.dm_os_host_info) = N'Linux' THEN N'/dev/null' ELSE N'NUL' END;\n"
+            + "ALTER DATABASE " + Bracket(Restoring) + " SET RECOVERY FULL;\nBACKUP DATABASE " + Bracket(Restoring) + " TO DISK = @device;\n"
+            + "BACKUP LOG " + Bracket(Restoring) + " TO DISK = @device WITH NORECOVERY;");
     }
 
     /// <summary>Creates the empty, marked round-trip database with the scratch database's collation.</summary>
@@ -271,6 +320,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         foreach (var name in created) await Drop(run, name, name != Offline);
+        // The restoring database's two backups went to the null device; their history goes with it.
+        if (restoringCreated) await run("EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Quote(Restoring) + ";", "msdb");
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");
     }
 }

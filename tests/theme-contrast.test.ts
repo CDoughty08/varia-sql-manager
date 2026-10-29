@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from '../src/shared/theme/charts'
 import { composite, contrast, hexColor, type Rgba } from '../src/shared/theme/color'
 import { contrastExemptions, contrastPairs, hoverPairs, type ContrastPair } from '../src/shared/theme/contrast-pairs'
 import { parseThemeSource } from '../src/shared/theme/format'
@@ -31,6 +32,22 @@ describe('built-in theme contrast', () => {
     expect(hoverPairs.length).toBeGreaterThan(4)
     expect(failures, failures.join('\n')).toEqual([])
   })
+  it('holds chart series to 3:1 and chart text to 4.5:1 on every surface a chart sits on', () => {
+    // Series are the chart's data (WCAG 1.4.11); grid lines are decorative and exempt. A tile's sparkline sits on the tile.
+    expect(chartSurfaces).toContain('tile.background')
+    for (const surface of chartSurfaces) {
+      for (const color of [...chartSeriesColors, ...chartStatusColors]) expect(contrastPairs).toContainEqual({ foreground: color, background: [surface], minimum: 3 })
+      expect(contrastPairs).toContainEqual({ foreground: 'charts.foreground', background: [surface], minimum: 4.5 })
+    }
+    expect(contrastExemptions['charts.lines']).toBeDefined()
+  })
+  it('leaves the active query\'s server row untinted, as a tint near the selection and hover fills read as one of them', () => {
+    // Its glyph (objectExplorer.activeConnectionForeground, paired above on every row state) marks it instead.
+    for (const type of types) {
+      const theme = resolveBuiltin(type)
+      expect(backgroundOf(theme, ['sideBar.background', 'objectExplorer.activeConnectionBackground']), type).toEqual(backgroundOf(theme, ['sideBar.background']))
+    }
+  })
   it('holds input and button outlines to 3:1 on every surface the controls sit on', () => {
     const outlines = contrastPairs.filter(pair => pair.foreground === 'input.border' || pair.foreground === 'button.border')
     // Fields and dialogs; the toolbar's server and database lists; Cancel on the Output toolbar; Object Explorer's
@@ -54,7 +71,8 @@ describe('built-in theme contrast', () => {
   })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
-    const foregrounds = colorKeys.filter(key => /[Ff]oreground$/.test(key))
+    // Indicators (status dots and rings) are glyphs: they need a pair as text colors do.
+    const foregrounds = colorKeys.filter(key => /(?:[Ff]oreground|Indicator)$/.test(key))
     const missing = [...foregrounds.filter(key => !checked.has(key) && !contrastExemptions[key]), ...sqlScopes.filter(scope => !checked.has('syntax:' + scope))]
     expect(missing).toEqual([])
     for (const [key, reason] of Object.entries(contrastExemptions)) {

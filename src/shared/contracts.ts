@@ -107,7 +107,8 @@ export interface ResultColumn {
   name: string
   dataType: string
   wire: WireKind
-  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector'
+  /** `tone`: a live table's row tone (src/shared/live/catalog.ts), hidden by the grid and left out of Copy and Save. */
+  role?: 'xml' | 'json' | 'plan' | 'udt' | 'vector' | 'tone'
   maxLength?: number
   precision?: number
   scale?: number
@@ -136,8 +137,13 @@ export interface ResultDescriptor {
   truncated?: TruncationReason
   incomplete: boolean
 }
-/** One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order). */
-export interface MessageEntry { text: string; kind: 'info' | 'error' }
+/**
+ * One line of the Messages tab: SQL errors, cancellation and timeout are `error` entries (red, in order); what the script
+ * printed (PRINT, RAISERROR with severity 10 or less) is `print`, which opens the Messages strip under the results; SQL
+ * Server's other informational messages (warnings such as 8153, SET STATISTICS output, DBCC) are `server`, which show in the
+ * strip without opening it; Varia's own lines (row counts, notes) are `info`.
+ */
+export interface MessageEntry { text: string; kind: 'info' | 'server' | 'print' | 'error' }
 export type QueryStatus = 'completed' | 'completedWithErrors' | 'failed' | 'cancelled' | 'timedOut'
 /** The query.execute summary: the rows stay in the backend (ResultClient reads them). `completedAt` is the backend's
  *  local time with 7 fractional digits, for SSMS's "Completion time:" line. */

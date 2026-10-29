@@ -60,13 +60,27 @@ describe('live request schemas', () => {
     expect(ok(fixture.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(false)
     expect(ok(fixtureTest.subscribe, { ...subscribe(), source: 'two', probes: [{ probe: 'two.only', intervalMs: 1000 }] })).toBe(true)
   })
-  it('accepts the Activity Monitor source on the production port, with no args', () => {
+  it('accepts the Activity Monitor source on the production port, with its own args', () => {
     const activity = (patch: Record<string, unknown> = {}) => ({ t: 'live', rid: 1, generation: 1, params: subscribe({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }], ...patch }) })
     expect(ok(portRequestSchema, activity())).toBe(true)
     expect(ok(portRequestSchema, activity({ args: {} }))).toBe(false)
     expect(ok(portRequestSchema, activity({ probes: [{ probe: 'debug.synthetic.table', intervalMs: 1000 }] }))).toBe(false)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 5000 }], refresh: true } })).toBe(true)
     expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { rows: 1 } } })).toBe(false)
+    // One subscription per monitor: the three probes, one filter per table and the Details flyout's session.
+    const probes = [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'login', descending: false }, { column: 'activeCpuMs', descending: true }] },
+      { probe: 'activity.resources', intervalMs: 5000, paused: true }]
+    const args = { filters: [{ table: 'sessions', view: 'blocked', showVaria: true, columnFilters: [{ column: 'login', values: ['app'] }] }, { table: 'waitTypes', hideBenign: false }], focusSession: 32_767 }
+    expect(ok(portRequestSchema, activity({ probes, args }))).toBe(true)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', args: { focusSession: 0 } } })).toBe(true)
+    for (const bad of [
+      { focusSession: 32_768 }, { focusSession: -1 }, { filters: [] }, { filters: [{ table: 'sessions' }, { table: 'sessions' }] }, { filters: [{ table: 'files', view: 'all' }] },
+      { filters: [{ table: 'sessions', columnFilters: [{ column: 'sessionId', values: ['1'] }] }] }, { filters: [{ table: 'sessions', text: 'x'.repeat(401) }] }, { columns: ['login'] }, { focusSession: 1, rank: 'cpu' }
+    ]) expect(ok(portRequestSchema, activity({ args: bad })), JSON.stringify(bad)).toBe(false)
+    // Sort names live column ids, unique within a probe, so sorting Processes never reorders the Blocking tree.
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'chainDepth', descending: false }] }] }))).toBe(true)
+    expect(ok(portRequestSchema, activity({ probes: [{ probe: 'activity.sessions', intervalMs: 2000, sort: [{ column: 'Session ID', descending: false }] }] }))).toBe(false)
+    expect(ok(portRequestSchema, { t: 'liveUpdate', rid: 2, generation: 1, params: { subscriptionId: uuid(), source: 'activity', track: [{ probe: 'activity.sessions', table: 1, seq: 1, keys: ['60'] }] } })).toBe(true)
   })
   it('is strict and bounded at every level', () => {
     const schema = testLiveSubscribeParamsSchema
@@ -96,11 +110,17 @@ describe('live request schemas', () => {
   it('allows sort, views and filters only where the probe declares them', () => {
     const settings = (probe: Record<string, unknown>) => ({ ...subscribe(), source: 'one', probes: [{ probe: 'one.all', intervalMs: 1000, ...probe }] })
     expect(ok(fixture.subscribe, settings({ sort: [{ column: 'v0', descending: true }, { column: 'k1', descending: false }], view: 'blocked', filter: { text: 'x', columns: ['m0', 'k0'] } }))).toBe(true)
+    // A key for one table names a column of that snapshot table; the same column may go once per table and once for all.
+    expect(ok(fixture.subscribe, settings({ sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k1', descending: false, table: 1 }, { column: 'k0', descending: false }] }))).toBe(true)
     for (const [name, probe] of Object.entries({
       appendSort: { sort: [{ column: 'm0', descending: true }] },
       unknownSort: { sort: [{ column: 'nope', descending: true }] },
       repeatedSort: { sort: [{ column: 'k0', descending: true }, { column: 'k0', descending: false }] },
       fiveSorts: { sort: ['k0', 'v0', 'k1', 'k2', 'k3'].map(column => ({ column, descending: false })) },
+      otherTablesSort: { sort: [{ column: 'k1', descending: true, table: 0 }] },
+      appendTableSort: { sort: [{ column: 'm0', descending: true, table: 4 }] },
+      missingTableSort: { sort: [{ column: 'k0', descending: true, table: 8 }] },
+      repeatedTableSort: { sort: [{ column: 'k0', descending: true, table: 0 }, { column: 'k0', descending: false, table: 0 }] },
       view: { view: 'other' },
       filterColumn: { filter: { text: 'x', columns: ['nope'] } },
       filterText: { filter: { text: 'x'.repeat(401) } },
@@ -119,6 +139,8 @@ describe('live request schemas', () => {
     expect(ok(schema, update({ paused: false }))).toBe(true)
     expect(ok(schema, update({ probes: [{ probe: 'debug.synthetic.table', paused: true, sort: [{ column: 'value', descending: true }] }], refresh: true, args: { tickMs: 50 } }))).toBe(true)
     expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 64 }, () => 'k'.repeat(512)) }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a', 'b'], linger: 2 }] }))).toBe(true)
+    expect(ok(schema, update({ track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: [], linger: 0 }] }))).toBe(true)
     for (const [name, patch] of Object.entries({
       nothing: {},
       refreshFalse: { refresh: false },
@@ -131,6 +153,9 @@ describe('live request schemas', () => {
       trackKeys: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: Array.from({ length: 65 }, () => 'k') }] },
       trackKeyLength: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['k'.repeat(513)] }] },
       trackSeq: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 0, keys: [] }] },
+      trackLinger: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 2 }] },
+      trackLingerSign: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: -1 }] },
+      trackLingerType: { track: [{ probe: 'debug.synthetic.table', table: 0, seq: 1, keys: ['a'], linger: 0.5 }] },
       args: { args: { rows: -1 } }
     })) expect(ok(schema, update(patch)), name).toBe(false)
     // An unkeyed snapshot table and an append table are never tracked.
@@ -302,6 +327,16 @@ describe('live table samples', () => {
     expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.grid', intervalMs: 1000, view: 'even', filter: { text: 'G1' }, sort: [{ column: 'items', descending: true }] }] }))).toBe(true)
     expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.grid', table: 0, seq: 1, keys: ['1'] }, { probe: 'debug.synthetic.grid', table: 1, seq: 1, keys: ['G1'] }] })).toBe(true)
     expect(ok(testLiveUpdateParamsSchema, { subscriptionId: uuid(), source: 'debug.synthetic', track: [{ probe: 'debug.synthetic.log', table: 0, seq: 1, keys: ['1'] }] })).toBe(false)
+  })
+  it('never lets a sort or filter name a table\'s hidden tone column', () => {
+    const grid = (settings: Record<string, unknown>) => subscribe({ probes: [{ probe: 'debug.synthetic.grid', intervalMs: 1000, ...settings }] })
+    expect(ok(testLiveSubscribeParamsSchema, grid({ filter: { text: 'warn', columns: ['name'] }, sort: [{ column: 'amount', descending: true, table: 0 }] }))).toBe(true)
+    for (const [name, settings] of Object.entries({
+      filter: { filter: { text: 'warn', columns: ['tone'] } },
+      sort: { sort: [{ column: 'tone', descending: true }] },
+      tableSort: { sort: [{ column: 'tone', descending: false, table: 0 }] }
+    })) expect(ok(testLiveSubscribeParamsSchema, grid(settings)), name).toBe(false)
+    expect(ok(testLiveSubscribeParamsSchema, subscribe({ probes: [{ probe: 'debug.synthetic.log', intervalMs: 1000, filter: { text: 'x', columns: ['tone'] } }] }))).toBe(false)
   })
 })
 

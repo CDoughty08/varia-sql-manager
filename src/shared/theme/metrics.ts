@@ -24,7 +24,6 @@ export interface PendingTypeStep { readonly what: string; readonly selectors: re
  * its planned step means removing its entry here.
  */
 export const typeScalePending: readonly PendingTypeStep[] = [
-  { what: 'Object Explorer rows', selectors: ['.explorer-row'], now: 'sm', planned: 'md' },
   { what: 'Document tabs (buttons) and dialog fields', selectors: ['button', 'select, input'], now: 'sm', planned: 'md' },
   { what: 'Results grid column headers', selectors: ['.rg-ch, .rg-corner'], now: 'sm', planned: 'xs' }
 ]
@@ -82,7 +81,7 @@ export type GlyphSizeName = keyof typeof glyphSizes
 export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   badge: ['.oe-icon .oe-badge'],
   sm: [
-    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.memory-indicator .codicon',
+    '.tab-close .codicon', '.tab-select .tab-readonly', '.tab-select .tab-running', '.connection-save-actions .codicon', '.query-status-state .codicon', '.output-status .codicon', '.memory-indicator .codicon', '.oe-active > .codicon',
     '.editor-status .codicon', '.status-pill > .codicon', '.status-pill > .icon', '.chip > .codicon', '.chip > .icon', '.live-pill > .codicon', '.stale-badge > .codicon',
     '.tile-caption > .codicon'
   ],
@@ -108,13 +107,13 @@ export const densityPlanned: Readonly<Record<keyof DensityMetrics, string>> = {
 }
 /**
  * The styles.css rules whose height is each token today; tests/theme-metrics.test.ts checks the list both ways. The title
- * bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows
- * (20 px) keep their sizes until the shell, explorer, results and density PRs move them onto the tokens.
+ * bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px)
+ * keep their sizes until the shell, results and density PRs move them onto the tokens.
  */
 export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]>> = {
   header: ['.title-bar'],
-  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.document-script-head'],
-  control: ['.icon-button', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input'],
+  bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
+  control: ['.icon-button', '.explorer-filter', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.activity-select', '.activity-tile-toggle'],
   row: ['.explorer-row', '.skeleton-row', '.document-nav-item'],
   status: ['.status-bar', '.query-status-bar']
 }
@@ -217,7 +216,7 @@ export function renderMetricDocs(): string {
     '',
     '## Bars and rows',
     '',
-    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, the explorer toolbar (32 px), dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.`,
+    `Compact is the default and the only density \`:root\` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.`,
     '',
     table(['Token', 'Compact px', 'Comfortable px', 'Planned for', 'Sized with it now'], densityRows),
     ''

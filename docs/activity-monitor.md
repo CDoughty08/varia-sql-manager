@@ -6,7 +6,77 @@ The Activity Monitor's probes, panes, columns, tiles, filters, wait categories a
 `src/shared/activity/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Activity/activity-catalog.json`
 and runs constant SQL from `backend/Varia.Backend/Activity/ActivitySql.cs`. Unlike SSMS, a failing query never pauses
 the monitor: each probe fails alone, its panes keep their last data and say why, and the others go on. The Activity
-Monitor document arrives in stages; this page is what its catalogue declares, and the SQL and rules the backend already has.
+Monitor document shows the overview's tiles and charts; the grids of its panes arrive in stages (Panes, below), and this
+page also covers what its catalogue declares for them and the SQL and rules the backend already has.
+
+## The document
+
+Open it with **Tools: Activity Monitor** in the command palette, **View › Activity Monitor**, the toolbar's Activity
+Monitor button, or **Activity Monitor** on a connected server's Object Explorer menu. It monitors the server the menu was opened on, else the active document's server,
+else the server selected in Object Explorer, else the one connected server; with several it asks which, and with none it
+opens the Connect dialog and then the monitor of the new connection. Each connection has one monitor, a tab named
+"{server} - Activity Monitor": opening it again shows that tab. A lost connection is refused until it is reconnected, and
+Reconnect moves the monitor to a new connection to the same server. Nothing in it is saved: File › Save is not offered,
+and it is neither kept by AutoRecover nor restored with the workspace.
+
+Under the title, a fact line names the server, its version, the login and, on Managed Instance, the kind of server:
+only what the connection reported, nothing a probe has not produced.
+
+The header says what the monitor is doing ("Live · every 2 s", "Live · slowed to 4 s", "Paused", "Paused while hidden",
+"Stopped · backend unavailable") and how old the data is, then the refresh interval, the chart window (1, 5, 15 or 60
+minutes, 15 by default; charts reach back as far as Environment › Live Data keeps history), what a sample costs on the server (the sum
+of the running probes' last statement times, each listed in its tooltip), and **Pause**, **Refresh Now** and **Split View**,
+which show only their icons (named in their tooltips) in a document narrower than 1,040 px, so the title and its state
+keep their room in the one header row.
+Pause stops collecting, as SSMS's does: no SQL runs, the charts keep their history and show a gap, and Resume starts a
+new baseline. A monitor whose tab is not showing pauses by itself after the Live Data delay. A monitor keeps its
+interval, window, panes and charts while other tabs show; Tools › Options › Activity Monitor sets what a new one starts
+with, and the tiles' thresholds.
+
+The eight tiles (below) show their value, unit and secondary figures over a sparkline of the window. A tile's button (or a
+click on the tile) expands its chart under the tiles; at most 2 are expanded, a third replacing the oldest, and the first two
+are expanded on first open, so SSMS's view is there at once. An expanded chart draws the tile's value and its secondary
+series that share its unit, with axes, a crosshair shared by the charts and "View as table" (its last 60 samples). A tile
+past a threshold is outlined in its tone with a glyph, and the crossing is announced once. Without the server-state
+permission the document still opens: it says which permission it needs (VIEW SERVER PERFORMANCE STATE from SQL Server
+2022, VIEW SERVER STATE before it and on Managed Instance), offers **Copy GRANT statement** when it knows the login
+(quoted as one name, never run by Varia) and **Retry**, and the tiles say "No permission"; the same holds when the
+permission goes while the monitor runs (the overview then stops for good). A sample that fails for another reason
+(blocked, timed out) keeps the tiles' last values, and a note above them gives the reason until a sample succeeds; the
+probe retries by itself. A monitor that stops because none of its probes can run on the server (NOT_SUPPORTED) says the
+server is not covered and offers no Retry; one that stops for the permission shows the permission message, whose Retry
+helps once the GRANT has run.
+
+The panes sit in one slot, or two with Split View: side by side when the document is at least 1,400 px wide, stacked
+below that, each then at least 200 px tall, with a splitter (arrow keys, Home and End). The tiles keep their height and
+the expanded charts give way down to a floor, so the panes keep theirs; only a document too short for all of them
+scrolls. Each slot has a tab per pane; choosing in one slot the pane the
+other shows swaps them. The Blocking tab counts blocked sessions. A pane whose grid has not arrived says so, and its
+probe stays paused: no SQL runs for a pane nobody can read.
+
+| Pane | Now |
+| --- | --- |
+| Processes | Processes is not shown yet; it arrives in a later version of Varia. |
+| Blocking | Blocking is not shown yet; it arrives in a later version of Varia. |
+| Resource Waits | Resource Waits is not shown yet; it arrives in a later version of Varia. |
+| Data File I/O | Data File I/O is not shown yet; it arrives in a later version of Varia. |
+| Recent Expensive Queries | Recent Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+| Active Expensive Queries | Active Expensive Queries is not shown yet; it arrives in a later version of Varia. |
+
+| Command | Id | Windows and Linux | macOS |
+| --- | --- | --- | --- |
+| Activity Monitor | `activity.open` | — | ⌥⌘A |
+| Pause | `activity.togglePause` | — | — |
+| Refresh Now | `activity.refresh` | F5 | F5 |
+| Set Refresh Interval… | `activity.setInterval` | — | — |
+| Set Chart Window… | `activity.setChartWindow` | — | — |
+| Split View | `activity.toggleSplit` | — | — |
+| Next Panel | `activity.nextPane` | F6 | F6 |
+| Previous Panel | `activity.previousPane` | Shift+F6 | ⇧F6 |
+| Close Activity Monitor | `activity.close` | Shift+Escape | ⇧⎋ |
+
+SSMS opens Activity Monitor with Ctrl+Alt+A. On Windows and Linux, Ctrl+Alt+letter is AltGr, which types characters on
+many layouts (Polish ą among them), so Varia leaves it unbound there; macOS has ⌥⌘A.
 
 ## Sampling
 
@@ -28,6 +98,69 @@ to its "At least" value; query statistics use their own setting (15 to 60 s, def
 costs more. SSMS's 5, 30 and 60 minute intervals are left out: the charts keep history. When a probe's sample costs more
 than 20 % of its interval 3 times in a row, its interval doubles (up to 60 s) and the header says so; it steps back
 after 10 cheap samples. Pause stops collecting (no SQL); the charts show a gap and Resume starts a new baseline.
+
+## The live source
+
+The live catalogue ([docs/live.md](live.md)) declares `activity.overview`, `activity.sessions`, `activity.resources`, built from this catalogue: the same tables, columns (in
+the same order, with the captions as column names, so Copy with Headers and Save write them), keys, facets and series.
+`activity.resources` opens unavailable: Resource Waits and Data File I/O are not sampled yet; they arrive in a later version of Varia.
+`activity.queries` joins the live catalogue with Recent Expensive Queries.
+
+Each probe runs its statements one at a time on the live connection, within one budget. A statement the login may not run
+(PERMISSION_DENIED) or the server lacks (NOT_SUPPORTED) fails alone: the sample goes on, an error beside it names the tables
+and series that statement feeds, and it is not run again on that connection, only reported; a new connection runs it
+again, since its login may since hold the permission or it reach another server. A lock wait or any other error stops
+the probe's statements: what was read arrives and the error names the rest; a probe that read nothing backs off. Each
+new connection first runs the capability probe: its session id, and whether the login reads server state, may end
+sessions and sees every file's name. The sessions probe sends what it found with its first sample on that connection:
+
+| Status | Value 1 means |
+| --- | --- |
+| `serverState` | The login reads server state (VIEW SERVER PERFORMANCE STATE from SQL Server 2022, VIEW SERVER STATE before): without it, Processes shows only the monitor's own session and Blocking and Active Expensive Queries report PERMISSION_DENIED. |
+| `canKill` | The login holds ALTER ANY CONNECTION, which Kill Process needs. |
+
+Without server state the overview opens unavailable (PERMISSION_DENIED), or, when the capability probe could not run as
+the monitor opened (it opened paused, say), stops at its first sample with that error, running nothing. The sessions
+probe runs: SQL Server shows such a login only its own session, so Processes holds the monitor's session (not hidden as
+Varia's then), and Blocking and Active Expensive Queries are PERMISSION_DENIED values beside each sample, read without SQL.
+
+The live layer sorts and filters a probe's tables by column id, so ids are unique within a probe: its first table keeps
+this catalogue's ids and the others take a prefix, so sorting Processes never reorders the Blocking tree.
+
+| Table | Prefix | Key in the live layer |
+| --- | --- | --- |
+| `sessions` | (none) | `sessionId` |
+| `blocking` | `chain` | `chainSessionId` |
+| `activeQueries` | `active` | `activeSessionId`, `activeRequestId` |
+| `waitCategories` | (none) | `categoryId` |
+| `waitTypes` | `type` | `typeWaitType` |
+| `files` | `io` | `ioDatabaseId`, `ioFileId` |
+| `recentQueries` | (none) | `queryHash` |
+
+Filters travel as the source's args: one per table (the view chip, the toggles, the filter box, column value filters, Hide
+benign waits), each replacing that table's, and a table without one shows the defaults. Processes' facets count the rows
+its view chip and toggles show, before the filter box and column value filters, so they never offer a value only hidden
+sessions have, and a column's own value filter never empties its list. Processes arrives in Session ID order when no sort
+is set; the sessions statement ranks sessions only for its cap (sessions in a blocking wait, then sessions with a request).
+The two `focus.*` series follow the Details flyout's session (`focusSession`, 0 for none); the first sample after it
+names another session is marked `reset`, so a chart starts them again. Every sessions sample carries the status values
+`serverState` and `canKill`.
+
+Per-session rates key a session by its login time and a request by its id and start time, so a reused id never yields a
+rate across two sessions. The sessions statement returns each of a session's requests as its own row (MARS sessions run
+several), ranked as Processes shows them, and its cap counts sessions. A session's own CPU and reads take in a request's
+work only when the request ends, and SQL Server takes it in on a smaller scale than the request reported (a 1.2 s CPU loop
+on SQL Server 2025: 813 ms against 1,096 ms), so session plus request falls at every batch end. CPU (ms/s) therefore
+counts each running request by its own change, a new one whole, and the ones that ended only beyond what they had
+counted: never negative, nothing counted twice, whichever request ranks first; the last moments of a request that ended
+between two samples may be missed. Every baseline keeps the time it was read at on the probe's own clock (the server's
+`ms_ticks` between samples that read it, else the schedule's), so a row missing from a sample (cut by a TOP, or its
+statement failed) gets a rate over its own span when it returns, never two intervals divided by one.
+
+Catalog views joined for names (`sys.databases`) do not wait on a database's `ALTER DATABASE`: under READ UNCOMMITTED
+with LOCK_TIMEOUT 1000, reads of `sys.databases` and `sys.master_files` returned at once (80 to 150 ms) while SET
+READ_COMMITTED_SNAPSHOT ON, SET SINGLE_USER, SET OFFLINE, MODIFY NAME and MODIFY FILE waited on a scratch database's
+exclusive database lock (SQL Server 2025). A wait that does happen is a BLOCKED value for that statement, as above.
 
 ## Panes
 
@@ -113,10 +246,10 @@ Probe `activity.sessions`; key `sessionId` (with `loginTime` for rates); at most
 | Blocked By | `blockedBy` | int | id | Yes | Fixed | The session it waits on (its longest blocking wait); negative ids show their meaning. SSMS lists a session once per session it blocks. |
 | Head Blocker | `headBlocker` | bool | — | Yes | Fixed | Blocks another session and waits on none. SSMS marks it on each duplicate row. |
 | Blocking | `blocking` | int | count | Yes | New | Sessions downstream of it in its blocking chain. |
-| CPU (ms/s) | `cpuRate` | decimal | ms/s | Yes | New | CPU used per second over the interval: the session's CPU plus its running requests'. |
+| CPU (ms/s) | `cpuRate` | decimal | ms/s | Yes | New | CPU per second over the interval: a running request's own CPU while it runs, one that started since the last sample whole, and for one that ended only what the session took in beyond what the request had counted (SQL Server takes it in on a smaller scale), so it is never negative and nothing counts twice. |
 | Total CPU (ms) | `totalCpuMs` | bigint | ms | Yes | SSMS | The session's CPU since login. |
 | Physical I/O (MB) | `physicalIoMb` | decimal | MB | Yes | SSMS | Pages read and written since login, in MB (cumulative). |
-| Logical Reads/s | `logicalReadsRate` | decimal | /s | Yes | New | Logical reads per second over the interval. |
+| Logical Reads/s | `logicalReadsRate` | decimal | /s | Yes | New | Logical reads per second over the interval, counted as CPU (ms/s) is. |
 | Memory Use (KB) | `memoryKb` | bigint | KB | Yes | SSMS | memory_usage pages, in KB. |
 | Open Transactions | `openTransactions` | int | count | Yes | Fixed | The session's open transactions. SSMS reads the request's count, so an idle session holding a transaction shows 0. |
 | Elapsed (s) | `elapsedSeconds` | decimal | s | Yes | New | How long the current request has run. |
@@ -410,8 +543,21 @@ Varia's benign list:
 
 ## Varia's own sessions
 
-A session whose host process is the backend and whose program name is the connection's Application Name plus one of
-these suffixes is Varia's. Query tabs always show, labelled with the tab's name; pool sessions show only with Varia's own on.
+A session whose host process is the backend, whose host name is the workstation its connections send (the Workstation ID,
+else this machine's name) and whose program name is a connection's Application Name plus one of these suffixes may be
+Varia's: a client sets all three at login, so a pool session must also be one whose session id Varia's own pooled or
+Object Actions connection to that server was given when it opened, and that it may still hold: an Object Actions
+session's until its connection closes, a pool session's while a connection holds it and for 10 minutes after the last
+closes, past the 4 to 8 minutes SqlClient keeps an idle pooled connection (SQL Server gives a freed id to the next
+client). A session that only claims them, under any other id, shows as itself. The ledger can be wrong for a while:
+SqlClient's idle connection resiliency, which the Object Explorer and Scripting pools keep, can give a held connection a
+new session id without opening it again, so that session shows as itself and its old id, which SQL Server may give to
+another client, still counts. That only labels; ending a session (`VariaSessions.Protected`, for Kill) refuses every
+session that may be Varia's: the monitor's, one whose id the ledger names, and one that claims a pool's process,
+machine and program name under any id.
+Pool sessions show only with Varia's own on. "Query tab" marks a plain-name session of this process, never hidden: a
+query tab, which the document names by the tab that holds its session id, or a pooled connection of the Connect
+dialog's database list or a column list, which no tab holds and which shows as "Query tab".
 
 | Suffix | Kind | Label |
 | --- | --- | --- |
@@ -435,7 +581,9 @@ Its SQL is written for SQL Server 2016 (band 13) to SQL Server 2025 (band 17); M
 catalog it has, not the version it reports. Any other server opens the document with "Activity Monitor isn't available for this kind of server."
 
 Showing other sessions and server activity needs VIEW SERVER STATE (SQL Server 2019 and earlier, Managed Instance) or
-VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later). Without it the monitor still opens, shows the login's own
+VIEW SERVER PERFORMANCE STATE (SQL Server 2022 and later), named by the version the server reports, as the capability
+probe checks it; a Managed Instance is asked for VIEW SERVER STATE even where it has the newer permission. Without it
+the monitor still opens, shows the login's own
 session, and offers the GRANT statement to copy (never runs it). File names need VIEW ANY DEFINITION; without it Data
 File I/O shows ids. Kill Process needs ALTER ANY CONNECTION (sysadmin or processadmin), and server state to see the
 session it checks (below).

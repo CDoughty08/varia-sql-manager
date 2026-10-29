@@ -20,7 +20,8 @@ const resolve = (file: Record<string, unknown>, variant: ThemeType = 'dark') => 
 // bar's text, so a theme that recolors the bar keeps it readable. The states kit takes the design's pill tints and live
 // colors, but pill text uses the status surface texts (and a successText slot), which stay readable over selected rows and
 // tinted status bars where the plain status colors do not; skeleton bars use the pressed fill, as the hover fill is too
-// faint on dialogs.
+// faint on dialogs. charts.gray is not in the design: it is the review's color for a stacked chart's
+// Other, the neutral swatch.
 const specValues = `
 foreground #d9dce3 #1c1f26|descriptionForeground #9298a4 #5c6370|disabledForeground #9298a4 #5c6370|errorForeground #f39a9a #b42229
 warningForeground #e4bb6a #875800|successForeground #74d19c #146f3b|infoForeground #8f9cff #4453d0|focusBorder #8f9cff #4453d0
@@ -42,10 +43,12 @@ sideBarTitle.foreground #a3a9b5 #4d5461|sideBarSectionHeader.border #1f2228 #ece
 list.activeSelectionBackground #29314f #d9e0fb|list.activeSelectionForeground #d9dce3 #1c1f26|list.inactiveSelectionBackground #21273b #e7ebfc
 list.inactiveSelectionForeground #d9dce3 #1c1f26|list.focusOutline #8f9cff #4453d0|list.highlightForeground #8f9cff #4453d0
 list.focusHighlightForeground #d9dce3 #1c1f26|list.filterMatchBackground #8f9cff33 #4453d033|tree.indentGuidesStroke #1f2228 #eceef2
-objectExplorer.activeConnectionBackground #232842 #dde1f9|objectExplorer.headingForeground #d9dce3 #1c1f26
+objectExplorer.activeConnectionBackground #111317 #f7f8fa|objectExplorer.activeConnectionForeground #8f9cff #4453d0
+objectExplorer.headingForeground #d9dce3 #1c1f26
 objectExplorer.sublabelForeground #bcc1cb #3a404b|objectExplorer.countForeground #9298a4 #5c6370|objectExplorer.chevronForeground #7f8694 #6b7280
 objectExplorer.folderIconForeground #bfa878 #7d6532|objectExplorer.objectIconForeground #a3a9b5 #4d5461
-objectExplorer.actionForeground #a3a9b5 #4d5461|editorGroupHeader.tabsBackground #111317 #f7f8fa|tab.activeBackground #16181d #ffffff
+objectExplorer.actionForeground #a3a9b5 #4d5461|objectExplorer.connectedIndicator #74d19c #146f3b
+objectExplorer.connectionErrorIndicator #f39a9a #b42229|objectExplorer.disconnectedIndicator #9298a4 #5c6370|editorGroupHeader.tabsBackground #111317 #f7f8fa|tab.activeBackground #16181d #ffffff
 tab.inactiveBackground #111317 #f7f8fa|tab.unfocusedActiveBackground #16181d #ffffff|tab.unfocusedInactiveBackground #111317 #f7f8fa
 tab.activeForeground #f5f6f8 #0a0c10|tab.inactiveForeground #9298a4 #5c6370|tab.unfocusedActiveForeground #a3a9b5 #4d5461
 tab.unfocusedInactiveForeground #9298a4 #5c6370|tab.border #262a31 #e3e6eb|tab.activeBorderTop #8f9cff #4453d0|editorGroup.border #262a31 #e3e6eb
@@ -68,7 +71,10 @@ panel.background #16181d #ffffff|panel.border #262a31 #e3e6eb|panelTitle.backgro
 panelTitle.inactiveForeground #9298a4 #5c6370|panelTitle.activeBorder #8f9cff #4453d0|badge.background #30343e #d6dae0
 badge.foreground #bcc1cb #3a404b|resultsGrid.background #16181d #ffffff|resultsGrid.foreground #d9dce3 #1c1f26
 resultsGrid.headerBackground #16181d #ffffff|resultsGrid.headerForeground #a3a9b5 #4d5461|resultsGrid.headerDescriptionForeground #9298a4 #5c6370
-resultsGrid.gridlines #1f2228 #eceef2|resultsGrid.alternateRowBackground #d9dce305 #1c1f2605|resultsGrid.rowNumberForeground #9298a4 #5c6370
+resultsGrid.gridlines #1f2228 #eceef2|resultsGrid.alternateRowBackground #d9dce305 #1c1f2605|resultsGrid.rowErrorBackground #f39a9a1f #b422291f
+resultsGrid.rowErrorForeground #d9dce3 #1c1f26|resultsGrid.rowWarningBackground #e4bb6a1f #8758001f|resultsGrid.rowWarningForeground #d9dce3 #1c1f26
+resultsGrid.rowRunningBackground #8f9cff1a #4453d01a|resultsGrid.rowRunningForeground #d9dce3 #1c1f26|resultsGrid.rowMutedBackground #16181d #ffffff
+resultsGrid.rowMutedForeground #a3a9b5 #4d5461|resultsGrid.rowNumberForeground #9298a4 #5c6370
 resultsGrid.nullForeground #9298a4 #5c6370|resultsGrid.nullBackground #d9dce300 #1c1f2600|resultsGrid.truncationForeground #e4bb6a #875800
 resultsGrid.selectionBackground #29314f #d9e0fb|resultsGrid.selectionForeground #d9dce3 #1c1f26
 resultsGrid.inactiveSelectionBackground #21273b #e7ebfc|resultsGrid.activeCellBorder #8f9cff #4453d0|resultsGrid.hoverBackground #262a32 #dfe2e7
@@ -97,7 +103,9 @@ live.staleForeground #f0d49e #6b4400|live.staleBackground #e4bb6a24 #87580024|ti
 tile.warningBorder #e4bb6a #875800|tile.criticalBorder #f39a9a #b42229|skeleton.background #30343e #d6dae0
 connection.red #e66767 #c42b3c|connection.orange #e09358 #b45309
 connection.yellow #d8bf5e #8f6b00|connection.green #6fbf8a #2e7d4f|connection.blue #6ea4ea #2563a8|connection.purple #ab95ea #7a4bbf
-connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00`
+connection.default #8d939f #6b7280|connection.favoriteForeground #d8bf5e #8f6b00
+charts.foreground #a3a9b5 #4d5461|charts.lines #262a31 #e3e6eb|charts.blue #3987e5 #2a78d6|charts.orange #d95926 #d4581f|charts.green #199e70 #12936a
+charts.yellow #c98500 #a87200|charts.purple #9085e9 #6250d6|charts.red #f39a9a #b42229|charts.gray #8d939f #6b7280`
 const specSyntax = { keyword: ['#93a4ff', '#3442c2'], operator: ['#9ea6b4', '#575e6b'], predefined: ['#d4a9f2', '#8338b4'], string: ['#9fd4a9', '#2c7440'],
   number: ['#e8b97d', '#965700'], comment: ['#868e9b', '#636a76'], identifier: ['#d9dce3', '#1c1f26'], delimiter: ['#9ea6b4', '#575e6b'] }
 
@@ -125,10 +133,10 @@ describe('built-in themes', () => {
       await expect(JSON.stringify(result.theme, null, 2) + '\n').toMatchFileSnapshot(`fixtures/themes/varia-${type}.resolved.json`)
     }
   })
-  it('have 67 slots, 237 keys and 16 scopes, with an acyclic and complete reference graph', () => {
+  it('have 67 slots, 258 keys and 16 scopes, with an acyclic and complete reference graph', () => {
     expect(paletteSlots).toHaveLength(67)
-    expect(colorKeys).toHaveLength(237)
-    expect(new Set(colorKeys).size).toBe(237)
+    expect(colorKeys).toHaveLength(258)
+    expect(new Set(colorKeys).size).toBe(258)
     expect(sqlScopes).toHaveLength(16)
     expect([...colorKeyOrder].sort()).toEqual([...colorKeys].sort())
     for (const key of colorKeys) {
@@ -143,7 +151,7 @@ describe('built-in themes', () => {
       expect(key.includes('-'), key).toBe(false)
       expect(cssVariable(key)).toBe('--varia-' + key.split('.').join('-'))
     }
-    expect(new Set(colorKeys.map(cssVariable)).size).toBe(237)
+    expect(new Set(colorKeys.map(cssVariable)).size).toBe(258)
     for (const value of Object.values(syntaxDefaults)) expect(isPaletteSlot(value!.slice(1))).toBe(true)
     for (const type of types) for (const slot of paletteSlots) {
       const value = builtinPalettes[type][slot]
@@ -245,7 +253,7 @@ describe('theme resolution', () => {
     for (const type of types) {
       const theme = resolveBuiltin(type)
       expect(isResolvedTheme(theme)).toBe(true)
-      expect(Object.keys(theme.colors)).toHaveLength(237)
+      expect(Object.keys(theme.colors)).toHaveLength(258)
       for (const key of colorKeys) expect(theme.colors[key]).toMatch(/^#[0-9a-f]{6}([0-9a-f]{2})?$/)
       for (const scope of sqlScopes) expect(theme.syntax[scope].foreground).toMatch(/^#[0-9a-f]{6}$/)
     }

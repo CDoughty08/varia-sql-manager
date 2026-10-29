@@ -113,7 +113,8 @@ internal static class ActivityLiveChecks
         await MarsAsync(check, host, info, monitor, render);
     }
 
-    /// <summary>A MARS session with two requests at once is one Processes row, its requests folded.</summary>
+    /// <summary>A MARS session with two requests at once: the sessions statement returns each request as its own row, ranked
+    /// within the session, and Processes folds them into one row.</summary>
     private static async Task MarsAsync(Action<bool, string> check, IActionHost host, ConnectionInfo info, SqlConnection monitor, ActivityRender render)
     {
         var connection = host.Connection(info.Id);
@@ -137,12 +138,20 @@ internal static class ActivityLiveChecks
             for (var attempt = 0; attempt < 100; attempt++)
             {
                 sessions = await Read(monitor, statement, parameter => 10_001);
-                if (Mine(sessions) is [var only] && Convert.ToInt32(sessions.Get(only, "request_count") ?? 0) == 2 || Mine(sessions).Count > 1) break;
+                if (Mine(sessions).Count > 1) break;
                 await Task.Delay(100);
             }
             var mine = Mine(sessions);
-            check(mine.Count == 1 && Convert.ToInt32(sessions.Get(mine[0], "request_count")) == 2 && sessions.Get(mine[0], "lowest_request_id") is not null,
-                $"a MARS session running two requests is one sessions row with both counted ({mine.Count} rows)");
+            long Number(object?[] row, string column) => Convert.ToInt64(sessions.Get(row, column) ?? -1L);
+            // Processes folds them: one row for the session.
+            var builder = new ActivitySessionRows(ActivityCatalog.Current);
+            var results = new Dictionary<string, ActivityResult> { ["sessions"] = new(sessions.Names, [.. sessions.Values.Select(row => row.Select(cell => cell is DBNull ? null : cell).ToArray())]) };
+            var folded = builder.Build(results, 0, new VariaSessions(ActivityCatalog.Current, 0, [], new HashSet<int>()), 0, 0);
+            var processes = folded.Sessions.Count(row => builder.SessionsWriter.Reader(row)("sessionId") == spid.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            check(mine.Count == 2 && mine.Select(row => Number(row, "request_rank")).SequenceEqual([1L, 2L]) && mine.All(row => Number(row, "request_count") == 2)
+                && mine.Select(row => Number(row, "request_id")).Distinct().Count() == 2 && mine.All(row => Number(row, "lowest_request_id") == mine.Min(other => Number(other, "request_id")))
+                && processes == 1,
+                $"a MARS session running two requests is a sessions row per request, ranked 1 and 2 with both counted, and one Processes row ({mine.Count} rows, {processes} in Processes)");
         }
         finally
         {

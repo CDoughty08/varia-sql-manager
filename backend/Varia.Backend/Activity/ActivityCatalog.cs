@@ -32,6 +32,8 @@ internal readonly record struct WaitClass(string Category, bool Benign)
 internal sealed class ActivityCatalog
 {
     public const int Version = 1;
+    /// <summary>The capability probe belongs to the source rather than one probe: it runs once per opened connection.</summary>
+    public const string CapabilityProbe = "activity";
 
     private static readonly Lazy<ActivityCatalog> Embedded = new(() =>
     {
@@ -49,11 +51,12 @@ internal sealed class ActivityCatalog
     private sealed record LoadGuardJson(int SlowSamples, int CheapSamples);
     private sealed record TableJson(string Table, string Probe, List<string> Key, int RowCap, List<string> Columns, List<string>? Identity = null, List<string>? TextColumns = null,
         List<string>? FacetColumns = null, List<string>? Tones = null, bool? DepartedLinger = null);
-    private sealed record VariaJson(string Suffix, string Kind);
+    private sealed record VariaJson(string Suffix, string Kind, string Label);
     private sealed record WaitJson(string Id, int Value, List<string> Names, List<string> Patterns);
     private sealed record CatalogJson(int Version, BandsJson Bands, List<string> Benign, List<string> BenignCategories, Dictionary<string, string> BlockerLabels, List<string> DetailsSections,
         List<string> DetailsTexts, Dictionary<string, EditionJson> Editions, List<ExceptionJson> Exceptions, HideBenignJson HideBenign, List<string> KillOutcomes, Dictionary<string, long> Limits,
-        LoadGuardJson LoadGuard, string PoolSuffix, List<ProbeJson> Probes, string Source, List<TableJson> Tables, Dictionary<string, string> Tones, string UnavailableMessage,
+        List<string> LiveProbes, LoadGuardJson LoadGuard, Dictionary<string, string> Pending, string PoolSuffix, List<ProbeJson> Probes, string Source, List<string> Statuses, List<TableJson> Tables,
+        Dictionary<string, string> Tones, string UnavailableMessage,
         List<VariaJson> VariaSessions, List<string> Views, List<WaitJson> Waits);
 
     private readonly FrozenDictionary<string, string> exact;
@@ -80,6 +83,10 @@ internal sealed class ActivityCatalog
             [.. table.Columns.Select(Column)], (table.TextColumns ?? []).ToFrozenSet(StringComparer.Ordinal), (table.FacetColumns ?? []).ToFrozenSet(StringComparer.Ordinal), table.Tones ?? [],
             table.DepartedLinger == true), StringComparer.Ordinal);
         VariaSuffixes = json.VariaSessions.Select(entry => (entry.Suffix, entry.Kind)).ToArray();
+        VariaLabels = json.VariaSessions.ToFrozenDictionary(entry => entry.Suffix, entry => entry.Label, StringComparer.Ordinal);
+        LiveProbes = json.LiveProbes;
+        Pending = json.Pending.ToFrozenDictionary(StringComparer.Ordinal);
+        Statuses = json.Statuses;
         DetailsSections = json.DetailsSections;
         DetailsTexts = json.DetailsTexts.ToFrozenSet(StringComparer.Ordinal);
         KillOutcomes = json.KillOutcomes;
@@ -123,6 +130,14 @@ internal sealed class ActivityCatalog
     public IReadOnlyDictionary<string, ActivityTableSpec> Tables { get; }
     /// <summary>Program name suffixes of Varia's sessions, with 'queryTab' or 'pool'.</summary>
     public IReadOnlyList<(string Suffix, string Kind)> VariaSuffixes { get; }
+    /// <summary>What the Varia column says of each suffix's sessions (a query tab's name comes from the renderer).</summary>
+    public IReadOnlyDictionary<string, string> VariaLabels { get; }
+    /// <summary>The probes the live catalogue declares, in its order.</summary>
+    public IReadOnlyList<string> LiveProbes { get; }
+    /// <summary>Declared probes whose sampling arrives later: each opens unavailable with its note and runs no SQL.</summary>
+    public IReadOnlyDictionary<string, string> Pending { get; }
+    /// <summary>The status ids the sessions probe sends with its first sample on each connection.</summary>
+    public IReadOnlyList<string> Statuses { get; }
     public IReadOnlyList<string> WaitCategories { get; }
     /// <summary>The Details flyout's sections, the texts it returns whole on request, and Kill's outcomes (activity.details and activity.kill).</summary>
     public IReadOnlyList<string> DetailsSections { get; }

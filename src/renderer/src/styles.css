@@ -165,13 +165,38 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .explorer-toolbar .icon-button { color: var(--varia-objectExplorer-actionForeground); }
 .explorer-toolbar .icon-button:focus-visible { outline-offset: -2px; }
 .explorer-body { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-footer { flex-shrink: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); padding: 12px; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+/* Filter loaded objects: one field, the search glyph and the clear button inside its border. */
+.explorer-filter { flex-shrink: 0; display: flex; align-items: center; gap: var(--varia-space-1); height: var(--varia-control); margin: var(--varia-space-2) var(--varia-space-2) var(--varia-space-1); padding: 0 var(--varia-space-0) 0 var(--varia-space-2); color: var(--varia-input-placeholderForeground); background: var(--varia-input-background); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+/* The field takes the controls' ring (2 px at 2 px), drawn around the field rather than the borderless input inside it. */
+.explorer-filter:has(input:focus-visible) { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.explorer-filter input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: var(--varia-size-sm); }
+.explorer-filter input:focus-visible { outline: none; }
+.explorer-filter .icon-button { width: 20px; height: 20px; color: var(--varia-objectExplorer-actionForeground); }
+/* Filter text that matches nothing: one compact line under the box rather than a centred empty pane. */
+.explorer-no-match.empty-state { flex: none; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; gap: var(--varia-space-1) var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-3); text-align: left; }
+.explorer-no-match .empty-state-icon { margin-bottom: 0; }
+.explorer-no-match .empty-state-detail { min-width: 0; overflow-wrap: anywhere; }
+.explorer-no-match .empty-state-actions { margin-top: 0; }
+/*
+ * The footer: how fresh the selection's listing is, then the connected servers. It is one line as tall as the stale
+ * badge's 20 px pill (.stale-badge[data-stale]), so a refresh that fails does not move the tree's bottom edge. The server
+ * count shows whole or not at all: when it does not fit beside the freshness it wraps to a second line, which the
+ * footer's height clips (each server row has its dot).
+ */
+.explorer-footer { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; align-content: flex-start; column-gap: var(--varia-space-2); height: calc(20px + 2 * var(--varia-space-1) + 1px); min-width: 0; overflow: hidden; padding: var(--varia-space-1) var(--varia-space-3); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); white-space: nowrap; border-top: 1px solid var(--varia-sideBarSectionHeader-border); }
+.explorer-freshness { display: flex; align-items: center; gap: var(--varia-space-1); flex: 0 1 auto; height: 20px; min-width: 0; }
+.explorer-freshness-scope { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+/* Alone on its line (no listing yet), the count may still ellipsize in a very narrow pane. */
+.explorer-servers { flex: 0 1 auto; min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; line-height: 20px; }
 /* Windowed rows over a spacer as tall as every row: only the rows in view (and the selected one) are in the DOM. */
 .explorer-tree { position: relative; flex: 1; min-height: 0; overflow: auto; contain: strict; outline: none; padding: 0; }
 .explorer-spacer { position: relative; width: 100%; }
-.explorer-row { position: absolute; top: 0; left: 0; right: 0; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-sm); line-height: 16px; white-space: nowrap; cursor: default; }
-.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
+.explorer-row { position: absolute; top: 0; left: 0; right: 0; container-type: inline-size; height: var(--varia-row); display: flex; align-items: center; gap: 4px; padding-right: 6px; font-size: var(--varia-size-md); line-height: var(--varia-line-md); white-space: nowrap; cursor: default; }
+/* A server leads its tree: taller (explorerLimits.serverRowHeight), its name in semibold, its version and login after it. */
+.explorer-row.server { height: 30px; }
+/* The active query's server (untinted by default; its glyph, .oe-active, marks it): hover and selection still show on it. */
 .explorer-row.active-connection { background: var(--varia-objectExplorer-activeConnectionBackground); transition: none; }
+.explorer-row:hover { background: var(--varia-list-hoverBackground); transition: background-color var(--varia-motion-fast) var(--varia-motion-ease); }
 .explorer-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .explorer-tree:focus .explorer-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); outline: 1px solid var(--varia-list-focusOutline); outline-offset: -1px; transition: none; }
 .oe-accent { position: absolute; top: 0; bottom: 0; left: 0; width: 3px; }
@@ -185,18 +210,47 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @keyframes oe-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .oe-badge[data-badge="loading"] { animation: none; } }
-.oe-label { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+/*
+ * The label grows from nothing to its text (basis 0, max-width max-content), ahead of the sublabel (its grow factor), and
+ * the row's end takes the rest; when the row is short of room the label keeps the smaller of its text and its width, min(35
+ * cqw, 10em): the automatic minimum of a flex item that clips rather than scrolls (overflow: clip) is the smaller of its
+ * min-content and its specified width. So the end's chips show whole beside a short name, and a long name keeps a share.
+ */
+.oe-label { flex: 1000 1 0; width: min(35cqw, 10em); max-width: max-content; overflow: clip; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.folder .oe-label { color: var(--varia-objectExplorer-headingForeground); }
 .explorer-row.server .oe-label { font-weight: 600; }
 .explorer-row.dimmed .oe-label { color: var(--varia-disabledForeground); }
 /* The sublabel takes only the space the label leaves (basis 0), so a label that fits never ellipsizes for its sublabel. */
-.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; color: var(--varia-objectExplorer-sublabelForeground); }
+.oe-sublabel { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; font-size: var(--varia-size-sm); color: var(--varia-objectExplorer-sublabelForeground); }
+.oe-match { font-weight: 600; color: var(--varia-list-highlightForeground); }
 .oe-filtered, .explorer-row.progress .oe-text { color: var(--varia-objectExplorer-countForeground); }
-.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button { color: inherit; }
+.explorer-row[aria-selected="true"] .oe-label, .explorer-row[aria-selected="true"] .oe-filtered, .explorer-row[aria-selected="true"] .oe-text, .explorer-row[aria-selected="true"] .oe-actions button, .explorer-row[aria-selected="true"] .oe-match, .explorer-row[aria-selected="true"] .oe-count { color: inherit; }
 .oe-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .explorer-row.synthetic .oe-icon { color: var(--varia-icon-foreground); }
 .explorer-row.error .oe-icon { color: var(--varia-errorForeground); }
-.oe-actions { display: flex; gap: 2px; margin-left: auto; padding-left: 4px; flex: none; }
+/*
+ * The row's end: chips and tags (E2, E3), the item count and the connection dot, then a lost server's buttons. It takes all
+ * the row the label leaves (see .oe-label). The chips in it give way first (their shrink factor dwarfs the tag's), then the
+ * tag, so the count and dot stay; an item's cap is an em size or a share of the row in cqw (each row is an inline-size
+ * container), since a percentage would resolve against this content-sized box and clamp an item to a share of its width.
+ */
+.oe-end { display: flex; flex: 0 1 auto; min-width: 0; align-items: center; gap: var(--varia-space-1); margin-left: auto; padding-left: var(--varia-space-1); }
+.oe-end:empty { display: none; }
+.oe-count { flex: none; color: var(--varia-objectExplorer-countForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
+.oe-dot { flex: none; box-sizing: border-box; width: 8px; height: 8px; margin: 0 var(--varia-space-1); border: 2px solid var(--varia-objectExplorer-connectedIndicator); border-radius: 50%; background: var(--varia-objectExplorer-connectedIndicator); }
+.oe-dot[data-state="error"] { border-color: var(--varia-objectExplorer-connectionErrorIndicator); background: transparent; }
+.oe-dot[data-state="lost"] { border-color: var(--varia-objectExplorer-disconnectedIndicator); background: transparent; }
+/* The active query's server: a small accent glyph, on every row state (the dot says the connection, the weight a server). */
+.oe-active { flex: none; display: grid; place-items: center; color: var(--varia-objectExplorer-activeConnectionForeground); }
+.oe-active > .codicon { font-size: var(--varia-glyph-sm); }
+/* Live status chips (ExplorerStatusService), before the environment tag: the first part of the row's end to give way, each
+   chip's word ending in an ellipsis before its number; the row's accessible name and tooltip say them all. */
+.oe-chips { display: flex; flex: 0 1000 auto; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
+.oe-chips > .status-pill { flex: 0 1 auto; min-width: 0; }
+/* In a narrow pane each chip would shrink to a letter or two: only the first (a database's state, a server's running
+   jobs) shows; the row's name and tooltip still say them all. */
+@container (max-width: 30em) { .oe-chips > .status-pill:not(:first-child) { display: none; } }
+.oe-actions { display: flex; gap: 2px; flex: none; }
 .oe-actions button { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; color: var(--varia-objectExplorer-actionForeground); }
 /* Monaco draws the drop position of an Object Explorer drag with this class; its own dnd.css is not loaded. */
 .monaco-editor .dnd-target { border-right: 2px solid var(--varia-focusBorder); }
@@ -297,6 +351,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .explorer-row[aria-selected="true"], .explorer-tree:focus .explorer-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
   .explorer-row[aria-selected="true"] .oe-sublabel, .explorer-row[aria-selected="true"] .oe-icon, .explorer-row[aria-selected="true"] .oe-twistie { color: HighlightText; }
   .explorer-row[aria-selected="true"] .oe-icon .oe-badge { color: HighlightText; background: Highlight; }
+  /* The connection dot keeps its shape: filled while connected, a ring otherwise. */
+  .oe-dot { forced-color-adjust: none; border-color: CanvasText; background: CanvasText; }
+  .oe-dot[data-state="error"], .oe-dot[data-state="lost"] { border-color: CanvasText; background: Canvas; }
+  .explorer-row[aria-selected="true"] .oe-dot { border-color: HighlightText; background: HighlightText; }
+  .explorer-row[aria-selected="true"] .oe-dot[data-state="error"], .explorer-row[aria-selected="true"] .oe-dot[data-state="lost"] { border-color: HighlightText; background: Highlight; }
+  .explorer-row[aria-selected="true"] .oe-count, .explorer-row[aria-selected="true"] .oe-active { color: HighlightText; }
   /* Offline, inaccessible and disabled rows stay dimmed, as disabled menu items are. */
   .explorer-row.dimmed:not([aria-selected="true"]) .oe-label, .explorer-row.dimmed:not([aria-selected="true"]) .oe-sublabel { color: GrayText; }
   /* The theme's outline can vanish on the system's selection colour; the focused selection gets a wider one in its text colour. */
@@ -366,17 +426,22 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .editor-container { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
 .editor-loading { padding: 30px; color: var(--varia-emptyState-foreground); }
 .output-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; background: var(--varia-panel-background); }
-.output-toolbar { display: flex; flex-shrink: 0; justify-content: space-between; align-items: center; height: 42px; border-bottom: 1px solid var(--varia-panel-border); padding-right: 18px; background: var(--varia-panelTitle-background); }
-.output-toolbar button { padding: 12px 19px; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-xs); }
-.output-toolbar button.active { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px var(--varia-panelTitle-activeBorder); transition: none; }
-.output-toolbar button .badge { margin-left: 8px; padding: 1px 5px; border-radius: var(--varia-radius-sm); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
-.output-toolbar small { font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+/* The results head: the segmented views, the run summary, the copy and save strips and the panel menu. */
+.output-toolbar { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: var(--varia-bar); box-sizing: border-box; padding: 0 6px 0 8px; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+/* Results, Messages and Execution plan as one segmented control: the selected view is a raised pill. */
+.output-views { display: inline-flex; flex-shrink: 0; gap: 1px; padding: 1px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
+.output-views button { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--varia-radius-sm); color: var(--varia-panelTitle-inactiveForeground); font-size: var(--varia-size-sm); }
+.output-views button.active { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-panelTitle-activeForeground); font-weight: 600; transition: none; }
+.output-views .badge { min-width: 16px; box-sizing: border-box; padding: 0 5px; border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font: 600 var(--varia-size-xs)/16px var(--varia-font-ui); text-align: center; }
+/* One run summary: how it went, rows, time and when it ended; the icon carries the outcome's colour. */
+.output-status { flex: 1; min-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); font-variant-numeric: tabular-nums; }
+.output-status strong { font-weight: 600; color: var(--varia-foreground); }
+.output-status .codicon { margin-right: 5px; vertical-align: -2px; font-size: var(--varia-glyph-sm); }
+.output-status[data-tone="success"] .codicon { color: var(--varia-successForeground); }
+.output-status[data-tone="warning"] .codicon { color: var(--varia-warningForeground); }
+.output-status[data-tone="error"] .codicon { color: var(--varia-errorForeground); }
+.output-spacer { flex: 1; }
 .output-view { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
-.output-toolbar { gap: 8px; padding-right: 10px; }
-.output-toolbar > div { display: flex; flex-shrink: 0; }
-.output-toolbar small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.output-toolbar button { padding: 12px; }
-.output-toolbar .output-status { flex: 1; min-width: 96px; text-align: right; }
 .job-strip { display: flex; min-width: 0; align-items: center; gap: 6px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); white-space: nowrap; }
 /* Strips give way to a narrow window: a long file name is cut short, while Cancel and the status line keep their room. */
 .output-toolbar > .job-strip { flex-shrink: 1; min-width: 72px; }
@@ -389,9 +454,19 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rs-stack { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .rs-content { position: relative; width: 100%; }
 .rs-item { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; min-height: 0; }
-.rs-placeholder { height: 22px; padding: 0 8px; font: var(--varia-size-sm)/22px var(--varia-font-ui); color: var(--varia-resultsGrid-headerForeground); background: var(--varia-resultsGrid-headerBackground); }
+/* A set's caption (gridLimits.captionHeight): Collapse and its name, rows and columns, its batch, and Save Results As. */
+.rs-caption { display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 26px; box-sizing: border-box; padding: 0 2px; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); background: var(--varia-panel-background); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.rs-item[data-collapsed] .rs-caption { border-bottom-color: transparent; }
+.rs-caption-toggle { display: inline-flex; flex-shrink: 0; align-items: center; gap: 2px; height: 22px; padding: 0 6px 0 0; border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
+.rs-caption-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.rs-caption-batch { flex-shrink: 0; }
+.rs-caption-save { flex-shrink: 0; }
+/* Captions and the Messages strip sit against the stack's and the pane's clipping edges: their rings go inside. */
+.rs-caption-toggle:focus-visible, .rs-caption-save:focus-visible, .messages-strip-toggle:focus-visible { outline-offset: -2px; }
 .rs-splitter { position: absolute; left: 0; right: 0; height: 5px; cursor: row-resize; background: var(--varia-resultsGrid-splitterBackground); outline: none; touch-action: none; }
 .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
+/* Beside a collapsed set a splitter only divides. */
+.rs-splitter[data-inert], .rs-splitter[data-inert]:hover { cursor: default; background: var(--varia-resultsGrid-splitterBackground); }
 /* A grid with its strip and lost overlay, which sit outside the grid's table structure. */
 .rg-frame { position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--varia-resultsGrid-background); }
 /* The results grid (GridView): pooled rows and cells, positioned absolutely; one class string per cell. */
@@ -406,11 +481,23 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .rg-corner { position: sticky; left: 0; z-index: 3; width: var(--rg-rhw); }
 .rg-ch:hover, .rg-corner:hover { background: var(--varia-resultsGrid-hoverBackground); }
 .rg-ch.unnamed { color: var(--varia-resultsGrid-headerDescriptionForeground); }
+/* The column's SQL type after its name (gridLimits.typeGap), muted and smaller. Name and type are each isolated, so bidi
+   controls in a name stay inside it. */
+.rg-cn { unicode-bidi: isolate; }
+.rg-ct { margin-left: 6px; unicode-bidi: isolate; font-size: var(--varia-size-xs); color: var(--varia-resultsGrid-headerDescriptionForeground); }
+.rg-ch.sel .rg-ct { color: inherit; }
 .rg-ch.sel { background: var(--varia-resultsGrid-headerSelectionBackground); color: var(--varia-resultsGrid-headerSelectionForeground); }
 .rg.rg-border-hover .rg-head, .rg.rg-border-hover .rg-head *, .rg.rg-resizing, .rg.rg-resizing * { cursor: col-resize; }
 .rg-rows { position: absolute; top: 0; left: 0; }
 .rg-row { position: absolute; left: 0; height: 20px; contain: strict; }
 .rg-row.odd { background: var(--varia-resultsGrid-alternateRowBackground); }
+/* A live grid row's tone (LiveGrid): its own background instead of the stripe, and its text color; selected cells keep theirs. */
+.rg-row.tone-error { background: var(--varia-resultsGrid-rowErrorBackground); color: var(--varia-resultsGrid-rowErrorForeground); }
+.rg-row.tone-warning { background: var(--varia-resultsGrid-rowWarningBackground); color: var(--varia-resultsGrid-rowWarningForeground); }
+.rg-row.tone-running { background: var(--varia-resultsGrid-rowRunningBackground); color: var(--varia-resultsGrid-rowRunningForeground); }
+.rg-row.tone-muted { background: var(--varia-resultsGrid-rowMutedBackground); color: var(--varia-resultsGrid-rowMutedForeground); }
+/* On a toned row a NULL keeps its color but not its tint, which would leave it too faint to read. */
+.rg-row.tone-error .rg-c.is-null, .rg-row.tone-warning .rg-c.is-null, .rg-row.tone-running .rg-c.is-null, .rg-row.tone-muted .rg-c.is-null { background: none; }
 /* Each row's own header is for screen readers; the numbers are drawn in one sticky column beside the rows. */
 .rg-rh { position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .rg-rhs { position: sticky; left: 0; z-index: 1; width: var(--rg-rhw); height: 0; }
@@ -431,9 +518,14 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Only the focused grid shows its active cell's outline, as in SSMS; the others show their selection. */
 .rg:focus-within .rg-c.is-act { outline: 1px solid var(--varia-resultsGrid-activeCellBorder); outline-offset: -1px; }
 .rg:focus-visible .rg-c.is-act { outline-width: 2px; outline-offset: -2px; }
-.rg-strip { flex-shrink: 0; padding: 4px 8px; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
-.rg-strip.error { color: var(--varia-errorForeground); }
+/* One line (gridLimits.stripHeight), cut short with the sentence in its tooltip, so a set sized to its rows counts it exactly. An
+   error strip wraps instead, keeping Retry in view; it comes after the set was sized. */
+.rg-strip { flex-shrink: 0; padding: 4px 8px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: var(--varia-size-xs)/16px var(--varia-font-ui); color: var(--varia-resultsGrid-truncationForeground); border-top: 1px solid var(--varia-panel-border); }
+.rg-strip.error { white-space: normal; color: var(--varia-errorForeground); }
 .rg-strip button { margin-left: 8px; padding: 0 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+/* A live log scrolled up: rows that arrived since, and a way back to the tail (LiveGridPane). */
+.live-grid-new-rows { position: absolute; bottom: var(--varia-space-3); left: 50%; z-index: 5; transform: translateX(-50%); padding: var(--varia-space-0) var(--varia-space-3); border-radius: var(--varia-radius-pill); font: var(--varia-size-xs)/var(--varia-line-xs) var(--varia-font-ui); background: var(--varia-button-background); color: var(--varia-button-foreground); }
+.live-grid-new-rows:hover { background: var(--varia-button-hoverBackground); }
 .rg-overlay { position: absolute; inset: 22px 0 0; z-index: 4; display: grid; place-items: center; padding: 16px; text-align: center; font: var(--varia-size-sm) var(--varia-font-ui); color: var(--varia-emptyState-foreground); background: var(--varia-resultsGrid-background); }
 @media (forced-colors: active) {
   /* Forced colors drop the selection's backgrounds; the system's selection colors show which cells Copy takes. */
@@ -445,6 +537,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .rg-c.is-link { color: LinkText; }
   /* NULL's tint is dropped too; dimmed text tells it from the text 'NULL'. */
   .rg-c.is-null:not(.is-sel) { color: GrayText; }
+  /* Forced colors drop row tones' backgrounds: a toned row's number gets a bar, and a muted row dimmed text. */
+  .rg-rn.tone-error, .rg-rn.tone-warning, .rg-rn.tone-running { border-left: 3px solid CanvasText; }
+  .rg-row.tone-muted { color: GrayText; }
   /* Splitters are drawn with a background only, which forced colors would drop. */
   .rs-splitter { background: CanvasText; forced-color-adjust: none; }
   .rs-splitter:hover, .rs-splitter:active, .rs-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
@@ -453,6 +548,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .messages:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .messages .msg { margin: 0; font: var(--varia-size-sm)/1.7 var(--varia-font-mono); white-space: pre-wrap; overflow-wrap: anywhere; content-visibility: auto; contain-intrinsic-size: auto 20px; }
 .messages .msg.error, .output-toolbar .badge.error-count { color: var(--varia-errorForeground); }
+/* The Messages strip under the results: one line (gridLimits.stripLine), opening to the messages. OutputPane caps it at what
+   the stack leaves (at most 40 % of the pane), and never below a few lines; then they scroll. */
+.messages-strip { display: flex; flex: 0 0 auto; flex-direction: column; min-height: 0; max-height: 40%; border-top: 1px solid var(--varia-panel-border); background: var(--varia-panel-background); }
+.messages-strip-toggle { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 26px; box-sizing: border-box; padding: 0 8px 0 2px; border-radius: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); text-align: left; white-space: nowrap; }
+/* A closed strip shows the first error, so it can be read whatever the pane's height. */
+.messages-strip-error { flex: 1; min-width: 0; margin-left: 8px; overflow: hidden; text-overflow: ellipsis; color: var(--varia-errorForeground); }
+.messages-strip-name { color: var(--varia-foreground); font-size: var(--varia-size-sm); font-weight: 600; }
+.messages-strip-facts { margin-left: 4px; font-variant-numeric: tabular-nums; }
+.messages-strip-facts[data-errors] { color: var(--varia-errorForeground); }
+.messages-strip .messages { flex: 1 1 auto; padding: 2px 20px 8px; }
+/* The Execution plan view: the run's plans, each opened as a .sqlplan document. */
+.plan-list { flex: 1; min-height: 0; margin: 0; padding: 4px 12px; overflow: auto; list-style: none; }
+.plan-item { display: flex; align-items: center; gap: 8px; min-height: 32px; border-bottom: 1px solid var(--varia-panel-border); color: var(--varia-foreground); font-size: var(--varia-size-sm); }
+.plan-name { font-weight: 600; }
+.plan-facts { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.plan-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
+.plan-actions button { padding: 2px 8px; border: 1px solid var(--varia-button-border); border-radius: var(--varia-radius-sm); color: var(--varia-foreground); font-size: var(--varia-size-xs); }
+.plan-more { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+@media (forced-colors: active) {
+  /* The selected view's fill is dropped; an outline inside marks it, and focus a ring outside it in another colour. */
+  .output-views { border-color: CanvasText; }
+  .output-views button.active { outline: 2px solid Highlight; outline-offset: -2px; }
+  .output-views button.active:focus-visible { outline: 2px solid CanvasText; outline-offset: 2px; }
+}
 .memory-indicator { display: flex; align-items: center; gap: 4px; margin-left: 12px; white-space: nowrap; }
 .memory-indicator .codicon { font-size: var(--varia-glyph-sm); }
 
@@ -768,6 +887,34 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
   .designer-cell[data-active], .table-designer-splitter:focus-visible { outline: 1px solid CanvasText; }
   .designer-row[data-selected] .designer-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
 }
+/* Live charts (live/ChartView.ts): the consumer sizes .live-chart; the canvas takes what the legend and toggle leave. */
+.live-chart { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; color: var(--varia-charts-foreground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.live-chart-canvas { display: block; flex: 1; width: 100%; min-height: 0; outline: none; }
+.live-chart-canvas:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.live-chart-legend { display: flex; flex-wrap: wrap; gap: 2px 10px; margin: 0 0 4px; padding: 0; list-style: none; }
+.live-chart-legend li { display: flex; align-items: center; gap: 4px; }
+.live-chart-swatch { flex: none; width: 16px; height: 8px; }
+.live-chart-tip { position: absolute; z-index: 2; pointer-events: none; padding: 3px 7px; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; background: var(--varia-editorWidget-background); color: var(--varia-editorWidget-foreground); border: 1px solid var(--varia-editorWidget-border); border-radius: var(--varia-radius-sm); box-shadow: var(--varia-shadow-menu) var(--varia-widget-shadow); }
+.live-chart-toggle { align-self: flex-end; margin-top: 4px; padding: 2px 6px; font-size: var(--varia-size-xs); }
+.live-chart-toggle[aria-pressed="true"] { border-color: var(--varia-button-border); transition: none; }
+.live-chart[data-table] .live-chart-canvas { display: none; }
+/* The table takes the plot's place at its size and scrolls there, so it never spills over the card or what is around it. */
+.live-chart-table-wrap { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.live-chart-table-wrap:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: -2px; }
+/* As wide as the plot it replaces, so the caption takes one line; the header stays in view as the rows scroll (on the
+   chart's surface, which LiveChart sets on the thead). */
+.live-chart-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; color: var(--varia-foreground); }
+.live-chart-table caption { padding-bottom: 2px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--varia-charts-foreground); }
+.live-chart-table thead { position: sticky; top: 0; z-index: 1; }
+.live-chart-table th, .live-chart-table td { padding: 1px 8px 1px 0; text-align: right; font-weight: 400; white-space: nowrap; }
+.live-chart-table th[scope="col"] { color: var(--varia-charts-foreground); }
+.live-chart-table th[scope="row"], .live-chart-table thead th:first-child { text-align: left; }
+@media (forced-colors: active) {
+  .live-chart-swatch line { stroke: CanvasText; }
+  /* Read by ChartView (systemColors): the canvas draws in what the DOM resolves these to. */
+  .live-chart-system { forced-color-adjust: none; color: CanvasText; background-color: Canvas; border-top-color: GrayText; }
+  .live-chart-toggle[aria-pressed="true"] { outline: 1px solid CanvasText; }
+}
 /* The states kit (src/renderer/src/kit): one empty state, inline errors, loading placeholders, status pills and tags,
    filter chips, live labels and metric tiles. Colour is never the only sign: pills and badges carry a word, an on chip
    a check mark, and a tile over its threshold a glyph. */
@@ -806,6 +953,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .stale-badge > .codicon { font-size: var(--varia-glyph-sm); }
 .tile-caption > .codicon { font-size: var(--varia-glyph-sm); }
 .status-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* A pill's number (StatusPill `value`): its label gives way, never it. */
+.status-pill-value { flex: none; }
 .status-pill[data-tone="running"] { background: var(--varia-statusPill-runningBackground); color: var(--varia-statusPill-runningForeground); }
 .status-pill[data-tone="success"] { background: var(--varia-statusPill-successBackground); color: var(--varia-statusPill-successForeground); }
 .status-pill[data-tone="warning"] { background: var(--varia-statusPill-warningBackground); color: var(--varia-statusPill-warningForeground); }
@@ -817,7 +966,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
    takes the server's name, the tab or the bar it sits in. */
 .environment-tag { display: inline-flex; flex: none; align-items: center; min-width: 0; max-width: 12em; }
 .environment-tag > .status-pill { flex: 0 1 auto; min-width: 0; }
-.environment-tag[data-place="explorer"] { max-width: min(40%, 12em); margin-left: var(--varia-space-1); }
+/* In a server row's end (.oe-end): the tag keeps its word whole while live chips give way, and gives way itself only to keep
+   the count and dot in a narrow row; a custom label stops at 40% of the row (cqw: the row is the container; a percentage
+   would resolve against .oe-end) and 12em. */
+.environment-tag[data-place="explorer"] { flex: 0 1 auto; max-width: min(40cqw, 12em); }
+/* Beside the active query's glyph (.oe-active and the gap before it), so the two together keep to that 40%. */
+.explorer-row.active-connection .environment-tag[data-place="explorer"] { max-width: min(40cqw - var(--varia-glyph-sm) - var(--varia-space-1), 12em); }
 .environment-tag[data-place="tab"] { max-width: 10em; }
 .environment-tag[data-place="tab"], .environment-tag[data-place="list"] { margin-left: 6px; }
 .environment-tag[data-place="list"] { vertical-align: middle; }
@@ -857,6 +1011,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .tile-unit { margin-left: 2px; color: var(--varia-descriptionForeground); font-size: var(--varia-size-sm); font-weight: 400; }
 .tile-context { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; }
 .tile-chart { min-width: 0; min-height: 0; }
+/* A tile's sparkline (live/LiveChart.tsx, variant sparkline on surface tile.background). */
+.tile-chart > .live-chart { height: 32px; }
 @media (forced-colors: active) {
   /* Forced colors drop fills: pills, badges and tiles keep an outline, and an on chip takes the selection colors. */
   .status-pill, .stale-badge[data-stale], .tile { border: 1px solid CanvasText; }
@@ -1081,4 +1237,70 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   /* A toast keeps its outline, and its glyph says the severity as its role's label does. */
   .toast { border-color: CanvasText; }
+}
+/* The Activity Monitor (activity/ActivityMonitor.tsx) inside the document frame: tiles, expanded charts, then the panes,
+   which take the rest of the height. The frame is the size container, so the document's width decides the reflow. The
+   body is the document's height: the tiles keep theirs, the expanded charts give way down to a floor, and the panes keep
+   their own (D-am §3.2: a pane never needs expanding to show data); only a document too short for all three scrolls. */
+.activity-body { display: flex; flex-direction: column; gap: var(--varia-space-3); height: 100%; padding: var(--varia-space-3) var(--varia-space-4) var(--varia-space-4); }
+.activity-cost { display: inline-flex; align-items: center; gap: var(--varia-space-0); color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.activity-select { height: var(--varia-control); padding: 0 6px; }
+/* The kit's InlineError, its own inset kept, in a box. */
+.activity-banner { flex: none; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); }
+.activity-note { margin: 0; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); line-height: var(--varia-line-xs); }
+.activity-tiles { display: grid; flex: none; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: var(--varia-space-2); }
+.activity-tile { position: relative; display: flex; min-width: 0; cursor: pointer; }
+.activity-tile > .tile { flex: 1; }
+/* Only the caption's row gives way to the chart button. SSMS's name wraps (to three lines in the narrowest row of
+   eight) rather than being cut; the secondary figures keep to one line, whole in the tile's tooltip and name, so the
+   tiles stay short. */
+.activity-tile .tile-caption { padding-right: calc(var(--varia-control) + var(--varia-space-1) - var(--varia-space-3)); }
+.activity-tile .tile-caption-text { display: -webkit-box; overflow: hidden; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.activity-tile .tile-context { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-tile-toggle { position: absolute; top: var(--varia-space-1); right: var(--varia-space-1); display: inline-flex; align-items: center; justify-content: center; width: var(--varia-control); height: var(--varia-control); padding: 0; color: var(--varia-descriptionForeground); }
+.activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); border-color: var(--varia-panelTitle-activeBorder); transition: none; }
+.activity-sparkline { height: 28px; }
+.activity-charts { display: grid; flex: 0 1 auto; min-height: 150px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); grid-auto-rows: minmax(0, 1fr); gap: var(--varia-space-2); }
+.activity-chart { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: var(--varia-space-2) var(--varia-space-3); border: 1px solid var(--varia-tile-border); border-radius: var(--varia-radius-lg); background: var(--varia-tile-background); }
+.activity-chart-head { display: flex; align-items: center; gap: var(--varia-space-2); }
+.activity-chart-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--varia-size-sm); line-height: var(--varia-line-sm); font-weight: 600; }
+.activity-chart-close { display: inline-flex; padding: 2px; }
+.activity-chart-plot { flex: 1 1 auto; height: 180px; min-height: 0; }
+.activity-panes { display: grid; flex: 1 1 260px; min-height: 260px; }
+.activity-panes[data-orientation="column"][data-split] { grid-template-columns: minmax(0, 1fr); }
+.activity-panes[data-orientation="row"][data-split] { grid-template-rows: minmax(0, 1fr); }
+.activity-splitter { background: transparent; outline: none; }
+.activity-panes[data-orientation="row"] > .activity-splitter { width: 6px; cursor: col-resize; }
+.activity-panes[data-orientation="column"] > .activity-splitter { height: 6px; cursor: row-resize; }
+.activity-splitter:hover, .activity-splitter:focus-visible { background: var(--varia-sash-hoverBorder); }
+.activity-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-lg); overflow: hidden; }
+.activity-pane-tabs { display: flex; flex: none; overflow-x: auto; border-bottom: 1px solid var(--varia-panel-border); background: var(--varia-panelTitle-background); }
+.activity-pane-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; flex: none; height: var(--varia-bar); padding: 0 var(--varia-space-3); border: 0; border-radius: 0; color: var(--varia-panelTitle-inactiveForeground); }
+.activity-pane-tabs [role="tab"][aria-selected="true"], .activity-pane-tabs [role="tab"][aria-selected="true"]:hover:not(:disabled) { color: var(--varia-panelTitle-activeForeground); box-shadow: inset 0 -2px 0 var(--varia-panelTitle-activeBorder); }
+.activity-pane-tabs [role="tab"]:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.activity-pane-body { display: flex; flex: 1; min-height: 0; overflow: auto; }
+/* Two rows of four tiles under 960 px of document (where eight still leave SSMS's names whole; D-am §3.2 says 1,100,
+   which at a 1,280 px window pushes the panes out of the document), four rows of two under 560 px. */
+@container (max-width: 960px) { .activity-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (max-width: 560px) { .activity-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* A narrow monitor shows its verbs as their icons, their names kept in the tooltip and for assistive technology, so the
+   title and its state keep their room in the one header row (a 1,280 px window's document included). */
+@container (max-width: 1040px) {
+  .document-frame[data-activity-monitor] .document-verb { position: relative; justify-content: center; width: var(--varia-control); padding: 0; }
+  .document-frame[data-activity-monitor] .document-verb-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+/* Narrower still (a 1,024 px window), the controls take a row of their own under the title, always, so the header's height
+   never follows the state's words. */
+@container (max-width: 800px) {
+  .document-frame[data-activity-monitor] .document-header { flex-wrap: wrap; }
+  .document-frame[data-activity-monitor] .document-actions { flex: 1 1 100%; margin-left: 0; }
+}
+/* Stacked (under 760 px of document), two expanded charts keep a chart's floor each. */
+@container (width < 760px) { .activity-charts:has(> .activity-chart + .activity-chart) { min-height: calc(2 * 150px + var(--varia-space-2)); } }
+@media (forced-colors: active) {
+  .activity-banner, .activity-pane, .activity-chart { border-color: CanvasText; }
+  .activity-tile-toggle[aria-pressed="true"], .activity-tile-toggle[aria-pressed="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .activity-pane-tabs [role="tab"][aria-selected="true"], .activity-pane-tabs [role="tab"][aria-selected="true"]:hover:not(:disabled) { forced-color-adjust: none; background: Highlight; color: HighlightText; box-shadow: none; }
+  .activity-splitter { background: CanvasText; forced-color-adjust: none; }
+  .activity-splitter:hover, .activity-splitter:focus-visible { background: Highlight; outline: 2px solid Highlight; }
 }

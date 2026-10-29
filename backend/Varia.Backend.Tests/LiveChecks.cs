@@ -251,6 +251,10 @@ internal static class LiveChecks
             ["track key length"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 1, keys = new[] { new string('k', 513) } } } }),
             ["track table"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 1, seq = 1, keys = Array.Empty<string>() } } }),
             ["args"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, args = new { tickMs = 5 } }),
+            ["track linger"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 1, keys = new[] { "k" }, linger = 2 } } }),
+            ["track linger sign"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 1, keys = new[] { "k" }, linger = -1 } } }),
+            ["sort table"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true, table = 1 } } } } }),
+            ["repeated table sort"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true, table = 0 }, new { column = "id", descending = false, table = 0 } } } } }),
             ["track seq"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 0, keys = Array.Empty<string>() } } }),
             ["unknown sort"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "nope", descending = true } } } } }),
             ["repeated sort"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true }, new { column = "id", descending = false } } } } }),
@@ -262,7 +266,8 @@ internal static class LiveChecks
             ["clear and set"] = Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new[] { new { column = "id", descending = true } }, clear = new[] { "sort" } } } })
         };
         check(updates.All(item => item.Value == "INVALID_PARAMS") && Update(new { subscriptionId = Guid.NewGuid().ToString(), source = SyntheticSampler.Source, paused = true }) == "NOT_FOUND"
-            && Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, refresh = true, args = new { rows = 5 } }) == "accepted",
+            && Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, refresh = true, args = new { rows = 5 } }) == "accepted"
+            && Update(new { subscriptionId = subscription, source = SyntheticSampler.Source, probes = new[] { new { probe = SyntheticSampler.TableProbe, sort = new object[] { new { column = "id", descending = true, table = 0 }, new { column = "id", descending = false } } } }, track = new[] { new { probe = SyntheticSampler.TableProbe, table = 0, seq = 2, keys = new[] { "k" }, linger = 1 } } }) == "accepted",
             "live.update refuses what main's schema refuses and names only running subscriptions: " + string.Join(", ", updates.Where(item => item.Value != "INVALID_PARAMS").Select(item => item.Key + " " + item.Value)));
 
         using var plain = new HostHarness(dispatcher: () => new SqlService(new ResultStore(1L << 30, 1L << 29)));

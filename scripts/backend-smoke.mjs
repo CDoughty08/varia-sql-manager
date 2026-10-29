@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { explorerRow } from './fixtures/explorer-tree.mjs'
-import { anyResultGrid, backendBanner, backendReady, errorMessages, explorerLabel, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
+import { anyResultGrid, backendBanner, backendReady, connectionDot, errorMessages, explorerFilterBox, explorerLabel, explorerTree, gridCell as gridCellOf, lostServerRows, menuItemNames, messages as messagesOf, openMenus, outputStatus, outputView, queryStatus, statusBar as statusBarOf, queryBarButton, toolbarButton } from './fixtures/ui.mjs'
 
 // Backend restarts end to end: the real backend's readiness and reload, a fake backend (tests/fixtures/backend.mjs)
 // that crashes, crash-loops, and hangs on cue, a stale protocol 1 backend, and, with a live server, a real session lost
@@ -70,7 +70,7 @@ async function messages() {
 }
 /** A data cell of the first results grid, by row and column. */
 const gridCell = (row, column) => gridCellOf(anyResultGrid(page), row, column).first()
-const running = () => expect(outputStatus(page)).toContainText('Executing query…')
+const running = () => expect(outputStatus(page)).toContainText(/^Executing · /)
 async function connectDialog() {
   await toolbarButton(page, 'Connect').click()
   const dialog = page.getByRole('dialog', { name: 'Connect', exact: true })
@@ -262,6 +262,9 @@ try {
   await execute().click()
   await running()
   await expect.poll(async () => (await calls()).some(call => call.method === 'query.execute')).toBe(true)
+  // Focus is in the Filter loaded objects box when the last live connection goes with the backend.
+  await explorerFilterBox(page).focus()
+  await expect(explorerFilterBox(page)).toBeFocused()
   const crashed = await hooks()
   await writeFile(join(control, 'crash-next'), '')
   await rm(join(control, 'hold', 'query.execute'))
@@ -277,6 +280,16 @@ try {
   const lostRow = lostServerRows(page)
   await expect(lostRow).toHaveAttribute('aria-label', 'crash-server (connection lost)')
   await expect(lostRow).not.toHaveAttribute('aria-expanded')
+  // Its dot is a ring, in forced colors too; with no live server, the Filter loaded objects box goes, as its command does.
+  await expect(connectionDot(lostRow)).toHaveAttribute('data-state', 'lost')
+  await page.emulateMedia({ forcedColors: 'active' })
+  const ring = await connectionDot(lostRow).evaluate(element => { const style = getComputedStyle(element); return { background: style.backgroundColor, border: style.borderTopColor } })
+  await page.emulateMedia({ forcedColors: null })
+  expect(ring.background).not.toBe(ring.border)
+  expect(ring.border).not.toBe('rgba(0, 0, 0, 0)')
+  await expect(explorerFilterBox(page)).toHaveCount(0)
+  // Focus the box held moves to the tree rather than the page, so keys still reach Object Explorer.
+  await expect(explorerTree(page)).toBeFocused()
   await explorerLabel(lostRow).click({ button: 'right' })
   await expect.poll(() => menuItemNames(page.getByRole('menu', { name: 'Object Explorer', exact: true }))).toEqual(['Connect…', 'Reconnect…', 'Remove'])
   await page.keyboard.press('Escape')
@@ -317,11 +330,17 @@ try {
   await expect(dialog).toHaveCount(0)
   await expect(lostServerRows(page)).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toHaveAttribute('aria-expanded', 'true')
+  await expect(explorerFilterBox(page)).toHaveCount(1)
   await expect(queryStatus(page)).not.toContainText('connection lost')
   await expect(execute()).toBeEnabled()
   await execute().click()
   await expect(page.locator('[data-result-grid]')).toHaveAttribute('aria-rowcount', '2')
   await expect(gridCell(0, 1)).toHaveText('2')
+  // At 1024x700 under the banner the output pane is short: the one set gives up its caption, and its header and row show
+  // whole inside the pane.
+  const shown = locator => locator.evaluate(element => { const box = element.getBoundingClientRect(), pane = element.closest('[role="tabpanel"]').getBoundingClientRect(); return box.height > 0 && box.top >= pane.top - 0.5 && box.bottom <= pane.bottom + 0.5 })
+  await expect.poll(() => shown(anyResultGrid(page).getByRole('columnheader').first())).toBe(true)
+  await expect.poll(() => shown(gridCell(0, 1))).toBe(true)
   await expect(await messages()).toContainText(newSession)
   recorded = await calls()
   expect(recorded.filter(call => call.method === 'query.execute').map(call => call.generation)).toEqual([1, 2])

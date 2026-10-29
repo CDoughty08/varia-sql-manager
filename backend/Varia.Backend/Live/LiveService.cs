@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
+using Varia.Backend.Activity;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
 using Varia.Backend.Results;
@@ -26,7 +27,17 @@ internal interface ILiveHost
     SqlConnection PoolConnection(string connectionId, string? database, string suffix);
     /// <summary>Opens it; a Kerberos or Entra sign-in failure throws AUTH_KERBEROS, AUTH_UNSUPPORTED or AUTH_ENTRA.</summary>
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>What every open connection says it is at login (its Application Name and workstation id): this backend's
+    /// sessions run under them plus a pool suffix, which tells the Activity Monitor which sessions may be Varia's own.</summary>
+    IReadOnlyCollection<VariaClient> Clients => [];
+    /// <summary>The session ids this backend's pooled and Object Actions connections to the connection's server were given when
+    /// they opened: what Varia knows of its own sessions without trusting what a client claims at login.</summary>
+    IReadOnlySet<int> OwnSessions(string connectionId) => new HashSet<int>();
 }
+
+/// <summary>A connection's Application Name and the workstation id SqlClient sends with it (its Workstation ID, else this
+/// machine's name), as sys.dm_exec_sessions shows them in program_name and host_name.</summary>
+internal readonly record struct VariaClient(string ApplicationName, string Workstation);
 
 /// <summary>One probe of a subscription: its settings, its schedule and its back-off.</summary>
 internal sealed class LiveProbeState(LiveProbeJson spec, int intervalMs)
@@ -528,6 +539,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
                     throw Invalid("Only keyed snapshot tables are tracked.");
                 if (track.Seq < 1 || track.Keys is null || track.Keys.Length > Limits.TrackedKeys || track.Keys.Any(key => key is null || key.Length > Limits.KeyCharacters))
                     throw Invalid("A track list has up to 64 keys of up to 512 characters.");
+                if (track.Linger is { } linger && (linger < 0 || linger > track.Keys.Length)) throw Invalid("A track list lingers at most its own keys.");
             }
         }
         var sourceArgs = args.Args is null ? null : ArgsOf(source, args.Args, json);
@@ -678,7 +690,8 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     private ILiveSampler CreateSampler(LiveSourceJson source, object? args, string subscriptionId, string connectionId) => TestSampler?.Invoke(source) ?? source.Id switch
     {
         SyntheticSampler.Source => new SyntheticSampler(host.Store, subscriptionId, (SyntheticLiveArgs?)args ?? new SyntheticLiveArgs(), Limits),
-        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql),
+        _ when source.Scope == "server" => new SqlSampler(host, Gates, subscriptionId, connectionId, source, Limits, TestText, TestSql,
+            source.Id == ActivityCatalog.Current.Source && TestSql is null ? new ActivityReader(host, connectionId, (ActivityLiveArgs?)args) : null),
         _ => throw Invalid("Unknown live source.")
     };
 
@@ -715,15 +728,18 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
     {
         if (settings.Sort is { } sort)
         {
-            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
-            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !sortable.Contains(key.Column))
-                || sort.Select(key => key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
+            // A row's tone column is never data: no sort or filter names it.
+            var sortable = spec.Tables.Where(table => table.Mode == "snapshot").SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            bool Sorts(LiveSortArgs key) => key.Table is not { } table ? sortable.Contains(key.Column)
+                : table >= 0 && table < spec.Tables.Count && spec.Tables[table].Mode == "snapshot" && spec.Tables[table].Columns.Exists(column => column.Id == key.Column && LiveColumnJson.IsData(column));
+            if (sort.Length is 0 || sort.Length > Limits.SortColumns || sort.Any(key => key?.Column is null || !Sorts(key))
+                || sort.Select(key => key.Table + "/" + key.Column).Distinct(StringComparer.Ordinal).Count() != sort.Length)
                 throw Invalid("Sort names a column the probe does not sort by.");
         }
         if (settings.View is { } view && !spec.Views.Contains(view, StringComparer.Ordinal)) throw Invalid("Unknown view.");
         if (settings.Filter is { } filter)
         {
-            var columns = spec.Tables.SelectMany(table => table.Columns).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
+            var columns = spec.Tables.SelectMany(table => table.Columns).Where(LiveColumnJson.IsData).Select(column => column.Id).ToHashSet(StringComparer.Ordinal);
             if (spec.FilterMode == "none" || filter.Text is not { Length: >= 1 } text || text.Length > Limits.FilterCharacters
                 || filter.Columns is { } named && (named.Length is 0 || named.Length > Limits.FilterColumns || named.Any(column => column is null || !columns.Contains(column))))
                 throw Invalid("The probe does not take this filter.");
@@ -741,6 +757,7 @@ internal sealed partial class LiveService(ILiveHost host, LiveCatalog? catalog =
             return source.Id switch
             {
                 SyntheticSampler.Source => SyntheticSampler.Check(element.Deserialize<SyntheticLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), maxTail),
+                _ when source.Id == ActivityCatalog.Current.Source => ActivityReader.Check(element.Deserialize<ActivityLiveArgs>(json) ?? throw Invalid("Invalid arguments for this source."), ActivityCatalog.Current),
                 _ => throw Invalid("This source takes no arguments.")
             };
         }

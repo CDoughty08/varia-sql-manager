@@ -9,7 +9,8 @@ import {
   activitySource, activityTables, benignWaits, blockerLabels, defaultPanes, maxExpandedTiles, paneSpecs, probeIntervalMs, probeSeries, probeSpecs, rankChips, rowTones, seriesSpecs, tableSpecs,
   tileSpecs, variaSessionKinds, viewChips, viewChipTitles, waitCategories, waitCategoryIds, waitExceptions, waitsChartSeries, waitToggles
 } from '../src/shared/activity/catalog'
-import { copyKeys, renderActivityMonitorDocs } from '../src/shared/activity/docs'
+import { copyKeys, documentCommands, renderActivityMonitorDocs } from '../src/shared/activity/docs'
+import { commandDescriptor, commandIds, type CommandId } from '../src/shared/commands/catalog'
 import { activityFilterSchema } from '../src/shared/activity/schema'
 import { defaultRules, keybindingLabel, platforms, reservedReason } from '../src/shared/commands/keybindings'
 
@@ -92,6 +93,16 @@ describe('activity monitor catalogue', () => {
     for (const caption of ['Session ID', 'Status', 'Blocked By', 'Head Blocker', 'Blocking', 'Host Name', 'Application', 'Elapsed (s)', 'Open Transactions', 'Wait Type']) expect(visible).toContain(caption)
     expect(tableSpecs.sessions.columns.find(column => column.id === 'openTransactions')).toMatchObject({ parity: 'fix', type: 'int', unit: 'count' })
   })
+  it('lists the document\'s commands with the titles and keys the commands catalogue gives them', () => {
+    expect(Object.keys(documentCommands)).toEqual(commandIds.filter(id => id.startsWith('activity.')))
+    for (const [id, command] of Object.entries(documentCommands)) {
+      expect(commandDescriptor(id as CommandId).title, id).toBe(command.title)
+      for (const platform of platforms) {
+        const keys = defaultRules(platform).filter(rule => rule.command === id).map(rule => keybindingLabel(rule.chords, platform).text).join(', ') || '—'
+        expect(keys, `${id} ${platform}`).toBe(platform === 'darwin' ? command.darwin : command.other)
+      }
+    }
+  })
   it('caps every table at the limits D-am binds, sessions at 10,000', () => {
     expect([tableSpecs.sessions.rowCap, tableSpecs.blocking.rowCap, tableSpecs.activeQueries.rowCap, tableSpecs.waitTypes.rowCap, tableSpecs.files.rowCap, tableSpecs.recentQueries.rowCap])
       .toEqual([activityLimits.sessions, activityLimits.blockingRows, activityLimits.activeQueries, activityLimits.waitTypes, activityLimits.files, activityLimits.shownHashes])
@@ -139,11 +150,11 @@ describe('activity monitor catalogue', () => {
     expect(Object.entries(activityEditions).filter(([, spec]) => spec.available).map(([id]) => id)).toEqual(['box', 'managedInstance'])
     expect(activityBands).toEqual({ min: 13, max: 17 })
     // SSMS opens Activity Monitor with Ctrl+Alt+A. Varia reserves Ctrl+Alt+letter on Windows and Linux (AltGr types
-    // characters there, Polish ą among them), so only macOS's ⌘⌥A is free for the document's PR; nothing takes either yet.
+    // characters there, Polish ą among them), so only macOS's ⌘⌥A opens the document; Windows and Linux leave the chord unbound.
     for (const platform of platforms) {
       const chord = platform === 'darwin' ? 'alt+meta+a' : 'ctrl+alt+a'
-      expect([reservedReason(chord, platform), defaultRules(platform).filter(rule => rule.chords[0] === chord).length], platform)
-        .toEqual([platform === 'darwin' ? undefined : 'AltGr types characters with Ctrl+Alt', 0])
+      expect([reservedReason(chord, platform), defaultRules(platform).filter(rule => rule.chords[0] === chord).map(rule => rule.command)], platform)
+        .toEqual(platform === 'darwin' ? [undefined, ['activity.open']] : ['AltGr types characters with Ctrl+Alt', []])
     }
   })
   it('validates filters strictly: Processes-only fields, facet columns, one filter per column, and the bounds', () => {

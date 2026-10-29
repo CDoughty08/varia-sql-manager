@@ -74,7 +74,11 @@ export const part = {
   errorMessage: '.msg.error',
   errorCount: '.error-count',
   resultItem: '.rs-item',
+  /** A set's caption above its grid: Collapse and its name, its rows and columns, its batch, and Save Results As. */
+  resultCaption: '.rs-caption',
   resultStack: '.rs-stack',
+  /** A live grid's frame (LiveGridPane), which holds the grid and its strips. */
+  liveGrid: '.live-grid',
   // Object Explorer
   explorerLabel: '.oe-label',
   explorerText: '.oe-text',
@@ -93,6 +97,27 @@ export const part = {
   explorerErrorRow: '.explorer-row.error',
   explorerSyntheticRow: '.explorer-row.synthetic',
   explorerError: '.explorer-error',
+  /** A row's end (RowEnd): indicators (live state chips, the environment tag), the item count, the connection dot. */
+  explorerEnd: '.oe-end',
+  /** A row's live status chips (ExplorerStatusService), hidden from screen readers: the row's name says them. */
+  explorerChips: '.oe-chips',
+  explorerCount: '.oe-count',
+  /** A server's connection dot; data-state says online, error or lost (the row's name and tooltip say it in words). */
+  explorerDot: '.oe-dot',
+  /** The glyph that marks the active query's server. */
+  explorerActive: '.oe-active',
+  /** The part of a label that matches the Filter loaded objects text. */
+  explorerMatch: '.oe-match',
+  /** The Filter loaded objects field around its input, and the line under it when nothing matches. */
+  explorerFilter: '.explorer-filter',
+  explorerNoMatch: '.explorer-no-match',
+  /** The pane's footer: the selection's listing and its freshness, then the connected servers. */
+  explorerFooter: '.explorer-footer',
+  explorerFreshness: '.explorer-freshness',
+  explorerFreshnessScope: '.explorer-freshness-scope',
+  explorerServers: '.explorer-servers',
+  /** The states kit's "Updated …" or, with data-stale, "Stale since …" (src/renderer/src/kit/LivePill.tsx). */
+  staleBadge: '.stale-badge',
   // Menus and the quick input
   menu: '.menu',
   menuLayer: '.menu-layer',
@@ -111,9 +136,11 @@ export const part = {
   // place (data-place: explorer, tab, query, status or list), and the kit's pill and its label inside it.
   environmentTag: '.environment-tag',
   statusPill: '.status-pill',
+  /** The states kit's live label (kit/LivePill.tsx): "Live · every 2 s", "Paused", "Stopped · backend unavailable". */
+  livePill: '.live-pill',
   statusPillLabel: '.status-pill-label',
-  /** The states kit's age label ("Updated 3 s ago"), which a stale one marks with data-stale. */
-  staleBadge: '.stale-badge',
+  /** A pill's number (StatusPill `value`: a percentage, a count), which never gives way to the label beside it. */
+  statusPillValue: '.status-pill-value',
   /** The spans that hold the tag with its visually hidden prefix: the query bar's, the classic query status bar's, and the window status bar's. */
   queryEnvironment: '.query-bar-environment',
   queryStatusEnvironment: '.query-status-environment',
@@ -160,6 +187,12 @@ export const part = {
   propertyField: '.property-field',
   propertyFact: '.property-fact',
   fieldHint: '.field-hint',
+  /** The frame's scrolling content under the header and fact line. */
+  documentContent: '.document-content',
+  // The Activity Monitor (src/renderer/src/activity): a banner (the kit's InlineError in a box), and a tile's caption, which
+  // assistive technology hears in the tile's name instead.
+  activityBanner: '.activity-banner',
+  tileCaption: '.tile-caption-text',
   designerText: '.designer-text',
   bookmarkGlyph: '.varia-bookmark',
   dropCaret: '.dnd-target',
@@ -170,6 +203,11 @@ export const part = {
   dockingPreview: '.docking-preview',
   /** Varia's class on Dockview's shell, next to Dockview's theme class: the dock's colours hang off it. */
   dockShell: '.varia-dock',
+  // Live charts (src/renderer/src/live/LiveChart.tsx): the crosshair's tooltip (hidden from assistive technology, as the
+  // status region says the same), the legend's line samples, and the scroll box that holds View as table.
+  chartTooltip: '.live-chart-tip',
+  chartSwatch: '.live-chart-swatch',
+  chartTableWrap: '.live-chart-table-wrap',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -199,6 +237,8 @@ export const gridPart = {
   head: '.rg-head',
   corner: '.rg-corner',
   columnHeader: '.rg-ch',
+  /** The SQL type after a header's name, drawn only (screen readers read it in the tooltip). */
+  columnType: '.rg-ct',
   selectedColumnHeader: '.rg-ch.sel',
   row: '[role="rowgroup"] > [role="row"]',
   rowHeader: '[role="rowheader"]',
@@ -211,8 +251,15 @@ export const gridPart = {
   activeCell: '.rg-c.is-act',
   truncatedCell: '.rg-c.is-trunc',
   linkCell: '.rg-c.is-link',
-  borderHover: '.rg-border-hover'
+  borderHover: '.rg-border-hover',
+  /** A live grid's row tones (LiveGrid), drawn with no ARIA of their own: the active cell's label names the tone. */
+  toneError: '.tone-error',
+  toneWarning: '.tone-warning',
+  toneRunning: '.tone-running',
+  toneMuted: '.tone-muted'
 }
+/** A live grid's row tones by name, for page code that reads which tone a row has. */
+export const gridTones = { error: gridPart.toneError, warning: gridPart.toneWarning, running: gridPart.toneRunning, muted: gridPart.toneMuted }
 /** The data cell at a row and column, both from 0, inside a results grid. */
 export const gridCellSelector = (row, column) => `[role="rowgroup"] > [role="row"][aria-rowindex="${row + 2}"] > [role="gridcell"][aria-colindex="${column + 2}"]`
 
@@ -225,8 +272,9 @@ export const titleBar = page => page.locator(part.titleBar)
 export const dockShell = page => page.locator('.dv-shell').evaluate((element, own) => ({ themes: [...element.classList].filter(name => name.startsWith('dockview-theme-')).sort(), varia: element.matches(own) }), part.dockShell)
 export const menubar = page => page.getByRole('menubar', { name: 'Application menu', exact: true })
 /**
- * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save and Save All; with the classic
- * toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and database lists.
+ * The Standard toolbar: in the header, icon buttons named Connect, New query, Open, Save, Save All and Activity Monitor;
+ * with the classic toolbar on, the same names as text buttons plus Execute, Cancel and Layouts, and the server and
+ * database lists.
  */
 export const toolbar = page => page.getByRole('toolbar', { name: 'Standard', exact: true })
 export const toolbarButton = (page, name) => toolbar(page).getByRole('button', named(name))
@@ -342,7 +390,29 @@ export const anyResultGrid = page => page.locator('[data-result-grid]')
 export const gridCell = (grid, row, column) => grid.locator(gridCellSelector(row, column))
 /** Whether a locator's element also matches a part's selector, for the drawn states (`gridPart.linkCell`). */
 export const matching = (locator, selector) => locator.and(locator.page().locator(selector))
+/** A set's caption Collapse button, named by the set ("Result 2"). */
+export const resultToggle = (page, index = 0) => outputPane(page).getByRole('button', { name: `Result ${index + 1}`, exact: true })
+/** The Messages strip's line under the results, drawn "Messages · 2 · no errors" and named "Messages, 2 messages, no errors",
+ *  a button that opens and closes it. */
+export const messagesStrip = page => outputPane(page).getByRole('button', { name: /^Messages, [\d,]+ messages?, / })
+/** The Execution plan view's list of the run's plans. */
+export const planList = page => outputPane(page).getByRole('list', { name: 'Execution plans', exact: true })
 export const resultSplitters = page => page.getByRole('separator', { name: /^Resize Result \d+$/ })
+
+// Live grids (LiveGridPane): a grid its owner names, in a frame with the overlay, the error strip and the new-rows button.
+
+/** A live grid's own grid by the name its owner gives it, which its label starts with ("Processes, 12 rows, 9 columns"),
+ *  for page code. */
+export const liveGridSelector = name => `[role="grid"]:is([aria-label="${name}"], [aria-label^="${name}, "])`
+const escaped = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+export const liveGrid = (page, name) => page.getByRole('grid', { name: new RegExp(`^${escaped(name)}(?:, |$)`) })
+export const liveGridFrame = (page, name) => page.locator(part.liveGrid).filter({ has: liveGrid(page, name) })
+/** What the frame says over the rows once they are gone (stopped, lost). */
+export const liveGridOverlay = frame => frame.locator(gridPart.overlay)
+/** The error strip under the rows: a failed copy, rows that could not be drawn or loaded. */
+export const liveGridStrip = frame => frame.locator(gridPart.strip)
+/** The "n new rows · Jump to latest" button of a log scrolled up from its tail. */
+export const liveGridNewRows = frame => frame.getByRole('button', { name: /new rows? · Jump to latest$/ })
 
 // Object Explorer
 
@@ -352,6 +422,22 @@ export const explorerTree = page => page.getByRole('tree', { name: 'Object Explo
 export const serverRows = page => explorerTree(page).locator('[role="treeitem"][aria-level="1"]')
 export const lostServerRows = page => explorerTree(page).getByRole('treeitem', { name: /\(connection lost\)$/ })
 export const explorerLabel = row => row.locator(part.explorerLabel)
+export const explorerSublabel = row => row.locator(part.explorerSublabel)
+export const itemCount = row => row.locator(part.explorerCount)
+export const connectionDot = row => row.locator(part.explorerDot)
+/** A row's live status chips, in order; each one's text is its whole label ("RESTORING 42 %", "2 jobs running"). */
+export const statusChips = row => row.locator(`${part.explorerChips} ${part.statusPill}`)
+/** The server rows marked as the active query's server (at most one). */
+export const activeServerRows = page => serverRows(page).filter({ has: page.locator(part.explorerActive) })
+export const explorerMatches = page => explorerTree(page).locator(part.explorerMatch)
+export const explorerFilterBox = page => page.getByRole('textbox', { name: 'Filter loaded objects', exact: true })
+export const explorerFilterField = page => page.locator(part.explorerFilter)
+export const explorerNoMatch = page => page.locator(part.explorerNoMatch)
+export const explorerFooter = page => page.locator(part.explorerFooter)
+export const explorerFreshness = page => explorerFooter(page).locator(part.explorerFreshness)
+export const explorerFreshnessScope = page => explorerFooter(page).locator(part.explorerFreshnessScope)
+export const explorerServerCount = page => explorerFooter(page).locator(part.explorerServers)
+export const staleBadge = scope => scope.locator(part.staleBadge)
 /** The inline Rename box (F2) in a row. */
 export const renameBox = page => explorerTree(page).getByRole('textbox', { name: /^Rename / })
 
@@ -436,6 +522,17 @@ const exactly = text => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 export const propertyFact = (frame, label) => frame.locator(part.propertyFact).filter({ has: frame.page().getByRole('term').filter({ hasText: exactly(label) }) }).getByRole('definition')
 /** The strip under a property sheet's sections that shows the hovered or focused row's whole description. */
 export const fieldHint = frame => frame.locator(part.fieldHint)
+/** A live document's label of what its view is doing, in its header (kit/LivePill.tsx). */
+export const livePill = scope => scope.locator(part.livePill)
+/** A document's title, its one level 1 heading. */
+export const documentTitle = frame => frame.getByRole('heading', { level: 1 })
+/** The header's controls and verbs, a group named after the document's title. */
+export const documentActions = (frame, title) => frame.getByRole('group', named(title + ' actions'))
+export const documentContent = frame => frame.locator(part.documentContent)
+/** An Activity Monitor's banner, and its error glyph. */
+export const activityBanner = frame => frame.locator(part.activityBanner)
+export const bannerGlyph = banner => banner.locator(':scope > .codicon')
+export const tileCaptions = frame => frame.locator(part.tileCaption)
 
 // Menus and the quick input
 
@@ -453,3 +550,11 @@ export const quickInputRows = page => quickInput(page).getByRole('option')
 export const quickInputActive = page => quickInput(page).getByRole('option', { selected: true })
 /** The live region for a hint or an error under the input; it stays in place while empty. */
 export const quickInputMessage = page => quickInput(page).locator('[aria-live="polite"]')
+
+// Live charts (src/renderer/src/live/LiveChart.tsx), inside the box a suite mounted one in.
+export const chartTooltip = box => box.locator(part.chartTooltip)
+/** The legend, named after the chart's title: shown only for two or more series. */
+export const chartLegend = box => box.getByRole('list', { name: / series$/ })
+export const chartSwatchLines = box => box.locator(part.chartSwatch).locator('line')
+/** View as table's scroll box, a region named after the chart's title. */
+export const chartTableRegion = box => box.getByRole('region', { name: / table$/ })

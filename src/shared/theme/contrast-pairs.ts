@@ -1,3 +1,4 @@
+import { chartSeriesColors, chartStatusColors, chartSurfaces } from './charts'
 import { sqlScopes, type ColorKey, type SqlScope } from './registry'
 import { statusTones, toneKeys } from './tones'
 
@@ -28,6 +29,7 @@ const dock: ColorKey[] = ['dock.background'], grid: ColorKey[] = ['resultsGrid.b
 const widgetInactiveSelection: ColorKey[] = ['editorWidget.background', 'list.inactiveSelectionBackground']
 const suggestFocus: ColorKey[] = ['editorWidget.background', 'quickInputList.focusBackground']
 const headerHover: ColorKey[] = ['resultsGrid.headerBackground', 'resultsGrid.hoverBackground']
+const surfacesOfCharts: ColorKey[][] = chartSurfaces.map(surface => [surface])
 const dockTabBackgrounds: ColorKey[] = ['tab.activeBackground', 'tab.inactiveBackground', 'tab.unfocusedActiveBackground', 'tab.unfocusedInactiveBackground']
 /** Monaco paints every matched bracket in these by depth, over the delimiter and identifier.quote scopes. */
 const brackets: ColorKey[] = ['editorBracketHighlight.foreground1', 'editorBracketHighlight.foreground2', 'editorBracketHighlight.foreground3', 'editorBracketHighlight.foreground4',
@@ -128,6 +130,16 @@ export const contrastPairs: readonly ContrastPair[] = [
   // NULL cells are tinted, over the grid and over a striped row.
   ...text(['resultsGrid.nullForeground'], [...panel, 'resultsGrid.nullBackground'], [...striped, 'resultsGrid.nullBackground']),
   ...text(['resultsGrid.linkForeground'], ['resultsGrid.background'], ['resultsGrid.background', 'resultsGrid.alternateRowBackground']),
+  // A toned live grid row has its own background instead of the stripe; its NULL cells drop their tint, keeping their colour.
+  ...([['resultsGrid.rowErrorForeground', 'resultsGrid.rowErrorBackground'], ['resultsGrid.rowWarningForeground', 'resultsGrid.rowWarningBackground'],
+    ['resultsGrid.rowRunningForeground', 'resultsGrid.rowRunningBackground'], ['resultsGrid.rowMutedForeground', 'resultsGrid.rowMutedBackground']] as const)
+    .flatMap(([foreground, background]) => [
+      ...text([foreground, 'errorForeground'], ['resultsGrid.background', background]),
+      ...text(['resultsGrid.nullForeground'], ['resultsGrid.background', background]),
+      // A selected cell keeps the row's text colour while the grid is not focused, and a departed (muted) row is the
+      // selected one by construction.
+      ...text([foreground], ['resultsGrid.background', background, 'resultsGrid.inactiveSelectionBackground'])
+    ]),
   ...text(['resultsGrid.truncationForeground', 'resultsMessages.foreground', 'textPreformat.foreground', 'warningForeground'], panel),
   ...text([...sqlScopes.map(scope => `syntax:${scope}` as const), ...brackets], editor, ['editor.background', 'editor.lineHighlightBackground']),
   // The readability audit: the remaining text each surface draws (styles.css and Monaco's widgets).
@@ -149,6 +161,11 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['foreground'], panelTitle),
   ...text(['errorForeground'], panel),
   ...text(['resultsGrid.truncationForeground', 'emptyState.foreground'], grid),
+  // The results head's selected view, and the facts in set captions, the Messages strip and the Execution plan list.
+  ...text(['panelTitle.activeForeground'], ['panelTitle.background', 'list.inactiveSelectionBackground']),
+  ...text(['descriptionForeground', 'warningForeground', 'successForeground'], panel, panelTitle),
+  // The results head's icon for a run that failed, timed out or was lost.
+  ...text(['errorForeground'], panelTitle),
   // Hovered column and row headers.
   ...text(['resultsGrid.headerForeground', 'resultsGrid.headerDescriptionForeground', 'resultsGrid.rowNumberForeground'], headerHover),
   // Dialogs: the Filter dialog's problems, the layout notice, and Tools › Options' selected page and focused row.
@@ -163,6 +180,12 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
+  // A server's connection dot keeps its color on every row state; its shape (dot or ring) and the row's words say the same.
+  ...graphic(['objectExplorer.connectedIndicator', 'objectExplorer.connectionErrorIndicator', 'objectExplorer.disconnectedIndicator'], sideBar, treeHover, treeServer, treeActive, treeInactive),
+  // So does the active query's server glyph, which is all that marks that row.
+  ...graphic(['objectExplorer.activeConnectionForeground'], sideBar, treeHover, treeServer, treeActive, treeInactive),
+  // Characters that match the Filter loaded objects box (selected rows draw them in the row's own color, in bold).
+  ...text(['list.highlightForeground'], treeHover, treeServer),
   ...graphic(['list.focusOutline'], sideBar, treeActive),
   ...graphic(['titleBar.iconForeground'], titleBar),
   // A connection's edge stays on both status bars, and the backend's dot on the main one, in every state.
@@ -184,6 +207,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['button.border'], input, widget, panelTitle, sideBar, panel, editor),
   ...graphic(['notificationsErrorIcon.foreground', 'notificationsWarningIcon.foreground', 'notificationsInfoIcon.foreground'], ['notifications.background']),
   ...graphic(['dock.guideForeground'], ['dock.guideBackground'], ['dock.guideActiveBackground']),
+  // Charts sit on documents, cards and widgets: their labels and legends are text, their series and status marks are
+  // graphics (WCAG 1.4.11).
+  ...text(['charts.foreground'], ...surfacesOfCharts),
+  ...graphic([...chartSeriesColors, ...chartStatusColors], ...surfacesOfCharts),
 
   // The states kit (src/renderer/src/kit). A pill or tag's text and glyph on its own fill, over every surface it may sit on.
   ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ...kitSurfaces.map(surface => [...surface, toneKeys(tone).background]))),
@@ -218,7 +245,16 @@ export const contrastPairs: readonly ContrastPair[] = [
   // state; a segmented control's outline. The chosen segment is a chip's active state, checked with the chips above.
   ...graphic(['input.border', 'button.background'], editor),
   ...graphic(['descriptionForeground'], input),
-  ...graphic(['button.foreground'], [...editor, 'button.background'])
+  ...graphic(['button.foreground'], [...editor, 'button.background']),
+
+  // The Activity Monitor (src/renderer/src/activity): a count on a pane's tab strip (Blocking's blocked sessions), a tile's
+  // pressed chart button, the focus rings on tiles' buttons and pane tabs, and the panes' splitter, which shows its focus
+  // only by this fill, in the document.
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], [...panelTitle, toneKeys(tone).background])),
+  ...text(['list.inactiveSelectionForeground'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['panelTitle.activeBorder', 'focusBorder'], [...tile, 'list.inactiveSelectionBackground']),
+  ...graphic(['focusBorder'], tile, panelTitle),
+  ...graphic(['sash.hoverBorder'], editor)
 ]
 
 /**
@@ -242,5 +278,6 @@ export const contrastExemptions: Readonly<Partial<Record<ColorKey, string>>> = {
   'statusBar.separatorForeground': 'Decorative divider between status items; the items carry the meaning.',
   'emptyState.iconForeground': 'Decorative glyph beside text that says the same thing.',
   'editorWhitespace.foreground': 'Decorative glyph beside the text: View White Space marks spaces and tabs the text already has.',
-  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.'
+  'disabledForeground': 'Disabled controls are exempt from WCAG 1.4.3 and 1.4.11.',
+  'charts.lines': 'Decorative grid lines; the values are in the axis labels, the crosshair tooltip and the data table.'
 }

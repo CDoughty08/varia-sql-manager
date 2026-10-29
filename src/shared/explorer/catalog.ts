@@ -419,11 +419,22 @@ export const kindSpecs = Object.fromEntries(nodeKinds.map(kind => {
   return [kind, { kind, ...rest, folders, scriptable }]
 })) as { readonly [K in NodeKind]: KindSpec }
 
+/**
+ * Live status chips (src/shared/explorer/status.ts; docs/object-explorer.md, Live status): the kinds whose rows show them,
+ * and the probes of the `explorer` live source (src/shared/live/catalog.ts) each reads. SQL Server Agent and Always On
+ * High Availability are not served yet (`laterFolders`), so the server row carries their chips until they are.
+ */
+export const statusChipKinds = {
+  server: ['explorer.agent', 'explorer.availability'],
+  database: ['explorer.databases', 'explorer.progress']
+} as const satisfies Partial<Record<NodeKind, readonly string[]>>
+export type StatusChipKind = keyof typeof statusChipKinds
+
 export const explorerLimits = {
   pageSize: 2000, folderCap: 100_000, nodeBudget: 250_000, inFlightPerConnection: 4, inFlightTotal: 8, queuePerConnection: 512,
   cancelBatch: 256, siblingLoads: 50, filters: 64, watchdogMs: 60_000, loadingRowDelayMs: 150, typeAheadMs: 1000,
-  typeAheadMax: 64, rowHeight: 22, indent: 16, overscan: 10, deleteSlice: 10_000,
-  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260
+  typeAheadMax: 64, rowHeight: 22, serverRowHeight: 30, indent: 16, overscan: 10, deleteSlice: 10_000,
+  cursorLength: 1650, label: 300, sublabel: 200, detail: 512, message: 512, maxName: 260, quickFilter: 128
 } as const
 /** The name bound of a kind's refs: sysname's 128 UTF-16 code units unless the kind declares a longer one. */
 export const maxNameOf = (spec: Pick<KindSpec, 'maxName'>): number => spec.maxName ?? maxIdentifierLength

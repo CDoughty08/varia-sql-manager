@@ -520,7 +520,9 @@ describe('SSIS properties view', () => {
     expect(listeners.size).toBe(0)
   })
   it('keeps the Refresh key to the document, so a query\'s F5 still executes', () => {
-    expect(commandDescriptor('ssis.refreshProperties').keybindings).toEqual([{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus" }])
+    // An Activity Monitor's F5 is its Refresh Now (activityMonitorFocus): the two clauses must never both hold.
+    expect(commandDescriptor('ssis.refreshProperties').keybindings).toEqual([{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus" }])
+    expect(commandDescriptor('activity.refresh').keybindings).toEqual([{ key: 'f5', when: 'activityMonitorFocus' }])
     expect(commandDescriptor('query.execute').keybindings?.[0]).toEqual({ key: 'f5', when: 'editorFocus || queryBarFocus' })
     const kinds: NodeKind[] = ['ssisFolder', 'ssisProject', 'ssisPackage', 'ssisEnvironment']
     expect(kinds.map(kind => ssisDocumentSpecs[kind as keyof typeof ssisDocumentSpecs].view)).toEqual(['folder', 'project', 'package', 'environment'])

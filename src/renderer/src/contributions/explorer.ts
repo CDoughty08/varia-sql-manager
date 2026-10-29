@@ -13,7 +13,7 @@ const frame = (callback: () => void) => { if (typeof requestAnimationFrame === '
  * on a server that is still connected (not lost with a backend restart, even when the backend restarted while the menu
  * was open or the command was waiting).
  */
-export function explorerContribution({ commands, documents, connections, explorer }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'>,
+export function explorerContribution({ commands, documents, connections, explorer, explorerStatus }: Pick<Workbench, 'commands' | 'documents' | 'connections' | 'explorer'> & { explorerStatus?: Pick<Workbench['explorerStatus'], 'refresh'> },
   api: Pick<VariaApi, 'writeClipboardText'>): Disposable {
   const nodeOf = (args?: CommandArgs): ExplorerMenuNode | undefined => args?.target ? explorerNodeOf(args) : explorer.menuNode(explorer.getSnapshot().selected)
   const live = (node: ExplorerMenuNode | undefined): node is ExplorerMenuNode => !!node && !node.lost && connections.isLive(node.connectionId)
@@ -27,7 +27,8 @@ export function explorerContribution({ commands, documents, connections, explore
   }
   const filterNode = (args?: CommandArgs) => { const node = nodeOf(args); return live(node) && filterable(node) ? node : undefined }
   const registrations = [
-    commands.register('explorer.refresh', { run: args => explorer.refresh(nodeOf(args)?.id) }),
+    // Refresh also samples the server's live status at once, so its chips match the reloaded rows.
+    commands.register('explorer.refresh', { run: args => { const node = nodeOf(args); explorer.refresh(node?.id); explorerStatus?.refresh(node?.connectionId) } }),
     commands.register('explorer.stop', { run: () => explorer.stop() }),
     commands.register('explorer.filter', { when: args => !!filterNode(args), run: args => { const node = filterNode(args); if (node) explorer.openFilter(node.id) } }),
     commands.register('explorer.removeFilter', {

@@ -267,10 +267,11 @@ export function ssisCommandEntries(): { readonly [K in SsisCommandId]: SsisComma
     }
     return [spec.command, entry]
   }))
-  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes.
+  // The document's own F5, as Refresh is in Object Explorer; a query's F5 (editorFocus, or its query bar's) still executes, and
+  // an Activity Monitor's F5 (activityMonitorFocus) is its Refresh Now: focus in a monitor means no SSIS document is active.
   const refresh: SsisCommandEntry = {
     title: 'Refresh Properties', category: 'Integration Services', icon: 'refresh', keywords: ['ssis', 'reload', 'catalog'], precondition: 'backendReady && activeDocumentIsSsis',
-    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus" }]
+    unavailableHint: 'Open the properties of an SSIS Catalog object first.', keybindings: [{ key: 'f5', when: "activeDocumentIsSsis && activePanel != 'explorer' && !editorFocus && !queryBarFocus && !activityMonitorFocus" }]
   }
   return { ...verbs, 'ssis.refreshProperties': refresh } as { readonly [K in SsisCommandId]: SsisCommandEntry }
 }

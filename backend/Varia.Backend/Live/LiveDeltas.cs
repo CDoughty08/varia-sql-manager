@@ -70,36 +70,38 @@ internal sealed class LiveDeltas(IReadOnlyList<string> counters)
     }
 }
 
-/// <summary>Per-row rates of a snapshot probe (per-session CPU, per-file bytes per second): baselines per key, where the key
-/// holds an identity column (a session's login time, a file's database and file ids), so a reused session id never yields
-/// a delta across two sessions. At most <paramref name="capacity"/> keys (the probe's row cap); a key absent from two
-/// samples in a row is dropped.</summary>
+/// <summary>Per-row rates of a snapshot probe (per-request CPU, per-file bytes per second): baselines per key, where the key
+/// holds an identity column (a request's start time, a file's database and file ids), so a reused id never yields a delta
+/// across two rows. Each baseline keeps the time it was read at, on the probe's own sample clock, so a row missing from a
+/// sample (cut by a TOP, or its statement failed) gets a rate over its own span when it comes back, never two intervals over
+/// one. At most <paramref name="capacity"/> keys (the probe's row cap); a key absent from two samples in a row is dropped.</summary>
 internal sealed class LiveKeyedDeltas(int capacity)
 {
-    private sealed class Baseline(double[] values) { public double[] Values = values; public int Absent; }
+    private sealed class Baseline(double[] values, long at) { public double[] Values = values; public long At = at; public int Absent; }
     private readonly Dictionary<string, Baseline> baselines = new(StringComparer.Ordinal);
     private readonly HashSet<string> seen = new(StringComparer.Ordinal);
 
     public int Count => baselines.Count;
 
     /// <summary>Each value's change per second since this key's previous sample: null for a new key, a counter that went
-    /// down, or no elapsed time.</summary>
-    public double?[] Apply(string key, double[] values, long? elapsedMs)
+    /// down, or no time between the two.</summary>
+    /// <param name="at">This sample's time in milliseconds on the probe's sample clock.</param>
+    public double?[] Apply(string key, double[] values, long at)
     {
         var rates = new double?[values.Length];
         seen.Add(key);
         if (baselines.TryGetValue(key, out var baseline) && baseline.Values.Length == values.Length)
         {
+            var elapsed = at - baseline.At;
             for (var i = 0; i < values.Length; i++)
             {
                 var delta = values[i] - baseline.Values[i];
-                rates[i] = delta >= 0 && elapsedMs is > 0 ? delta * 1000.0 / elapsedMs.Value : null;
+                rates[i] = delta >= 0 && elapsed > 0 ? delta * 1000.0 / elapsed : null;
             }
-            baseline.Values = values;
-            baseline.Absent = 0;
+            (baseline.Values, baseline.At, baseline.Absent) = (values, at, 0);
         }
-        else if (baseline is not null) baseline.Values = values;
-        else if (baselines.Count < capacity) baselines[key] = new(values);
+        else if (baseline is not null) (baseline.Values, baseline.At, baseline.Absent) = (values, at, 0);
+        else if (baselines.Count < capacity) baselines[key] = new(values, at);
         return rates;
     }
 

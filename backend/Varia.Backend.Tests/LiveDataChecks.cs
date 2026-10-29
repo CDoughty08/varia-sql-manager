@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using Varia.Backend.Activity;
 using Varia.Backend.Live;
 using Varia.Backend.Protocol;
 
@@ -35,7 +36,7 @@ internal static class LiveDataChecks
         {
             var recorder = new LiveRecorder(++next);
             var id = Guid.NewGuid().ToString();
-            var task = service.Live.SubscribeAsync(new LiveSubscribeArgs(id, connectionId, "activity", [new LiveProbeArgs(LiveSql.OverviewProbe, intervalMs)]), recorder.Context, json);
+            var task = service.Live.SubscribeAsync(new LiveSubscribeArgs(id, connectionId, "activity", [new LiveProbeArgs(ActivityReader.OverviewProbe, intervalMs)]), recorder.Context, json);
             return (task, recorder, id);
         }
         static async Task<LiveEnd> Stop((Task<LiveEnd> Task, LiveRecorder Recorder, string Id) view)
@@ -61,12 +62,19 @@ internal static class LiveDataChecks
         foreach (var query in LiveSql.All(LiveCatalog.Current).Where(query => query.Band == band))
         {
             var result = await Execute(query.Text(LiveSql.UncommittedPrologue));
-            var columns = result.ResultSets is [{ } set] ? set.Columns.Select(column => (column.Name, Numeric(column.DataType))).ToList() : [];
-            if (result.Status != "completed" || !query.Returns(columns))
-                shapes.Add(query.Probe + " " + result.Status + ": " + string.Join(", ", result.ResultSets.SelectMany(item => item.Columns).Select(column => column.Name + " " + column.DataType)));
+            // A metrics row first (when the probe has series), then one result set per table, each with its table's columns
+            // by name and type (sysname reads as nvarchar, as the sampler's own check allows).
+            var spec = LiveCatalog.Current.Probes[query.Probe];
+            var metrics = query.Columns.Length > 0 ? 1 : 0;
+            var sets = result.ResultSets;
+            var fits = result.Status == "completed" && sets.Count == metrics + query.Tables.Length
+                && (metrics == 0 || query.Returns([.. sets[0].Columns.Select(column => (column.Name, Numeric(column.DataType)))]))
+                && query.Tables.Select((read, at) => (Table: spec.Tables[read.Table], Set: sets[metrics + at])).All(pair => pair.Set.Columns.Count == pair.Table.Columns.Count
+                    && pair.Set.Columns.Select((column, index) => column.Name == pair.Table.Columns[index].Name && LiveCells.Matches(pair.Table.Columns[index].DataType, column.DataType.Split('(')[0])).All(match => match));
+            if (!fits) shapes.Add(query.Probe + " " + result.Status + ": " + string.Join(", ", result.ResultSets.SelectMany(item => item.Columns).Select(column => column.Name + " " + column.DataType)));
         }
         check(band is >= LiveSql.MinBand and <= LiveSql.MaxBand && shapes.Count == 0,
-            "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric: " + string.Join("; ", shapes));
+            "every live query at the server's band (" + band + ") returns the columns it declares, by name, in order and numeric, and its tables' columns by name and type: " + string.Join("; ", shapes));
 
         // Rates on the server's clock: a baseline with gauges only, then every series, the second within about a second
         // (the quick second sample; the interval is 2 s). Measured once more when a tick failed (a busy shared server).
@@ -86,10 +94,15 @@ internal static class LiveDataChecks
         var (overview, sampled, ticks) = measured;
         var opened = overview.Recorder.Opened;
         var samples = ticks.Where(tick => tick.Samples.Count > 0).Select(tick => tick.Samples[0]).ToList();
+        // Every series of the activity catalogue's overview: gauges from the first sample, rates from the second; a ratio (I/O
+        // latency) has no value when its base did not move (no reads in the interval).
+        var series = LiveCatalog.Current.Probes[ActivityReader.OverviewProbe].Series;
+        bool Valid(double? value, bool required) => value is { } v ? double.IsFinite(v) && v >= 0 : !required;
         check(sampled && ticks.All(tick => tick.Errors is null && tick.Samples.Count == 1) && opened is { Source: "activity", Band: >= LiveSql.MinBand and <= LiveSql.MaxBand, Spid: > 0, Isolation: "readUncommitted", Probes: [{ State: "ok" }] }
-            && samples[0] is { Gap: "baseline", Metrics: [null, >= 0, null, null, null, >= 1] }
-            && samples.Skip(1).All(sample => sample.Metrics is { Length: 6 } metrics && metrics.All(value => value is { } v && double.IsFinite(v) && v >= 0) && metrics[0] <= 100 && sample.EffectiveIntervalMs == 2000),
-            "activity.overview opens on the server's band and its own session, reading uncommitted; its baseline carries gauges only, and the next samples every series (CPU 0 to 100 %): "
+            && series.Count == 21 && samples[0] is { Gap: "baseline", Metrics: { Length: 21 } baseline } && series.Select((spec, at) => spec.Counter == "gauge" ? Valid(baseline[at], true) : baseline[at] is null).All(ok => ok)
+            && samples.Skip(1).All(sample => sample.Metrics is { Length: 21 } metrics && series.Select((spec, at) => Valid(metrics[at], spec.Counter != "ratio")).All(ok => ok)
+                && metrics[series.FindIndex(spec => spec.Id == "cpuPercent")] <= 100 && metrics[series.FindIndex(spec => spec.Id == "userSessions")] >= 1 && sample.EffectiveIntervalMs == 2000),
+            "activity.overview opens on the server's band and its own session, reading uncommitted; its baseline carries its gauges only, and the next samples every series of the activity catalogue (CPU 0 to 100 %): "
             + string.Join(" | ", ticks.Select(tick => string.Join(",", tick.Errors?.Select(error => error.Code) ?? []) + string.Join(",", tick.Samples.Select(sample => sample.Gap + " " + string.Join(",", sample.Metrics ?? []))))));
         // ms_ticks is read at some point while a statement runs, so the server's elapsed time lies between the backend's
         // clock less the later statement's cost and plus the earlier one's (ms_ticks has the system timer's resolution).

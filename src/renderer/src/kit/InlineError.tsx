@@ -1,4 +1,4 @@
-import { useState, type Ref } from 'react'
+import { useState, type ReactNode, type Ref } from 'react'
 import Icon from '../Icon'
 import { copyStatus, copyText, errorDetailsText, type CopyRecord, type ErrorReport } from './format'
 
@@ -21,12 +21,14 @@ interface Props extends ErrorReport {
   readonly className?: string
   /** Main's clipboard API by default: the page never touches the clipboard itself. */
   readonly writeClipboard?: Clipboard
+  /** Under the actions, in line with the sentence: what an action of the document's own did ("GRANT statement copied."). */
+  readonly children?: ReactNode
 }
 
 const mainClipboard: Clipboard = text => typeof window !== 'undefined' && window.varia ? window.varia.writeClipboardText(text) : Promise.resolve({ ok: false })
 
 /** An error where it happened: a glyph, the sentence, what to do, and Copy details with the code for a report. */
-export default function InlineError({ actions = [], copy = true, role = 'alert', className, writeClipboard = mainClipboard, note, ...report }: Props) {
+export default function InlineError({ actions = [], copy = true, role = 'alert', className, writeClipboard = mainClipboard, note, children, ...report }: Props) {
   // Which details the last copy took, so an error that replaces this one offers its own copy again.
   const [copied, setCopied] = useState<CopyRecord>()
   const text = errorDetailsText(report)
@@ -41,6 +43,7 @@ export default function InlineError({ actions = [], copy = true, role = 'alert',
         {copy && <button type="button" onClick={copyDetails}>Copy details</button>}
         <span className="inline-error-status" role="status">{copyStatus(copied, text)}</span>
       </div>}
+      {children}
     </div>
   </div>
 }

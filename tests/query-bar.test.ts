@@ -152,7 +152,7 @@ describe('query bar', () => {
     connections.add(connectionInfo('a'), connectionOptions)
     documents.create('a.sql', '', 'master', 'a')
     const header = render(createElement(StandardToolbar, { variant: 'header' }))
-    expect([...header.matchAll(/aria-label="([^"]+)"/g)].map(match => match[1])).toEqual(['Standard', 'Connect', 'New query', 'Open', 'Save', 'Save All'])
+    expect([...header.matchAll(/aria-label="([^"]+)"/g)].map(match => match[1])).toEqual(['Standard', 'Connect', 'New query', 'Open', 'Save', 'Save All', 'Activity Monitor'])
     expect(header).not.toContain('<select')
     const classic = render(createElement(StandardToolbar, { variant: 'classic' }))
     expect(classic).toContain('<label class="context-field" for="query-server">Server</label><select id="query-server" aria-label="Query server"')

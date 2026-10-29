@@ -21,12 +21,13 @@ function fixture() {
     onResultsJob: vi.fn<VariaApi['onResultsJob']>(listener => { progress.add(listener); return () => { progress.delete(listener) } })
   }
   const documents = { openText: vi.fn<DocumentService['openText']>(o => ({ id: 'doc', name: o.name, kind: o.kind, database: '', dirty: false, savedVersionId: 1 })) }
-  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => 1000, newId: () => `job-${++ids}` })
+  const clock = { now: 1000 }
+  const service = new ResultsService({ client, api, events, documents, frame: callback => { frames.push(callback) }, timers: timers.timers, now: () => clock.now, newId: () => `job-${++ids}` })
   const published = { count: 0 }
   service.subscribe(() => { published.count++ })
   const flush = () => { for (const callback of frames.splice(0)) callback() }
   const tab = (id = 't1') => service.getSnapshot()[id]
-  return { client, events, timers, api, service, published, flush, tab, progress, documents }
+  return { client, events, timers, api, service, published, flush, tab, progress, documents, clock }
 }
 
 describe('results service', () => {
@@ -93,14 +94,17 @@ describe('results service', () => {
     service.finish('t1', 'q1', { error: 'x' })
     expect(tab().status).toBe('completed')
   })
-  it('switches to Messages when a run fails or returns no sets, until the user picks a tab', () => {
+  it('ends a run without sets on Messages and one with sets on Results, even when it failed, until the user picks a view', () => {
     const { client, service, flush, tab } = fixture()
     service.begin('t1', 'q1')
     client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
     flush()
     expect(tab().view).toBe('results')
     service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)], { status: 'failed', messages: [{ text: 'Msg 1, Level 16, State 1, Line 1\nBad.', kind: 'error' }] }) })
-    expect(tab()).toMatchObject({ status: 'failed', view: 'messages', manualView: false })
+    // The error shows in the Messages strip under the grid, which it opened.
+    expect(tab()).toMatchObject({ status: 'failed', view: 'results', manualView: false, strip: true })
+    service.setView('t1', 'plan')
+    expect(tab()).toMatchObject({ view: 'plan', manualView: true })
     service.setView('t1', 'results')
     expect(tab()).toMatchObject({ view: 'results', manualView: true })
     service.begin('t1', 'q2')
@@ -115,14 +119,14 @@ describe('results service', () => {
     service.finish('t3', 'q3', { summary: summaryOf([]) })
     expect(tab('t3')).toMatchObject({ status: 'completed', view: 'messages' })
   })
-  it('ends a run whose later batches ran after an error on Messages, completed with errors, its sets in batch order', () => {
+  it('ends a run whose later batches ran after an error on Results with the strip open, completed with errors, its sets in batch order', () => {
     const { service, tab } = fixture()
     service.begin('t1', 'q1')
     const sets = [descriptor(1, { batchNumber: 1 }), descriptor(2, { batchNumber: 3 }), descriptor(3, { batchNumber: 3, incomplete: true })]
     const error = { code: 'SQL_ERROR', message: 'Msg 208, Level 16, State 1, Line 3\nInvalid object name.', batchNumber: 2, iteration: 1 }
     service.finish('t1', 'q1', { summary: summaryOf(sets, { status: 'completedWithErrors', error, completedBatches: 3, totalBatches: 3, messages: [
       { text: error.message, kind: 'error' }, { text: 'Batch 2 raised an error; execution continued with the next batch.', kind: 'info' }] }) })
-    expect(tab()).toMatchObject({ status: 'completedWithErrors', view: 'messages', completedBatches: 3, totalBatches: 3 })
+    expect(tab()).toMatchObject({ status: 'completedWithErrors', view: 'results', strip: true, completedBatches: 3, totalBatches: 3 })
     expect(tab().sets.map(set => [set.descriptor.batchNumber, set.descriptor.incomplete])).toEqual([[1, false], [3, false], [3, true]])
     expect(tab().messages.map(entry => entry.kind)).toEqual(['error', 'info'])
     // A summary whose errors fell past the message caps still shows its error.
@@ -142,6 +146,94 @@ describe('results service', () => {
     service.begin('t1', 'q3')
     service.finish('t1', 'q3', { summary: summaryOf([], { messages: [{ text: 'mine', kind: 'info' }] }), notice: 'New session.' })
     expect(tab().messages).toEqual([{ text: 'New session.', kind: 'info' }, { text: 'mine', kind: 'info' }])
+  })
+  it('opens the Messages strip for an error, PRINT or RAISERROR, not for row counts or SQL Server\'s warnings, until the user opens or closes it', () => {
+    const { client, service, flush, tab } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
+    client.emit('q1', { type: 'messages', messages: [{ text: '(5 rows affected)', kind: 'info' }] })
+    flush()
+    expect(tab()).toMatchObject({ view: 'results', strip: false, stripChosen: false })
+    // An aggregate's NULL warning (8153) and STATISTICS output show in the strip without opening it.
+    client.emit('q1', { type: 'messages', messages: [{ text: 'Warning: Null value is eliminated by an aggregate or other SET operation.', kind: 'server' }, { text: 'Table \'t\'. Scan count 1, logical reads 2.', kind: 'server' }] })
+    flush()
+    expect(tab().strip).toBe(false)
+    client.emit('q1', { type: 'messages', messages: [{ text: 'printed', kind: 'print' }] })
+    flush()
+    expect(tab()).toMatchObject({ strip: true, stripChosen: false })
+    // Closed by the user, it stays closed for the run, whatever arrives, and starts closed next time.
+    service.setStrip('t1', false)
+    expect(tab()).toMatchObject({ strip: false, stripChosen: true })
+    client.emit('q1', { type: 'messages', messages: [{ text: 'Msg 50000, Level 16, State 1, Line 1\nNo.', kind: 'error' }] })
+    flush()
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1)], { status: 'completedWithErrors', messages: [{ text: 'Msg 50000, Level 16, State 1, Line 1\nNo.', kind: 'error' }] }) })
+    expect(tab().strip).toBe(false)
+    service.begin('t1', 'q2')
+    expect(tab().strip).toBe(false)
+    // A summary is enough when its messages' events were dropped; an error that ended the run without one opens it too.
+    service.finish('t1', 'q2', { summary: summaryOf([descriptor(2)], { messages: [{ text: 'Table \'t\'. Scan count 1, logical reads 2.', kind: 'server' }, { text: 'printed', kind: 'print' }] }) })
+    expect(tab().strip).toBe(true)
+    service.begin('t1', 'q3')
+    service.finish('t1', 'q3', { error: 'The SQL backend stopped while this script was running. It was not re-run.', code: 'BACKEND_LOST' })
+    expect(tab().strip).toBe(true)
+    // Opened by the user, it starts open in the next run; another tab keeps its own.
+    service.begin('t1', 'q4')
+    service.setStrip('t1', true)
+    service.begin('t1', 'q5')
+    expect(tab().strip).toBe(true)
+    service.begin('t2', 'q6')
+    expect(tab('t2').strip).toBe(false)
+    // Closing the tab forgets the choice.
+    service.release('t1')
+    service.begin('t1', 'q7')
+    expect(tab().strip).toBe(false)
+  })
+  it('keeps how a run ended, and when, after its results are closed, also without a summary', () => {
+    const { client, service, flush, tab, clock } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open' }) })
+    flush()
+    clock.now = 4500
+    service.finish('t1', 'q1', { error: 'The SQL backend stopped while this script was running. It was not re-run.', code: 'BACKEND_LOST' })
+    clock.now = 90_000
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'lost', endedAt: 4500, startedAt: 1000 })
+    expect(tab().summary).toBeUndefined()
+    // Closing again keeps it.
+    service.closeResults('t1')
+    expect(tab().closedFrom).toBe('lost')
+    // Main failed the run (no summary): closed, it still failed.
+    service.begin('t1', 'q2')
+    client.emit('q2', { type: 'resultSet.opened', descriptor: descriptor(2, { state: 'open' }) })
+    flush()
+    service.finish('t1', 'q2', { error: 'The request timed out.', code: 'TIMEOUT' })
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'failed' })
+    service.begin('t1', 'q3')
+    service.finish('t1', 'q3', { summary: summaryOf([descriptor(3)], { status: 'cancelled' }) })
+    service.closeResults('t1')
+    expect(tab()).toMatchObject({ status: 'closed', closedFrom: 'cancelled' })
+  })
+  it('records each set once it has all its rows, for sizing the stack, without changing a published map', () => {
+    const { client, service, flush, tab } = fixture()
+    service.begin('t1', 'q1')
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(1, { state: 'open', rowsStored: 0 }) })
+    client.emit('q1', { type: 'resultSet.opened', descriptor: descriptor(2, { index: 1, state: 'open', rowsStored: 0 }) })
+    flush()
+    const before = tab().settled
+    expect(before.size).toBe(0)
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(1, { rowsStored: 3 }) })
+    flush()
+    expect(before.size).toBe(0)
+    expect([...tab().settled]).toEqual([['1:1', { rows: 3, strip: false }]])
+    // A truncated set shows a strip under its grid, which its height counts.
+    client.emit('q1', { type: 'resultSet.closed', descriptor: descriptor(2, { index: 1, rowsStored: 50, truncated: 'rowLimit' }) })
+    flush()
+    expect(tab().settled.get('1:2')).toEqual({ rows: 50, strip: true })
+    service.finish('t1', 'q1', { summary: summaryOf([descriptor(1, { rowsStored: 3 }), descriptor(2, { index: 1, rowsStored: 50, truncated: 'rowLimit' })]) })
+    expect(tab().settled.size).toBe(2)
+    service.closeResults('t1')
+    expect(tab().settled.size).toBe(0)
   })
   it('bounds a run\'s sets and messages', () => {
     const { client, service, flush, tab } = fixture()

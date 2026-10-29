@@ -20,7 +20,7 @@ import type { Disposable, ExternalStore } from './types'
 
 export interface FocusFacts {
   readonly editorFocus: boolean; readonly editorTextFocus: boolean; readonly inputFocus: boolean; readonly activePanel: 'explorer' | 'editor' | 'output' | ''; readonly outputGridFocus: boolean
-  readonly designerFocus: boolean; readonly queryBarFocus: boolean
+  readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
 export interface DesignerKeys { readonly editable: boolean; readonly rowSelected: boolean; readonly keyRemovable: boolean }
@@ -28,11 +28,13 @@ export interface DesignerContextState { readonly byDocument: Readonly<Record<str
 /** A Database Properties document's state for its verbs: DatabasePropertiesService publishes one per open document. */
 export interface PropertiesKeys { readonly changed: boolean; readonly applicable: boolean; readonly applying: boolean; readonly refreshable: boolean }
 export interface PropertiesContextState { readonly byDocument: Readonly<Record<string, PropertiesKeys>> }
+/** An Activity Monitor's state for its commands: ActivityMonitorService publishes one per open monitor. */
+export interface ActivityContextState { readonly byDocument: Readonly<Record<string, { readonly paused: boolean; readonly split: boolean }>> }
 /** The parts of a DOM element and of the editor that `focusFacts` reads, so tests can pass plain objects. */
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, designerFocus: false, queryBarFocus: false }
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor', 'output'])
 
 /** Focus keys for the focused element. The find widget is inside the editor, so its inputs give editorFocus and inputFocus. */
@@ -45,7 +47,7 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
   const pane = element.closest('[data-pane]')?.getAttribute('data-pane') ?? ''
   return {
     editorFocus, editorTextFocus, inputFocus, activePanel: panels.has(pane) ? pane as FocusFacts['activePanel'] : '', outputGridFocus: !!element.closest('[data-result-grid]'),
-    designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]')
+    designerFocus: !!element.closest('[data-designer]'), queryBarFocus: !!element.closest('[data-query-bar]'), activityMonitorFocus: !!element.closest('[data-activity-monitor]')
   }
 }
 
@@ -83,13 +85,15 @@ export interface ContextInputs {
   readonly properties?: PropertiesContextState
   /** A toast is showing or waiting (`hasNotifications`). */
   readonly notifications?: boolean
+  /** The Activity Monitors' keys; without them, those keys are false. */
+  readonly activity?: ActivityContextState
 }
 /** Every context key from service snapshots and focus facts; without focus, the focus keys are false or ''. */
 export function computeContextKeys(inputs: ContextInputs): ContextKeys {
   const { documents, connections } = inputs, focus = inputs.focus ?? noFocus
   const active = documents.documents.find(document => document.id === documents.activeId)
   const activeConnection = active?.connectionId ? connections.find(connection => connection.id === active.connectionId) : undefined
-  const designer = active ? inputs.designer?.byDocument[active.id] : undefined
+  const designer = active ? inputs.designer?.byDocument[active.id] : undefined, monitor = active ? inputs.activity?.byDocument[active.id] : undefined
   const properties = active ? inputs.properties?.byDocument[active.id] : undefined
   return contextRecord(inputs.platform, {
     ...focus, textInputFocus: focus.editorTextFocus || focus.inputFocus,
@@ -100,6 +104,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     hasActiveDocument: !!active, activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,
     propertiesRefreshable: !!properties?.refreshable,
+    activeDocumentIsActivityMonitor: active?.kind === 'activityMonitor', activityPaused: !!monitor?.paused, activitySplit: !!monitor?.split,
     designerEditable: !!designer?.editable, designerRowSelected: !!designer?.rowSelected, designerPrimaryKeyRemovable: !!designer?.keyRemovable, designerSaving: !!inputs.designer?.saving, multipleDocuments: documents.documents.length > 1, documentBusy: documents.busy,
     hasConnection: connections.some(connection => !connection.lost), hasLostConnection: connections.some(connection => connection.lost),
     activeDocumentConnected: !!activeConnection && !activeConnection.lost, activeConnectionLost: !!activeConnection?.lost,
@@ -137,6 +142,8 @@ export interface ContextKeyOptions {
   readonly properties?: ExternalStore<PropertiesContextState>
   /** The toasts (`hasNotifications`). */
   readonly notifications?: ExternalStore<NotificationSnapshot>
+  /** The Activity Monitors' keys. */
+  readonly activity?: ExternalStore<ActivityContextState>
   readonly editor?: () => FocusEditor<Element> | undefined
   readonly activeElement?: () => Element | null
 }
@@ -150,7 +157,7 @@ export class ContextKeyService implements Disposable {
   private cache?: { readonly inputs: readonly unknown[]; readonly keys: ContextKeys }
   private readonly unsubscribe: (() => void)[]
   constructor(private readonly options: ContextKeyOptions) {
-    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.notifications].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
+    this.unsubscribe = [options.documents, options.queries, options.connections, options.backend, options.editorOptions, options.quickInput, options.panes, options.explorer, options.results, options.scripting, options.bookmarks, options.inputMode, options.recentFiles, options.recovery, options.designer, options.shell, options.properties, options.notifications, options.activity].flatMap(store => store ? [store.subscribe(() => this.changed())] : [])
   }
   private inputs(focus?: FocusFacts): ContextInputs {
     const { options } = this, editor = options.editorOptions.getSnapshot()
@@ -160,13 +167,13 @@ export class ContextKeyService implements Disposable {
       panes: options.panes?.getSnapshot(), panelTabs: options.shell?.getSnapshot().panelTabs, explorer: options.explorer?.getSnapshot(), results: options.results?.getSnapshot(), scriptingRunning: options.scripting?.getSnapshot(),
       overtype: options.inputMode?.getSnapshot().mode === 'overtype', recentFiles: !!options.recentFiles?.getSnapshot().length,
       recoveryFiles: !!options.recovery?.getSnapshot().entries.length, designer: options.designer?.getSnapshot(), properties: options.properties?.getSnapshot(),
-      notifications: !!options.notifications && options.notifications.getSnapshot().visible.length > 0
+      notifications: !!options.notifications && options.notifications.getSnapshot().visible.length > 0, activity: options.activity?.getSnapshot()
     }
   }
   /** Static and state keys, for enablement: focus keys are false or ''. Cached until a snapshot changes. */
   getState(): ContextKeys {
     const { options } = this
-    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.notifications?.getSnapshot()]
+    const inputs = [options.documents.getSnapshot(), options.queries.getSnapshot(), options.connections.getSnapshot(), options.backend.getSnapshot(), options.editorOptions.getSnapshot(), options.quickInput?.getSnapshot(), options.panes?.getSnapshot(), options.explorer?.getSnapshot(), options.results?.getSnapshot(), options.scripting?.getSnapshot(), options.bookmarks?.getSnapshot(), options.inputMode?.getSnapshot(), options.recentFiles?.getSnapshot(), options.recovery?.getSnapshot(), options.designer?.getSnapshot(), options.shell?.getSnapshot(), options.properties?.getSnapshot(), options.notifications?.getSnapshot(), options.activity?.getSnapshot()]
     if (this.cache?.inputs.every((value, index) => value === inputs[index])) return this.cache.keys
     const keys = computeContextKeys(this.inputs())
     this.cache = { inputs, keys }
