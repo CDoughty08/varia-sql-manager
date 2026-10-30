@@ -167,8 +167,9 @@ const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: Objec
 
 /** A path on the server (files.ts' rules); New Database, Attach and Restore take paths through it too. */
 export const serverPathSchema = z.string().superRefine((path, context) => { const problem = serverPathProblem(path); if (problem) context.addIssue({ code: 'custom', message: problem }) })
-export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePurposes), path: serverPathSchema.optional(), allFiles: z.boolean().optional() }).strict()
-  .refine(files => !(files.purpose === 'folder' && files.allFiles), 'A folder picker lists folders only.') satisfies z.ZodType<ServerFilesRequest>
+export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePurposes), path: serverPathSchema.optional(), allFiles: z.boolean().optional(), exists: z.boolean().optional() }).strict()
+  .refine(files => !(files.purpose === 'folder' && files.allFiles), 'A folder picker lists folders only.')
+  .refine(files => !(files.exists && (files.path === undefined || files.allFiles !== undefined)), 'A check names one path, with no type filter.') satisfies z.ZodType<ServerFilesRequest>
 
 export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional() }).strict()
   .superRefine((request, context) => {

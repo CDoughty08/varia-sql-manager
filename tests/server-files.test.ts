@@ -7,7 +7,7 @@ import {
 import type { ActionDescribeRequest, ActionDescribeResult } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import {
-  formatFree, formatModified, formatSize, pickerMessages, pickerRows, pickerStatus, selectedFolder, ServerFilePickerService, slowListingMs, type PickerRow
+  formatFree, formatModified, formatSize, pickerMessages, pickerRows, pickerStatus, pickerTreeLabel, rootLabel, selectedFolder, ServerFilePickerService, slowListingMs, type PickerRow
 } from '../src/renderer/src/server-files/ServerFilePickerService'
 import { serverFilesTestHook } from '../src/renderer/src/server-files/test-hook'
 import { ConnectionService } from '../src/renderer/src/services/connections'
@@ -59,26 +59,45 @@ const tree: Record<string, ServerFileEntry[]> = {
   '\\\\files\\share\\': [file('Shared.bak')]
 }
 
-function setup(options: { legacy?: boolean } = {}) {
+/** `limit` truncates listings as the backend's browseEntries does; `legacy` answers as SQL Server 2016 does a login outside sysadmin. */
+function setup(options: { legacy?: boolean; limit?: number } = {}) {
   const held = new Map<string, ReturnType<typeof deferred<ApiResult<ActionDescribeResult>>>>()
+  /** Held requests by id, which a cancel answers CANCELLED as the backend does. */
+  const waiting = new Map<string, { path: string; wait: ReturnType<typeof deferred<ApiResult<ActionDescribeResult>>> }>()
   const answer = (params: ActionDescribeRequest): ApiResult<ActionDescribeResult> => {
     const files = params.files!
     if (files.path === undefined) return { ok: true, value: { elapsedMs: 1, serverFiles: { separator: '\\', roots, entries: [], truncated: false } } }
+    if (files.exists) {
+      const { folder, name } = splitServerPath(files.path, '\\')
+      const own = tree[folder.toLowerCase()]?.find(entry => sameServerPath(entry.name, name, '\\'))
+      const entries = options.legacy || !own ? [] : [{ name: own.name, directory: own.directory }]
+      return { ok: true, value: { elapsedMs: 1, serverFiles: { separator: '\\', path: files.path, roots: [], entries, truncated: false, ...(options.legacy ? { notice: 'legacyEmpty' as const } : {}) } } }
+    }
     const folder = folderPath(files.path, '\\')
     const entries = tree[folder.toLowerCase()]
     if (!entries) return { ok: true, value: { elapsedMs: 1, error: { code: 'PATH_NOT_FOUND', message: `The folder ${folder} does not exist, or SQL Server's service account cannot see it.`, retryable: false } } }
     const extensions = serverFilePurposeSpecs[files.purpose].extensions
     const listed = options.legacy ? [] : entries.filter(entry => entry.directory || (extensions.length > 0 || files.allFiles) && (files.allFiles || extensions.some(extension => entry.name.toLowerCase().endsWith(extension))))
-    const listing: ServerFilesListing = { separator: '\\', path: folder, roots: [], entries: listed, truncated: false, ...(options.legacy ? { notice: 'legacyEmpty' as const } : {}) }
+    const limit = options.limit ?? listed.length
+    const listing: ServerFilesListing = { separator: '\\', path: folder, roots: [], entries: listed.slice(0, limit), truncated: listed.length > limit, ...(options.legacy ? { notice: 'legacyEmpty' as const } : {}) }
     return { ok: true, value: { elapsedMs: 1, serverFiles: listing } }
   }
   const api = {
     describeObject: vi.fn<VariaApi['describeObject']>(async params => {
       const wait = held.get(params.files?.path ?? '')
-      if (wait) return wait.promise
+      if (wait) { waiting.set(params.requestId, { path: params.files?.path ?? '', wait }); return wait.promise }
       return answer(params)
     }),
-    cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => ({ ok: true, value: { cancelled: ids.length } }))
+    cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async ids => {
+      for (const id of ids) {
+        const request = waiting.get(id)
+        if (!request) continue
+        waiting.delete(id)
+        held.delete(request.path)
+        request.wait.resolve({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
+      }
+      return { ok: true, value: { cancelled: ids.length } }
+    })
   }
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
@@ -139,13 +158,15 @@ describe('ServerFilePickerService', () => {
     await service.ok()
     expect(service.current).toMatchObject({ selected: 'D:\\Backups\\Nightly\\', fileName: '' })
   })
-  it('refuses a name the folder does not list unless the file is still to be written, and reports a missing folder as a value', async () => {
-    const { service, settle } = setup()
+  it('refuses a name the server says does not exist unless the file is still to be written, and reports a missing folder as a value', async () => {
+    const { service, settle, api } = setup()
     const picked = service.pick({ connectionId: 'server-a', purpose: 'backup' })
     await settle()
     service.setFileName('nope.bak')
     await service.ok()
-    expect(service.current?.error).toMatchObject({ code: 'PATH_NOT_FOUND', message: pickerMessages.notListed('nope.bak', 'D:\\Backups\\') })
+    expect(api.describeObject.mock.calls.at(-1)![0].files).toEqual({ purpose: 'backup', path: 'D:\\Backups\\nope.bak', exists: true })
+    expect(service.current?.error).toMatchObject({ code: 'PATH_NOT_FOUND', message: 'D:\\Backups\\nope.bak does not exist, or SQL Server\'s service account cannot see it.' })
+    expect(pickerMessages.notFound('D:\\Backups\\nope.bak')).toBe(service.current?.error?.message)
     service.setFileName('D:\\Missing\\x.bak')
     await service.ok()
     expect(service.current?.error).toMatchObject({ code: 'PATH_NOT_FOUND', message: 'The folder D:\\Missing\\ does not exist, or SQL Server\'s service account cannot see it.' })
@@ -211,6 +232,104 @@ describe('ServerFilePickerService', () => {
     expect(api.cancelObjectActions).toHaveBeenCalledWith(['id-3'])
     await service.ok()
     expect(await picked).toBeUndefined()
+  })
+  it('asks the server about a typed name the listing does not show: past its limit, or outside Files of type', async () => {
+    const { service, settle, api, items } = setup({ limit: 2 })
+    const truncated = service.pick({ connectionId: 'server-a', purpose: 'backup' })
+    await settle()
+    expect(items()).toEqual(['C:\\', 'D:\\SQLData\\', 'D:\\Backups\\ (open)', '  Nightly', '  AppData.bak', `  — ${pickerMessages.truncated}`])
+    service.setFileName('appdata_log.TRN')
+    await service.ok()
+    expect(api.describeObject.mock.calls.at(-1)![0].files).toEqual({ purpose: 'backup', path: 'D:\\Backups\\appdata_log.TRN', exists: true })
+    expect(await truncated).toBe('D:\\Backups\\appdata_log.TRN')
+    const filtered = service.pick({ connectionId: 'server-a', purpose: 'database' })
+    await settle()
+    expect(service.current).toMatchObject({ selected: 'D:\\SQLData\\' })
+    service.setFileName('mastlog.ldf')
+    await service.ok()
+    expect(await filtered).toBe('D:\\SQLData\\mastlog.ldf')
+    // A folder the listing cut off is opened, not chosen.
+    const cut = setup({ limit: 1 })
+    const folder = cut.service.pick({ connectionId: 'server-a', purpose: 'backup', initialPath: 'D:\\' })
+    await cut.settle()
+    expect(cut.items()).toContain('  Backups')
+    expect(cut.items()).not.toContain('  SQLData')
+    cut.service.setFileName('SQLData')
+    await cut.service.ok()
+    expect(cut.service.current).toMatchObject({ selected: 'D:\\SQLData\\', fileName: '' })
+    cut.service.cancel()
+    expect(await folder).toBeUndefined()
+  })
+  it('accepts a typed name on SQL Server 2016 for a login outside sysadmin, whose listing is empty and which cannot be asked', async () => {
+    const { service, settle, api } = setup({ legacy: true })
+    const picked = service.pick({ connectionId: 'server-a', purpose: 'backup' })
+    await settle()
+    service.setFileName('D:\\Backups\\AppData.bak')
+    await service.ok()
+    expect(api.describeObject.mock.calls.some(([params]) => params.files?.exists)).toBe(false)
+    expect(await picked).toBe('D:\\Backups\\AppData.bak')
+    // A name typed in an initial path goes to File name, and OK takes it.
+    const initial = service.pick({ connectionId: 'server-a', purpose: 'backup', initialPath: 'D:\\Backups\\Sales.bak' })
+    await settle()
+    expect(service.current).toMatchObject({ fileName: 'Sales.bak' })
+    await service.ok()
+    expect(await initial).toBe('D:\\Backups\\Sales.bak')
+  })
+  it('never chooses a path a later request would refuse: a listed name past 260 units stays in the picker with the reason', async () => {
+    const deep = 'D:\\' + 'x'.repeat(246) + '\\'
+    tree[deep.toLowerCase()] = [file('AppData_2026-10-30.bak')]
+    cleanups.push(() => { delete tree[deep.toLowerCase()] })
+    const { service, settle } = setup()
+    const picked = service.pick({ connectionId: 'server-a', purpose: 'backup', initialPath: deep })
+    await settle()
+    service.select(deep + 'AppData_2026-10-30.bak')
+    service.setFileName('')
+    await service.ok()
+    expect(service.current?.error).toMatchObject({ code: 'PATH_NOT_FOUND', message: 'A path is at most 260 characters.' })
+    service.cancel()
+    expect(await picked).toBeUndefined()
+  })
+  it('runs one listing at a time, and cancels a listing no longer wanted: a collapsed folder, the old Files of type, one still waiting', async () => {
+    const { service, settle, api, hold, paths, items } = setup()
+    void service.pick({ connectionId: 'server-a', purpose: 'backup' })
+    await settle()
+    const nightly = hold('D:\\Backups\\Nightly\\')
+    service.toggle('D:\\Backups\\Nightly\\')
+    service.toggle('C:\\')
+    await settle()
+    // C:\ waits its turn behind Nightly.
+    expect(paths()).toEqual([null, 'D:\\Backups\\', 'D:\\Backups\\Nightly\\'])
+    // Collapsed while it waits, C:\ is never sent; collapsed while it lists, Nightly is cancelled in SQL Server.
+    service.toggle('C:\\')
+    service.toggle('D:\\Backups\\Nightly\\')
+    await settle()
+    expect(api.cancelObjectActions.mock.calls).toEqual([[['id-3']]])
+    expect(paths()).toEqual([null, 'D:\\Backups\\', 'D:\\Backups\\Nightly\\'])
+    expect(service.current?.error).toBeUndefined()
+    nightly.release()
+    service.toggle('D:\\Backups\\Nightly\\')
+    await settle()
+    expect(items()).toContain('    Sales.bak')
+    // Files of type cancels what still lists for the old filter, then lists again with the new one.
+    hold('D:\\Backups\\Nightly\\')
+    service.setAllFiles(true)
+    await settle()
+    const old = api.describeObject.mock.calls.find(([params]) => params.files?.path === 'D:\\Backups\\Nightly\\' && params.files.allFiles)![0]
+    service.setAllFiles(false)
+    await settle()
+    expect(api.cancelObjectActions.mock.calls.at(-1)).toEqual([[old.requestId]])
+    expect(items()).toContain('    Sales.bak')
+  })
+  it('labels default folders by their own name and the tree by purpose; a folder picker says when a folder has no subfolders', async () => {
+    expect([rootLabel(roots[0], '\\'), rootLabel(roots[1], '\\'), rootLabel({ path: '/var/opt/mssql/data/', kind: 'folder', defaults: ['data'] }, '/'), rootLabel({ path: '\\\\files\\share\\', kind: 'folder' }, '\\')])
+      .toEqual(['C:\\', 'SQLData', 'data', '\\\\files\\share\\'])
+    expect([pickerTreeLabel('backup'), pickerTreeLabel('database'), pickerTreeLabel('folder')]).toEqual(['Select the file', 'Select the file', 'Select the folder'])
+    const { service, settle } = setup()
+    void service.pick({ connectionId: 'server-a', purpose: 'folder', initialPath: 'D:\\SQLData\\' })
+    await settle()
+    const rows = pickerRows(service.current!)
+    expect(rows.flatMap(row => row.type === 'note' ? [row.text] : [])).toEqual(['This folder has no subfolders, or the server\'s account cannot list it.'])
+    expect(rows.flatMap(row => row.type === 'item' ? [[row.name, row.label]] : [])).toEqual([['C:\\', 'C:\\'], ['D:\\SQLData\\', 'SQLData'], ['D:\\Backups\\', 'Backups']])
   })
   it('opens from the test hook on the first live connection and records each answer', async () => {
     const { service, connections, settle } = setup()

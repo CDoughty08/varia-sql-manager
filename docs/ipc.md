@@ -498,14 +498,21 @@ request body.
 
 The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
 no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
-'database' | 'log' | 'folder', path?, allFiles? } }` (`files` only with that dialog, `allFiles` never with `folder`; a path
+'database' | 'log' | 'folder', path?, allFiles?, exists? } }` (`files` only with that dialog, `allFiles` never with `folder`,
+`exists` only with a path and no `allFiles`; a path
 is `serverPathSchema` in `src/shared/actions/schema.ts` and `ServerPath.Valid` in C#: 1 – 260 UTF-16 code units, well formed,
 no control characters or `*?"<>|`, a drive, a share or `/`). It answers `{ serverFiles: { separator, path?, roots: [{ path,
 kind: 'drive' | 'folder', defaults?: ('data' | 'log' | 'backup')[], freeMb? }], entries: [{ name, directory, sizeBytes?,
 modified? }] (≤ 2,000, folders first), truncated, notice?: 'legacyEmpty' }, elapsedMs }`: with no path the drives (`/` on
-Linux) and default folders, else one level of the folder, typed with the server's separator. Its deadline is a function
-of the request (`methodPolicies`), 15 s instead of 45 s. A missing folder, a file or another platform's path is
-`PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any connection opens.
+Linux) and default folders, else one level of the folder, typed with the server's separator. With `exists` it checks the
+path itself, for a typed name a listing does not show (past its limit or outside the type filter): `path` is the path
+checked and `entries` its own entry, or none (`legacyEmpty` when SQL Server 2016 will not tell a login outside sysadmin).
+Its deadline is a function of the request (`methodPolicies`), 15 s instead of 45 s. Listings run under a gate of their
+own, one per connection (`browsePerConnection`), outside the describe and script gates: SQL Server honours the attention
+only once a file-system call returns (about 21 s for an unreachable share), so a listing past its budget keeps its gate
+until then, and the picker runs one listing at a time and cancels those it no longer needs. A missing folder, a file or
+another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
+connection opens.
 docs/object-actions.md lists the statements by version.
 
 ## Streams and credits

@@ -41,6 +41,10 @@ internal sealed class ActionServiceOptions
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
     /// <summary>The server file picker's budget for one listing (actionLimits.browseMs).</summary>
     public TimeSpan BrowseBudget { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>The picker's listings run one at a time per connection under a gate of their own, outside the read gates: SQL
+    /// Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a listing
+    /// past its budget still holds its gate, and must not hold one that Database Properties or Delete Object waits for.</summary>
+    public int BrowsePerConnection { get; init; } = 1;
     public TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED.</summary>
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
@@ -63,6 +67,7 @@ internal sealed partial class ActionService : IDisposable
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> executeGates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> browseGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim readTotal;
     private readonly SemaphoreSlim executeTotal;
     private int activeJobs;
@@ -127,6 +132,7 @@ internal sealed partial class ActionService : IDisposable
             if (!catalog.ServerFilePurposes.ContainsKey(files.Purpose ?? "")) throw Invalid("purpose.");
             if (files.Path is not null && !ServerPath.Valid(files.Path, catalog.Limit("serverPath"))) throw Invalid("path.");
             if (files.Purpose == "folder" && files.AllFiles == true) throw Invalid("a folder picker lists folders only.");
+            if (files.Exists == true && (files.Path is null || files.AllFiles is not null)) throw Invalid("exists checks one path.");
             if (args.Target is not { Kind: "server" }) throw Invalid("target.");
             try { ExplorerRefs.Object(args.Target, explorer); }
             catch (RequestException) { throw Invalid("target."); }
@@ -195,7 +201,7 @@ internal sealed partial class ActionService : IDisposable
                     var (listing, error) = await ServerFiles.ListAsync(connection, catalog, files, profile.Linux, job);
                     return new ActionDescribeResult(null, watch.ElapsedMilliseconds, error, ServerFiles: listing);
                 },
-                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder");
+                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
         }
         return RunAsync(args.ConnectionId, args.RequestId, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -242,7 +248,7 @@ internal sealed partial class ActionService : IDisposable
     /// request's own token) has already sent SQL Server an attention through the job's token; the reply then waits up to
     /// StopGrace for the job, whose steps say what completed, and past it answers CANCELLED, an unknown outcome.</summary>
     private async Task<T> RunAsync<T>(string connectionId, string requestId, bool read, TimeSpan? budget, CancellationToken token,
-        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object")
+        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", bool browse = false)
     {
         var profile = host.Profile(connectionId);
         var served = profile.Explorer(explorer);
@@ -255,7 +261,7 @@ internal sealed partial class ActionService : IDisposable
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var job = Task.Run(() => JobAsync(connectionId, read, profile, served.Band, work, failed, jobSource), CancellationToken.None);
+            var job = Task.Run(() => JobAsync(connectionId, read, browse, profile, served.Band, work, failed, jobSource), CancellationToken.None);
             _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             try { return await job.WaitAsync(source.Token); }
             catch (OperationCanceledException) when (source.IsCancellationRequested && !token.IsCancellationRequested)
@@ -274,19 +280,21 @@ internal sealed partial class ActionService : IDisposable
         finally { running.Unregister(requestId, entry); }
     }
 
-    private async Task<T> JobAsync<T>(string connectionId, bool read, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
+    private async Task<T> JobAsync<T>(string connectionId, bool read, bool browse, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
         Func<ActionError, T> failed, CancellationTokenSource jobSource)
     {
         Interlocked.Increment(ref activeJobs);
         try
         {
             var token = jobSource.Token;
-            var gate = (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
-            var total = read ? readTotal : executeTotal;
+            // The picker's listings take only their own gate (ActionServiceOptions.BrowsePerConnection), never a read gate.
+            var gate = browse ? browseGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.BrowsePerConnection))
+                : (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
+            var total = browse ? null : read ? readTotal : executeTotal;
             if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy();
             try
             {
-                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy();
+                if (total is not null && !await total.WaitAsync(Options.GateWait, token)) throw Busy();
                 try
                 {
                     await using var connection = host.Connection(connectionId);
@@ -301,7 +309,7 @@ internal sealed partial class ActionService : IDisposable
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
                 }
-                finally { total.Release(); }
+                finally { total?.Release(); }
             }
             finally { gate.Release(); }
         }
@@ -736,6 +744,7 @@ internal sealed partial class ActionService : IDisposable
         running.Forget(connectionId);
         readGates.TryRemove(connectionId, out _);
         executeGates.TryRemove(connectionId, out _);
+        browseGates.TryRemove(connectionId, out _);
     }
 
     public void CancelAll() => running.ForgetAll();
@@ -745,5 +754,6 @@ internal sealed partial class ActionService : IDisposable
         running.ForgetAll();
         readGates.Clear();
         executeGates.Clear();
+        browseGates.Clear();
     }
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Actions;
@@ -22,7 +23,8 @@ internal static class ServerFilesChecks
             "the catalogue's picker purposes keep at most two lower-case extensions each, which the listing binds as @e1 and @e2");
         var options = new ActionServiceOptions();
         check(Catalog.Limit("browseMs") == (long)options.BrowseBudget.TotalMilliseconds && Catalog.Limit("serverPath") == 260 && Catalog.Limit("browseEntries") == 2_000
-            && Catalog.Retryable("PATH_NOT_FOUND") == false, "the picker's budget, path length and entry limit are the catalogue's, and PATH_NOT_FOUND is not retryable");
+            && Catalog.Limit("browsePerConnection") == options.BrowsePerConnection && options.BrowsePerConnection == 1 && Catalog.Retryable("PATH_NOT_FOUND") == false,
+            "the picker's budget, path length, entry limit and gate are the catalogue's, and PATH_NOT_FOUND is not retryable");
 
         using var fixture = JsonDocument.Parse(File.ReadAllText(Fixtures.Path("tests/fixtures/server-paths.json")));
         var root = fixture.RootElement;
@@ -59,17 +61,19 @@ internal static class ServerFilesChecks
             try { service.Validate(args); return "accepted"; }
             catch (RequestException error) { return error.Code; }
         }
-        ActionDescribeArgs Files(string purpose, string? path = null, bool? all = null, ObjectRefDto? target = null, string dialog = "serverFiles") =>
-            new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), dialog, target ?? Server, new(purpose, path, all));
+        ActionDescribeArgs Files(string purpose, string? path = null, bool? all = null, ObjectRefDto? target = null, string dialog = "serverFiles", bool? exists = null) =>
+            new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), dialog, target ?? Server, new(purpose, path, all, exists));
         var invalid = new (string Name, ActionDescribeArgs Args)[]
         {
             ("an unknown purpose", Files("archive")), ("a relative path", Files("backup", "Backups")), ("a wildcard", Files("backup", "C:\\*.bak")), ("261 units", Files("backup", "C:\\" + new string('x', 258))),
             ("a control character", Files("backup", "C:\\a\nb")), ("All Files for a folder", Files("folder", "C:\\", true)), ("a database target", Files("backup", target: new ObjectRefDto("database", Name: "AppData"))),
             ("a server with a name", Files("backup", target: new ObjectRefDto("server", Name: "x"))), ("files for another dialog", Files("backup", dialog: "deleteObject")),
-            ("no files", new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "serverFiles", Server))
+            ("no files", new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "serverFiles", Server)), ("a check without a path", Files("backup", exists: true)),
+            ("a check with a type filter", Files("backup", "C:\\x.bak", false, exists: true))
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
-        check(accepted.Count == 0 && Refused(Files("backup")) == "accepted" && Refused(Files("database", "\\\\files\\share\\O'Brien ]]\\", true)) == "accepted" && Refused(Files("folder", "/var/opt/mssql/")) == "accepted",
+        check(accepted.Count == 0 && Refused(Files("backup")) == "accepted" && Refused(Files("database", "\\\\files\\share\\O'Brien ]]\\", true)) == "accepted" && Refused(Files("folder", "/var/opt/mssql/")) == "accepted"
+            && Refused(Files("backup", "\\\\files\\share\\O'Brien ]].bak", exists: true)) == "accepted",
             "Validate refuses what zod refuses for the picker and accepts hostile paths verbatim: " + string.Join(", ", accepted));
 
         var cloudHost = new FakeHost(5);
@@ -84,6 +88,69 @@ internal static class ServerFilesChecks
         using var offline = new ActionService(unreachable);
         var lost = await offline.DescribeAsync(Files("backup", "C:\\"), CancellationToken.None);
         check(lost is { Error.Code: "CONNECTION_LOST", ServerFiles: null } && unreachable.Connections == 1 && offline.RunningCount == 0, "a picker listing that cannot connect is a value, and frees its request");
+        await GatesAsync(check);
+    }
+
+    /// <summary>SQL Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a
+    /// listing past its budget still holds its gate. Listings stuck on four servers, as many as the read gates allow in total,
+    /// leave Database Properties and Delete Object their gates on those servers and others; a second listing on a stuck server
+    /// waits only for its own.</summary>
+    private static async Task GatesAsync(Action<bool, string> check)
+    {
+        var host = new StuckHost();
+        using var service = new ActionService(host);
+        service.Options.BrowseBudget = TimeSpan.FromMilliseconds(400);
+        service.Options.GateWait = TimeSpan.FromSeconds(5);
+        var servers = Enumerable.Range(0, service.Options.ReadTotal).Select(_ => Guid.NewGuid().ToString()).ToList();
+        ActionDescribeArgs Listing(string connectionId) => new(connectionId, Guid.NewGuid().ToString(), "serverFiles", Server, new("backup", "\\\\unreachable\\share\\"));
+        var stuck = servers.Select(server => service.DescribeAsync(Listing(server), CancellationToken.None)).ToList();
+        var watch = Stopwatch.StartNew();
+        while (host.Held < servers.Count && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        var timedOut = await Task.WhenAll(stuck);
+        var second = await service.DescribeAsync(Listing(servers[0]), CancellationToken.None);
+        host.Blocking = false;
+        async Task<string> Describe(string connectionId)
+        {
+            try { return (await service.DescribeAsync(new(connectionId, Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("table", "AppData", "dbo", "Orders")), CancellationToken.None)).Error?.Code ?? "none"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var sameServer = await Describe(servers[0]);
+        var otherServer = await Describe(Guid.NewGuid().ToString());
+        var heldWhile = host.Held;
+        host.Release();
+        watch.Restart();
+        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == servers.Count && second.Error?.Code == "TIMEOUT" && host.Opened == servers.Count + 2
+            && sameServer == "CONNECTION_LOST" && otherServer == "CONNECTION_LOST" && service.ActiveJobs == 0 && service.RunningCount == 0,
+            "listings stuck past their budget hold only the picker's own gate: a second listing on that server waits for it, and describes on that server and others still open (their unreachable fake answers CONNECTION_LOST, not BUSY): "
+            + string.Join(", ", timedOut.Select(result => result.Error?.Code)) + " | " + second.Error?.Code + " | " + sameServer + " | " + otherServer + " | " + host.Opened + " opened");
+    }
+
+    /// <summary>A server whose connections never open while Blocking holds them, whatever their token says, as a file-system call
+    /// SQL Server is waiting on ignores the attention; Release lets them fail.</summary>
+    private sealed class StuckHost : IActionHost
+    {
+        private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int held, opened;
+        public volatile bool Blocking = true;
+        public int Held => Volatile.Read(ref held);
+        public int Opened => Volatile.Read(ref opened);
+        public void Release() => released.TrySetResult();
+        public ServerProfile Profile(string connectionId) => Box2022;
+        public SqlConnection Connection(string connectionId) => new("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
+        public async Task OpenAsync(SqlConnection connection, CancellationToken token)
+        {
+            Interlocked.Increment(ref opened);
+            if (Blocking)
+            {
+                Interlocked.Increment(ref held);
+                await released.Task;
+                throw new OperationCanceledException(token);
+            }
+            await connection.OpenAsync(token);
+        }
+        public bool ClearPoolsFor(string connectionId, string database) => true;
+        public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 
     private sealed class FakeHost(int edition = 3) : IActionHost

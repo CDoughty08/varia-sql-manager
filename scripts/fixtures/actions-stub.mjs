@@ -16,7 +16,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
  * The server file picker ('serverFiles') lists `stubServerFiles`: drive C:\, the default data and backup folders, the backup
  * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
- * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND.
+ * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
+ * type filter aside, and under C:\Legacy\ answers legacyEmpty.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -156,6 +157,15 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   /** One folder of `serverFiles`, filtered by the purpose's extensions as the backend filters; Slow waits 1.5 s (or its cancel). */
   function listServerFiles({ files, requestId }) {
     if (files.path === undefined) return ok({ serverFiles: { separator: '\\', roots: serverFiles.roots, entries: [], truncated: false }, elapsedMs: 1 })
+    if (files.exists) {
+      // A check of one path: its own entry, none, or under C:\Legacy\ SQL Server 2016's silence (legacyEmpty).
+      const path = files.path.replaceAll('/', '\\').replace(/\\$/, '')
+      const at = path.lastIndexOf('\\')
+      const parent = path.slice(0, at + 1).toLowerCase()
+      const legacy = parent.startsWith('c:\\legacy\\')
+      const own = legacy ? undefined : serverFiles.folders[parent]?.find(entry => entry.name.toLowerCase() === path.slice(at + 1).toLowerCase())
+      return ok({ serverFiles: { separator: '\\', path, roots: [], entries: own ? [{ name: own.name, directory: own.directory }] : [], truncated: false, ...(legacy ? { notice: 'legacyEmpty' } : {}) }, elapsedMs: 1 })
+    }
     const folder = files.path.replaceAll('/', '\\').replace(/\\?$/, '\\')
     const entries = serverFiles.folders[folder.toLowerCase()]
     if (!entries) return ok({ elapsedMs: 1, error: { code: 'PATH_NOT_FOUND', message: `The folder ${folder} does not exist, or SQL Server's service account cannot see it.`, retryable: false } })

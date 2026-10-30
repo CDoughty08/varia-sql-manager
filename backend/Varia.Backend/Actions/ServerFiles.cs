@@ -77,7 +77,7 @@ internal static partial class ServerFiles
 
     private sealed record ServerFacts(string? Data, string? Log, string? Backup, bool Sysadmin, bool Views);
 
-    /// <summary>Lists the roots or one folder. <paramref name="legacy"/> (the live checks only, through InternalsVisibleTo) uses the
+    /// <summary>Lists the roots or one folder, or (Exists) checks one path. <paramref name="legacy"/> (the live checks only, through InternalsVisibleTo) uses the
     /// SQL Server 2016 statements on a newer server. Returns the listing or an error value.</summary>
     public static async Task<(ServerFilesDto? Listing, ActionError? Error)> ListAsync(SqlConnection connection, ActionsCatalog catalog, ServerFilesArgsDto files, bool linux, CancellationToken token,
         bool legacy = false)
@@ -92,12 +92,22 @@ internal static partial class ServerFiles
         var display = ScriptingErrors.Display(files.Path);
         var folder = ServerPath.Folder(files.Path, linux);
         if (folder is null) return (null, ActionErrors.Create(catalog, "PATH_NOT_FOUND", display + " is not a full path on this server" + (linux ? " (SQL Server runs on Linux, so paths start with /)." : ".")));
+        // Without its trailing separator, so a file given as a folder is found as a file (C:\ and / keep theirs). At most as long as
+        // the path asked, which Validate held to the limit.
+        var probe = folder.Length > 1 && !(folder.Length == 3 && folder[1] == ':') ? folder[..^1] : folder;
+        if (files.Exists == true)
+        {
+            // One path a listing may not show (past its limit, or outside the type filter): its own entry, or none. SQL Server
+            // 2016's xp_fileexist answers only sysadmin, so for others the answer is unknown, which legacyEmpty says.
+            if (!modern && !facts.Sysadmin) return (new(separator, probe, [], [], false, "legacyEmpty"), null);
+            var (found, isDirectory) = await ExistsAsync(connection, modern ? Exists : LegacyExists, probe, token);
+            var name = probe[(probe.LastIndexOf(separator, StringComparison.Ordinal) + 1)..];
+            return (new(separator, probe, [], found || isDirectory ? [new(name.Length > 0 ? name : probe, isDirectory)] : [], false), null);
+        }
         if (folder.Length > max) return (null, ActionErrors.Create(catalog, "PATH_NOT_FOUND", "A path is at most " + max + " characters."));
         // SQL Server 2016's xp_fileexist answers only sysadmin; for others the listing alone decides, and an empty one says why.
         if (modern || facts.Sysadmin)
         {
-            // Without its trailing separator, so a file given as a folder is found as a file (C:\ and / keep theirs).
-            var probe = folder.Length > 1 && !(folder.Length == 3 && folder[1] == ':') ? folder[..^1] : folder;
             var (exists, directory) = await ExistsAsync(connection, modern ? Exists : LegacyExists, probe, token);
             if (!directory)
                 return (null, ActionErrors.Create(catalog, "PATH_NOT_FOUND", exists

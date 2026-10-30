@@ -1,6 +1,6 @@
 import { actionLimits, serverFilePurposeSpecs, serverFilesDescribeId, type ServerFilePurpose } from '../../../shared/actions/catalog.ts'
 import {
-  folderPath, isAbsoluteServerPath, sameServerPath, serverFolder, serverPathProblem, serverPathRoot, serverPathText, splitServerPath, type ServerFileEntry, type ServerFilesListing,
+  folderPath, isAbsoluteServerPath, sameServerPath, serverFolder, serverPathProblem, serverPathRoot, serverPathText, splitServerPath, type ServerFileEntry, type ServerFilesListing, type ServerFilesRequest,
   type ServerPathSeparator, type ServerRoot
 } from '../../../shared/actions/files.ts'
 import type { ActionDescribeResult, ActionError } from '../../../shared/actions/schema.ts'
@@ -57,24 +57,40 @@ export interface OpenServerFilePicker {
 }
 export interface ServerFilePickerSnapshot { readonly open?: OpenServerFilePicker }
 
-/** A row of the tree: a root, a folder or a file, or a line under a folder that says why it shows nothing. */
+/**
+ * A row of the tree: a root, a folder or a file, or a line under a folder that says why it shows nothing. `name` is the
+ * accessible name (a root's full path), `label` what the row shows (a default folder's own name, beside its tags).
+ */
 export type PickerRow =
-  | { readonly type: 'item'; readonly path: string; readonly name: string; readonly level: number; readonly directory: boolean; readonly root?: ServerRoot; readonly entry?: ServerFileEntry; readonly expanded: boolean; readonly listing?: FolderListing }
+  | { readonly type: 'item'; readonly path: string; readonly name: string; readonly label: string; readonly level: number; readonly directory: boolean; readonly root?: ServerRoot; readonly entry?: ServerFileEntry; readonly expanded: boolean; readonly listing?: FolderListing }
   | { readonly type: 'note'; readonly key: string; readonly level: number; readonly text: string; readonly tone: 'info' | 'error' | 'busy'; readonly slow?: boolean }
 
 export const pickerMessages = {
   empty: 'This folder is empty, or the server\'s account cannot list it.',
+  /** Locate Folder lists folders only, so a folder of files shows nothing. */
+  noFolders: 'This folder has no subfolders, or the server\'s account cannot list it.',
   legacyEmpty: 'SQL Server 2016 lists folders only to members of sysadmin. Type the path instead.',
   truncated: `Only the first ${actionLimits.browseEntries.toLocaleString('en-US')} entries are listed. Type a name to pick another.`,
   listing: 'Listing…',
   disconnected: 'The server was disconnected.',
   banner: (server: string) => `Paths are on the server ${server}; SQL Server's service account must be able to read them.`,
-  notListed: (name: string, folder: string) => `${folder} has no file named ${name}.`
+  notFound: (path: string) => `${path} does not exist, or SQL Server's service account cannot see it.`,
+  cancelled: 'The listing was cancelled.'
 } as const
 
 /** How long a listing runs before its row shows a spinner and the tree is busy, in ms (the --varia-motion-delay token). */
 export const slowListingMs = 300
 const failure = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: code !== 'PATH_NOT_FOUND' && code !== 'NOT_SUPPORTED' })
+
+/** Listings one picker runs at once; the rest wait their turn, so a tree on a slow share cannot fill the server's gates. */
+export const pickerListings = 1
+/** The tree's name (SSMS's, recalled). */
+export const pickerTreeLabel = (purpose: ServerFilePurpose): string => purpose === 'folder' ? 'Select the folder' : 'Select the file'
+/** What a root's row shows: a default folder by its own name (its tags say which), a drive, share or typed folder by its path. */
+export function rootLabel(root: ServerRoot, separator: ServerPathSeparator): string {
+  if (!root.defaults?.length) return root.path
+  return root.path.slice(0, -1).split(separator).at(-1) || root.path
+}
 
 /** Windows compares paths without case, Linux exactly. */
 export const folderKey = (path: string, separator: ServerPathSeparator): string => separator === '\\' ? path.toLowerCase() : path
@@ -90,14 +106,14 @@ export function pickerRows(open: OpenServerFilePicker): PickerRow[] {
     if (listing.status === 'failed') { rows.push({ type: 'note', key: path + '\u0000failed', level, text: listing.error.message, tone: 'error' }); return }
     for (const entry of listing.entries) {
       const child = entry.directory ? path + entry.name + separator : path + entry.name
-      rows.push({ type: 'item', path: child, name: entry.name, level, directory: entry.directory, entry, expanded: entry.directory && open.expanded.has(folderKey(child, separator)), listing: entry.directory ? open.listings.get(folderKey(child, separator)) : undefined })
+      rows.push({ type: 'item', path: child, name: entry.name, label: entry.name, level, directory: entry.directory, entry, expanded: entry.directory && open.expanded.has(folderKey(child, separator)), listing: entry.directory ? open.listings.get(folderKey(child, separator)) : undefined })
       if (entry.directory) add(child, level + 1)
     }
-    if (listing.entries.length === 0) rows.push({ type: 'note', key: path + '\u0000empty', level, text: listing.notice === 'legacyEmpty' ? pickerMessages.legacyEmpty : pickerMessages.empty, tone: 'info' })
+    if (listing.entries.length === 0) rows.push({ type: 'note', key: path + '\u0000empty', level, text: listing.notice === 'legacyEmpty' ? pickerMessages.legacyEmpty : open.purpose === 'folder' ? pickerMessages.noFolders : pickerMessages.empty, tone: 'info' })
     else if (listing.truncated) rows.push({ type: 'note', key: path + '\u0000truncated', level, text: pickerMessages.truncated, tone: 'info' })
   }
   for (const root of open.roots ?? []) {
-    rows.push({ type: 'item', path: root.path, name: root.path, level: 1, directory: true, root, expanded: open.expanded.has(folderKey(root.path, separator)), listing: open.listings.get(folderKey(root.path, separator)) })
+    rows.push({ type: 'item', path: root.path, name: root.path, label: rootLabel(root, separator), level: 1, directory: true, root, expanded: open.expanded.has(folderKey(root.path, separator)), listing: open.listings.get(folderKey(root.path, separator)) })
     add(root.path, 2)
   }
   return rows
@@ -122,7 +138,13 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
   private resolve?: (path: string | undefined) => void
   /** Requests in flight by request id, so Cancel and a lost server can cancel them in SQL Server. */
   private readonly requests = new Set<string>()
+  /** Those of them sent to the backend; the rest still wait for the picker's lane. */
+  private readonly sent = new Set<string>()
+  /** Each open picker's turn at listing, `pickerListings` at a time; a new picker gets a new lane. */
+  private lane = new ListingLane()
   private readonly loads = new Map<string, Promise<FolderListing>>()
+  /** The request each running load waits on, so a load that is no longer wanted is cancelled in SQL Server. */
+  private readonly loadRequests = new Map<string, string>()
   /** Each listed folder's path by key, so Files of type can list the expanded folders again. */
   private readonly paths = new Map<string, string>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
@@ -169,7 +191,17 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     if (!open?.separator || open.disconnected) return
     const key = folderKey(path, open.separator)
     const expanded = new Set(open.expanded)
-    if (expanded.has(key)) { expanded.delete(key); this.update(open, { expanded }); return }
+    if (expanded.has(key)) {
+      expanded.delete(key)
+      // A folder collapsed while it lists: its listing is cancelled, and expanding it again lists it afresh.
+      if (open.listings.get(key)?.status === 'loading') {
+        this.dropLoad(key)
+        const listings = new Map(open.listings)
+        listings.delete(key)
+        this.update(open, { expanded, listings })
+      } else this.update(open, { expanded })
+      return
+    }
     expanded.add(key)
     this.update(open, { expanded })
     void this.load(open, path)
@@ -179,7 +211,8 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
   setAllFiles(allFiles: boolean): void {
     const open = this.current
     if (!open || open.allFiles === allFiles || open.purpose === 'folder') return
-    for (const key of this.loads.keys()) this.loads.delete(key)
+    // Listings for the old filter are cancelled, not left to hold the server's gate.
+    for (const key of [...this.loads.keys()]) this.dropLoad(key)
     const selected = open.selected && open.separator && !open.selected.endsWith(open.separator) ? selectedFolder(open) : open.selected
     this.update(open, { allFiles, listings: new Map(), selected, fileName: selected === open.selected ? open.fileName : '' })
     void this.relist(open)
@@ -200,11 +233,11 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     if (!typed) {
       if (!open.selected) return
       if (open.selected.endsWith(separator)) {
-        if (open.purpose === 'folder') this.finish(open.selected)
+        if (open.purpose === 'folder') this.choose(open, open.selected)
         else this.toggle(open.selected)
         return
       }
-      this.finish(open.selected)
+      this.choose(open, open.selected)
       return
     }
     const full = isAbsoluteServerPath(typed) ? serverPathText(typed, separator) : base ? base + serverPathText(typed, separator) : undefined
@@ -215,7 +248,7 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     try {
       if (full.endsWith(separator) || open.purpose === 'folder') {
         const folder = await this.navigate(open, folderPath(full, separator))
-        if (folder && open.purpose === 'folder' && this.live(open)) this.finish(folder)
+        if (folder && open.purpose === 'folder' && this.live(open)) this.choose(open, folder)
         else if (folder) this.update(open, { fileName: '' })
         return
       }
@@ -229,10 +262,30 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
         if (child && this.live(open)) this.update(open, { fileName: '' })
         return
       }
-      if (entry) { this.finish(parent + entry.name); return }
-      if (!open.mustExist) { this.finish(parent + name); return }
-      this.update(open, { error: failure('PATH_NOT_FOUND', pickerMessages.notListed(name, parent)) })
+      if (entry) { this.choose(open, parent + entry.name); return }
+      const path = parent + name
+      // A name the listing does not show may still exist: past its limit, outside Files of type, or on SQL Server 2016 for a
+      // login outside sysadmin, which lists nothing and cannot be asked (the dialog's own check decides there).
+      if (!open.mustExist || listing?.status === 'ready' && listing.notice === 'legacyEmpty') { this.choose(open, path); return }
+      const problem = serverPathProblem(path)
+      if (problem) { this.update(open, { error: failure('PATH_NOT_FOUND', problem) }); return }
+      const checked = await this.request(open, path, { exists: true })
+      if (!this.live(open)) return
+      if ('error' in checked) { if (checked.error.code !== 'CANCELLED') this.update(open, { error: checked.error }); return }
+      const found = checked.listing.entries[0]
+      if (checked.listing.notice === 'legacyEmpty') this.choose(open, path)
+      else if (!found) this.update(open, { error: failure('PATH_NOT_FOUND', pickerMessages.notFound(path)) })
+      else if (found.directory) { if (await this.navigate(open, path + separator) && this.live(open)) this.update(open, { fileName: '' }) }
+      else this.choose(open, path)
     } finally { if (this.live(open)) this.update(open, { busy: undefined }) }
+  }
+
+  /** Closes the picker with a path every later request takes (serverPathSchema), or says why it cannot: a listed name can
+   *  make a path longer than 260 units, and a Linux name can hold characters Windows forbids. */
+  private choose(open: OpenServerFilePicker, path: string): void {
+    const problem = serverPathProblem(path)
+    if (problem) this.update(open, { error: failure('PATH_NOT_FOUND', problem) })
+    else this.finish(path)
   }
 
   /** Cancel or Escape: nothing is chosen, and listings still running are cancelled in SQL Server. */
@@ -325,6 +378,7 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     this.update(open, { expanded, selected: folder })
     const listing = await this.load(open, folder)
     if (!this.live(open)) return undefined
+    if (listing.status === 'failed' && listing.error.code === 'CANCELLED') return undefined
     if (listing.status !== 'ready') { this.update(open, { error: listing.status === 'failed' ? listing.error : failure('SQL_ERROR', 'The folder could not be listed.') }); return undefined }
     return listing
   }
@@ -357,8 +411,9 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     })
     promise = (async (): Promise<FolderListing> => {
       const allFiles = this.current?.allFiles ?? false
-      const result = await this.request(open, folder, allFiles)
+      const result = await this.request(open, folder, allFiles ? { allFiles } : {}, requestId => this.loadRequests.set(key, requestId))
       clearTimeout(timer)
+      if (this.loads.get(key) === promise) this.loadRequests.delete(key)
       const listing: FolderListing = 'error' in result ? { status: 'failed', error: result.error }
         : { status: 'ready', entries: result.listing.entries, truncated: result.listing.truncated, ...(result.listing.notice ? { notice: result.listing.notice } : {}) }
       const state = this.current
@@ -374,17 +429,24 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     return promise
   }
 
-  private async request(open: OpenServerFilePicker, path: string | undefined, allFiles = false): Promise<{ listing: ServerFilesListing } | { error: ActionError }> {
+  /** One request, in its turn on the picker's lane; one cancelled while it waits is never sent. `track` learns its id at once. */
+  private async request(open: OpenServerFilePicker, path: string | undefined, files: Pick<ServerFilesRequest, 'allFiles' | 'exists'> = {}, track?: (requestId: string) => void): Promise<{ listing: ServerFilesListing } | { error: ActionError }> {
     const requestId = this.newId()
+    const lane = this.lane
     this.requests.add(requestId)
+    track?.(requestId)
     let result: ApiResult<ActionDescribeResult>
+    // Taken at once when the lane is free, so the request is sent in this turn.
+    if (!lane.take()) await lane.wait()
     try {
+      if (!this.requests.has(requestId)) return { error: failure('CANCELLED', pickerMessages.cancelled) }
+      this.sent.add(requestId)
       result = await this.options.api.describeObject({
         connectionId: open.connectionId, requestId, dialog: serverFilesDescribeId, target: { kind: 'server' },
-        files: { purpose: open.purpose, ...(path === undefined ? {} : { path }), ...(allFiles ? { allFiles } : {}) }
+        files: { purpose: open.purpose, ...(path === undefined ? {} : { path }), ...files }
       })
     } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : 'The request failed.' } }
-    finally { this.requests.delete(requestId) }
+    finally { this.requests.delete(requestId); this.sent.delete(requestId); lane.release() }
     if (!result.ok) return { error: failure(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? 'CONNECTION_LOST' : result.code === 'CANCELLED' ? 'CANCELLED' : 'SQL_ERROR', result.error) }
     if (result.value.error) return { error: result.value.error }
     if (!result.value.serverFiles) return { error: failure('SQL_ERROR', 'The server sent no listing.') }
@@ -398,7 +460,10 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     for (const timer of this.timers) clearTimeout(timer)
     this.timers.clear()
     this.loads.clear()
+    this.loadRequests.clear()
     this.paths.clear()
+    // Requests still waiting on the old lane end unsent once its listing answers; the next picker never waits behind them.
+    this.lane = new ListingLane()
     const resolve = this.resolve
     this.resolve = undefined
     this.publish({})
@@ -424,14 +489,41 @@ export class ServerFilePickerService extends SnapshotStore<ServerFilePickerSnaps
     if (!open || open.disconnected || this.options.connections.getSnapshot().some(item => item.id === open.connectionId && !item.lost)) return
     this.cancelRequests()
     this.loads.clear()
+    this.loadRequests.clear()
     this.update(open, { disconnected: true, busy: undefined, error: failure('CONNECTION_LOST', pickerMessages.disconnected) })
   }
-  private cancelRequests(): void {
-    const ids = [...this.requests]
-    this.requests.clear()
-    for (let start = 0; start < ids.length; start += actionLimits.cancelIds) {
-      try { void this.options.api.cancelObjectActions(ids.slice(start, start + actionLimits.cancelIds)).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (error) { onUnexpectedError(error) }
+  /** A load no longer wanted (its folder collapsed, or Files of type changed): forgotten, and its request cancelled. */
+  private dropLoad(key: string): void {
+    this.loads.delete(key)
+    const requestId = this.loadRequests.get(key)
+    this.loadRequests.delete(key)
+    if (requestId) this.cancelRequests([requestId])
+  }
+  /** Cancels requests: those sent in SQL Server, and those still waiting for the lane before they are sent. */
+  private cancelRequests(ids: readonly string[] = [...this.requests]): void {
+    const sent = ids.filter(id => this.requests.delete(id) && this.sent.has(id))
+    for (let start = 0; start < sent.length; start += actionLimits.cancelIds) {
+      try { void this.options.api.cancelObjectActions(sent.slice(start, start + actionLimits.cancelIds)).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (error) { onUnexpectedError(error) }
     }
+  }
+}
+
+/** Turns at listing: `pickerListings` requests at once, then each waits for one to answer. */
+class ListingLane {
+  private active = 0
+  private readonly waiting: (() => void)[] = []
+  /** Takes a free turn, or says there is none (then `wait`). */
+  take(): boolean {
+    if (this.active >= pickerListings) return false
+    this.active++
+    return true
+  }
+  wait(): Promise<void> { return new Promise(resolve => { this.waiting.push(resolve) }) }
+  /** Hands the turn to the next waiting request, or frees it. */
+  release(): void {
+    const next = this.waiting.shift()
+    if (next) next()
+    else this.active--
   }
 }
 

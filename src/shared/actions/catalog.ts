@@ -288,8 +288,10 @@ export const actionLimits = {
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
   /** The server file picker: UTF-16 units in a server path (sys.master_files.physical_name is nvarchar(260)), entries one folder
-   *  lists (one more is read to set `truncated`), and the backend's budget for one listing in ms (main's deadline is 15 s). */
-  serverPath: 260, browseEntries: 2_000, browseMs: 10_000
+   *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
+   *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
+   *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
+  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1
 } as const
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */

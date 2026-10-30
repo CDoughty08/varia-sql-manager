@@ -15,9 +15,9 @@ internal static class ServerFilesLiveChecks
 {
     private sealed class Client(SqlService service, string connectionId, JsonSerializerOptions json)
     {
-        public async Task<ActionDescribeResult> List(string purpose, string? path = null, bool? all = null) =>
+        public async Task<ActionDescribeResult> List(string purpose, string? path = null, bool? all = null, bool? exists = null) =>
             (ActionDescribeResult)await service.DispatchAsync("actions.describe", JsonSerializer.SerializeToElement(
-                new ActionDescribeArgs(connectionId, Guid.NewGuid().ToString(), "serverFiles", new ObjectRefDto("server"), new ServerFilesArgsDto(purpose, path, all)), json), json);
+                new ActionDescribeArgs(connectionId, Guid.NewGuid().ToString(), "serverFiles", new ObjectRefDto("server"), new ServerFilesArgsDto(purpose, path, all, exists)), json), json);
     }
 
     private static string Describe(ActionDescribeResult result) => result.Error is { } error ? error.Code + " " + error.Message
@@ -90,6 +90,19 @@ internal static class ServerFilesLiveChecks
             && foreign is { ServerFiles: null, Error.Code: "PATH_NOT_FOUND" } && foreign.Error.Message.Contains("is not a full path on this server", StringComparison.Ordinal),
             "a missing folder, a path holding quotes, brackets and a comment, a file and another platform's path are PATH_NOT_FOUND values: " + Describe(missing) + " | " + Describe(file) + " | " + Describe(foreign));
 
+        // A check of one path, for a name a listing does not show: its own entry (a file, or a folder given with or without its
+        // separator), or none for a missing one, and on Windows forward slashes are the server's backslashes.
+        var masterPath = masterFolder + masterFile;
+        var hasFile = await client.List("backup", masterPath, exists: true);
+        var hasFolder = await client.List("backup", masterFolder, exists: true);
+        var hasNothing = await client.List("backup", masterFolder + "VariaNoSuchFile_" + Guid.NewGuid().ToString("N") + ".bak", exists: true);
+        var forward = linux ? hasFile : await client.List("backup", masterPath.Replace('\\', '/'), exists: true);
+        check(hasFile is { Error: null, ServerFiles: { Entries: [{ Directory: false } fileEntry], Truncated: false, Notice: null } fileCheck } && Same(fileEntry.Name, masterFile) && fileCheck.Path == masterPath
+            && hasFolder is { Error: null, ServerFiles: { Entries: [{ Directory: true }] } folderCheck } && Same(folderCheck.Path! + separator, masterFolder)
+            && hasNothing is { Error: null, ServerFiles: { Entries: [], Notice: null } } && forward is { ServerFiles.Entries: [{ Directory: false }], ServerFiles.Path: { } forwardPath } && forwardPath == masterPath,
+            "a check finds master's data file as a file and its folder as a folder, finds nothing for a missing name, and writes the path as the server does: "
+            + Describe(hasFile) + " | " + Describe(hasFolder) + " | " + Describe(hasNothing));
+
         // One level of the drive, never the tree below it: SMO's level-0 form stays fast with the ORDER BY and the type filter.
         var drive = linux ? "/" : masterFolder[..3];
         var (timed, ms) = await LiveResultChecks.OnceMore("the picker's listing of " + drive, 2000, item => item.Ms, async () =>
@@ -116,12 +129,15 @@ internal static class ServerFilesLiveChecks
             var (legacy, legacyError) = await service.Actions.ListServerFilesAsync(info.Id, new("database", masterFolder), legacy: true, null, CancellationToken.None);
             var (legacyRoots, _) = await service.Actions.ListServerFilesAsync(info.Id, new("backup"), legacy: true, null, CancellationToken.None);
             var (legacyMissing, legacyMissingError) = await service.Actions.ListServerFilesAsync(info.Id, new("backup", masterFolder + "VariaNoSuchFolder_" + Guid.NewGuid().ToString("N")), legacy: true, null, CancellationToken.None);
+            var (legacyFile, _) = await service.Actions.ListServerFilesAsync(info.Id, new("backup", masterFolder + masterFile, Exists: true), legacy: true, null, CancellationToken.None);
+            var (legacyNone, _) = await service.Actions.ListServerFilesAsync(info.Id, new("backup", masterFolder + "VariaNoSuchFile_" + Guid.NewGuid().ToString("N"), Exists: true), legacy: true, null, CancellationToken.None);
             check(legacyError is null && legacy is { Notice: null } && legacy.Entries.FirstOrDefault(entry => Same(entry.Name, masterFile)) is { Directory: false, SizeBytes: null, Modified: null }
                 && legacy.Entries.All(entry => entry.Directory || entry.Name.EndsWith(".mdf", StringComparison.OrdinalIgnoreCase)) && Ordered(legacy)
                 && legacyRoots is { } oldRoots && roots.ServerFiles is { } newRoots
                 && oldRoots.Roots.Where(root => root.Kind == "drive").Select(root => root.Path).SequenceEqual(newRoots.Roots.Where(root => root.Kind == "drive").Select(root => root.Path), StringComparer.OrdinalIgnoreCase)
-                && legacyMissing is null && legacyMissingError?.Code == "PATH_NOT_FOUND",
-                "SQL Server 2016's statements list the same folder and drives for a member of sysadmin, without sizes, and find a missing folder: " + legacyMissingError?.Code);
+                && legacyMissing is null && legacyMissingError?.Code == "PATH_NOT_FOUND"
+                && legacyFile is { Notice: null, Entries: [{ Directory: false }] } && legacyNone is { Notice: null, Entries: [] },
+                "SQL Server 2016's statements list the same folder and drives for a member of sysadmin, without sizes, find a missing folder, and check a file: " + legacyMissingError?.Code);
         }
         else Console.WriteLine("Server file picker checks of SQL Server 2016's statements skipped: the test login is not in sysadmin.");
 
@@ -157,10 +173,13 @@ internal static class ServerFilesLiveChecks
             var lowRoots = await low.List("backup");
             var lowData = await low.List("database", masterFolder);
             var (lowLegacy, lowLegacyError) = await service.Actions.ListServerFilesAsync(connected.Id, new("database", masterFolder), legacy: true, null, CancellationToken.None);
+            var lowCheck = await low.List("database", masterFolder + masterFile, exists: true);
+            var (lowLegacyCheck, lowLegacyCheckError) = await service.Actions.ListServerFilesAsync(connected.Id, new("database", masterFolder + masterFile, Exists: true), legacy: true, null, CancellationToken.None);
             check(lowRoots is { Error: null, ServerFiles: { } lowListed } && (dataFolder is null || lowListed.Roots.Any(root => Same(root.Path, dataFolder)))
                 && lowData is { Error: null, ServerFiles: { } lowFiles } && Has(lowFiles, masterFile)
-                && lowLegacyError is null && lowLegacy is { Notice: "legacyEmpty", Entries: [], Truncated: false },
-                "a login with no server permissions lists the roots and master's folder from SQL Server 2017, and SQL Server 2016's xp_dirtree answers it with nothing, which the listing says (legacyEmpty): "
+                && lowLegacyError is null && lowLegacy is { Notice: "legacyEmpty", Entries: [], Truncated: false }
+                && lowCheck is { Error: null, ServerFiles: { Entries: [{ Directory: false }], Notice: null } } && lowLegacyCheckError is null && lowLegacyCheck is { Notice: "legacyEmpty", Entries: [] },
+                "a login with no server permissions lists the roots and master's folder and checks master's file from SQL Server 2017, and SQL Server 2016's xp_dirtree and xp_fileexist answer it with nothing, which the listing and the check say (legacyEmpty): "
                 + Describe(lowRoots) + " | " + Describe(lowData) + " | " + (lowLegacyError?.Code ?? lowLegacy?.Notice ?? "no notice"));
         }
         finally { await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(connected.Id), json), json); }

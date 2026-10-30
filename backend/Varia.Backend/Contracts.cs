@@ -187,13 +187,16 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// what the table designer needs of a database (tableDesigner), or the server's folders (serverFiles, the server as Target, with Files).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null);
 /// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
-/// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's.</summary>
-internal sealed record ServerFilesArgsDto(string Purpose, string? Path = null, bool? AllFiles = null);
+/// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
+/// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
+internal sealed record ServerFilesArgsDto(string Purpose, string? Path = null, bool? AllFiles = null, bool? Exists = null);
 /// <summary>A drive or default folder: Kind drive or folder, Defaults data, log and backup.</summary>
 internal sealed record ServerRootDto(string Path, string Kind, List<string>? Defaults = null, long? FreeMb = null);
 /// <summary>Modified is the server's local time as yyyy-MM-ddTHH:mm:ss.</summary>
 internal sealed record ServerFileEntryDto(string Name, bool Directory, long? SizeBytes = null, string? Modified = null);
-/// <summary>One listing: Separator  or /, Path the folder listed (ending with it), Roots only without a path, Notice legacyEmpty.</summary>
+/// <summary>One listing: Separator \ or /, Path the folder listed (ending with it), Roots only without a path, Notice legacyEmpty.
+/// For Exists, Path is the path checked and Entries its own entry when it exists (none when it does not, or with legacyEmpty when
+/// SQL Server 2016 will not tell a login outside sysadmin).</summary>
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>

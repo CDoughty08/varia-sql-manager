@@ -11,6 +11,9 @@ export interface ServerFilesRequest {
   readonly path?: string
   /** Files of type: All Files(*.*) instead of the purpose's extensions; a folder picker lists folders only. */
   readonly allFiles?: boolean
+  /** Whether `path` itself exists, rather than its entries: for a typed name the listing does not show (past its limit, or
+   *  outside the type filter). The answer's entries hold the path's own entry, or none. */
+  readonly exists?: boolean
 }
 /** A drive, or one of the instance's default data, log and backup folders (one row when they are the same folder). */
 export interface ServerRoot {
@@ -23,14 +26,15 @@ export interface ServerRoot {
 export interface ServerFileEntry { readonly name: string; readonly directory: boolean; readonly sizeBytes?: number; readonly modified?: string }
 export interface ServerFilesListing {
   readonly separator: ServerPathSeparator
-  /** The folder listed, ending with the separator; absent when the roots were asked for. */
+  /** The folder listed, ending with the separator (for `exists`, the path checked, without one); absent when the roots were asked for. */
   readonly path?: string
   /** Only when no path was asked. */
   readonly roots: readonly ServerRoot[]
   /** Folders first, then files, by name; at most `actionLimits.browseEntries`. */
   readonly entries: readonly ServerFileEntry[]
   readonly truncated: boolean
-  /** SQL Server 2016 lists folders only to members of sysadmin, and to others answers with nothing rather than an error. */
+  /** SQL Server 2016 lists folders only to members of sysadmin, and to others answers with nothing rather than an error; a
+   *  check carries it when the server would not say whether the path exists. */
   readonly notice?: 'legacyEmpty'
 }
 

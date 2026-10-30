@@ -66,8 +66,10 @@ The Table Designer (New › Table…) uses the same requests without being a dia
 ## Server file picker
 
 `actions.describe` with `serverFiles`, the server as its target and a `files` member (`purpose`, `path`,
-`allFiles`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default data, log
-and backup folders. Paths are the server's, with its separator; SQL Server's service account must be able to read them.
+`allFiles`, `exists`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default
+data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past
+its limit or outside the type filter): the answer's entries hold that path's own entry, or none when it does not exist.
+Paths are the server's, with its separator; SQL Server's service account must be able to read them.
 
 | Purpose | Title | Files of type | Extensions |
 | --- | --- | --- | --- |
@@ -79,13 +81,14 @@ and backup folders. Paths are the server's, with its separator; SQL Server's ser
 A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and
 times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,
 `xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with
-nothing, so that listing carries the `legacyEmpty` notice. The path is a parameter of constant statements, and the
-type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A missing folder, a
-file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and Managed Instance
-are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s.
+nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant
+statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A
+missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and
+Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s. Listings take
+a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog's describe.
 
-The picker's titles, Files of type entries and field names (Select the file, Selected path, Files of type, File name)
-are SSMS's as recalled, not yet checked against SSMS 22.
+The picker's titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of
+type, File name, Folder name) are SSMS's as recalled, not yet checked against SSMS 22.
 
 ## Database Properties
 
@@ -284,3 +287,4 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `serverPath` | 260 | UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260)) |
 | `browseEntries` | 2,000 | Entries the server file picker lists per folder; more set `truncated` |
 | `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
+| `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
