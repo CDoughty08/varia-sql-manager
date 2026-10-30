@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ApiResult, ExplorerChildrenResult, ExplorerError, ExplorerNode, VariaApi } from '../src/shared/contracts'
+import type { ApiResult, ConnectionInfo, ExplorerChildrenResult, ExplorerError, ExplorerNode, VariaApi } from '../src/shared/contracts'
 import { folderSpecs, kindSpecs, type FolderId, type NodeSubtype } from '../src/shared/explorer/catalog'
 import type { ExplorerChildrenParams, ExplorerFilter, ExplorerNodeRef, ObjectRef } from '../src/shared/explorer/refs'
 import { explorerChildrenParamsSchema } from '../src/shared/explorer/schema'
@@ -76,7 +76,7 @@ function fakeBackend() {
       case 'databases': {
         const statics = [folder(owner, 'systemDatabases'), folder(owner, 'databaseSnapshots')]
         const rows = [object({ kind: 'database', name: 'AppData' }, 'AppData', state.appData), object({ kind: 'database', name: 'Locked' }, 'Locked', { status: 'noAccess' }),
-          ...state.offline ? [object({ kind: 'database', name: 'Offline' }, 'Offline', { sublabel: '(Offline)', status: 'unavailable', hasChildren: false })] : []]
+          ...state.offline ? [object({ kind: 'database', name: 'Offline' }, 'Offline', { sublabel: '(Offline)', status: 'unavailable', hasChildren: false, database: { state: 6, userAccess: 0, readOnly: false, standby: false } })] : []]
         const filtered = params.filter?.name ? rows.filter(row => row.label.includes(params.filter!.name!.value)) : rows
         return ok([...statics, ...filtered], { total: statics.length + filtered.length })
       }
@@ -138,7 +138,7 @@ function fixture(limits: Partial<ExplorerServiceLimits> = {}) {
   const wall = { now: 1_800_000_000_000 }
   const explorer = new ExplorerService({ api: backend.api, connections, events, timers: clock.timers, schedule: callback => callback(), newId: () => uuid(++ids), limits, now: () => wall.now })
   disposals.push(() => explorer.dispose())
-  const connect = (name = 'server-a') => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa' }, connectionOptions)
+  const connect = (name = 'server-a', profile: Partial<ConnectionInfo> = {}) => connections.add({ ...info(name), productVersion: '16.0.4135.4', login: 'sa', ...profile }, connectionOptions)
   const rows = () => explorer.getSnapshot().rows
   /** Visible rows as labels; synthetic rows as their text in brackets. */
   const labels = () => Array.from(rows().ids, id => id > 0 ? '  '.repeat(explorer.node(id)!.level - 1) + explorer.node(id)!.label : `[${explorer.rowText(id)}]`)
@@ -1344,8 +1344,8 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(listener).toHaveBeenCalledTimes(1)
     expect(f.explorer.context.getSnapshot()).toEqual({
       explorerHasSelection: true, explorerSelectionKind: 'folder', explorerSelectionFolder: 'databases', explorerSelectionFilterable: true, explorerSelectionFiltered: false,
-      explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })),
-      ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false
+      explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: 'box', explorerSelectionServerLinux: false,
+      ...scriptContextValues(scriptMenuState({ kind: 'folder' })), ...actionContextValues(actionMenuState({ kind: 'folder' })), ...ssisVerbContextValues(ssisVerbMenuState('folder')), explorerLoading: false
     })
     expect(f.explorer.getSnapshot().selected).toBe(databases)
     f.explorer.select(f.find('Database Snapshots'))
@@ -1357,9 +1357,10 @@ describe('ExplorerService: selection, targets and context', () => {
       explorerScriptCreateOrAlter: '', explorerScriptSelect: '', explorerSelectionModifiable: false,
       explorerActionSelectTop: '', explorerActionRename: 'enabled', explorerActionDelete: 'enabled'
     })
-    // A row with the same keys publishes nothing.
+    // A status badge is a key of its own.
     f.explorer.select(f.find('Locked'))
-    expect(listener).toHaveBeenCalledTimes(3)
+    expect(listener).toHaveBeenCalledTimes(4)
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerSelectionStatus: 'noAccess', explorerActionRename: 'enabled' })
     f.explorer.select(f.find('server-a.example'))
     expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'server', explorerSelectionInsertable: true, explorerScriptTitle: '', explorerScriptCreate: '' })
     // A system database's subtype changes the row: it still scripts as a database.
@@ -1367,6 +1368,10 @@ describe('ExplorerService: selection, targets and context', () => {
     await settle()
     f.explorer.select(f.find('master'))
     expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionKind: 'database', explorerScriptTitle: 'database', explorerScriptDrop: 'enabled', explorerActionRename: 'disabled', explorerActionDelete: 'disabled' })
+    // A row with the same keys publishes nothing.
+    const calls = listener.mock.calls.length
+    f.explorer.select(f.find('model'))
+    expect(listener).toHaveBeenCalledTimes(calls)
     // Synthetic rows are not nodes.
     f.explorer.select(syntheticId(1, RowKind.Error))
     expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerHasSelection: false, explorerSelectionKind: '' })
@@ -1401,7 +1406,9 @@ describe('ExplorerService: selection, targets and context', () => {
     const tables = await f.open('Databases', 'AppData', 'Tables')
     const table = f.find('dbo.T0')
     f.explorer.select(table)
-    expect(f.explorer.target()).toEqual({ connectionId: cid('server-a'), ref: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T0' } }, kind: 'table', label: 'dbo.T0' })
+    expect(f.explorer.target()).toEqual({
+      connectionId: cid('server-a'), ref: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T0' } }, kind: 'table', label: 'dbo.T0', engine: 'box', linux: false
+    })
     expect(f.explorer.queryTarget()).toEqual({ connectionId: cid('server-a'), database: 'AppData' })
     expect(f.explorer.queryTarget(tables)).toEqual({ connectionId: cid('server-a'), database: 'AppData' })
     expect(f.explorer.queryTarget(f.find('AppData'))).toEqual({ connectionId: cid('server-a'), database: 'AppData' })
@@ -1418,7 +1425,8 @@ describe('ExplorerService: selection, targets and context', () => {
     const tables = await f.open('Databases', 'AppData', 'Tables')
     const table = f.find('dbo.T0'), root = f.find('server-a.example')
     expect(f.explorer.menuNode(table)).toEqual({
-      id: table, lost: false, connectionId: cid('server-a'), ref: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T0' } }, kind: 'table', label: 'dbo.T0'
+      id: table, lost: false, connectionId: cid('server-a'), ref: { type: 'object', object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'T0' } }, kind: 'table', label: 'dbo.T0',
+      engine: 'box', linux: false
     })
     expect(f.explorer.menuNode(syntheticId(tables, RowKind.Error))).toMatchObject({ id: tables, kind: 'folder', folder: 'tables', lost: false })
     expect(f.explorer.menuNode(undefined)).toBeUndefined()
@@ -1428,6 +1436,34 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.menuNode(table)).toBeUndefined()
     f.connections.remove(cid('server-a'))
     expect(f.explorer.menuNode(root)).toBeUndefined()
+  })
+  it('carries a node\'s status, a database\'s runtime state as listed, and its server\'s engine and platform to targets and keys', async () => {
+    const f = fixture()
+    f.connect('server-a', { engineEdition: 8, linux: true })
+    await settle()
+    await f.open('Databases')
+    const offline = f.find('Offline'), appData = f.find('AppData')
+    f.explorer.select(offline)
+    expect(f.explorer.target()).toMatchObject({ status: 'unavailable', database: { state: 6, userAccess: 0, readOnly: false, standby: false }, listedAt: f.wall.now, engine: 'managedInstance', linux: true })
+    expect(f.explorer.menuNode(offline)).toMatchObject({ status: 'unavailable', database: { state: 6 }, engine: 'managedInstance', linux: true })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerSelectionStatus: 'unavailable', explorerSelectionServerEngine: 'managedInstance', explorerSelectionServerLinux: true })
+    // A row without runtime facts carries none; a reconcile that brings them stamps the time it listed them.
+    expect(f.explorer.menuNode(appData)).not.toHaveProperty('database')
+    f.state.appData = { database: { state: 0, userAccess: 1, readOnly: true, standby: false } }
+    f.wall.now += 5_000
+    f.explorer.reconcile(f.find('Databases'))
+    await settle()
+    expect(f.explorer.menuNode(appData)).toMatchObject({ database: { userAccess: 1, readOnly: true }, listedAt: f.wall.now })
+    f.state.appData = {}
+    f.explorer.reconcile(f.find('Databases'))
+    await settle()
+    expect(f.explorer.menuNode(appData)).not.toHaveProperty('listedAt')
+    // A cloud edition, and a server whose profile probe failed.
+    f.connect('server-b', { engineEdition: 5 })
+    f.connect('server-c')
+    await settle()
+    expect(f.explorer.menuNode(f.find('server-b.example'))).toMatchObject({ engine: 'cloud', linux: false })
+    expect(f.explorer.menuNode(f.find('server-c.example'))).toMatchObject({ engine: 'box', linux: false })
   })
   it('gives quoted insert text, a fully loaded Columns folder\'s list, and a server\'s name to copy', async () => {
     const f = fixture()

@@ -1,6 +1,6 @@
 :root { --varia-font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, Ubuntu, Cantarell, 'Noto Sans', sans-serif; --varia-font-mono: 'Cascadia Mono', Consolas, 'SF Mono', Menlo, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace; font-family: var(--varia-font-ui); color: var(--varia-foreground); background: var(--varia-editor-background); font-synthesis: none; }
 /* Metric tokens, as src/shared/theme/metrics.ts defines them (tests/theme-css.test.ts compares the two). */
-:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
+:root { --varia-size-xs: 11px; --varia-line-xs: 16px; --varia-size-sm: 12px; --varia-line-sm: 16px; --varia-size-md: 13px; --varia-line-md: 20px; --varia-size-lg: 15px; --varia-line-lg: 20px; --varia-size-xl: 20px; --varia-line-xl: 26px; --varia-space-0: 2px; --varia-space-1: 4px; --varia-space-2: 8px; --varia-space-3: 12px; --varia-space-4: 16px; --varia-space-5: 24px; --varia-space-6: 32px; --varia-radius-sm: 4px; --varia-radius-lg: 8px; --varia-radius-pill: 999px; --varia-shadow-menu: 0 4px 12px; --varia-shadow-popover: 0 8px 24px; --varia-shadow-dialog: 0 16px 48px; --varia-motion-fast: 80ms; --varia-motion-base: 120ms; --varia-motion-spin: 1500ms; --varia-motion-pulse: 2000ms; --varia-motion-delay: 300ms; --varia-motion-ease: cubic-bezier(0.2, 0, 0, 1); --varia-glyph-badge: 9px; --varia-glyph-sm: 12px; --varia-glyph-md: 16px; --varia-glyph-lg: 24px; --varia-progress: 4px; --varia-header: 40px; --varia-bar: 36px; --varia-control: 26px; --varia-row: 22px; --varia-status: 24px; }
 @media (prefers-reduced-motion: reduce) { :root { --varia-motion-fast: 0ms; --varia-motion-base: 0ms; } }
 @keyframes varia-appear { from { opacity: 0; } }
 /* VS Code variables standalone Monaco uses but never defines: the border width of the find widget's toggles, and the
@@ -835,12 +835,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .create-catalog-dialog fieldset:disabled .checkbox-label, .create-catalog-dialog fieldset:disabled .field-note { opacity: .6; }
 .create-catalog-caption { font-size: var(--varia-size-xs); color: var(--varia-settings-headerForeground); }
-.create-catalog-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
-.create-catalog-steps li { display: flex; align-items: flex-start; gap: 6px; overflow-wrap: anywhere; user-select: text; }
-.create-catalog-steps .codicon { flex-shrink: 0; margin-top: 1px; }
-.create-catalog-steps li[data-status="pending"], .create-catalog-steps li[data-status="skipped"] { color: var(--varia-descriptionForeground); }
-.create-catalog-steps li[data-status="done"] .codicon { color: var(--varia-successForeground); }
-.create-catalog-steps li[data-status="failed"] .codicon { color: var(--varia-errorForeground); }
+/* StepList (kit/StepList.tsx): a run's steps, each with its icon, text, meta, and a progress bar under a running step. */
+.step-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.step-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 6px; row-gap: 2px; overflow-wrap: anywhere; user-select: text; }
+.step-list .codicon, .step-list .icon { margin-top: 1px; }
+.step-list-meta { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
+.step-list li[data-status="pending"], .step-list li[data-status="skipped"] { color: var(--varia-descriptionForeground); }
+.step-list li[data-status="running"] .step-list-text { font-weight: 600; }
+.step-list li[data-status="running"] > .codicon { color: var(--varia-focusBorder); }
+.step-list li[data-status="done"] > .codicon { color: var(--varia-successForeground); }
+.step-list li[data-status="failed"] > .codicon { color: var(--varia-errorForeground); }
+.step-list-spinner { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
+@media (prefers-reduced-motion: reduce) { .step-list-spinner { animation: none; } }
+.step-list-progress { grid-column: 2 / -1; height: var(--varia-progress); border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); overflow: hidden; }
+.step-list-fill { height: 100%; border-radius: var(--varia-radius-pill); background: var(--varia-focusBorder); transition: width var(--varia-motion-base) var(--varia-motion-ease); }
+@media (forced-colors: active) { .step-list-progress { border: 1px solid CanvasText; } .step-list-fill { background: Highlight; } }
 .create-catalog-files { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 4px 0 0; font-size: var(--varia-size-xs); }
 .create-catalog-files dt { color: var(--varia-descriptionForeground); }
 .create-catalog-files dd { margin: 0; }
@@ -852,6 +861,17 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 }
 /* Large object dialogs, the property grid's expandable rows, and a sub-dialog over a dialog or document (Select Database Owner). */
 .connection-modal.object-dialog.large { width: min(960px, calc(100vw - 48px)); height: min(680px, calc(100vh - 48px)); }
+.object-dialog-steps { margin: 8px 10px 0; }
+.object-dialog-steps > .object-dialog-caption { padding: 0 0 4px; }
+/* Under 720 px (narrowFrameQuery) the page list is a row of tabs above the Connection and Progress boxes. */
+.object-dialog.narrow .object-dialog-body { flex-direction: column; }
+.object-dialog.narrow .object-dialog-side { flex: 0 0 auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
+.object-dialog.narrow .object-dialog-box { flex: 1 1 0; min-width: 0; padding-bottom: 4px; }
+.object-dialog-pages.tabs { flex: 1 0 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding-bottom: 0; }
+.object-dialog-tabs { display: flex; }
+.object-dialog-tabs > button { display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 3px 10px; white-space: nowrap; }
+.object-dialog-tabs > button[aria-selected="true"] { border-bottom-color: var(--varia-focusBorder); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
+.object-dialog-tabs > button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .property-parent { display: flex; align-items: center; min-width: 0; }
 .property-twisty { width: 16px; height: 16px; padding: 0; border: 0; background: transparent; color: inherit; }
 .sub-dialog-backdrop { z-index: 20001; }

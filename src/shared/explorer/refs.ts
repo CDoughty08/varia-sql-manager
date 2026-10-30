@@ -1,7 +1,8 @@
 // Object Explorer node identity: what a node is, independent of the folder showing it. Refs carry names, never paths or
 // object_ids, so they survive refresh, drop and recreate, and map to `[schema].[name]` for drag and copy and to SMO URNs.
 import { quoteName } from '../sql/identifiers.ts'
-import { kindSpecs, type dateFilterOps, type FolderId, type KindScope, type NodeKind, type NodeSubtype, type ParentKind, type textFilterOps } from './catalog.ts'
+import { kindSpecs, type dateFilterOps, type FolderId, type KindScope, type NodeKind, type NodeStatus, type NodeSubtype, type ParentKind, type ServerEngine, type textFilterOps } from './catalog.ts'
+import type { DatabaseRuntime } from './status.ts'
 
 export { quoteName }
 export type { FolderId, KindScope, NodeKind, NodeSubtype, ParentKind }
@@ -27,7 +28,11 @@ export interface ObjectRef {
 export type ExplorerNodeRef =
   | { readonly type: 'object'; readonly object: ObjectRef }
   | { readonly type: 'folder'; readonly owner: ObjectRef; readonly folder: FolderId }
-/** What a command acts on: the selected node. */
+/**
+ * What a command acts on: the selected node, with what menus narrow its actions by. `status` is its badge, `database` a
+ * database row's runtime state as listed at `listedAt` (epoch ms; a newer live status sample wins, `currentDatabaseRuntime`),
+ * and `engine` and `linux` describe its server. Renderer-only: requests name objects by `ref`, never by these.
+ */
 export interface ExplorerTarget {
   readonly connectionId: string
   readonly ref: ExplorerNodeRef
@@ -35,6 +40,11 @@ export interface ExplorerTarget {
   readonly folder?: FolderId
   readonly subtype?: NodeSubtype
   readonly label: string
+  readonly status?: NodeStatus
+  readonly database?: DatabaseRuntime
+  readonly listedAt?: number
+  readonly engine?: ServerEngine
+  readonly linux?: boolean
 }
 
 export type TextFilterOp = typeof textFilterOps[number]

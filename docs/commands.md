@@ -487,6 +487,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `2_script` | **S**cript … as › | Submenu: Object Explorer context menu › Script … as | `explorerScriptTitle != '' && explorerNode != 'background'` |
 | `3_filter` | F**i**lter Settings… | `explorer.filter` | `explorerFolderFilterable` |
 | `3_filter` | Remove Fi**l**ter | `explorer.removeFilter` | `explorerFolderFiltered` |
+| `4_tasks` | **T**asks › | Submenu: Object Explorer context menu › Tasks | `explorerNode == 'database' && !explorerServerLost` |
 | `5_copy` | Copy N**a**me | `explorer.copyName` | `(explorerNode != 'background' && explorerNode != 'folder' && explorerNode != 'returnValue' && !explorerServerLost) \|\| explorerFolderInsertable` |
 | `7_edit` | Rena**m**e | `explorer.rename` | `explorerActionRename != '' && explorerNode != 'background'` |
 | `7_edit` | D**e**lete | `explorer.delete` | `explorerActionDelete != '' && explorerNode != 'background'` |
@@ -502,6 +503,16 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_table` | **T**able… | `explorer.newTable` | Always |
+
+#### Object Explorer context menu › Tasks
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `4_backup` | **R**estore › | Submenu: Object Explorer context menu › Tasks › Restore | Always |
+
+#### Object Explorer context menu › Tasks › Restore
+
+Nothing is placed here yet, so the submenu stays hidden.
 
 #### Object Explorer context menu › Script … as
 
@@ -681,7 +692,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (95)
+## Context keys (101)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -753,6 +764,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerSelectionFilterable` | boolean | state | The selected Object Explorer node is a folder that Filter Settings can filter. |
 | `explorerSelectionFiltered` | boolean | state | The selected Object Explorer folder has a filter. |
 | `explorerSelectionInsertable` | boolean | state | The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder. |
+| `explorerSelectionStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | state | The selected Object Explorer node's status badge from `src/shared/explorer/catalog.ts` ('disabled' for a disabled login, 'unavailable' for an offline database), or '' for none. Keep it out of keybinding `when` clauses. |
+| `explorerSelectionServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | state | The kind of server the selected Object Explorer node is on: 'box' (SQL Server), 'managedInstance' or 'cloud' (Azure SQL Database and the other cloud editions), or '' with no selection. Keep it out of keybinding `when` clauses. |
+| `explorerSelectionServerLinux` | boolean | state | The selected Object Explorer node is on SQL Server on Linux. |
 | `explorerScriptTitle` | `''`, `'table'`, `'view'`, `'procedure'`, `'function'`, `'trigger'`, `'databaseTrigger'`, `'serverTrigger'`, `'database'`, `'index'`, `'key'`, `'constraint'`, `'statistic'`, `'synonym'`, `'sequence'`, `'userDefinedDataType'`, `'userDefinedType'`, `'tableType'`, `'xmlSchemaCollection'`, `'rule'`, `'default'`, `'securityPolicy'`, `'schema'`, `'user'`, `'databaseRole'`, `'applicationRole'`, `'login'`, `'serverRole'`, `'credential'`, `'linkedServer'`, `'backupDevice'`, `'audit'`, `'serverAuditSpecification'`, `'databaseAuditSpecification'`, `'fullTextCatalog'`, `'fullTextStoplist'`, `'searchPropertyList'`, `'partitionScheme'`, `'partitionFunction'`, `'planGuide'` | state | The selected Object Explorer node's Script submenu title key from `src/shared/scripting/catalog.ts` ('table' shows Script Table as), or '' when it has none. Keep it out of keybinding `when` clauses. |
 | `explorerScriptCreate` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › CREATE To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerScriptAlter` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Script as › ALTER To: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
@@ -782,6 +796,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerFolderFiltered` | boolean | target | The menu is for an Object Explorer folder that has a filter. |
 | `explorerFolder` | `''`, `'databases'`, `'systemDatabases'`, `'databaseSnapshots'`, `'serverSecurity'`, `'logins'`, `'serverRoles'`, `'credentials'`, `'cryptographicProviders'`, `'audits'`, `'serverAuditSpecifications'`, `'serverObjects'`, `'backupDevices'`, `'linkedServers'`, `'serverTriggers'`, `'tables'`, `'systemTables'`, `'fileTables'`, `'externalTables'`, `'graphTables'`, `'droppedLedgerTables'`, `'views'`, `'systemViews'`, `'droppedLedgerViews'`, `'externalResources'`, `'externalDataSources'`, `'externalFileFormats'`, `'synonyms'`, `'programmability'`, `'storedProcedures'`, `'systemStoredProcedures'`, `'functions'`, `'tableValuedFunctions'`, `'scalarValuedFunctions'`, `'aggregateFunctions'`, `'databaseTriggers'`, `'assemblies'`, `'types'`, `'userDefinedDataTypes'`, `'userDefinedTableTypes'`, `'userDefinedTypes'`, `'xmlSchemaCollections'`, `'rules'`, `'defaults'`, `'planGuides'`, `'sequences'`, `'storage'`, `'fullTextCatalogs'`, `'partitionSchemes'`, `'partitionFunctions'`, `'fullTextStoplists'`, `'searchPropertyLists'`, `'databaseSecurity'`, `'users'`, `'roles'`, `'databaseRoles'`, `'applicationRoles'`, `'schemas'`, `'asymmetricKeys'`, `'certificates'`, `'symmetricKeys'`, `'alwaysEncryptedKeys'`, `'columnMasterKeys'`, `'columnEncryptionKeys'`, `'databaseAuditSpecifications'`, `'securityPolicies'`, `'columns'`, `'keys'`, `'constraints'`, `'tableTriggers'`, `'indexes'`, `'statistics'`, `'parameters'`, `'integrationServicesCatalogs'`, `'ssisProjects'`, `'ssisEnvironments'`, `'ssisPackages'` | target | The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else. |
 | `explorerFolderInsertable` | boolean | target | The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list. |
+| `explorerNodeStatus` | `''`, `'disabled'`, `'unavailable'`, `'readOnly'`, `'noAccess'` | target | The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none. |
+| `explorerServerEngine` | `''`, `'box'`, `'managedInstance'`, `'cloud'` | target | The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area. |
+| `explorerServerLinux` | boolean | target | The menu is for a node on SQL Server on Linux. |
 | `outputView` | `'grid'`, `'messages'`, `''` | target | The Query Output view the menu is for: a results grid or the messages. |
 | `pane` | `'explorer'`, `'editor'`, `'output'`, `''` | target | The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output. |
 | `paneFloating` | boolean | target | The panel the menu is for is floating. |

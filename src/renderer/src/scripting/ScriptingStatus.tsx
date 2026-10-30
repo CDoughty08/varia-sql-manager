@@ -1,9 +1,10 @@
 import { useCallback, useRef, type FocusEvent } from 'react'
+import { stateJobText } from '../actions/ObjectActionService'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 
 /**
- * The status bar's Object Explorer segment: "Renaming dbo.Orders to Orders2…" with Stop once a rename has run for
- * 300 ms (DDL waits for locks without a timeout, so Stop is how it ends), then "Scripting dbo.Orders…" with Cancel once
+ * The status bar's Object Explorer segment: "Renaming dbo.Orders to Orders2…" (or another state job: "Disabling AppUser…")
+ * with Stop once it has run for 300 ms (DDL waits for locks without a timeout, so Stop is how it ends), then "Scripting dbo.Orders…" with Cancel once
  * a request has run for 300 ms, else the latest notice (copied, saved, cancelled, or a warning). One polite live region
  * holds them, so each is announced. A warning is a button that shows every warning in the command banner, as a warning,
  * so its full text is not only a mouse tooltip.
@@ -11,9 +12,10 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 export default function ScriptingStatus() {
   const { scripting, actions, commands, documents } = useWorkbench()
   const { jobs, notice } = useServiceSnapshot(scripting)
-  const { renames } = useServiceSnapshot(actions)
+  const { jobs: stateJobs } = useServiceSnapshot(actions)
   const shown = jobs.filter(job => job.visible)
-  const renaming = renames.filter(job => job.visible)
+  const running = stateJobs.filter(job => job.visible)
+  const first = running[0] && stateJobText({ ...running[0], stopping: running.every(job => job.stopping) })
   const returnTo = useRef<HTMLElement | null>(null)
   const entered = (event: FocusEvent<HTMLElement>) => {
     if (event.relatedTarget instanceof HTMLElement && !event.currentTarget.contains(event.relatedTarget)) returnTo.current = event.relatedTarget
@@ -28,10 +30,10 @@ export default function ScriptingStatus() {
     }
   }, [documents])
   return <span className="status-scripting" role="status" onFocus={entered}>
-    {renaming.length > 0 && <>
-      <span className="status-scripting-text">{renaming.every(job => job.stopping) ? 'Stopping the rename of' : 'Renaming'} {renaming[0].label} to {renaming[0].newName}…</span>
-      {renaming.length > 1 && <span className="status-scripting-more">(+{renaming.length - 1} more)</span>}
-      <button type="button" ref={leaves} aria-label="Stop rename" disabled={renaming.every(job => job.stopping)} onClick={() => actions.stopRenames(renaming.map(job => job.id))}>Stop</button>
+    {first && <>
+      <span className="status-scripting-text">{first.text}</span>
+      {running.length > 1 && <span className="status-scripting-more">(+{running.length - 1} more)</span>}
+      <button type="button" ref={leaves} aria-label={first.stop} disabled={running.every(job => job.stopping)} onClick={() => actions.stopJobs(running.map(job => job.id))}>Stop</button>
     </>}
     {shown.length ? <>
       <span className="status-scripting-text">Scripting {shown[0].label}…</span>

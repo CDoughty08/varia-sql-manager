@@ -4,8 +4,22 @@
 import type { IconId } from '../icons.ts'
 import type { StatusTone } from '../theme/tones.ts'
 
+/** A database's runtime state: sys.databases' state, user_access, is_read_only and is_in_standby. A database node's listing
+ *  carries it (`ExplorerNode.database`), and so does each live status row. */
+export interface DatabaseRuntime { readonly state: number; readonly userAccess: number; readonly readOnly: boolean; readonly standby: boolean }
 /** A row of `explorer.databases`: a database that is not plainly online and open to everyone. */
-export interface DatabaseStatusRow { readonly name: string; readonly state: number; readonly userAccess: number; readonly readOnly: boolean; readonly standby: boolean }
+export interface DatabaseStatusRow extends DatabaseRuntime { readonly name: string }
+const plainlyOnline: DatabaseRuntime = Object.freeze({ state: 0, userAccess: 0, readOnly: false, standby: false })
+/**
+ * A database's runtime state now: the live sample when it was taken after the listing (`at` and `listedAt` in epoch ms),
+ * else the listing's. The probe reports only databases that are not plainly online and open to everyone, so a newer
+ * sample without a row for the database means exactly that. Neither known: undefined.
+ */
+export function currentDatabaseRuntime(listed: DatabaseRuntime | undefined, listedAt: number | undefined, sample?: { readonly at: number; readonly row: DatabaseStatusRow | undefined }): DatabaseRuntime | undefined {
+  if (!sample || listed && listedAt !== undefined && sample.at <= listedAt) return listed
+  const row = sample.row
+  return row ? { state: row.state, userAccess: row.userAccess, readOnly: row.readOnly, standby: row.standby } : plainlyOnline
+}
 /** A row of `explorer.progress`: a restore or a recovery that is running, and how far it has come. */
 export interface ProgressRow { readonly name: string; readonly command: string; readonly percent: number }
 /** A row of `explorer.availability`: an availability group's synchronization health and this replica's role. */

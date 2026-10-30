@@ -300,6 +300,11 @@ cancel that reaches main before the load was written is sent right after it; one
 60 s (1,024 ids), and that load is then refused with `CANCELLED`. A running `requestId` sent again is
 `DUPLICATE_REQUEST`. Catalog failures (permission, access, a missing object, a lock, the 40 s budget, a lost connection)
 are not envelope errors but `result.error` values with their own codes, so each tree node shows its own failure.
+A database row also carries its runtime state as `sys.databases` lists it, `database: { state: int, userAccess: int,
+readOnly: bool, standby: bool }` (`state_desc` and `user_access_desc` as their numbers), so menus can narrow a database's
+actions by it; a newer live status sample wins (`currentDatabaseRuntime`). `connections.connect` answers `linux: bool`
+when the server's profile was read (SQL Server on Linux or in a Linux container), for the `explorerServerLinux` context key;
+`engineEdition` gives `explorerServerEngine` (`box`, `managedInstance` for edition 8, `cloud` for Azure SQL Database).
 
 **Scripting cancellation** works the same way (`ScriptingRequests`, `varia:scripting-cancel`, 1–64 ids, 256 tombstones
 for 60 s). The backend sends an attention for the statement SMO has in flight, answers at once, and keeps the job's
@@ -407,9 +412,10 @@ the restore that fails or is stopped adds the step "Remove the incomplete catalo
 2,048 characters), which ends a transaction the cancelled statement left open and drops what this request made, waiting at
 most 30 s for each lock (a database left restoring only while it still is and no other session holds it), as SSMS's
 DropCatalog does; when a part of it fails, the message names only what is left to delete; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
-The renderer refuses to close the window or quit while Create Catalog runs (`CreateCatalogService.closeRefusal`, checked by
-`FileService.closeWindow`): its unload would cancel the request, which past the restore is a Stop. A backend whose stdin ends
-anyway (a renderer reload, Restart Backend, a crashed renderer) cancels everything as usual, then
+Create Catalog is a long run: while it runs the renderer refuses to close the window or quit (`LongRunService.closeRefusal`,
+checked by `FileService.closeWindow`), to disconnect its server and to restart the backend, since its unload would cancel the
+request, which past the restore is a Stop; main's reload prompt names it (`varia:long-runs`, below). A backend whose stdin ends
+anyway (a confirmed reload, a crashed renderer) cancels everything as usual, then
 waits up to 120 s (`createDrainMs`) for a Create Catalog past its restore to finish or remove what it made before it exits, and
 main, which sees the pending request, waits 130 s (`createCatalogDrainMs`) instead of 2 s before it kills that generation. Only
 a kill or crash inside that window leaves an incomplete `SSISDB`, which Create Catalog then refuses (`CATALOG_EXISTS`).
@@ -474,6 +480,22 @@ for 300 ms, and cancels a preview an edit overtook (`varia:actions-cancel`), so 
 metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's query limit). The Open Connections question itself is
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
+
+**Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
+only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
+`src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same
+range), tabsWithTransactions: ≤ 8 names of ≤ 260, canClose }` or `disableLogin { login: 1–128, sessions?, service?: ≤ 256,
+sysadmin }`. Main writes the box from that catalogue (names through `displayText`, so none can add lines or hide
+characters), shows it as the page's abortable dialog, and answers with the chosen button's id (`closeAndRename`,
+`renameWhenFree`, `disable`, or `cancel`, which Escape, a closed box and a reload or crash also answer). The page can
+neither word a prompt nor choose its default button. No backend method is involved.
+
+**Long runs** (`src/shared/long-runs.ts`): whenever its long runs change, the page sends main
+`varia:long-runs { runs: [{ kind, server: 1–256 }] (≤ 16), total: 0–1,000,000 ≥ runs }` (strict; trusted senders only;
+answers nothing), and main's reload prompt then names the first run ("Create Catalog is running on <server>: reloading
+stops it part way.", or "…, with N more runs: reloading stops them part way.") before what AutoRecover keeps. A reload or
+crash resets it. The refusals themselves are the renderer's (`LongRunService`); main's 130 s drain of a stopping backend
+stays the last resort.
 
 The **Table Designer** uses the same three methods too, with no new method (so no new entry in the five places a method is
 declared). `actions.describe { connectionId, requestId, dialog: 'tableDesigner', target: { kind: 'database', name } }` (any

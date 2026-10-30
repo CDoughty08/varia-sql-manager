@@ -78,6 +78,12 @@ Icons ([the registry](../icons.md)) are drawn on a 16 px grid, the codicon font'
 | `--varia-glyph-md` | 16 | Every other icon: tree rows, toolbars, menus, the palette, tabs, dialogs. | `.icon` |
 | `--varia-glyph-lg` | 24 | Large glyphs; none today (an empty state draws its glyph at md, as the states kit specifies). |  |
 
+## Indicators
+
+| Token | px | Use |
+| --- | --- | --- |
+| `--varia-progress` | 4 | A progress bar's track and fill, as under a running step in a StepList. |
+
 ## Bars and rows
 
 Compact is the default and the only density `:root` sets; Comfortable is planned as an option. The title bar (34 px), toolbar controls (28 px), padded buttons and inputs, dock headers (28 px) and grid rows (20 px) keep their own heights until they are moved onto these tokens.

@@ -3,11 +3,16 @@ import { readFileSync } from 'node:fs'
 import { stripTypeScriptTypes } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
-  actionsCatalogJson, dialogIds, dialogSpecs, dialogTitle, isModalDialog, objectActions, objectActionSpecs, propertiesCommandEntries, scriptActionTitles, unknownOutcomeMessage
+  actionsCatalogJson, actionStatuses, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
+  pageIds, propertiesCommandEntries, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
 } from '../src/shared/actions/catalog'
+import { currentDatabaseRuntime } from '../src/shared/explorer/status'
+import { contextRecord } from '../src/shared/commands/context-keys'
+import { resolveMenu, type ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
+import type { MenuEntry, MenuId } from '../src/shared/commands/menus'
 import { maxScriptCharacters } from '../src/main/validation'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
 import { commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
@@ -15,7 +20,7 @@ import { isIconId } from '../src/shared/icons'
 import { whenProblems } from '../src/shared/commands/context-keys'
 import { findConflicts } from '../src/shared/commands/conflicts'
 import { defaultRules, platforms, reservedReason } from '../src/shared/commands/keybindings'
-import { buildMenuModel } from '../src/shared/commands/menus'
+import { buildMenuModel, submenus } from '../src/shared/commands/menus'
 import { kindSpecs, nodeKinds, type NodeKind, type NodeSubtype } from '../src/shared/explorer/catalog'
 import { scriptDestinations } from '../src/shared/scripting/catalog'
 
@@ -134,6 +139,88 @@ describe('object action catalogue', () => {
     expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
+  })
+  it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
+    expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties'>()
+    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject'>()
+    expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options'>()
+    expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options'])
+    for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
+      expect(isIconId(page.icon), `${dialog}: ${page.id}`).toBe(true)
+      expect(pageIds, dialog).toContain(page.id)
+    }
+    expect(new Set(objectActions.map(action => objectActionSpecs[action].command)).size).toBe(objectActions.length)
+  })
+  it('overlays a status\'s row on the subtype\'s: named actions take its state, and \'\' takes one away', () => {
+    expect(overlayRow({ rename: 'enabled', delete: 'enabled' }, { delete: '', properties: 'enabled' })).toEqual({ rename: 'enabled', properties: 'enabled' })
+    expect(overlayRow({ rename: 'enabled' }, { rename: 'disabled' })).toEqual({ rename: 'disabled' })
+    expect(overlayRow({ rename: 'enabled' }, undefined)).toEqual({ rename: 'enabled' })
+    // As a kind will declare one: the overlay applies to the subtype's row, for that status only.
+    const specs = { database: { row: { rename: 'enabled', delete: 'enabled' }, subtypes: { system: { rename: 'disabled' } }, statuses: { unavailable: { delete: 'disabled', properties: '' }, readOnly: { properties: 'enabled' } } } } as const
+    expect(actionRow('database', undefined, 'unavailable', specs)).toEqual({ rename: 'enabled', delete: 'disabled' })
+    expect(actionRow('database', 'system', 'readOnly', specs)).toEqual({ rename: 'disabled', properties: 'enabled' })
+    expect(actionRow('database', undefined, 'noAccess', specs)).toEqual({ rename: 'enabled', delete: 'enabled' })
+    // No kind has an overlay yet, so a status leaves every row as it is, and the menu keys with it.
+    for (const kind of nodeKinds) {
+      expect(actionStatuses(kind), kind).toEqual([])
+      for (const status of ['disabled', 'unavailable', 'readOnly', 'noAccess'] as const) expect(actionRow(kind, undefined, status), kind).toEqual(actionRow(kind))
+    }
+    expect(actionMenuState({ kind: 'database', status: 'unavailable' })).toEqual(actionMenuState({ kind: 'database' }))
+    expect(actionMenuState({ kind: 'database', status: 'bogus' as never })).toEqual(actionMenuState({ kind: 'database' }))
+  })
+  it('narrows a database\'s row by its runtime state with the first rule that applies, and leaves it when the state is unknown', () => {
+    const rules: DatabaseActionRule[] = [
+      { action: 'rename', states: ['offline', 'restoring'], reason: 'The database must be online to be renamed.' },
+      { action: 'delete', states: ['restoring'], hide: true, reason: 'Wait until it finishes restoring.' },
+      { action: 'delete', readOnly: true, reason: 'Read-only.' },
+      { action: 'properties', access: ['single'], reason: 'Single user.' },
+      { action: 'properties', states: ['other'], reason: 'Unknown state.' }
+    ]
+    const row = { rename: 'enabled', delete: 'enabled', properties: 'enabled', selectTop: 'disabled' } as const
+    const online = { state: 0, userAccess: 0, readOnly: false, standby: false }
+    expect(databaseActionState(row, undefined, rules)).toEqual({ row, reasons: {} })
+    expect(databaseActionState(row, online, rules)).toEqual({ row, reasons: {} })
+    expect(databaseActionState(row, { ...online, state: 6 }, rules)).toEqual({ row: { ...row, rename: 'disabled' }, reasons: { rename: 'The database must be online to be renamed.' } })
+    // A hidden action leaves the row; a disabled one stays as it is, with no reason.
+    expect(databaseActionState(row, { ...online, state: 1 }, rules).row).toEqual({ rename: 'disabled', properties: 'enabled', selectTop: 'disabled' })
+    expect(databaseActionState(row, { ...online, standby: true }, rules).row).toMatchObject({ delete: 'disabled' })
+    expect(databaseActionState(row, { ...online, userAccess: 1, state: 42 }, rules).reasons).toEqual({ properties: 'Single user.' })
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 10, 8, 99].map(databaseStateOf)).toEqual(['online', 'restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other', 'other'])
+    // With no rules yet, a runtime changes nothing.
+    expect(actionMenuState({ kind: 'database', database: { ...online, state: 6 } })).toEqual(actionMenuState({ kind: 'database' }))
+  })
+  it('offers an action with engines only on those servers, and everywhere when the engine is unknown', () => {
+    expect(offeredOnEngine(undefined, 'cloud')).toBe(true)
+    expect(offeredOnEngine(['box', 'managedInstance'], undefined)).toBe(true)
+    expect(offeredOnEngine(['box', 'managedInstance'], 'managedInstance')).toBe(true)
+    expect(offeredOnEngine(['box'], 'cloud')).toBe(false)
+    for (const engine of ['box', 'managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
+  })
+  it('takes a live sample over the listing only when it is newer, and reads a newer sample without a row as plainly online', () => {
+    const listed = { state: 6, userAccess: 0, readOnly: false, standby: false }
+    const row = { name: 'Sales', state: 1, userAccess: 1, readOnly: true, standby: false }
+    expect(currentDatabaseRuntime(listed, 1_000)).toBe(listed)
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_000, row })).toBe(listed)
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_001, row })).toEqual({ state: 1, userAccess: 1, readOnly: true, standby: false })
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row: undefined })).toEqual({ state: 0, userAccess: 0, readOnly: false, standby: false })
+    expect(currentDatabaseRuntime(undefined, undefined, { at: 5, row })).toMatchObject({ state: 1 })
+    expect(currentDatabaseRuntime(undefined, undefined)).toBeUndefined()
+  })
+  it('declares the database node\'s Tasks and Tasks › Restore submenus, hidden while nothing is placed in them', () => {
+    const state = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionKind: 'database', ...actionContextValues(actionMenuState({ kind: 'database' })) })
+    const commands = { isEnabled: () => true, isToggled: () => false }, keybindings = { lookup: () => undefined }
+    const titles = (items: readonly ResolvedMenuItem[]): string[] => items.flatMap(item => item.kind === 'submenu' ? [item.title + ' >', ...titles(item.items).map(title => '  ' + title)] : item.kind === 'command' ? [item.title] : [])
+    const resolve = (model?: (menu: MenuId) => readonly MenuEntry[], lost = false) =>
+      titles(resolveMenu('explorer.context', { platform: 'win32', state, target: { explorerNode: 'database', explorerServerLost: lost }, commands, keybindings, ...model ? { model } : {} }))
+    expect(resolve().some(title => title.startsWith('Tasks'))).toBe(false)
+    // A later PR places Restore › Database… in it: Tasks › Restore › appears on a database, not on a lost server's.
+    const item: MenuEntry = { kind: 'command', id: 'explorer.properties', nativeId: 'test.restoreDatabase', title: 'Database…', mnemonic: 'd', toggle: false }
+    const model = (menu: MenuId) => menu === 'explorer.tasks.restore' ? [item] : buildMenuModel(menu, 'win32')
+    const shown = resolve(model)
+    expect(shown.slice(shown.indexOf('Tasks >'), shown.indexOf('Tasks >') + 3)).toEqual(['Tasks >', '  Restore >', '    Database…'])
+    expect(resolve(model, true).some(title => title.startsWith('Tasks'))).toBe(false)
+    // docs/object-actions.md names them as the menus do (its generator loads in plain Node, without menus.ts).
+    expect(renderObjectActionsDocs()).toContain(`${submenus['explorer.tasks'].title} (\`explorer.tasks\`) and ${submenus['explorer.tasks'].title} › ${submenus['explorer.tasks.restore'].title} (\`explorer.tasks.restore\`)`)
   })
   it('keeps the limits and error codes', () => {
     expect(actionLimits).toMatchObject({ describeMs: 40_000, scriptMs: 25_000, readPerConnection: 2, readTotal: 4, executePerConnection: 1, executeTotal: 2, registered: 128, cancelIds: 16, newName: 128,

@@ -3,7 +3,7 @@ import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
 import type { ActionExecuteResult } from '../src/shared/actions/schema'
 import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
 import type { ExplorerChildrenParams } from '../src/shared/explorer/refs'
-import { moduleRenameNote, renameMessages } from '../src/renderer/src/actions/ObjectActionService'
+import { moduleRenameNote, renameMessages, stateJobText } from '../src/renderer/src/actions/ObjectActionService'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions, explorerAnswer, readyBackend, workbenchFixture } from './fixtures/workbench'
 
@@ -124,17 +124,17 @@ describe('inline Rename in Object Explorer', () => {
     const pending = deferred<ApiResult<ActionExecuteResult>>()
     api.executeObjectAction.mockReturnValueOnce(pending.promise)
     const running = actions.commitRename(node(orders), 'Orders2')
-    expect(actions.getSnapshot().renames).toEqual([{ id: expect.any(String), label: 'dbo.Orders', newName: 'Orders2', visible: false, stopping: false }])
+    expect(actions.getSnapshot().jobs).toEqual([{ id: expect.any(String), verb: 'rename', label: 'dbo.Orders', newName: 'Orders2', visible: false, stopping: false }])
     // Only a rename that takes a moment shows, so a quick one does not flash in the status bar.
-    await vi.waitFor(() => expect(actions.getSnapshot().renames[0]?.visible).toBe(true))
+    await vi.waitFor(() => expect(actions.getSnapshot().jobs[0]?.visible).toBe(true))
     const requestId = api.executeObjectAction.mock.calls[0][0].requestId
-    actions.stopRenames([requestId])
-    actions.stopRenames([requestId])
+    actions.stopJobs([requestId])
+    actions.stopJobs([requestId])
     expect(api.cancelObjectActions.mock.calls).toEqual([[[requestId]]])
-    expect(actions.getSnapshot().renames[0]).toMatchObject({ stopping: true })
+    expect(actions.getSnapshot().jobs[0]).toMatchObject({ stopping: true })
     pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', message: 'Rename' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } } })
     expect(await running).toBe(true)
-    expect(actions.getSnapshot().renames).toEqual([])
+    expect(actions.getSnapshot().jobs).toEqual([])
     expect(commands.getSnapshot().error).toBe('')
     expect(explorer.getSnapshot().rows.nodes.some(item => item?.label === 'dbo.Orders')).toBe(true)
   })
@@ -143,7 +143,7 @@ describe('inline Rename in Object Explorer', () => {
     const pending = deferred<ApiResult<ActionExecuteResult>>()
     api.executeObjectAction.mockReturnValueOnce(pending.promise)
     const running = actions.commitRename(node(orders), 'Orders2')
-    actions.stopRenames([api.executeObjectAction.mock.calls[0][0].requestId])
+    actions.stopJobs([api.executeObjectAction.mock.calls[0][0].requestId])
     pending.resolve({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
     await running
     expect(commands.getSnapshot().error).toBe(renameMessages.stoppedUnknown)
@@ -173,5 +173,49 @@ describe('inline Rename in Object Explorer', () => {
     api.push({ status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 0 })
     await vi.waitFor(() => expect(explorer.renaming.getSnapshot()).toBeUndefined())
     expect(api.executeObjectAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('status-bar state jobs', () => {
+  it('words each verb, a later step and a stop, with Stop named for the verb', () => {
+    const rename = { verb: 'rename', label: 'Sales', newName: 'Sales2', stopping: false } as const
+    expect(stateJobText(rename)).toEqual({ text: 'Renaming Sales to Sales2…', stop: 'Stop rename' })
+    expect(stateJobText({ ...rename, step: 'Closing connections' })).toEqual({ text: 'Renaming Sales to Sales2: Closing connections…', stop: 'Stop rename' })
+    expect(stateJobText({ ...rename, step: 'Closing connections', stopping: true }).text).toBe('Stopping the rename of Sales to Sales2…')
+    expect(stateJobText({ verb: 'disable', label: 'app_user', stopping: false })).toEqual({ text: 'Disabling app_user…', stop: 'Stop disable' })
+    expect(stateJobText({ verb: 'enable', label: 'app_user', stopping: true })).toEqual({ text: 'Stopping the enable of app_user…', stop: 'Stop enable' })
+  })
+  it('runs any verb as one job per node: a second action is refused, a step shows, and Stop and a disconnect reach it', async () => {
+    const { actions, api, orders, node, commands, connections } = await setup()
+    const pending = deferred<ApiResult<ActionExecuteResult>>()
+    const run = vi.fn((_requestId: string) => pending.promise)
+    const first = actions.runStateJob(node(orders), 'disable', undefined, run)
+    const job = run.mock.calls[0][0]
+    expect(actions.getSnapshot().jobs).toEqual([{ id: job, verb: 'disable', label: 'dbo.Orders', visible: false, stopping: false }])
+    expect(await actions.runStateJob(node(orders), 'rename', 'B', run)).toBeUndefined()
+    expect(commands.getSnapshot().error).toBe(renameMessages.running('dbo.Orders', 'disable'))
+    expect(commands.getSnapshot().error).toBe('An action on dbo.Orders is already running. Wait for it, or stop it in the status bar.')
+    actions.setJobStep(job, 'Closing connections')
+    expect(actions.getSnapshot().jobs[0]).toMatchObject({ step: 'Closing connections' })
+    actions.setJobStep('other', 'Ignored')
+    expect(actions.getSnapshot().jobs[0]).toMatchObject({ step: 'Closing connections' })
+    actions.stopJobs([job])
+    expect(api.cancelObjectActions.mock.calls).toEqual([[[job]]])
+    connections.remove('server-a')
+    pending.resolve({ ok: false, error: 'The operation was cancelled.', code: 'CANCELLED' })
+    expect(await first).toMatchObject({ dropped: true, stopped: true, result: { ok: false, code: 'CANCELLED' } })
+    expect(actions.getSnapshot().jobs).toEqual([])
+    expect(run).toHaveBeenCalledOnce()
+  })
+  it('hands back a thrown request as a value, and runs nothing for a lost server', async () => {
+    const { actions, orders, node, connections } = await setup()
+    const failure = new Error('IPC lost')
+    expect(await actions.runStateJob(node(orders), 'enable', undefined, async () => { throw failure })).toEqual({ thrown: failure, dropped: false, stopped: false })
+    expect(actions.getSnapshot().jobs).toEqual([])
+    const lost = node(orders)
+    connections.remove('server-a')
+    const run = vi.fn()
+    expect(await actions.runStateJob(lost, 'enable', undefined, run)).toBeUndefined()
+    expect(run).not.toHaveBeenCalled()
   })
 })

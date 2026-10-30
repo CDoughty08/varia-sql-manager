@@ -48,6 +48,7 @@ import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingServ
 import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
+import { LongRunService } from '../../src/renderer/src/services/long-runs'
 import { actionsContribution } from '../../src/renderer/src/contributions/actions'
 import { designerContribution } from '../../src/renderer/src/contributions/designer'
 import { TableDesignerService } from '../../src/renderer/src/designer/TableDesignerService'
@@ -231,6 +232,9 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     closeWindowCancelled: vi.fn<VariaApi['closeWindowCancelled']>(),
     // Nothing to ask unless a test says otherwise; answers Cancel when asked.
     confirmSessions: vi.fn<VariaApi['confirmSessions']>(async () => ({ ok: true, value: 'cancel' })),
+    // Object action confirmations answer Cancel unless a test says otherwise.
+    confirmAction: vi.fn<VariaApi['confirmAction']>(async () => ({ ok: true, value: 'cancel' })),
+    setLongRuns: vi.fn<VariaApi['setLongRuns']>(async () => ({ ok: true, value: undefined })),
     querySessionState: vi.fn<VariaApi['querySessionState']>(async sessionId => {
       const state = sessionStates.get(sessionId)
       return state === undefined ? { ok: false, error: 'This query has no open SQL session.', code: 'SESSION_CLOSED' } : { ok: true, value: state === 'unchecked' ? { transactionCount: 0, checked: false } : { transactionCount: state, checked: true } }
@@ -305,7 +309,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
-  const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
+  const longRuns = new LongRunService({ api })
+  const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
@@ -392,6 +397,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     ssisCatalog,
+    longRuns,
     designers,
     ssisProperties,
     properties,
@@ -449,6 +455,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions.dispose()
     dialogs.dispose()
     ssisCatalog.dispose()
+    longRuns.dispose()
     designers.dispose()
     ssisProperties.dispose()
     activity.dispose()
@@ -483,6 +490,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     actions,
     dialogs,
     ssisCatalog,
+    longRuns,
     designers,
     ssisProperties,
     properties,

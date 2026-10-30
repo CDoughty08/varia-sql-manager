@@ -8,6 +8,9 @@ import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode } from './auth'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
+import type { DatabaseRuntime } from './explorer/status.ts'
+import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
+import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
@@ -66,14 +69,14 @@ export interface ConnectionOptions {
 
 /**
  * `generation` is the backend generation that holds the connection (stamped by main); a later generation cannot use it.
- * `productVersion` (≤ 32 characters), `login` (≤ 128) and `engineEdition` come from the server profile probed at connect,
- * and are absent when the probe failed.
+ * `productVersion` (≤ 32 characters), `login` (≤ 128), `engineEdition` and `linux` (SQL Server on Linux) come from the
+ * server profile probed at connect, and are absent when the probe failed.
  */
 export interface ConnectionInfo {
   id: string; server: string; database: string; serverVersion: string; displayName?: string; color?: string; commandTimeout?: number; historyWarning?: string; generation: number
   /** Set by main: the saved entry's environment label, which a connect without one kept. */
   environment?: string
-  productVersion?: string; login?: string; engineEdition?: number
+  productVersion?: string; login?: string; engineEdition?: number; linux?: boolean
 }
 export interface DiscoveredServer { server: string; version: string; source: 'local' | 'network' }
 export interface DatabaseInfo { name: string; isSystem: boolean; isSnapshot: boolean }
@@ -213,7 +216,7 @@ export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[
  *  if the backend dies before it does. */
 export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
- *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`. */
+ *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed. */
 export interface ExplorerNode {
   readonly ref: ExplorerNodeRef
   readonly label: string
@@ -224,6 +227,7 @@ export interface ExplorerNode {
   readonly subtype?: NodeSubtype
   readonly status?: NodeStatus
   readonly created?: string
+  readonly database?: DatabaseRuntime
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
@@ -500,6 +504,10 @@ export interface VariaApi {
   /** Asks, in main's message box, what to do with the open transactions and running queries of sessions that are about
    *  to end (src/shared/sessions.ts composes the prompt). */
   confirmSessions(request: SessionPromptRequest): Promise<ApiResult<SessionAnswer>>
+  /** An object action's confirmation (src/shared/actions/prompts.ts) in main's message box: the chosen button's answer. */
+  confirmAction(request: ActionPromptRequest): Promise<ApiResult<ActionPromptAnswer>>
+  /** The page's long runs (src/shared/long-runs.ts), all of them, whenever they change: main's reload prompt names them. */
+  setLongRuns(state: LongRunState): Promise<ApiResult<void>>
   closeWindow(): Promise<void>
   /** The page's close ended without closing (a prompt was cancelled, or a save failed). Main hands a close it asked for
    *  to the next page when this one reloads or crashes first, but not one that ended. */

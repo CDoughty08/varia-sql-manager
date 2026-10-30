@@ -4,6 +4,8 @@ import type { SsisCatalogSetup, SsisCatalogSetupResult, SsisExecuteResult } from
 import { createCatalogMessages, CreateCatalogService } from '../src/renderer/src/ssis/CreateCatalogService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
+import { LongRunService } from '../src/renderer/src/services/long-runs'
+import { longRunMessages } from '../src/shared/long-runs'
 import { deferred } from './fixtures/documents'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import { resolveMenu } from '../src/renderer/src/menus/resolve'
@@ -33,11 +35,12 @@ function setup(answer: ApiResult<SsisCatalogSetupResult> = setupOf()) {
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
   const explorer = { refresh: vi.fn() }
+  const longRuns = new LongRunService()
   let ids = 0
-  const service = new CreateCatalogService({ api, connections, explorer, newId: () => `id-${++ids}` })
-  cleanups.push(() => service.dispose())
+  const service = new CreateCatalogService({ api, connections, explorer, longRuns, newId: () => `id-${++ids}` })
+  cleanups.push(() => service.dispose(), () => longRuns.dispose())
   const settle = () => new Promise(resolve => setTimeout(resolve, 0))
-  return { service, api, connections, explorer, execute, settle }
+  return { service, api, connections, explorer, execute, settle, longRuns }
 }
 
 describe('CreateCatalogService', () => {
@@ -190,17 +193,25 @@ describe('CreateCatalogService', () => {
     expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'CANCELLED', message } })
     expect(service.current?.stopping).toBeUndefined()
   })
-  it('refuses to let the window close while Create Catalog runs, and only then', async () => {
-    const { service, execute, settle } = setup(setupOf({ clrEnabled: true }))
-    expect(service.closeRefusal()).toBeUndefined()
+  it('is a long run while Create Catalog runs, and only then, so the window, its server and the backend stay up', async () => {
+    const { service, execute, settle, longRuns } = setup(setupOf({ clrEnabled: true }))
     service.open(folder())
     await settle()
-    expect(service.closeRefusal()).toBeUndefined()
+    expect(longRuns.getSnapshot().runs).toEqual([])
     const running = service.create(secret, secret)
-    expect(service.closeRefusal()).toBe(createCatalogMessages.closing)
+    expect(longRuns.getSnapshot().runs).toMatchObject([{ kind: 'createCatalog', connectionId: 'server-a', server: 'server-a.example' }])
+    expect(longRuns.closeRefusal()).toBe(longRunMessages.close({ kind: 'createCatalog', server: 'server-a.example' }))
     execute.resolve(created)
     await running
-    expect(service.closeRefusal()).toBeUndefined()
+    expect(longRuns.getSnapshot().runs).toEqual([])
+  })
+  it('ends its long run when the request fails too', async () => {
+    const { service, api, settle, longRuns } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    api.executeSsis.mockRejectedValueOnce(new Error('IPC lost'))
+    await service.create(secret, secret)
+    expect(longRuns.getSnapshot().runs).toEqual([])
   })
   it('says the outcome is unknown when the server goes away while it runs, and cancels it', async () => {
     const { service, api, connections, execute, settle } = setup(setupOf({ clrEnabled: true }))
@@ -231,7 +242,7 @@ describe('Create Catalog command', () => {
     expect(fixture.ssisCatalog.current).toMatchObject({ connectionId: 'server-a', nodeId: 4 })
     expect(fixture.commands.canRun('explorer.createCatalog', { target })).toBe(false)
   })
-  it('keeps the window open while Create Catalog runs: File › Exit and closing the window report why, and tell main the close ended', async () => {
+  it('keeps the window open, its server connected and the backend up while Create Catalog runs: each reports why, and main hears of the run', async () => {
     const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
@@ -246,12 +257,29 @@ describe('Create Catalog command', () => {
     await fixture.commands.execute('window.close', undefined, 'menu')
     expect(fixture.api.closeWindow).not.toHaveBeenCalled()
     expect(fixture.api.closeWindowCancelled).toHaveBeenCalledTimes(1)
-    expect(fixture.files.getSnapshot().error).toBe(createCatalogMessages.closing)
+    const run = { kind: 'createCatalog', server: 'server-a.example' } as const
+    expect(fixture.files.getSnapshot().error).toBe(longRunMessages.close(run))
+    expect(fixture.api.setLongRuns).toHaveBeenLastCalledWith({ runs: [run], total: 1 })
+    // Disconnect's server picker greys the server, naming the run.
+    const picker = async () => {
+      await fixture.commands.execute('connection.disconnect', undefined, 'palette')
+      const row = fixture.quickInput.getSnapshot().rows.find(item => item.item.id === 'server-a')?.item
+      fixture.quickInput.hide('cancel')
+      return row
+    }
+    expect(await picker()).toMatchObject({ disabled: true, disabledHint: longRunMessages.stop(run) })
+    await fixture.commands.execute('backend.restart', undefined, 'menu')
+    expect(fixture.api.restartBackend).not.toHaveBeenCalled()
+    expect(fixture.commands.getSnapshot().error).toBe(longRunMessages.stop(run))
     expect(fixture.api.cancelSsis).not.toHaveBeenCalled()
     answer.resolve(created)
     await running
+    expect(fixture.api.setLongRuns).toHaveBeenLastCalledWith({ runs: [], total: 0 })
+    expect((await picker())?.disabled).toBeUndefined()
     await fixture.commands.execute('window.close', undefined, 'menu')
     expect(fixture.api.closeWindow).toHaveBeenCalledOnce()
+    await fixture.commands.execute('backend.restart', undefined, 'menu')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
   })
   it('is hidden from the context menu of a lost server\'s Integration Services Catalogs', () => {
     const fixture = workbenchFixture()

@@ -1,6 +1,6 @@
 // Focused renderer crash, native dialog ordering, reload and quit coverage; also run by menus-smoke.mjs.
 import { mkdir } from 'node:fs/promises'
-import { dialogLifecycle, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
+import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -15,6 +15,9 @@ try {
   const watchdogStarted = performance.now()
   await rendererWatchdog(options)
   console.log(`Renderer watchdog checks passed in ${Math.round(performance.now() - watchdogStarted)} ms.`)
+  const longRunsStarted = performance.now()
+  await longRunRefusals(options)
+  console.log(`Long run checks passed in ${Math.round(performance.now() - longRunsStarted)} ms.`)
   const sessionsStarted = performance.now()
   await sessionPrompts(options)
   console.log(`Session prompt checks passed in ${Math.round(performance.now() - sessionsStarted)} ms.`)
