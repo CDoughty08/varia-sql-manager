@@ -50,6 +50,7 @@ import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
+import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
@@ -137,6 +138,8 @@ export interface Workbench extends Disposable {
   readonly actions: ObjectActionService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
+  /** The server file picker (Locate Backup File, Locate Database Files, Locate Folder) that a dialog's "…" button opens. */
+  readonly serverFiles: ServerFilePickerService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
   /** The table designers (New › Table…): their designs, saves and prompts. */
@@ -209,6 +212,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const serverFiles = new ServerFilePickerService({ api, connections })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
@@ -317,6 +321,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     actions,
     dialogs,
+    serverFiles,
     ssisCatalog,
     designers,
     ssisProperties,
@@ -363,6 +368,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       actions.dispose()
       dialogs.dispose()
+      serverFiles.dispose()
       ssisCatalog.dispose()
       connections.dispose()
       editorOptions.dispose()

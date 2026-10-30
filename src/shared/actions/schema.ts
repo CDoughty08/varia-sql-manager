@@ -4,16 +4,19 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type ObjectAction } from './catalog.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
+import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue) or a designer (src/shared/designer/catalog.ts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds] as const
+/** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), or the
+ *  server's folders for the server file picker. */
+export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId] as const
 export type DescribeId = typeof describeIds[number]
 
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
+/** `files` only with `serverFiles`, whose target is the server. */
+export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest }
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
@@ -124,6 +127,7 @@ export interface DatabasePropertiesModel {
 }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
+  readonly serverFiles?: ServerFilesListing
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -161,9 +165,18 @@ export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): stri
 const issue = (context: z.RefinementCtx, path: string, message: string) => context.addIssue({ code: 'custom', path: [path], message })
 const targetIssues = (context: z.RefinementCtx, target: ObjectRef, action: ObjectAction) => { for (const message of actionTargetProblems(target, action)) issue(context, 'target', message) }
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema }).strict()
+/** A path on the server (files.ts' rules); New Database, Attach and Restore take paths through it too. */
+export const serverPathSchema = z.string().superRefine((path, context) => { const problem = serverPathProblem(path); if (problem) context.addIssue({ code: 'custom', message: problem }) })
+export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePurposes), path: serverPathSchema.optional(), allFiles: z.boolean().optional() }).strict()
+  .refine(files => !(files.purpose === 'folder' && files.allFiles), 'A folder picker lists folders only.') satisfies z.ZodType<ServerFilesRequest>
+
+export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional() }).strict()
   .superRefine((request, context) => {
+    if ((request.dialog === serverFilesDescribeId) !== (request.files !== undefined)) issue(context, 'files', 'Only the server file picker lists files, and it needs what to list.')
     switch (request.dialog) {
+      case serverFilesDescribeId:
+        if (request.target.kind !== 'server') issue(context, 'target', 'The server file picker lists folders on the server.')
+        break
       // A new table goes in any database, SQL Server's own included, as in SSMS.
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')

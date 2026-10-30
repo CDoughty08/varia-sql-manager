@@ -2,7 +2,7 @@
 import { kindSpecs, nodeKinds, type NodeSubtype } from '../explorer/catalog.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionRow, dialogIds, dialogSpecs, objectActions, objectActionSpecs,
-  scriptActionTitles, unknownOutcomeMessage
+  allFilesType, scriptActionTitles, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
 } from './catalog.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 
@@ -37,7 +37,10 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   collations: 'Collations the Collation list offers',
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
-  statusDelayMs: 'How long a rename runs before the status bar shows it with Stop, in ms'
+  statusDelayMs: 'How long a rename runs before the status bar shows it with Stop, in ms',
+  serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
+  browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
+  browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)'
 }
 
 /** One line per kind and run of subtypes that act alike. */
@@ -111,6 +114,7 @@ export function renderObjectActionsDocs(): string {
     '`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and',
     '[docs/table-designer.md](table-designer.md) describes them.',
     '',
+    ...serverFilesDocs(),
     ...databasePropertiesDocs(),
     '## SQL',
     '',
@@ -142,7 +146,36 @@ export function renderObjectActionsDocs(): string {
   ].join('\n')
 }
 
-const notOnText = (def: DatabaseOptionDef) => def.notOn?.join(', ') ?? ''
+/** The server file picker (`actions.describe` with `serverFiles`), which New Database, Attach and Restore will open from a "…" button. */
+function serverFilesDocs(): string[] {
+  return [
+    '## Server file picker',
+    '',
+    `\`actions.describe\` with ${code(serverFilesDescribeId)}, the server as its target and a \`files\` member (\`purpose\`, \`path\`,`,
+    '`allFiles`) lists one folder on the server, or with no path the server\'s drives (/ on Linux) and its default data, log',
+    'and backup folders. Paths are the server\'s, with its separator; SQL Server\'s service account must be able to read them.',
+    '',
+    table(['Purpose', 'Title', 'Files of type', 'Extensions'], serverFilePurposes.map(purpose => {
+      const spec = serverFilePurposeSpecs[purpose]
+      const types = serverFileTypesLabel(purpose)
+      return [code(purpose), spec.title + ' - <server>', types ? types + ', ' + allFilesType : 'Folders only', spec.extensions.join(', ') || '—']
+    })),
+    '',
+    'A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and',
+    'times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,',
+    '`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with',
+    'nothing, so that listing carries the `legacyEmpty` notice. The path is a parameter of constant statements, and the',
+    'type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A missing folder, a',
+    'file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and Managed Instance',
+    'are refused before connecting (`NOT_SUPPORTED`). Main\'s deadline for a listing is 15 s.',
+    '',
+    'The picker\'s titles, Files of type entries and field names (Select the file, Selected path, Files of type, File name)',
+    'are SSMS\'s as recalled, not yet checked against SSMS 22.',
+    ''
+  ]
+}
+
+const notOnText =(def: DatabaseOptionDef) => def.notOn?.join(', ') ?? ''
 const sqlForms = { compat: '`COMPATIBILITY_LEVEL`', collate: '`COLLATE`', autoCreateStats: '`AUTO_CREATE_STATISTICS`', snapshotIsolation: '`ALLOW_SNAPSHOT_ISOLATION`', filestream: '`FILESTREAM( NON_TRANSACTED_ACCESS = … )`' } as const
 function optionSql(def: DatabaseOptionDef): string {
   const sql = def.sql

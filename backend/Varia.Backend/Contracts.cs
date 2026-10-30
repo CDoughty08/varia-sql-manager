@@ -184,8 +184,17 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
+/// what the table designer needs of a database (tableDesigner), or the server's folders (serverFiles, the server as Target, with Files).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null);
+/// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
+/// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's.</summary>
+internal sealed record ServerFilesArgsDto(string Purpose, string? Path = null, bool? AllFiles = null);
+/// <summary>A drive or default folder: Kind drive or folder, Defaults data, log and backup.</summary>
+internal sealed record ServerRootDto(string Path, string Kind, List<string>? Defaults = null, long? FreeMb = null);
+/// <summary>Modified is the server's local time as yyyy-MM-ddTHH:mm:ss.</summary>
+internal sealed record ServerFileEntryDto(string Name, bool Directory, long? SizeBytes = null, string? Modified = null);
+/// <summary>One listing: Separator  or /, Path the folder listed (ending with it), Roots only without a path, Notice legacyEmpty.</summary>
+internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
@@ -211,7 +220,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null);
+    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

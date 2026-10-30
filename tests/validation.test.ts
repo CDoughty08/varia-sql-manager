@@ -6,7 +6,7 @@ import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSche
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
-import { actionCancelSchema } from '../src/shared/actions/schema'
+import { actionCancelSchema, type ActionDescribeRequest } from '../src/shared/actions/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
 describe('IPC validation', () => {
@@ -122,7 +122,20 @@ describe('IPC validation', () => {
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
     expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0 })
-    expect(methodPolicies['actions.describe']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 45_000 })
+    expect(methodPolicies['actions.describe']).toMatchObject({ kind: 'unary', lane: 'metadata' })
+    expect(deadlineFor('actions.describe', describe as ActionDescribeRequest).deadlineMs).toBe(45_000)
+    // The server file picker: one folder of the server, typed paths verbatim, a 15 s deadline around the backend's 10 s budget.
+    const files = { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: "\\\\files\\O'Brien ]] --\\", allFiles: true } }
+    expect(validateRequest('actions.describe', files)).toEqual(files)
+    expect(validateRequest('actions.describe', { ...files, files: { purpose: 'folder' } })).toEqual({ ...files, files: { purpose: 'folder' } })
+    expect(validateRequest('actions.describe', { ...files, files: { purpose: 'database', path: '/var/opt/mssql/data/' } })).toBeTruthy()
+    expect(deadlineFor('actions.describe', files as ActionDescribeRequest).deadlineMs).toBe(15_000)
+    for (const value of [
+      { ...files, files: undefined }, { ...describe, files: files.files }, { ...files, target }, { ...files, target: { kind: 'database', name: 'master' } },
+      { ...files, files: { purpose: 'archive' } }, { ...files, files: { purpose: 'folder', allFiles: true } }, { ...files, files: { ...files.files, extra: 1 } },
+      { ...files, files: { purpose: 'backup', path: 'Backups' } }, { ...files, files: { purpose: 'backup', path: 'C:\\*.bak' } }, { ...files, files: { purpose: 'backup', path: 'C:\\a\nb' } },
+      { ...files, files: { purpose: 'backup', path: 'C:\\' + 'x'.repeat(258) } }, { ...files, files: { purpose: 'backup', path: '' } }, { ...files, files: { purpose: 'backup', path: 'C:\\\uD800' } }
+    ]) expect(() => validateRequest('actions.describe', value), JSON.stringify(value).slice(0, 120)).toThrow('Invalid request')
     expect(methodPolicies['actions.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 30_000 })
     // Stop is main's own channel (varia:actions-cancel), not a backend method.
     expect(() => validateRequest('actions.cancel', { requestIds: [ids.requestId] })).toThrow('Unsupported backend method')
