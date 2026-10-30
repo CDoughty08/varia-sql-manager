@@ -51,6 +51,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, QuerySession> sessions = new();
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> pools = new();
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
+    /// <summary>Connections whose server-scope pools open in master since an object action freed their own database (critic A5).</summary>
+    private readonly ConcurrentDictionary<string, byte> serverScopeInMaster = new();
     /// <summary>The connection id each pooled or Object Actions connection was made for, so opening it records its session.</summary>
     private readonly ConditionalWeakTable<SqlConnection, Owner> owners = [];
     private readonly OwnSessionLedger ownSessions = new();
@@ -228,7 +230,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     }
     bool IActivityHost.IsConnected(string connectionId) => connections.ContainsKey(connectionId);
     ServerProfile? IActivityHost.Profile(string connectionId) => ((ILiveHost)this).Profile(connectionId);
-    SqlConnection IActivityHost.MonitorConnection(string connectionId) => PoolConnection(connectionId, null, LiveConnections.ServerSuffix, reconnect: false);
+    /// <summary>Activity Monitor's session actions read on the monitor's pool, in master where the live pool is (LiveConnections.Pool).</summary>
+    SqlConnection IActivityHost.MonitorConnection(string connectionId) =>
+        PoolConnection(connectionId, LiveConnections.Pool("server", "activity", Profile(connectionId), ssis.Options.CatalogDatabase).Database, LiveConnections.ServerSuffix, reconnect: false);
     SqlConnection IActivityHost.KillConnection(string connectionId) => ((IActionHost)this).Connection(connectionId);
     Task IActivityHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
     IReadOnlyCollection<string> IActivityHost.ApplicationNames() =>
@@ -271,7 +275,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -494,6 +498,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     {
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
+        serverScopeInMaster.TryRemove(args.ConnectionId, out _);
         ownSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
@@ -522,6 +527,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString);
         if (database is not null) builder.InitialCatalog = Name(database);
+        else if (!stateful && serverScopeInMaster.ContainsKey(id)) builder.InitialCatalog = "master";
         if (stateful)
         {
             // Never let idle connection recovery silently replace a tab's SQL session state.
@@ -551,6 +557,34 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     }
 
     Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
+
+    /// <summary>Critic A5: when the connection's own database (the Connect dialog's Database, or the login's default) is the one an
+    /// action needs to itself, its server-scope pools open in master from now on, unless the login cannot open master (a contained
+    /// database user, or a sign-in the probe could not check); then its idle pools in the database are cleared.</summary>
+    public bool FreeDatabase(string connectionId, string database)
+    {
+        if (connections.TryGetValue(connectionId, out var current) && string.Equals(new SqlConnectionStringBuilder(current).InitialCatalog, database, StringComparison.OrdinalIgnoreCase)
+            && profiles.TryGetValue(connectionId, out var profile) && profile.ServerScopeInMaster)
+            serverScopeInMaster.TryAdd(connectionId, 0);
+        return ClearPoolsFor(connectionId, database);
+    }
+
+    /// <summary>The program names of the connection's pools, as PoolConnection writes them.</summary>
+    public IReadOnlyList<string> PoolPrograms(string connectionId)
+    {
+        if (!connections.TryGetValue(connectionId, out var connectionString)) return [];
+        var application = new SqlConnectionStringBuilder(connectionString).ApplicationName;
+        return [.. new[] { ExplorerPool, ScriptingPool, SsisPool, LiveConnections.ServerSuffix }.Select(suffix => Program(application, suffix))];
+    }
+
+    private static string Program(string application, string suffix)
+    {
+        var name = application + suffix;
+        return name.Length > 128 ? name[..128] : name;
+    }
+
+    /// <summary>Where a connection's server-scope pools open: null (its own database) until an action freed that database, then master.</summary>
+    internal string? ServerScopeDatabase(string connectionId) => serverScopeInMaster.ContainsKey(connectionId) ? "master" : null;
 
     /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
     /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
@@ -589,11 +623,12 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Object Explorer's own pool: the connection's settings under a distinct program name (as SSMS does), so its
     /// READ UNCOMMITTED and LOCK_TIMEOUT never reach query tabs, SMO or databases.list. It keeps the login's initial
     /// catalog (contained-database users), and is cleared with the connection's other pools on disconnect.</summary>
-    SqlConnection IExplorerHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Object Explorer");
+    SqlConnection IExplorerHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, ExplorerPool);
+    private const string ExplorerPool = " - Object Explorer", ScriptingPool = " - Scripting";
 
     /// <summary>Scripting's own pool, for the same reasons: its READ COMMITTED, LOCK_TIMEOUT 10 s and SMO's USE never
     /// reach the other pools, and each job restores its database before the connection returns to the pool.</summary>
-    SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, " - Scripting");
+    SqlConnection IScriptingHost.Connection(string connectionId, string? database) => PoolConnection(connectionId, database, ScriptingPool);
 
     Task IExplorerHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
@@ -632,9 +667,10 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         if (!connections.TryGetValue(connectionId, out var connectionString)) throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
         var builder = new SqlConnectionStringBuilder(connectionString) { Pooling = true, CommandTimeout = 30 };
         if (!reconnect) builder.ConnectRetryCount = 0;
-        var name = builder.ApplicationName + suffix;
-        builder.ApplicationName = name.Length > 128 ? name[..128] : name;
-        if (database is not null) builder.InitialCatalog = database;
+        builder.ApplicationName = Program(builder.ApplicationName, suffix);
+        // Server scope (no database) keeps the connection's own database, which a contained user signs in to, until an action
+        // freed that database (critic A5).
+        if ((database ?? ServerScopeDatabase(connectionId)) is { } catalog) builder.InitialCatalog = catalog;
         if (pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
         return Owned(new SqlConnection(builder.ConnectionString), connectionId);
     }
@@ -1497,6 +1533,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         sessions.Clear();
         pools.Clear();
         profiles.Clear();
+        serverScopeInMaster.Clear();
         connections.Clear();
         store.ReleaseAll();
         SqlConnection.ClearAllPools();

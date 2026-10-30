@@ -8,12 +8,16 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 
 ## Actions
 
-| Action | Menu title | Command | Kind | Group | Mnemonic | Windows and Linux | macOS | Context key |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `1_query` 2 | w | — | — | `explorerActionSelectTop` |
-| `rename` | Rename | `explorer.rename` | inline | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` |
-| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` |
-| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` |
+| Action | Menu title | Command | Kind | Group | Mnemonic | Windows and Linux | macOS | Context key | Runs on |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `1_query` 2 | w | — | — | `explorerActionSelectTop` | SQL Server, Managed Instance, Azure SQL Database |
+| `rename` | Rename | `explorer.rename` | inline | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` | SQL Server, Managed Instance |
+| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` | SQL Server, Managed Instance |
+| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
+
+"Runs on" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
+Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
+connection. The table designer's `createTable` runs on SQL Server and Managed Instance.
 
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
@@ -198,12 +202,94 @@ available: the dialog's or document's Stop, or the status bar's Stop for a renam
 Server has ended the statement, with each step done, cancelled or skipped, so the dialog or document says what completed
 before Stop.
 
+### Steps, compensation and cleanup
+
+Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled or skipped), a title, SQL
+Server's message for a failed one, and for some a detail (a name) or progress. The first failure stops the rest, which are
+skipped. An action may also plan compensation steps, each undoing one earlier step once that step completed and a later one
+failed or was stopped (restoring a database's user access after a failed rename, for example), and cleanup steps that run
+after any failure or Stop (removing a partly restored database Varia created). They run on the same connection under a fresh
+budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended. A
+Stop's reply waits for SQL Server to end the statement and then for them, so it never reports an unknown outcome while
+Varia's own cleanup runs. An action can instead run its steps in one transaction (the table designer's Save): a failure or
+Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.
+
+Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and
+before Database Properties applies its changes, the backend frees the database of its own sessions: when it is the
+connection's own database (the Connect dialog's Database, or the login's default), Object Explorer's, scripting's,
+SSIS's and the live views' server-scope connections open in master from then on (unless the login is a contained database
+user, who cannot open master), the idle pooled connections in the database are closed, and for up to a second the backend
+waits for SQL Server to end their sessions. Activity Monitor and Object Explorer's status always sample in master on SQL
+Server and Managed Instance, for the same reason. Query windows are the user's own and stay where they are.
+
 Deleting a database runs SSMS's statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK
 IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history
 (`msdb.dbo.sp_delete_database_backuphistory`). SSMS deletes the history first, so a DROP that fails (for example, a
 query window still uses the database) would lose it; Script Action shows the order Varia runs.
 
 If the backend stops while an action runs: "The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check."
+
+### Shared statements
+
+Later actions plan these statements. Each is built by SQL Server from constant text, linted, and checked against hostile
+names by a live dry run:
+
+| Step | As Script Action writes it |
+| --- | --- |
+| Restore multi-user access | `ALTER DATABASE [db] SET  MULTI_USER` |
+| Restore restricted user access | `ALTER DATABASE [db] SET  RESTRICTED_USER` |
+| Detach the database | `EXEC master.dbo.sp_detach_db @dbname = N'db', @skipchecks = 'false'` ('true' when Update Statistics is cleared) |
+| Disable the login, Enable the login | `ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE` |
+| Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
+| Drop the database user | `DROP USER [user]`, in its database |
+
+## Logins
+
+Object Explorer gives each login a subtype from `sys.server_principals`: `sa` by principal_id 1 whatever its name, `system`
+for SQL Server's own logins (a name that starts and ends with `##`), else by type: `S` `sql`, `U` `windowsUser`, `G` `windowsGroup`, `C` `certificateMapped`, `K` `asymmetricKeyMapped`, `E` `externalUser`, `X` `externalGroup`.
+The login actions arrive in later versions; their rules are data already, and the backend's login preflight reads the
+facts they need in the action's own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login
+another session is changing, and never a password hash, which no Varia statement may name.
+
+✓ allowed, ○ shown greyed and refused, – not offered.
+
+| Subtype | Disable | Enable | Unlock | Rename | Delete | Why greyed |
+| --- | --- | --- | --- | --- | --- | --- |
+| `sa` | ✓ | ✓ | ✓ | ✓ | ○ | The sa login cannot be deleted. |
+| `system` | ○ | ○ | ○ | ○ | ○ | This login belongs to SQL Server and cannot be changed. |
+| `sql` | ✓ | ✓ | ✓ | ✓ | ✓ |  |
+| `windowsUser` | ✓ | ✓ | – | ✓ | ✓ |  |
+| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status. |
+| `certificateMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
+| `asymmetricKeyMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
+| `externalUser` | ✓ | ✓ | – | ○ | ✓ | A Microsoft Entra login cannot be renamed. |
+| `externalGroup` | ✓ | ✓ | – | ○ | ✓ | A Microsoft Entra login cannot be renamed. |
+
+The login this connection uses, or a Windows group it gets in through, cannot be disabled, renamed, deleted: "This is the login this connection uses. Connect with another login to change it."
+Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY LOGIN)." For a sysadmin member without CONTROL SERVER: "The login is a member of sysadmin: changing it needs CONTROL SERVER."
+
+### Login limits
+
+| Limit | Value | Meaning |
+| --- | --- | --- |
+| `password` | 128 | UTF-16 code units in a password |
+| `databases` | 4,096 | Databases New Login and Login Properties list |
+| `languages` | 64 | Languages the Default language list offers |
+| `serverRoles` | 256 | Server roles listed and chosen |
+| `roles` | 256 | Database roles listed and chosen per database |
+| `schemas` | 1,024 | Schemas listed per database |
+| `mappings` | 256 | Database user mappings per request |
+| `credentials` | 16 | Credentials mapped per request |
+| `certificates` | 1,024 | Certificates listed |
+| `asymmetricKeys` | 1,024 | Asymmetric keys listed |
+| `permissions` | 512 | Server permissions per request |
+| `sidHex` | 172 | Characters of a SID as hexadecimal text |
+| `stepTitle` | 64 | Characters in a step's title |
+| `stepDetail` | 128 | Characters in a step's detail |
+| `ownedDatabases` | 100 | Databases a login owns that the login preflight names |
+| `mappedUsers` | 100 | Mapped database users Delete Login lists |
+| `scanDatabases` | 4,096 | Databases the mapped-user scan reads |
+| `serviceNames` | 4 | Service accounts the service lookup reads |
 
 ## Errors
 
@@ -256,3 +342,4 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a rename runs before the status bar shows it with Stop, in ms |
+| `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |

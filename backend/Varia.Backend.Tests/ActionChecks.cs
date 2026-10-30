@@ -37,7 +37,7 @@ internal static class ActionChecks
     {
         var rows = Catalog.Rows.ToList();
         check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
-            "the embedded actions catalogue loads at version 2 and every row names an Object Explorer kind and subtype");
+            "the embedded actions catalogue loads at version 3 and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
@@ -57,7 +57,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == 9 * 2 + 6 * 5 + 2 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -84,7 +84,12 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.DropProcedure, name, [name, name]), new PlannedStatement(ActionTemplate.DropFunction, name, [name, name]),
                 new PlannedStatement(ActionTemplate.RenameObject, name, [name, name, name]), new PlannedStatement(ActionTemplate.RenameDatabase, "master", [name, name]),
                 new PlannedStatement(ActionTemplate.SetSingleUser, "master", [name]), new PlannedStatement(ActionTemplate.DropDatabase, "master", [name]),
-                new PlannedStatement(ActionTemplate.DeleteBackupHistory, "msdb", [name])
+                new PlannedStatement(ActionTemplate.DeleteBackupHistory, "msdb", [name]),
+                // The shared templates (critic A21).
+                new PlannedStatement(ActionTemplate.SetMultiUser, "master", [name]), new PlannedStatement(ActionTemplate.SetRestrictedUser, "master", [name]),
+                ActionSql.Detach(name, updateStatistics: true), new PlannedStatement(ActionTemplate.DisableLogin, "master", [name]),
+                new PlannedStatement(ActionTemplate.EnableLogin, "master", [name]), new PlannedStatement(ActionTemplate.DenyConnect, "master", [name]),
+                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name])
             };
             foreach (var plan in plans)
             {
@@ -93,7 +98,8 @@ internal static class ActionChecks
                 // The query window splits the script where SSMS's does: one USE batch and one statement batch, whatever the name holds.
                 if (batches.Count != (plan.Template == ActionTemplate.DeleteBackupHistory ? 1 : 2) || !batches[^1].Sql.Contains(ActionSql.Statement(plan), StringComparison.Ordinal))
                     failures.Add(plan.Template + " splits into " + batches.Count + " batches for " + fragment[..1]);
-                if (!ActionSql.Statement(plan).Contains(plan.Template is ActionTemplate.DeleteBackupHistory or ActionTemplate.RenameObject ? name.Replace("'", "''", StringComparison.Ordinal) : quoted, StringComparison.Ordinal))
+                if (!ActionSql.Statement(plan).Contains(plan.Template is ActionTemplate.DeleteBackupHistory or ActionTemplate.RenameObject or ActionTemplate.DetachDatabase
+                    ? name.Replace("'", "''", StringComparison.Ordinal) : quoted, StringComparison.Ordinal))
                     failures.Add(plan.Template + " does not quote " + fragment[..1]);
             }
         }
@@ -200,6 +206,8 @@ internal static class ActionChecks
         }
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
+        public bool FreeDatabase(string connectionId, string database) { Cleared.Add("free " + database); return true; }
+        public IReadOnlyList<string> PoolPrograms(string connectionId) => ["Varia - Object Explorer", "Varia - Scripting", "Varia - Integration Services", "Varia - Activity Monitor"];
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

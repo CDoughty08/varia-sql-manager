@@ -21,7 +21,7 @@ internal sealed record OptionJson(string Key, string Label, string Control, bool
 /// about which objects an action may touch or how an option is written.</summary>
 internal sealed class ActionsCatalog
 {
-    public const int Version = 2;
+    public const int Version = 3;
 
     private static readonly Lazy<ActionsCatalog> Embedded = new(() =>
     {
@@ -30,17 +30,18 @@ internal sealed class ActionsCatalog
         return Parse(stream);
     });
 
-    private sealed record ActionJson(string Action, string Class, string Title, bool? SystemObjects = null);
+    private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
+        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
 
     private readonly Dictionary<(string Kind, string Subtype), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> dialogActions;
     private readonly HashSet<string> systemActions;
+    private readonly Dictionary<string, ActionJson> actions;
 
     private ActionsCatalog(CatalogJson json)
     {
@@ -48,6 +49,8 @@ internal sealed class ActionsCatalog
         rows = json.Rows.ToDictionary(row => (row.Kind, row.Subtype), row => new ActionRow(row.Kind, row.Subtype, row.Enabled, row.Disabled));
         errors = json.Errors.ToDictionary(row => row.Code, row => row.Retryable, StringComparer.Ordinal);
         Actions = [.. json.Actions.Select(row => row.Action)];
+        actions = json.Actions.ToDictionary(row => row.Action, StringComparer.Ordinal);
+        Logins = new LoginRules(json.Logins);
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
         dialogActions = json.Dialogs.ToDictionary(row => row.Dialog, row => row.Action, StringComparer.Ordinal);
@@ -76,6 +79,14 @@ internal sealed class ActionsCatalog
     public IReadOnlyList<int> CompatibilityLevels { get; }
     /// <summary>System databases whose owner SQL Server keeps.</summary>
     public IReadOnlyList<string> OwnerNotOn { get; }
+    /// <summary>Login subtypes, protected-principal rules and login limits (src/shared/actions/logins.ts).</summary>
+    public LoginRules Logins { get; }
+
+    /// <summary>Whether the action runs on a server of this engine (ExplorerProfile.ServerEngine).</summary>
+    public bool Serves(string action, string engine) => actions.TryGetValue(action, out var row) ? row.Engines.Contains(engine) : throw new InvalidOperationException("Unknown object action " + action);
+
+    /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
+    public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));
 
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);

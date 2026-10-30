@@ -359,7 +359,7 @@ internal static class SsisCreateChecks
         var failedStep = SsisCreate.CleanupStep(catalog, longFailure);
         var doneStep = SsisCreate.CleanupStep(catalog, null);
         check(failedStep.Status == "failed" && failedStep.Message!.Length <= catalog.Limit("messageChars") && failedStep.Message.StartsWith(catalog.CleanupStep + ": Lock request", StringComparison.Ordinal)
-            && doneStep is { Status: "done", Message: "Remove the incomplete catalog" },
+            && doneStep is { Status: "done", Title: "Remove the incomplete catalog", Message: null, Compensates: true } && failedStep is { Title: "Remove the incomplete catalog", Compensates: true },
             "the removal's step names what failed, clipped to " + catalog.Limit("messageChars") + " characters as every SSIS message is (" + failedStep.Message?.Length + ")");
         var setup = SsisCreate.Setup("SSISDB", ok with { ScanForStartup = true });
         check(setup is { Catalog: "SSISDB", ClrEnabled: false, StartupDefault: true, DataFile: @"C:\Data\SSISDB.mdf", LogFile: @"C:\Data\SSISDB.ldf" } && setup.BackupFile.EndsWith("SSISDBBackup.bak", StringComparison.Ordinal),

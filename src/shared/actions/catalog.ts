@@ -3,9 +3,10 @@
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, type NodeKind, type NodeSubtype } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, serverEngines, type NodeKind, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
+import { loginsCatalog } from './logins.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -33,14 +34,22 @@ export interface ObjectActionSpec {
   readonly command: ActionCommandId
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
+  /** The servers it runs on (critic A1); the backend refuses it elsewhere before opening a connection. */
+  readonly engines: readonly ServerEngine[]
+  /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
+   *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
+  readonly cleanupMs?: number
 }
+/** Box editions and Managed Instance: Azure SQL Database reaches one database per connection and refuses USE, so its
+ *  actions are a follow-up. */
+const onServers: readonly ServerEngine[] = ['box', 'managedInstance']
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec } = {
-  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows' },
-  rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename' },
+  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
+  rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename', engines: onServers },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
-  delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete' },
+  delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
   // SSMS 22's access key for Properties is unverified; P is free in Varia's Object Explorer menu.
-  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true }
+  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true, engines: onServers }
 }
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
@@ -254,8 +263,13 @@ export const actionLimits = {
   /** How long a stopped action's reply waits for SQL Server to end the statement, then answers CANCELLED (outcome unknown). */
   stopGraceMs: 10_000,
   /** When a running rename appears in the status bar, with Stop. */
-  statusDelayMs: 300
+  statusDelayMs: 300,
+  /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
+  cleanupMs: 10_000
 } as const
+
+/** Whether an action runs on a server of this engine. */
+export const actionServes = (action: ObjectAction, engine: ServerEngine): boolean => objectActionSpecs[action].engines.includes(engine)
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */
 export const unknownOutcomeMessage = 'The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.'
@@ -283,16 +297,20 @@ export function actionsCatalogJson(): string {
     : [])
   return [
     '{',
-    `  "actions": ${block(objectActions.map(action => ({ action, class: objectActionSpecs[action].class, title: objectActionSpecs[action].title, systemObjects: objectActionSpecs[action].systemObjects })))},`,
+    `  "actions": ${block(objectActions.map(action => {
+      const spec = objectActionSpecs[action]
+      return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
+    }))},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
     `  "errors": ${block(actionErrorCodes.map(code => ({ code, retryable: actionErrorRetryable[code] })))},`,
     `  "limits": ${line(actionLimits)},`,
+    `  "logins": ${line(loginsCatalog())},`,
     `  "ownerNotOn": ${line(ownerNotOn)},`,
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
-    '  "version": 2',
+    '  "version": 3',
     '}',
     ''
   ].join('\n')

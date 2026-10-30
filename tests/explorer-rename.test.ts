@@ -61,7 +61,7 @@ describe('inline Rename in Object Explorer', () => {
     const { actions, api, explorer, orders, node, setTables, find, commands } = await setup()
     explorer.beginRename(orders)
     setTables(['Orders2'])
-    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done' }], messages: ['Caution: Changing any part of an object name could break scripts and stored procedures.'], elapsedMs: 1 } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: ['Caution: Changing any part of an object name could break scripts and stored procedures.'], elapsedMs: 1 } })
     expect(await actions.commitRename(node(orders), 'Orders2')).toBe(true)
     expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', connectionId: 'server-a', target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, newName: 'Orders2' })
     expect(explorer.renaming.getSnapshot()).toBeUndefined()
@@ -73,7 +73,7 @@ describe('inline Rename in Object Explorer', () => {
   it('adds the definition note for modules, and keeps the folder selected when the new name never appears', async () => {
     const { actions, api, explorer, orders, node, commands, find } = await setup()
     const view = { ...node(orders), kind: 'view' as const, ref: { type: 'object' as const, object: { kind: 'view' as const, database: 'AppData', schema: 'dbo', name: 'Orders' } } }
-    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done' }], messages: ['Caution: x.'], elapsedMs: 1 } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: ['Caution: x.'], elapsedMs: 1 } })
     await actions.commitRename(view, 'V2')
     expect(commands.getSnapshot().error).toBe('Caution: x. ' + moduleRenameNote)
     const tables = await find('Tables')
@@ -132,7 +132,7 @@ describe('inline Rename in Object Explorer', () => {
     actions.stopRenames([requestId])
     expect(api.cancelObjectActions.mock.calls).toEqual([[[requestId]]])
     expect(actions.getSnapshot().renames[0]).toMatchObject({ stopping: true })
-    pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', message: 'Rename' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } } })
+    pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', title: 'Rename' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } } })
     expect(await running).toBe(true)
     expect(actions.getSnapshot().renames).toEqual([])
     expect(commands.getSnapshot().error).toBe('')
@@ -151,7 +151,7 @@ describe('inline Rename in Object Explorer', () => {
   it('shows no warning for a database rename, whose MODIFY NAME only confirms the new name', async () => {
     const { actions, api, orders, node, commands } = await setup()
     const database = { ...node(orders), kind: 'database' as const, ref: { type: 'object' as const, object: { kind: 'database' as const, name: 'AppData' } } }
-    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', message: 'Rename' }], messages: ["The database name 'AppData2' has been set."], elapsedMs: 1 } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: ["The database name 'AppData2' has been set."], elapsedMs: 1 } })
     await actions.commitRename(database, 'AppData2')
     expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'AppData' }, newName: 'AppData2' })
     expect(commands.getSnapshot()).toMatchObject({ error: '' })

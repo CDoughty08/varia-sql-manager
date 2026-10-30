@@ -4,6 +4,7 @@
 // Erasable TypeScript (no enums), so Node's type stripping can load it as well.
 import type { CodiconId, IconId } from '../icons.ts'
 import { maxIdentifierLength } from '../sql/identifiers.ts'
+import { loginSubtypes } from '../actions/logins.ts'
 
 /** What a node is, independent of the folder showing it. Folders are not a kind. */
 export const nodeKinds = [
@@ -77,7 +78,9 @@ export const nodeSubtypes = [
   'clustered', 'nonclustered', 'clusteredColumnstore', 'nonclusteredColumnstore', 'xml', 'spatial', 'hash', 'other',
   'alias',
   'input', 'output',
-  'entryPoint', 'child'
+  'entryPoint', 'child',
+  // Logins (src/shared/actions/logins.ts; 'system' and 'sql' are above).
+  'sa', 'windowsUser', 'windowsGroup', 'certificateMapped', 'asymmetricKeyMapped', 'externalUser', 'externalGroup'
 ] as const
 export type NodeSubtype = typeof nodeSubtypes[number]
 
@@ -134,6 +137,16 @@ export const minBand = 12, maxBand = 17
 export const bandOf = (major: number): number => major < 13 ? minBand : Math.min(major, maxBand)
 export const engineOf = (edition: number): Engine => (cloudEngineEditions as readonly number[]).includes(edition) ? 'cloud' : 'box'
 export interface ExplorerProfile { readonly band: number; readonly engine: Engine }
+/**
+ * The kind of server an action (its catalogue `engines`) and the server context keys tell apart: Azure SQL Managed Instance
+ * (EngineEdition 8) is a `box` engine for the folders above, but it cannot set SINGLE_USER, attach, detach or restore from a
+ * disk. Folders keep `Engine`; actions use this one, derived once here and mirrored in C# (ExplorerProfile.ServerEngine).
+ */
+export const serverEngines = ['box', 'managedInstance', 'cloud'] as const
+export type ServerEngine = typeof serverEngines[number]
+export const managedInstanceEngineEditions = [8] as const
+export const serverEngineOf = (edition: number): ServerEngine => engineOf(edition) === 'cloud' ? 'cloud'
+  : (managedInstanceEngineEditions as readonly number[]).includes(edition) ? 'managedInstance' : 'box'
 
 export interface FolderSpec {
   readonly id: FolderId
@@ -315,7 +328,8 @@ const kindData: { readonly [K in NodeKind]: KindData } = {
   server: {
     title: 'Server', scope: 'server', icon: 'server', folders: ['databases', 'serverSecurity', 'serverObjects', 'integrationServicesCatalogs'], smo: 'Server', scriptable: false, insert: 'none'
   },
-  login: { title: 'Login', scope: 'serverObject', icon: 'login', smo: 'Login', insert: 'onePart' },
+  // One icon for every login, as SSMS draws them (recalled).
+  login: { title: 'Login', scope: 'serverObject', icon: 'login', subtypes: loginSubtypes, smo: 'Login', insert: 'onePart' },
   serverRole: { title: 'Server Role', scope: 'serverObject', icon: 'role', smo: 'ServerRole', insert: 'onePart' },
   credential: { title: 'Credential', scope: 'serverObject', icon: 'key', smo: 'Credential', insert: 'onePart' },
   cryptographicProvider: { title: 'Cryptographic Provider', scope: 'serverObject', icon: 'circuit-board', smo: 'CryptographicProvider', insert: 'onePart' },
@@ -491,7 +505,7 @@ const line = (value: unknown) => JSON.stringify(sortKeys(value))
 const block = (items: readonly unknown[]) => '[\n' + items.map(item => '    ' + line(item)).join(',\n') + '\n  ]'
 
 /**
- * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "queries", "scopes", "version"}`,
+ * The catalogue as the backend embeds it: `{"cloudEngineEditions", "folders", "kinds", "managedInstanceEngineEditions", "queries", "scopes", "version"}`,
  * keys sorted and everything derived spelled out, so C# needs no rules of its own: each folder's `since` and `engines`
  * include the gates of the folders above it, and kinds carry every collection and a child's `parents`.
  */
@@ -509,6 +523,7 @@ export function explorerCatalogJson(): string {
     `  "cloudEngineEditions": ${line(cloudEngineEditions)},`,
     `  "folders": ${block(folders)},`,
     `  "kinds": ${block(kinds)},`,
+    `  "managedInstanceEngineEditions": ${line(managedInstanceEngineEditions)},`,
     `  "queries": ${line(queryIds)},`,
     `  "scopes": ${line(scopeFields)},`,
     '  "version": 1',

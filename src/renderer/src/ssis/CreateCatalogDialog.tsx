@@ -90,7 +90,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
         <section className="property-section create-catalog-plan" aria-labelledby="create-catalog-plan">
           <div className="create-catalog-caption" id="create-catalog-plan">This changes the server</div>
           <ol className="create-catalog-steps" aria-labelledby="create-catalog-plan">
-            {(steps.length ? steps.map(step => step.message ?? '') : plannedSteps(open)).map((text, index) => {
+            {(steps.length ? steps.map(step => step.message ?? step.title) : plannedSteps(open)).map((text, index) => {
               const step = steps[index]
               return <li key={index} data-status={step?.status ?? 'pending'}>
                 <Icon name={step ? stepIcons[step.status] : 'circle-outline'} />

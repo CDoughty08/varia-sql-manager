@@ -223,7 +223,7 @@ describe('table designer', () => {
     expect(designers.canClose(id)).toBe(designerStrings.saving)
     designers.stop(id)
     expect(api.cancelObjectActions).toHaveBeenCalledWith([requests()[0].requestId])
-    pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', message: 'Create the table' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'stopped', retryable: true } } })
+    pending.resolve({ ok: true, value: { steps: [{ status: 'cancelled', title: 'Create the table' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'stopped', retryable: true } } })
     expect(await first).toBe(false)
     expect(state()).toMatchObject({ phase: 'ready', error: designerStrings.stopped })
     expect(designers.anySaving).toBe(false)

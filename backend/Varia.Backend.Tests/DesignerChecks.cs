@@ -196,6 +196,8 @@ internal static class DesignerChecks
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId) => throw new InvalidOperationException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => Task.CompletedTask;
         public bool ClearPoolsFor(string connectionId, string database) => false;
+        public bool FreeDatabase(string connectionId, string database) => false;
+        public IReadOnlyList<string> PoolPrograms(string connectionId) => [];
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

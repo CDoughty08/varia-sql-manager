@@ -77,9 +77,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
   // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it. Database Properties uses the same three
   // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes.
+  // actions.execute is sensitive as a whole (critic A3): New Login and Login Properties carry passwords in it, and a
+  // per-request flag would leave the frame unzeroed the day an action forgets to set it.
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
-  'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0 },
+  'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) ends them, except Create
