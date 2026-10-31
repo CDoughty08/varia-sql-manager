@@ -95,7 +95,10 @@ which closing rolls back, and names Varia's own query windows whose session hold
 the window is in). On Azure SQL Managed Instance, which cannot set SINGLE_USER, Close existing connections is greyed
 with that reason, and a request that asks for it is refused before anything runs; where the option is greyed, the dialog
 only counts the open transactions. An offline database has no sessions to close: the option is greyed ("An offline
-database has no connections to close.") and its Delete runs no SINGLE_USER.
+database has no connections to close.") and its Delete runs no SINGLE_USER. Without VIEW SERVER STATE (or with VIEW
+SERVER PERFORMANCE STATE denied on SQL Server 2022 and later) the dialog counts and lists no sessions, since SQL Server
+shows such a login only its own, and the database's owner still describes, scripts and deletes it: the transaction DMVs
+that find sessions using the database from elsewhere are read only with the permission.
 
 Once a database is deleted (or its DROP completed before a later step failed), each Database Properties document on it
 turns orphan: what it showed stays, read-only, under "This database no longer exists on <server>." with Close and no

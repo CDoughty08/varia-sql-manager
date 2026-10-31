@@ -676,14 +676,42 @@ internal sealed partial class ActionService : IDisposable
         var owner = row.Name("owner_name") is { Length: > 0 } name ? ScriptingErrors.Display(name) : null;
         if (target.Kind != "database") return new(new DeleteTargetDto(subject.Display, subject.Title, owner, subject.Warnings, subject.Truncated), 0);
         var snapshot = row.Bool("is_snapshot");
-        int? sessions = row.Long("sessions") is { } count ? (int)count : null;
-        int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
-        var (blockers, more) = sessions is null ? (null, false) : await BlockersAsync(connection, connectionId, target.Name!, token);
-        var tabs = sessions is null ? null : await TransactionTabsAsync(connection, connectionId, target.Name!, token);
+        int? sessions = null, withTransaction = null;
+        List<BlockerDto>? blockers = null;
+        var more = false;
+        List<string>? tabs = null;
+        // Database's count is null without VIEW SERVER STATE, and the transaction DMVs are read only when it is not (ActionSql.InTransaction).
+        if (row.Long("sessions") is not null)
+        {
+            try
+            {
+                (sessions, withTransaction) = await DatabaseUseAsync(connection, target.Name!, token);
+                (blockers, more) = await BlockersAsync(connection, connectionId, target.Name!, token);
+                tabs = await TransactionTabsAsync(connection, connectionId, target.Name!, token);
+            }
+            // VIEW SERVER STATE with VIEW SERVER PERFORMANCE STATE denied (2022 and later): unknown, as without the permission.
+            catch (SqlException denied) when (denied.Number == 300 && !token.IsCancellationRequested)
+            {
+                (sessions, withTransaction, blockers, more, tabs) = (null, null, null, false, null);
+            }
+        }
         var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
         var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
             withTransaction, blockers, blockers is null ? null : more, note, tabs);
         return new(deleted, 0);
+    }
+
+    /// <summary>The sessions using the database and those with an open transaction there (ActionSql.DatabaseUse).</summary>
+    private static async Task<(int? Sessions, int? WithTransaction)> DatabaseUseAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.DatabaseUse;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        if (!await reader.ReadAsync(token)) return (null, null);
+        int? Count(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+        return (Count(0), Count(1));
     }
 
     /// <summary>The sessions in the database Delete Object lists (ActionSql.DatabaseSessions), at most the catalogue's blockers, leaving

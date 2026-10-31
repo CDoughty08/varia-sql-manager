@@ -77,6 +77,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string DeleteOffline => Name + "_del";
     public string DeleteCompensated => Name + "_delc";
     public string DeleteSnapshot => Name + "_delcs";
+    /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
+    public string DeleteOwned => Name + "_delo";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -88,8 +90,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
-    // _del, _delc and _delcs Delete parity's (D3d): an offline database, and a database with its snapshot.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs)?$")]
+    // _del, _delc, _delcs and _delo Delete parity's (D3d): an offline database, a database with its snapshot, and the login's own.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -407,6 +409,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Deletes a file the server left (sysadmin, SQL Server 2019 and later): an offline-dropped scratch database's, whose
     /// ACL Windows authentication leaves to the dropping login, so attaching it again fails. Only for paths this run created.</summary>
     public static string DeleteFileSql(string file) => "EXEC master.sys.xp_delete_files " + Quote(file) + ";";
+
+    /// <summary>For a bare scratch name with its login (<see cref="CreateLoginAsync"/>), Delete parity's database that the login owns (D3d).</summary>
+    public async Task<string> CreateDeleteOwnedAsync()
+    {
+        await CreateMarkedAsync(DeleteOwned);
+        await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
+        return DeleteOwned;
+    }
 
     /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP
     /// (3709) and which disposal drops first; false when this server cannot create a snapshot.</summary>

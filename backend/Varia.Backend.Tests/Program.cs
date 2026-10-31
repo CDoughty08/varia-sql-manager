@@ -51,7 +51,7 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
                 }
                 finally { await focusedService.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(id), json), json); }
             });
-            await ActionLiveChecks.DeleteParityAsync(Check, focusedService, focusedInfo, json, deleteScratch);
+            await ActionLiveChecks.DeleteParityAsync(Check, focusedService, focusedInfo, FocusedLive("master"), json, deleteScratch, requirePermissionChecks: true);
             Console.WriteLine("Passed " + passed + " focused Delete parity checks.");
         }
         else if (lane == "--seams-live")
@@ -212,13 +212,13 @@ Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123a
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
     "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_seam", "_seamt", "_del", "_delc", "_delcs" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_seam", "_seamt", "_del", "_delc", "_delcs", "_delo" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
         "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_seamx", "SSISDB" }.Any(ScratchDatabase.Sweepable)
     && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the wave 5 seam checks' _seam and _seamt, Delete parity's _del, _delc and _delcs, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the wave 5 seam checks' _seam and _seamt, Delete parity's _del, _delc, _delcs and _delo, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
 {
     // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
     const string rs = "VariaScratch_20261018120000_0123abcd_rs";

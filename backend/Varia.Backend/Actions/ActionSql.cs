@@ -207,7 +207,11 @@ internal static partial class ActionSql
     }
 
     /// <summary>A session uses a database when it is in it or has a transaction there: SET SINGLE_USER WITH ROLLBACK IMMEDIATE ends
-    /// both, and rolls back the whole transaction ("Nonqualified transactions are being rolled back"), so Delete Object counts both.</summary>
+    /// both, and rolls back the whole transaction ("Nonqualified transactions are being rolled back"), so Delete Object counts both.
+    /// These DMVs raise error 300 for a login without VIEW SERVER STATE (VIEW SERVER PERFORMANCE STATE on 2022 and later) whatever
+    /// guards them in the statement, unlike sys.dm_exec_sessions, which shows such a login its own sessions: so only the statements
+    /// the describe runs once Database's guarded count says it has the permission read them (DatabaseUse, DatabaseSessions,
+    /// TransactionSessions), never Database, which every database action runs.</summary>
     private const string InTransaction = "EXISTS (SELECT 1 FROM sys.dm_tran_session_transactions AS st JOIN sys.dm_tran_database_transactions AS dt ON dt.transaction_id = st.transaction_id "
         + "WHERE st.session_id = es.session_id AND dt.database_id = d.database_id)";
     private const string UsesDatabase = "(es.database_id = d.database_id OR " + InTransaction + ")";
@@ -215,9 +219,8 @@ internal static partial class ActionSql
     private const string HoldsTransaction = "((es.database_id = d.database_id AND es.open_transaction_count > 0) OR " + InTransaction + ")";
 
     /// <summary>A database's row in master: state, user access, subtype, what blocks a DROP (replication, an availability group,
-    /// mirroring, its own database snapshots), owner, the sessions using it (UsesDatabase) and those with an open transaction
-    /// (HoldsTransaction), never this one (with VIEW SERVER STATE),
-    /// permissions and whether @new is another database's name. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
+    /// mirroring, its own database snapshots), owner, the sessions in it and those with an open transaction (with VIEW SERVER STATE,
+    /// else null; DatabaseUse adds those with a transaction there from elsewhere), permissions and whether @new is another database's name. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
     /// group's member owns it with no server principal of its own.</summary>
     public const string Database = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, d.user_access AS user_access, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
@@ -227,8 +230,9 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN dm.mirroring_guid IS NULL THEN 0 ELSE 1 END) AS mirrored, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS s WHERE s.source_database_id = d.database_id) THEN 1 ELSE 0 END) AS has_snapshots, "
         + "COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
-        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.session_id <> @@SPID AND " + UsesDatabase + ") END AS sessions, "
-        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.session_id <> @@SPID AND " + HoldsTransaction + ") END AS with_transaction, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND es.session_id <> @@SPID) END AS sessions, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id "
+        + "AND es.open_transaction_count > 0 AND es.session_id <> @@SPID) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
@@ -262,19 +266,23 @@ internal static partial class ActionSql
     public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
 
+    /// <summary>Delete Object's counts of a database's sessions (D3 §8): those using it (UsesDatabase) and those with an open transaction
+    /// there (HoldsTransaction), never this one. Only with VIEW SERVER STATE (InTransaction): without it the describe counts none (unknown).</summary>
+    public const string DatabaseUse = "SELECT (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.session_id <> @@SPID AND " + UsesDatabase + ") AS sessions, "
+        + "(SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.session_id <> @@SPID AND " + HoldsTransaction + ") AS with_transaction "
+        + "FROM sys.databases AS d WHERE d.name = @name;";
+
     /// <summary>The sessions using a database (UsesDatabase) that Delete Object lists (D3 §8), each with whether it holds an open
-    /// transaction (HoldsTransaction): at most @take by session id, never this one. Without VIEW SERVER STATE it reads none, and the
-    /// describe lists none (unknown); the action leaves out the backend's pooled sessions.</summary>
+    /// transaction (HoldsTransaction): at most @take by session id, never this one. Only with VIEW SERVER STATE (InTransaction): without
+    /// it the describe lists none (unknown); the action leaves out the backend's pooled sessions.</summary>
     public const string DatabaseSessions = "SELECT TOP (@take) es.session_id AS session_id, es.host_process_id AS host_process_id, "
         + "CONVERT(int, CASE WHEN " + HoldsTransaction + " THEN 1 ELSE 0 END) AS open_transaction, es.program_name AS program_name, es.host_name AS host_name "
-        + "FROM sys.dm_exec_sessions AS es CROSS JOIN sys.databases AS d WHERE d.name = @name AND es.session_id <> @@SPID AND " + UsesDatabase + " "
-        + "AND HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 ORDER BY es.session_id;";
+        + "FROM sys.dm_exec_sessions AS es CROSS JOIN sys.databases AS d WHERE d.name = @name AND es.session_id <> @@SPID AND " + UsesDatabase + " ORDER BY es.session_id;";
 
     /// <summary>This process's sessions (@pid) with an open transaction in the database or while in it (HoldsTransaction), at most @take
-    /// by session id, never this one: the action keeps the query tabs' (A7). Without VIEW SERVER STATE it reads none.</summary>
+    /// by session id, never this one: the action keeps the query tabs' (A7). Only with VIEW SERVER STATE (InTransaction).</summary>
     public const string TransactionSessions = "SELECT TOP (@take) es.session_id AS session_id FROM sys.dm_exec_sessions AS es CROSS JOIN sys.databases AS d "
-        + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID AND " + HoldsTransaction + " AND HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 "
-        + "ORDER BY es.session_id;";
+        + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID AND " + HoldsTransaction + " ORDER BY es.session_id;";
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
@@ -457,6 +465,7 @@ internal static partial class ActionSql
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database use", LintCatalog(DatabaseUse, ExplorerCatalog.MaxBand, database: false));
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("transaction sessions", LintCatalog(TransactionSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));

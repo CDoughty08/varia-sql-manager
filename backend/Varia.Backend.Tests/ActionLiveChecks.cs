@@ -3,6 +3,7 @@ using System.Text.Json;
 using Varia.Backend.Actions;
 using Varia.Backend.Explorer;
 using Varia.Backend.Protocol;
+using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Tests;
 
@@ -105,7 +106,7 @@ internal static class ActionLiveChecks
         }
         await using var scratch = ScratchDatabase.Bare((text, database) => Sql(text, database));
         await ScratchAsync(check, service, client, json, Sql, options, scratch);
-        await DeleteParityAsync(check, service, info, json, scratch);
+        await DeleteParityAsync(check, service, info, options, json, scratch);
     }
 
     /// <summary>Runs a statement in a query session of its own (or <paramref name="session"/>, which the caller closes).</summary>
@@ -124,9 +125,11 @@ internal static class ActionLiveChecks
     /// <summary>Delete parity (D3d), in the scratch databases _del, _delc and its snapshot _delcs. An offline database's Delete warns
     /// that its files stay, runs no SINGLE_USER, drops it and leaves its files on disk (attached again and dropped afterwards, which
     /// deletes them). A query tab's session with an open transaction is listed and counted. A DROP its snapshot fails (3709,
-    /// DEPENDENTS) after Close existing connections restores multi-user access, and restricted access for a restricted database.
-    /// Also the focused lane --delete-live.</summary>
-    public static async Task DeleteParityAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, JsonSerializerOptions json, ScratchDatabase scratch)
+    /// DEPENDENTS) after Close existing connections restores multi-user access, and restricted access for a restricted database. A
+    /// login without VIEW SERVER STATE deletes the database it owns (DeleteOwnedAsync). Also the focused lane --delete-live, which
+    /// requires the permission checks.</summary>
+    public static async Task DeleteParityAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json, ScratchDatabase scratch,
+        bool requirePermissionChecks = false)
     {
         var client = new Client(service, info.Id, json);
         Task<SqlRun> Sql(string text, string database = "master", string? session = null) => Query(service, info, json, text, database, session);
@@ -144,6 +147,7 @@ internal static class ActionLiveChecks
         var offline = scratch.DeleteOffline;
         var major = int.Parse((await Exec("SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion'));")).Scalar!, System.Globalization.CultureInfo.InvariantCulture);
         var files = major >= 15 ? await scratch.CreateDeleteOfflineAsync() : [];
+        await DeleteOwnedAsync(check, service, info, options, json, scratch, major, requirePermissionChecks);
         if (major < 15) Console.WriteLine("Offline Delete checks skipped: deleting the files an offline database's DROP leaves needs SQL Server 2019 or later.");
         else try
         {
@@ -213,6 +217,64 @@ internal static class ActionLiveChecks
         var restrictedAccess = await Access(compensated);
         check(restricted is { Error.Code: "DEPENDENTS" } && restricted.Steps.Last() is { Status: "done", Title: "Restore restricted user access", Compensates: true } && restrictedAccess == "RESTRICTED_USER",
             "and restricted access for a restricted database (" + restrictedAccess + ")");
+    }
+
+    /// <summary>Delete parity (D3d) for a login without VIEW SERVER STATE that owns a database (_delo), as a dbcreator owner of their
+    /// own database is: Delete Object describes it with its sessions unknown (the transaction DMVs would raise error 300), scripts its
+    /// DROP and deletes it. On SQL Server 2022 and later, VIEW SERVER STATE with VIEW SERVER PERFORMANCE STATE denied answers the same.</summary>
+    private static async Task DeleteOwnedAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, ConnectOptions options, JsonSerializerOptions json, ScratchDatabase scratch,
+        int major, bool required)
+    {
+        async Task<SqlRun> Exec(string text)
+        {
+            var result = await Query(service, info, json, text);
+            if (result.Status != "completed") throw new InvalidOperationException("Delete permission fixture failed: " + result.Error);
+            return result;
+        }
+        if (!await scratch.CreateLoginAsync())
+        {
+            if (required) throw new InvalidOperationException("Delete parity's permission checks require a SQL Server that accepts SQL logins.");
+            Console.WriteLine("Delete Object permission checks skipped: this server accepts Windows logins only.");
+            return;
+        }
+        var owned = await scratch.CreateDeleteOwnedAsync();
+        var login = Bracket(scratch.Login!);
+        string? limitedId = null;
+        try
+        {
+            var limited = (ConnectionInfo)await service.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(options with
+            {
+                Database = "master", Authentication = "sql", Username = scratch.Login, Password = scratch.Password
+            }, json), json);
+            limitedId = limited.Id;
+            var client = new Client(service, limited.Id, json);
+            var database = new ObjectRefDto("database", Name: owned);
+            static bool Unknown(ActionDescribeResult described) =>
+                described is { Error: null, DeleteTarget: { Sessions: null, WithTransaction: null, Blockers: null, BlockersTruncated: null, TransactionTabs: null } };
+            var described = await client.Describe(database);
+            var script = await client.Script(new ActionArgs("delete", limited.Id, Guid.NewGuid().ToString(), database, null, true, false));
+            check(Unknown(described) && described.DeleteTarget!.Owner == ScriptingErrors.Display(scratch.Login!) && script is { Error: null, Database: "master" }
+                && script.Text!.Contains("DROP DATABASE " + Bracket(owned), StringComparison.Ordinal),
+                "a login without VIEW SERVER STATE describes Delete Object on the database it owns, its sessions unknown, and scripts the DROP ("
+                + described.Error?.Code + " " + described.Error?.Message + "; " + script.Error?.Message + ")");
+            if (major >= 16)
+            {
+                await Exec("GRANT VIEW SERVER STATE TO " + login + ";\nDENY VIEW SERVER PERFORMANCE STATE TO " + login + ";");
+                var denied = await client.Describe(database);
+                await Exec("REVOKE VIEW SERVER PERFORMANCE STATE FROM " + login + ";\nREVOKE VIEW SERVER STATE FROM " + login + ";");
+                check(Unknown(denied), "and with VIEW SERVER STATE but VIEW SERVER PERFORMANCE STATE denied (" + denied.Error?.Code + " " + denied.Error?.Message + ")");
+            }
+            var deleted = await client.Delete(database);
+            var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(owned) + ";")).Scalar == "0";
+            check(Done(deleted) && gone, "and deletes it (" + deleted.Error?.Code + " " + deleted.Error?.Message + ")");
+        }
+        finally
+        {
+            if (limitedId is not null) await service.DispatchAsync("connections.disconnect", JsonSerializer.SerializeToElement(new ConnectionArgs(limitedId), json), json);
+            // The login is this run's own: its sessions, if a pool kept one, are ours to end before the login is dropped.
+            await Query(service, info, json, "DECLARE @kill nvarchar(max) = N'';\nSELECT @kill += N'KILL ' + CONVERT(nvarchar(11), s.session_id) + N';' FROM sys.dm_exec_sessions AS s "
+                + "WHERE s.login_name = " + Literal(scratch.Login!) + ";\nEXEC (@kill);");
+        }
     }
 
     private static async Task ScratchAsync(Action<bool, string> check, SqlService service, Client client, JsonSerializerOptions json, Func<string, string, string?, Task<SqlRun>> sql,
