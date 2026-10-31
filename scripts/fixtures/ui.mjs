@@ -465,6 +465,8 @@ export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
 export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('listitem')
+/** Delete Object's list of the sessions using a database (D3d). */
+export const objectDialogSessions = dialog => dialog.getByRole('list', { name: 'Sessions using the database', exact: true }).getByRole('listitem')
 /** An object dialog's page tabs, where the dialog is narrow ("Select a page" is then a tablist), and the page it shows. */
 export const objectDialogTabs = dialog => dialog.getByRole('tablist', { name: 'Select a page', exact: true }).getByRole('tab')
 export const objectDialogPage = dialog => dialog.locator(part.objectDialogPage)

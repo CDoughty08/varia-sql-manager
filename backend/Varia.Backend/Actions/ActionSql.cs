@@ -206,17 +206,21 @@ internal static partial class ActionSql
             + "JOIN sys.objects AS ro ON ro.object_id = r.referencing_id JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id ORDER BY rs.name, ro.name;";
     }
 
-    /// <summary>A database's row in master: state, subtype, what blocks a DROP (replication, an availability group,
-    /// mirroring), owner, sessions in it (with VIEW SERVER STATE), permissions and whether @new is another database's name.
-    /// The owner falls back to SUSER_SNAME(d.owner_sid): a Windows group's member owns it with no server principal of its own.</summary>
-    public const string Database = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
+    /// <summary>A database's row in master: state, user access, subtype, what blocks a DROP (replication, an availability group,
+    /// mirroring, its own database snapshots), owner, sessions in it and those with an open transaction (with VIEW SERVER STATE),
+    /// permissions and whether @new is another database's name. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
+    /// group's member owns it with no server principal of its own.</summary>
+    public const string Database = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, d.user_access AS user_access, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system, "
         + "CONVERT(bit, CASE WHEN d.is_published = 1 OR d.is_subscribed = 1 OR d.is_merge_published = 1 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS replicated, "
         + "CONVERT(bit, CASE WHEN d.replica_id IS NULL THEN 0 ELSE 1 END) AS in_availability_group, "
         + "CONVERT(bit, CASE WHEN dm.mirroring_guid IS NULL THEN 0 ELSE 1 END) AS mirrored, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS s WHERE s.source_database_id = d.database_id) THEN 1 ELSE 0 END) AS has_snapshots, "
         + "COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id "
+        + "AND es.open_transaction_count > 0) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
@@ -249,6 +253,12 @@ internal static partial class ActionSql
     /// SERVER STATE only this session is visible: none.</summary>
     public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
+
+    /// <summary>The sessions in a database that Delete Object lists (D3 §8): at most @take by session id, never this one. Without
+    /// VIEW SERVER STATE it reads none, and the describe lists none (unknown); the action leaves out the backend's pooled sessions.</summary>
+    public const string DatabaseSessions = "SELECT TOP (@take) es.session_id AS session_id, es.host_process_id AS host_process_id, es.open_transaction_count AS open_transaction_count, "
+        + "es.program_name AS program_name, es.host_name AS host_name FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
+        + "WHERE d.name = @name AND es.session_id <> @@SPID AND HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 ORDER BY es.session_id;";
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
@@ -431,6 +441,7 @@ internal static partial class ActionSql
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.

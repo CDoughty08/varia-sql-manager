@@ -830,6 +830,10 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+/* D3d: the sessions a database's DROP waits for, and why Close existing connections is greyed. */
+.object-dialog-sessions { margin: 8px 0 0; padding: 0 0 0 6px; list-style: none; display: flex; flex-direction: column; gap: 2px; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.object-dialog-sessions > li { overflow-wrap: anywhere; }
+.object-dialog-options .field-note { margin: 0 0 0 24px; }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }

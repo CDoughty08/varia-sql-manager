@@ -73,6 +73,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Seam => Name + "_seam";
     /// <summary>The name the seam checks' rename collides with (created on demand, with <see cref="Seam"/>).</summary>
     public string SeamTaken => Name + "_seamt";
+    /// <summary>Delete parity (D3d): an offline database Delete drops (its files stay), and one whose snapshot fails its DROP.</summary>
+    public string DeleteOffline => Name + "_del";
+    public string DeleteCompensated => Name + "_delc";
+    public string DeleteSnapshot => Name + "_delcs";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -83,8 +87,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks'.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
+    // _del, _delc and _delcs Delete parity's (D3d): an offline database, and a database with its snapshot.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -242,7 +247,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private static string Bracket(string value) => "[" + value.Replace("]", "]]") + "]";
 
     private static Task<SqlRun> Drop(Func<string, string, Task<SqlRun>> run, string name, bool online) => run(
-        (online ? "" : "ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
+        (online ? "" : "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND state = 6) ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
         + "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND source_database_id IS NULL AND state = 0) ALTER DATABASE " + Bracket(name) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n"
         + "IF DB_ID(" + Quote(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";", "master");
 
@@ -389,6 +394,30 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return true;
     }
 
+    /// <summary>For a bare scratch name, Delete parity's offline database (D3d): marked, then taken offline; its files' physical
+    /// names, which the check deletes (<see cref="DeleteFileSql"/>) once Delete has dropped it and left them.</summary>
+    public async Task<List<string>> CreateDeleteOfflineAsync()
+    {
+        await CreateMarkedAsync(DeleteOffline);
+        var files = await Exec("SELECT physical_name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(DeleteOffline) + ") ORDER BY file_id;");
+        await Exec("ALTER DATABASE " + Bracket(DeleteOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        return [.. files.Sets[0].Select(row => row[0]!)];
+    }
+
+    /// <summary>Deletes a file the server left (sysadmin, SQL Server 2019 and later): an offline-dropped scratch database's, whose
+    /// ACL Windows authentication leaves to the dropping login, so attaching it again fails. Only for paths this run created.</summary>
+    public static string DeleteFileSql(string file) => "EXEC master.sys.xp_delete_files " + Quote(file) + ";";
+
+    /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP
+    /// (3709) and which disposal drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateDeleteCompensatedAsync()
+    {
+        await CreateMarkedAsync(DeleteCompensated);
+        if (!await CreateSnapshotAsync(DeleteCompensated, DeleteSnapshot)) return false;
+        created.Insert(0, DeleteSnapshot);
+        return true;
+    }
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {
@@ -419,7 +448,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
-        foreach (var name in created) await Drop(run, name, name != Offline);
+        foreach (var name in created) await Drop(run, name, name != Offline && name != DeleteOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");

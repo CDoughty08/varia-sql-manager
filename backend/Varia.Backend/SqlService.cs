@@ -607,6 +607,14 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// after FreeDatabase cleared its pools are the backend's own, which the server is ending.</summary>
     public IReadOnlySet<int> PoolSessions(string connectionId) => poolSessions.Sessions(connectionId, ServerOf);
 
+    /// <summary>The SPIDs of the open query sessions on connections to the server (IActionHost.QuerySessions).</summary>
+    public IReadOnlySet<int> QuerySessions(string connectionId)
+    {
+        var server = ServerOf(connectionId);
+        return server is null ? new HashSet<int>() : sessions.Values.Where(session => session.Spid is not null && session.Connection.State == System.Data.ConnectionState.Open
+            && ServerOf(session.ConnectionId) == server).Select(session => session.Spid!.Value).ToHashSet();
+    }
+
     private static string Program(string application, string suffix)
     {
         var name = application + suffix;

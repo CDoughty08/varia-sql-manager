@@ -36,6 +36,10 @@ internal interface IActionHost
     /// those still in a database just after FreeDatabase are Varia's own, which a cleared pool ends within moments. Query tabs
     /// are unpooled and never among them.</summary>
     IReadOnlySet<int> PoolSessions(string connectionId);
+    /// <summary>The session ids of the backend's open query sessions on connections to the same server. SQL Server gives a freed id
+    /// to the next client, and PoolSessions keeps a cleared pool's ids for minutes, so a query tab can hold one of them: it is the
+    /// user's session, never Varia's pool's. Hosts that open no query sessions (the offline checks') have none.</summary>
+    IReadOnlySet<int> QuerySessions(string connectionId) => new HashSet<int>();
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -220,7 +224,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
-                _ => DescribeJobAsync(connection, target, band, job)
+                _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
     }
@@ -244,6 +248,10 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        // Managed Instance refuses SINGLE_USER: Delete Object greys the option there (CloseConnectionsNote), and a request that
+        // asks for it anyway is refused before any connection opens.
+        if (args.Action == "delete" && args.CloseConnections == true && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine == "managedInstance")
+            return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
@@ -392,6 +400,9 @@ internal sealed partial class ActionService : IDisposable
             if (row.Bool("replicated")) warnings.Add(new("The database is used for replication; the DROP fails until replication is removed.", true));
             if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; the DROP fails until it is removed from the group.", true));
             if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; the DROP fails until mirroring is removed.", true));
+            if (row.Bool("has_snapshots")) warnings.Add(new(SnapshotsWarning, true));
+            // SQL Server leaves an offline database's files where they are when it drops the database (D3 §8).
+            if (row.Int("state") == OfflineState) warnings.Add(new(OfflineWarning, false));
         }
         else
         {
@@ -519,8 +530,24 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
-    /// <summary>The statements an action runs, in order.</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
+    /// <summary>sys.databases state of an offline database.</summary>
+    internal const int OfflineState = 6;
+    internal const string OfflineWarning = "This database is offline. Deleting it removes it from the server but leaves its files on disk.";
+    internal const string SnapshotsWarning = "The database has database snapshots; the DROP fails until they are deleted.";
+    /// <summary>Why Delete Object greys Close existing connections on Azure SQL Managed Instance.</summary>
+    internal const string ManagedInstanceCloseNote = "Managed Instance cannot set SINGLE_USER.";
+
+    /// <summary>What a database's Delete plan needs from its row: whether it is offline, where no session can be (so no SINGLE_USER
+    /// runs), and its user access (sys.databases user_access: 0 multi, 1 single, 2 restricted), which a failed DROP restores.</summary>
+    internal sealed record DeleteFacts(bool Offline, int UserAccess);
+
+    private static DeleteFacts? FactsOf(ActionSubject subject) =>
+        subject.Target.Kind == "database" ? new(subject.Row.Int("state") == OfflineState, subject.Row.Int("user_access")) : null;
+
+    /// <summary>The statements an action runs, in order. A database's Delete that closes connections first undoes SINGLE_USER when
+    /// its DROP did not complete (D3 §8): the compensation restores the access <paramref name="facts"/> read (multi or restricted).
+    /// An offline database has no sessions to close, so its Delete runs no SINGLE_USER.</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null)
     {
         if (args.Action == "rename")
             return target.Kind == "database"
@@ -529,9 +556,14 @@ internal sealed partial class ActionService : IDisposable
         if (target.Kind != "database") return [new(ActionSql.DropOf(target.Kind), target.Database!, [target.Schema!, target.Name!])];
         // SSMS deletes the backup history first; deleting it after the DROP keeps it when the DROP fails (IN_USE).
         var plan = new List<PlannedStatement>();
-        if (args.CloseConnections == true) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
+        var close = args.CloseConnections == true && facts?.Offline != true;
+        if (close) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
         plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
+        // Due only when the DROP (main step 1) did not complete; a failed history delete after it leaves no database to restore.
+        var restore = facts?.UserAccess switch { 0 => ActionTemplate.SetMultiUser, 2 => ActionTemplate.SetRestrictedUser, _ => (ActionTemplate?)null };
+        if (close && restore is { } undo)
+            plan.Add(new(undo, "master", [target.Name!], StepKind.Compensation, Undoes: 0, When: statuses => statuses.Count < 2 || statuses[1] != "done"));
         return plan;
     }
 
@@ -626,16 +658,50 @@ internal sealed partial class ActionService : IDisposable
 
     // --- Jobs -------------------------------------------------------------------------------------------------------------
 
-    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, string connectionId, string engine, ObjectRefDto target, int band, CancellationToken token)
     {
         var (subject, error) = await ResolveAsync(connection, target, null, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, 0, error);
         var row = subject.Row;
-        var snapshot = target.Kind == "database" ? row.Bool("is_snapshot") : (bool?)null;
-        int? sessions = target.Kind == "database" && row.Long("sessions") is { } count ? (int)count : null;
         var owner = row.Name("owner_name") is { Length: > 0 } name ? ScriptingErrors.Display(name) : null;
-        var deleted = new DeleteTargetDto(subject.Display, snapshot == true ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions);
+        if (target.Kind != "database") return new(new DeleteTargetDto(subject.Display, subject.Title, owner, subject.Warnings, subject.Truncated), 0);
+        var snapshot = row.Bool("is_snapshot");
+        int? sessions = row.Long("sessions") is { } count ? (int)count : null;
+        int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
+        var (blockers, more) = sessions is null ? (null, false) : await BlockersAsync(connection, connectionId, target.Name!, token);
+        var note = engine == "managedInstance" && !snapshot ? ManagedInstanceCloseNote : null;
+        var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
+            withTransaction, blockers, blockers is null ? null : more, note);
         return new(deleted, 0);
+    }
+
+    /// <summary>The sessions in the database Delete Object lists (ActionSql.DatabaseSessions), at most the catalogue's blockers, leaving
+    /// out the sessions of this process its pooled connections were given (FreeDatabaseAsync ends those before the DROP) unless a query
+    /// tab holds that id now: More when more exist. Program and host are clipped to blockerChars.</summary>
+    private async Task<(List<BlockerDto>? Blockers, bool More)> BlockersAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    {
+        var limit = (int)catalog.Limit("blockers");
+        var chars = (int)catalog.Limit("blockerChars");
+        var pooled = host.PoolSessions(connectionId);
+        var tabs = host.QuerySessions(connectionId);
+        var blockers = new List<BlockerDto>();
+        var more = false;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.DatabaseSessions;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@take", SqlDbType.Int, 0, limit + 1 + Math.Min(pooled.Count, 1024));
+        await using var reader = await command.ExecuteReaderAsync(token);
+        int Number(int ordinal) => reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+        string? Clipped(int ordinal) => reader.IsDBNull(ordinal) || reader.GetString(ordinal).Trim() is not { Length: > 0 } text ? null : ScriptingErrors.Clip(text, chars);
+        while (await reader.ReadAsync(token))
+        {
+            var id = Number(0);
+            if (Number(1) == Environment.ProcessId && pooled.Contains(id) && !tabs.Contains(id)) continue;
+            if (blockers.Count == limit) { more = true; break; }
+            blockers.Add(new(id, Clipped(3), Clipped(4), Number(2) > 0));
+        }
+        return (blockers, more);
     }
 
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
@@ -643,7 +709,7 @@ internal sealed partial class ActionService : IDisposable
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = ScriptText(Plan(args, target));
+        var text = ScriptText(Plan(args, target, FactsOf(subject)));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
@@ -659,7 +725,7 @@ internal sealed partial class ActionService : IDisposable
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
-        var plan = Plan(args, target);
+        var plan = Plan(args, target, FactsOf(subject));
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.

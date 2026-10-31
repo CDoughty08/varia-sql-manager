@@ -191,7 +191,8 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   const verbs: Verb[] = state.phase === 'applying'
     ? [{ command: 'databaseProperties.stop', args, emphasis: 'danger' }]
     : [{ command: 'databaseProperties.refresh', args }, { command: 'databaseProperties.discard', args }, { command: 'databaseProperties.apply', args, label: 'Apply', emphasis: 'primary' }]
-  const pill = model ? databaseStatusPill(model) : undefined
+  // An orphan has no status: the database it showed is gone.
+  const pill = model && !state.gone ? databaseStatusPill(model) : undefined
   const phaseLabel = state.phase === 'loading' ? 'Reading the database…' : state.phase === 'applying' ? 'Applying the changes…' : state.phase === 'confirming' ? 'Waiting for your answer…' : undefined
   const content = (page: PageId) => {
     if (!model || !draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the database" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the database could not be read.' : ''}</p>
@@ -208,7 +209,9 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   // The way out the message names: Refresh, or, while the draft whose outcome is unknown still holds changes, Discard Changes first.
   // NOT_FOUND: the database went, or another has taken its name since it was read, so what is shown must be read again.
   const reread = state.stale || state.phase === 'loadFailed' || state.error?.code === 'NOT_FOUND'
-  const recovery = reread && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
+  // An orphan (Varia deleted the database) has only Close: a database that takes the name later is another one.
+  const recovery = state.gone ? [{ label: 'Close', run: () => properties.closeGone(state.id) }]
+    : reread && properties.canRefresh(state.id) ? [{ label: 'Refresh', run: () => properties.refresh(state.id) }]
     : reread && properties.canDiscard(state.id) ? [{ label: 'Discard Changes', run: () => properties.discard(state.id) }] : []
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}

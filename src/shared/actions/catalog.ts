@@ -397,7 +397,9 @@ export const actionLimits = {
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
-  cleanupMs: 10_000
+  cleanupMs: 10_000,
+  /** Delete Object: the sessions in a database it lists (more set a truncation flag), and the characters of each one's program and host. */
+  blockers: 8, blockerChars: 128
 } as const
 
 /** Whether an action runs on a server of this engine. */

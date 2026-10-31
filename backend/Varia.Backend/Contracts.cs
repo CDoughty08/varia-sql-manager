@@ -214,7 +214,14 @@ internal sealed record ActionError(string Code, string Message, bool Retryable);
 internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
     bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
-internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
+/// <summary>A session in a database that its DROP waits for and Close existing connections ends (D3 §8): never the backend's own
+/// pooled sessions. Program and host are clipped to the catalogue's blockerChars.</summary>
+internal sealed record BlockerDto(int SessionId, string? Program, string? Host, bool OpenTransaction);
+/// <summary>Delete Object's target. For a database: Sessions and WithTransaction (sessions with an open transaction) are absent without
+/// VIEW SERVER STATE, as are Blockers (at most the catalogue's blockers; BlockersTruncated when more exist); CloseConnectionsNote is why
+/// Close existing connections is unavailable on this server (Managed Instance).</summary>
+internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null,
+    int? WithTransaction = null, List<BlockerDto>? Blockers = null, bool? BlockersTruncated = null, string? CloseConnectionsNote = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
 internal sealed record DatabaseGeneralDto(string Name, string Status, bool Standby, string? Owner, string Created, double SizeMb, double? SpaceAvailableMb = null, int? Users = null,
     string? LastBackup = null, string? LastLogBackup = null, string? Collation = null, double? MemoryAllocatedMb = null, double? MemoryUsedMb = null, int? Id = null);

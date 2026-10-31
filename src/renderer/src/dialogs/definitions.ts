@@ -6,7 +6,7 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import type { ActionDescribeResult, ActionError, ActionRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 
@@ -27,6 +27,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly modelOf: (result: ActionDescribeResult) => Model | undefined
   readonly initialDraft: (model: Model, target: ObjectRef) => Draft
   readonly request: (target: ObjectRef, model: Model, draft: Draft) => DialogRequest
+  /**
+   * Whether the action's reply says the database it ran on is gone (Delete: a success, or a reply whose DROP completed before a
+   * later step failed or stopped), so its Properties documents turn orphan and the query windows that used it are counted (D3 §8).
+   */
+  readonly removesDatabase?: (target: ObjectRef, steps: readonly ActionStep[], succeeded: boolean) => boolean
   /** A question to ask before OK sends `request` (never before Script). */
   readonly confirm?: (model: Model, request: BuiltRequest) => DialogConfirmation | undefined
   /** The request once the user answered Yes. */
@@ -38,6 +43,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
 
 /** Delete Object's checkboxes; they apply to databases only. */
 export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
+/** Whether Delete Object can close the database's connections: not for a snapshot, nor where the server cannot set SINGLE_USER (Managed Instance). */
+export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
 export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, DeleteDraft> = {
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,
@@ -45,8 +52,9 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false }),
   request: (target, model, draft) => {
     const database = target.kind === 'database'
-    return { action: 'delete', target, closeConnections: database && !model.isSnapshot && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
+    return { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
   },
+  removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
   afterSuccess: effects => effects.refreshListing()
 }
 

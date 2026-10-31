@@ -332,7 +332,12 @@ action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
-not reachable from the wire.
+not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?, warnings: { text,
+blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?, host?,
+openTransaction }[], blockersTruncated?, closeConnectionsNote? }`: for a database, the session count, those with an open
+transaction and the sessions listed (at most 8, never the backend's own pooled sessions; program and host at most 128
+characters) need VIEW SERVER STATE, and `closeConnectionsNote` says why Close existing connections is unavailable (Managed
+Instance).
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
 serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
