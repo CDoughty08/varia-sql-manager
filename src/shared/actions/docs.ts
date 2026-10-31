@@ -3,7 +3,7 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  allFilesType, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
+  allFilesType, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
@@ -46,7 +46,13 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
   browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
   browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
-  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates'
+  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
+  newDatabaseFiles: 'Files one New Database request may create',
+  newDatabaseFilegroups: 'Filegroups one New Database request may create, PRIMARY included',
+  dataFileMb: 'A data file\'s initial and maximum size in New Database, in MB (16 TB)',
+  logFileMb: 'A log file\'s initial and maximum size in New Database, in MB (2 TB, SQL Server\'s ceiling for a log file)',
+  growthMb: 'A file\'s autogrowth in MB, in New Database',
+  growthPercent: 'A file\'s autogrowth in percent, in New Database'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -144,7 +150,7 @@ function longRunDocs(): string[] {
     '',
     table(['Kind', 'Named as'], longRunKinds.map(kind => [code(kind), longRunSubjects[kind]])),
     '',
-    'Create Catalog is the only long run so far; the others are reserved for the actions that will use them.',
+    'Create Catalog and New Database are the long runs so far; the others are reserved for the actions that will use them.',
     '',
     'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
     'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
@@ -242,6 +248,7 @@ export function renderObjectActionsDocs(): string {
     ...longRunDocs(),
     ...serverFilesDocs(),
     ...databasePropertiesDocs(),
+    ...newDatabaseDocs(),
     '## SQL',
     '',
     'DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer\'s or',
@@ -383,6 +390,48 @@ const optionRow = (def: DatabaseOptionDef): string[] =>
   [def.label, def.category === 'header' ? 'Header' : def.category, yesNo(def.settable), optionSql(def), def.exclusive ? 'Yes' : '', def.settable && def.refusedReadOnly ? 'Yes' : '', def.since ? String(def.since) : '', notOnText(def)]
 
 /** Database Properties: its pages, the options it changes, the order its statements run in, and the Open Connections rule. */
+/** Server actions: New Database. */
+function newDatabaseDocs(): string[] {
+  const places = (spec: typeof serverActionSpecs[typeof serverActions[number]]) =>
+    [...spec.folders.map(folder => `the ${code(folder)} folder`), ...spec.kinds.map(kind => `a ${code(kind)} node`)].join(', ')
+  return [
+    '## New Database',
+    '',
+    'A server action makes something on the server rather than acting on an object row, so no row offers it and no',
+    '`explorerAction*` key gates it: its item reads the node it is on, and its describe\'s target is the server.',
+    '',
+    table(['Action', 'Menu title', 'Command', 'Document', 'On', 'Group', 'Mnemonic', 'Servers', 'Long run'], serverActions.map(action => {
+      const spec = serverActionSpecs[action]
+      return [code(action), spec.title, code(spec.command), code(spec.dialog), places(spec), `${code(spec.group)} ${spec.order}`, spec.mnemonic,
+        spec.engines.map(engine => engineNames[engine]).join(', '), code(spec.longRun)]
+    })),
+    '',
+    'New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel or closing it discards it,',
+    'as SSMS\'s Cancel does). Its describe reads model as Database Properties reads it (a new database starts as a copy of',
+    'model), the instance\'s default data and log folders, the server\'s collation, whether the login may create a database,',
+    'master\'s compatibility level and the platform. The document sends the files, filegroups, collation, containment and',
+    'ledger, and only the options and scoped configurations that differ from model: Script writes those, never every option as',
+    'SSMS does. A file\'s default name is its logical name with .mdf, .ndf or .ldf, made safe for the server\'s platform',
+    '(critic A23); a FILESTREAM or memory-optimized container is a folder named after it and grows as it needs. SQL Server on',
+    'Linux has no FILESTREAM, so its filegroups are not offered there.',
+    '',
+    'OK runs the steps "Create the database", then Database Properties\' own ALTER steps for the options (titled by option),',
+    'the filegroup changes (Autogrow all files, Set the default filegroup, Make the filegroup read-only) and "Set the owner".',
+    'A failure after CREATE leaves the database, as SSMS does, and the steps say what completed. OK registers the',
+    '`newDatabase` long run while it runs, and Stop cancels the running statement. On success the document closes, Object',
+    'Explorer reloads the Databases folder and selects the new database, and the toolbar\'s database list refreshes.',
+    '',
+    'The builder has SQL Server compose CREATE DATABASE from one JSON parameter: names through `QUOTENAME`, file names and',
+    'paths as N\'\' literals quoted on the server (`REPLACE` under `Latin1_General_BIN2`), sizes through `CONVERT` of typed',
+    'numbers, the collation only as `sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution',
+    'form, `EXEC @module @stmt` with `@module = QUOTENAME(@db) + N\'.sys.sp_executesql\'`. Before it, the preflight refuses a',
+    'name in use, a login without CREATE ANY DATABASE, a missing owner or collation, a folder that does not exist or a file',
+    'that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM where it is off, ledger before SQL Server',
+    '2022, and Partial containment without contained database authentication.',
+    ''
+  ]
+}
+
 function databasePropertiesDocs(): string[] {
   return [
     '## Database Properties',

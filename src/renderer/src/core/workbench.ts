@@ -61,6 +61,7 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -151,6 +152,8 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** New Database documents (D1b): their designs, OK as a long run, Script previews and frames. */
+  readonly newDatabase: NewDatabaseService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
@@ -234,6 +237,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
+  const newDatabase = new NewDatabaseService({
+    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // The database name, once the first read has drawn it; until then the document's first section in its list.
+    focus: id => nextFrame(() => {
+      if (modalOpen()) return
+      const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
+      const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
+      ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    })
+  })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
@@ -261,6 +274,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -331,6 +345,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designers,
     ssisProperties,
     properties,
+    newDatabase,
     activity,
     operations,
     theme,
@@ -366,6 +381,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
+      newDatabase.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()

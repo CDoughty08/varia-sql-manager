@@ -3,11 +3,12 @@
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type FolderId, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
 import type { DatabaseRuntime } from '../explorer/status.ts'
 import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
+import type { LongRunKind } from '../long-runs.ts'
 import { loginsCatalog } from './logins.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
@@ -22,7 +23,8 @@ export type ObjectAction = typeof objectActions[number]
 export type ActionClass = 'query' | 'inline' | 'dialog'
 export const dialogIds = [
   'deleteObject',
-  'databaseProperties'
+  'databaseProperties',
+  'newDatabase'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -64,6 +66,48 @@ const actionSpecData = {
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
 export type ActionCommandId = typeof actionSpecData[ObjectAction]['command']
+
+// Server-scope actions: no object's row offers them, since what they make does not exist yet. A folder's menu and its
+// nodes' menus place them, the server is their describe's target, and OK runs them with the new object's name (New
+// Database; Attach and Restore Database follow in later PRs). One entry per line, so later actions append cleanly.
+export const serverActions = [
+  'createDatabase'
+] as const
+export type ServerAction = typeof serverActions[number]
+/** Every action actions.execute runs from this catalogue (the table designer's createTable is the designer catalogue's). */
+export type CatalogAction = ObjectAction | ServerAction
+export interface ServerActionSpec {
+  /** The palette's and the menu's title. */
+  readonly title: string
+  readonly mnemonic: string
+  readonly group: string
+  readonly order: number
+  /** The document or dialog the command opens; its OK runs the action. */
+  readonly dialog: DialogId
+  readonly command: `explorer.${string}`
+  /** The servers it runs on (critic A1); elsewhere the menu hides it and the backend refuses it. */
+  readonly engines: readonly ServerEngine[]
+  /** The folders whose menu offers it, and the node kinds whose menu does (SSMS offers New Database on a database too). */
+  readonly folders: readonly FolderId[]
+  readonly kinds: readonly NodeKind[]
+  /** It registers with the long-run registry while OK runs, never with the document task. */
+  readonly longRun: LongRunKind
+  /** As ObjectActionSpec.cleanupMs. */
+  readonly cleanupMs?: number
+}
+const serverActionSpecData = {
+  // SSMS 22's Databases menu: New Database…, Attach…, Restore Database…, Restore Files and Filegroups…; its access key for New
+  // Database is recalled as N. Azure SQL Managed Instance creates databases without files, so it is a follow-up.
+  createDatabase: {
+    title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase', engines: ['box'], folders: ['databases'], kinds: ['database'],
+    longRun: 'newDatabase'
+  }
+} as const satisfies { readonly [A in ServerAction]: ServerActionSpec }
+export const serverActionSpecs: { readonly [A in ServerAction]: ServerActionSpec & { readonly command: typeof serverActionSpecData[A]['command'] } } = serverActionSpecData
+export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['command']
+export const isServerAction = (action: string): action is ServerAction => (serverActions as readonly string[]).includes(action)
+/** An action's servers, from whichever list declares it. */
+export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] => isServerAction(action) ? serverActionSpecs[action].engines : objectActionSpecs[action].engines
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
 export type ActionState = '' | 'disabled' | 'enabled'
@@ -271,6 +315,57 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
 }
 
+const anyOf = (clauses: readonly string[]) => clauses.length === 1 ? clauses[0] : `(${clauses.join(' || ')})`
+const serverCommandData: { readonly [A in ServerAction]: Pick<ActionCommandEntry, 'icon' | 'keywords' | 'unavailableHint'> } = {
+  createDatabase: { icon: 'database', keywords: ['create', 'database', 'add', 'files'], unavailableHint: 'Select the Databases folder, or a database, of a SQL Server in Object Explorer.' }
+}
+/**
+ * The server actions' commands. The menu offers one on its folders and node kinds, on a server it serves that is not lost;
+ * the palette, on a selection of the same kind. Like a long-running object action, none holds the document task.
+ */
+export function serverActionCommandEntries(): { readonly [K in ServerActionCommandId]: ActionCommandEntry } {
+  return Object.fromEntries(serverActions.map(action => {
+    const spec: ServerActionSpec = serverActionSpecs[action]
+    const engines = (key: string) => anyOf(spec.engines.map(engine => `${key} == '${engine}'`))
+    const menuPlaces = anyOf([...spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerNode == '${kind}'`)])
+    const selectionPlaces = anyOf([...spec.folders.map(folder => `explorerSelectionFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerSelectionKind == '${kind}'`)])
+    const entry: ActionCommandEntry = {
+      title: spec.title, category: 'Object Explorer', ...serverCommandData[action],
+      precondition: `backendReady && ${selectionPlaces} && ${engines('explorerSelectionServerEngine')}`,
+      menus: [{ menu: 'explorer.context', group: spec.group, order: spec.order, mnemonic: spec.mnemonic, when: `${menuPlaces} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
+    }
+    return [spec.command, entry]
+  })) as { readonly [K in ServerActionCommandId]: ActionCommandEntry }
+}
+
+/** The New Database document's header verbs: catalogue commands, so the palette offers them too. */
+export type NewDatabaseCommandId = 'newDatabase.ok' | 'newDatabase.cancel' | 'newDatabase.stop'
+export interface NewDatabaseCommandEntry {
+  readonly title: string
+  readonly category: 'New Database'
+  readonly icon: 'check' | 'close' | 'debug-stop'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+}
+/** OK creates the database and closes the document; Cancel closes it; Stop cancels a running OK in SQL Server. */
+export function newDatabaseCommandEntries(): { readonly [K in NewDatabaseCommandId]: NewDatabaseCommandEntry } {
+  return {
+    'newDatabase.ok': {
+      title: 'Create Database', category: 'New Database', icon: 'check', keywords: ['ok', 'create', 'new', 'database'],
+      precondition: 'activeDocumentIsNewDatabase && newDatabaseCreatable', unavailableHint: 'Fill in the New Database document on a connected server first.'
+    },
+    'newDatabase.cancel': {
+      title: 'Cancel', category: 'New Database', icon: 'close', keywords: ['close', 'discard'],
+      precondition: 'activeDocumentIsNewDatabase && !newDatabaseCreating', unavailableHint: 'Stop the database being created first.'
+    },
+    'newDatabase.stop': {
+      title: 'Stop', category: 'New Database', icon: 'debug-stop', keywords: ['cancel', 'create'],
+      precondition: 'activeDocumentIsNewDatabase && newDatabaseCreating', unavailableHint: 'The database is not being created.'
+    }
+  }
+}
+
 /** The Database Properties document's header verbs: catalogue commands, so the palette offers them too. */
 export type PropertiesCommandId = 'databaseProperties.apply' | 'databaseProperties.discard' | 'databaseProperties.refresh' | 'databaseProperties.stop'
 export interface PropertiesCommandEntry {
@@ -337,8 +432,8 @@ export interface DialogSpec {
   /** 'withName': SSMS's "Database Properties - AppData". */
   readonly titleFormat: 'plain' | 'withName'
   readonly size: 'compact' | 'large'
-  /** The action OK runs and Script scripts; its catalogue row decides where the dialog opens. */
-  readonly action: ObjectAction
+  /** The action OK runs and Script scripts; its catalogue row (or, for a server action, its folders) decides where the dialog opens. */
+  readonly action: CatalogAction
   readonly pages: readonly DialogPageSpec[]
   /** A modal dialog whose run has several steps lists them under its message bar once the run reports them. */
   readonly steps?: true
@@ -354,6 +449,11 @@ const dialogSpecData = {
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
+  },
+  // SSMS's New Database pages: General (the name, the owner and the files), Options and Filegroups.
+  newDatabase: {
+    title: 'New Database', surface: 'document', titleFormat: 'plain', size: 'large', action: 'createDatabase',
+    pages: [page('general', 'General'), page('options', 'Options'), page('filegroups', 'Filegroups')]
   }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
@@ -435,11 +535,14 @@ export const actionLimits = {
    *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
    *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
    *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
-  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1
+  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1,
+  /** New Database: files and filegroups one design holds, sizes in MB (a data file up to 16 TB, a log file and a growth up to
+   *  2 TB, as SQL Server bounds them), and a growth in percent. */
+  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_216, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
 } as const
 
 /** Whether an action runs on a server of this engine. */
-export const actionServes = (action: ObjectAction, engine: ServerEngine): boolean => objectActionSpecs[action].engines.includes(engine)
+export const actionServes = (action: CatalogAction, engine: ServerEngine): boolean => catalogActionEngines(action).includes(engine)
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */
 export const unknownOutcomeMessage = 'The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.'
@@ -473,9 +576,14 @@ export function actionsCatalogJson(): string {
     const spec: ObjectActionSpec = objectActionSpecs[action]
     return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
   }
+  // A server action belongs to no row: `scope` says so, and C# validates its target itself.
+  const serverActionJson = (action: ServerAction) => {
+    const spec: ServerActionSpec = serverActionSpecs[action]
+    return { action, class: 'dialog', title: spec.title, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, scope: 'server' }
+  }
   return [
     '{',
-    `  "actions": ${block(objectActions.map(actionJson))},`,
+    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson)])},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,

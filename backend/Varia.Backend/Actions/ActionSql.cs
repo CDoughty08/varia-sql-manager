@@ -265,7 +265,9 @@ internal static partial class ActionSql
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
         // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
-        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'"
+        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'",
+        // New Database's facts (CreateDatabaseSql.Facts).
+        "'InstanceDefaultDataPath'", "'InstanceDefaultLogPath'", "'Collation'", "N'CREATE ANY DATABASE'", "N'CREATE DATABASE'", "N'dm_os_file_exists'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -442,6 +444,8 @@ internal static partial class ActionSql
         yield return ("properties call", LintCatalog(DatabaseProperties.InsideCall, ExplorerCatalog.MaxBand, database: false));
         yield return ("properties preflight", LintCatalog(ActionService.DatabasePropertiesPreflight, ExplorerCatalog.MaxBand, database: false));
         foreach (var item in DatabaseAlter.Lint(ActionsCatalog.Current)) yield return item;
+        // New Database: its facts for every band, and its builder (form 5), run and dry run.
+        foreach (var item in CreateDatabaseSql.LintAll()) yield return item;
     }
 }
 

@@ -173,6 +173,14 @@ internal sealed partial class ActionService : IDisposable
         }
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        // A server action's document (New Database) describes the server it makes something on.
+        if (catalog.IsServerAction(catalog.ActionOf(args.Dialog)))
+        {
+            if (args.Target is not { Kind: "server" }) throw Invalid("target.");
+            try { ExplorerRefs.Object(args.Target, explorer); }
+            catch (RequestException) { throw Invalid("target."); }
+            return args.Target;
+        }
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
@@ -217,8 +225,14 @@ internal sealed partial class ActionService : IDisposable
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
-                TableDesignValidator.Validate(designer, args.Design);
+                TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
                 return database;
+            case "createDatabase":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createDatabase takes only a design.");
+                // The new database's name is the target's; it is no object yet, so no row offers the action.
+                if (args.Target is not { Kind: "database", Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } created || !ExplorerRefs.Ident(created.Name)) throw Invalid("target.");
+                NewDatabaseValidator.Validate(catalog, created.Name!, args.Design?.As<NewDatabaseDesignDto>());
+                return created;
             default:
                 throw Invalid("action.");
         }
@@ -257,6 +271,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                "newDatabase" => DescribeNewDatabaseJobAsync(connection, profile, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -272,6 +287,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                "createDatabase" => ScriptNewDatabaseJobAsync(connection, args, profile, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -286,6 +302,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                "createDatabase" => ExecuteNewDatabaseJobAsync(connection, args, profile, band, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

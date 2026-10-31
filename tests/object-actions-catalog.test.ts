@@ -7,7 +7,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import {
   actionCommandEntries, actionContextKey, actionContextValues, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenuState, actionOffered, actionRow,
   actionsCatalogJson, actionStatuses, databaseActionState, databaseStateOf, dialogIds, dialogSpecs, dialogTitle, isModalDialog, objectActions, objectActionSpecs, offeredOnEngine, overlayRow,
-  pageIds, propertiesCommandEntries, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
+  isServerAction, newDatabaseCommandEntries, pageIds, propertiesCommandEntries, serverActionCommandEntries, serverActions, serverActionSpecs, scriptActionTitles, unknownOutcomeMessage, type ActionCommandId, type DatabaseActionRule, type ModalDialogId, type PageId
 } from '../src/shared/actions/catalog'
 import { currentDatabaseRuntime } from '../src/shared/explorer/status'
 import { contextRecord } from '../src/shared/commands/context-keys'
@@ -129,13 +129,16 @@ describe('object action catalogue', () => {
     expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties'])
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'newDatabase'])
     expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
     expect(dialogSpecs.databaseProperties).toMatchObject({ title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties' })
     expect(dialogSpecs.databaseProperties.pages.map(page => [page.id, page.title, page.icon])).toEqual([['general', 'General', 'settings-gear'], ['files', 'Files', 'settings-gear'],
       ['filegroups', 'Filegroups', 'settings-gear'], ['options', 'Options', 'settings-gear']])
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
-    for (const dialog of dialogIds) expect(objectActionSpecs[dialogSpecs[dialog].action].dialog).toBe(dialog)
+    for (const dialog of dialogIds) {
+      const action = dialogSpecs[dialog].action
+      expect(isServerAction(action) ? serverActionSpecs[action].dialog : objectActionSpecs[action].dialog).toBe(dialog)
+    }
     // Delete Object is a confirmation, so it stays modal; Database Properties opens as a document (U1 D2).
     expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
@@ -234,6 +237,40 @@ describe('object action catalogue', () => {
     expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row, complete: false })).toMatchObject({ state: 1 })
     expect(currentDatabaseRuntime(undefined, undefined, { at: 5, row, complete: true })).toMatchObject({ state: 1 })
     expect(currentDatabaseRuntime(undefined, undefined)).toBeUndefined()
+  })
+  it('offers New Database… first on the Databases folder and a database node of a SQL Server box, never on Azure or Managed Instance', () => {
+    expect(serverActions).toEqual(['createDatabase'])
+    expect(serverActionSpecs.createDatabase).toMatchObject({ title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase',
+      engines: ['box'], folders: ['databases'], kinds: ['database'], longRun: 'newDatabase' })
+    expect(dialogSpecs.newDatabase).toMatchObject({ title: 'New Database', surface: 'document', titleFormat: 'plain', action: 'createDatabase' })
+    expect(dialogSpecs.newDatabase.pages.map(page => page.id)).toEqual(['general', 'options', 'filegroups'])
+    const entries = { ...serverActionCommandEntries(), ...newDatabaseCommandEntries() }
+    expect(Object.keys(entries)).toEqual(['explorer.newDatabase', 'newDatabase.ok', 'newDatabase.cancel', 'newDatabase.stop'])
+    for (const [id, entry] of Object.entries(entries)) {
+      expect(isCommandId(id), id).toBe(true)
+      expect(commandDescriptor(id as never)).toEqual(entry)
+      expect(isIconId(entry.icon), id).toBe(true)
+      expect(whenProblems(entry.precondition, ['static', 'state']), id).toEqual([])
+      for (const placement of 'menus' in entry ? entry.menus : []) expect(whenProblems(placement.when, ['static', 'state', 'target']), id).toEqual([])
+    }
+    // Stop must stay available while OK runs; Cancel is not.
+    expect(entries['newDatabase.stop'].precondition).toBe('activeDocumentIsNewDatabase && newDatabaseCreating')
+    expect(entries['newDatabase.cancel'].precondition).toContain('!newDatabaseCreating')
+    const commands = { isEnabled: () => true, isToggled: () => false }, keybindings = { lookup: () => undefined }
+    const titles = (target: Record<string, unknown>, engine: 'box' | 'cloud' | 'managedInstance' = 'box') => {
+      const state = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionServerEngine: engine, ...actionContextValues(actionMenuState({ kind: 'folder' })) })
+      return resolveMenu('explorer.context', { platform: 'win32', state, target: { explorerServerEngine: engine, explorerServerLost: false, ...target }, commands, keybindings })
+        .flatMap(item => item.kind === 'command' ? [item.title] : item.kind === 'separator' ? ['---'] : [])
+    }
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' })[0]).toBe('New Database…')
+    expect(titles({ explorerNode: 'database' })[0]).toBe('New Database…')
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'tables' })).not.toContain('New Database…')
+    expect(titles({ explorerNode: 'folder', explorerFolder: 'databases', explorerServerLost: true })).not.toContain('New Database…')
+    for (const engine of ['cloud', 'managedInstance'] as const) expect(titles({ explorerNode: 'folder', explorerFolder: 'databases' }, engine), engine).not.toContain('New Database…')
+    // No row offers it, and Attach, Restore and Restore Files stay out of this PR (critic A17).
+    for (const kind of nodeKinds) expect(actionOffered(kind, 'createDatabase' as never), kind).toBe(false)
+    expect(commandIds.filter(id => /attach|restore/i.test(id))).toEqual([])
+    expect(renderObjectActionsDocs()).toContain('## New Database')
   })
   it('declares the database node\'s Tasks and Tasks › Restore submenus, hidden while nothing is placed in them', () => {
     const state = contextRecord('win32', { backendReady: true, hasConnection: true, explorerHasSelection: true, explorerSelectionKind: 'database', ...actionContextValues(actionMenuState({ kind: 'database' })) })
