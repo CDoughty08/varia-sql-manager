@@ -8,7 +8,7 @@ import { actionRequestSchema, type ActionDescribeResult, type ActionExecuteResul
 import type { ApiResult } from '../src/shared/contracts'
 import { setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
-import { newDatabaseDesign, newDatabaseMessages, previewDelayMs } from '../src/renderer/src/new-database/NewDatabaseService'
+import { filegroupsFor, fileTypesFor, newDatabaseDesign, newDatabaseKey, newDatabaseMessages, newDatabaseStateProblems, previewDelayMs } from '../src/renderer/src/new-database/NewDatabaseService'
 import { databaseModel } from './fixtures/database-properties'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, manualTimers, workbenchFixture } from './fixtures/workbench'
@@ -35,9 +35,10 @@ describe('New Database without the DOM', () => {
     expect(defaultFileName('Sales2', 'rows', false, '\\')).toBe('Sales2.ndf')
     expect(defaultFileName('Sales_log', 'log', false, '/')).toBe('Sales_log.ldf')
     expect(defaultFileName('Stream', 'filestream', false, '\\')).toBe('Stream')
-    // Windows refuses \ / : * ? " < > |, trailing dots and spaces, and device names; Linux only / and what ServerPath refuses.
+    // Windows refuses \ / : * ? " < > |, trailing dots and spaces, and device names; Linux / and \ (SQL Server on Linux reads
+    // it as a separator, so a\b would land in a folder a), * ? " < > | and what ServerPath refuses.
     expect(sanitiseFileName('a\\b/c:d*e?"<>|', '\\')).toBe('a_b_c_d_e_____')
-    expect(sanitiseFileName('a\\b:c', '/')).toBe('a\\b:c')
+    expect(sanitiseFileName('a\\b:c', '/')).toBe('a_b:c')
     expect(sanitiseFileName('a/b', '/')).toBe('a_b')
     expect(sanitiseFileName('name. ', '\\')).toBe('name__')
     expect(sanitiseFileName('CON', '\\')).toBe('_CON')
@@ -52,6 +53,7 @@ describe('New Database without the DOM', () => {
     expect(/[\uD800-\uDBFF]\.mdf$/.test(long)).toBe(false)
     expect(fileNameProblem('a:b.mdf', '\\')).toMatch(/cannot contain/)
     expect(fileNameProblem('a:b.mdf', '/')).toBeUndefined()
+    expect(fileNameProblem('a\\b.mdf', '/')).toMatch(/cannot contain/)
     expect(fileNameProblem('NUL', '\\')).toMatch(/device name/)
     expect(fileNameProblem('x.', '\\')).toMatch(/dot or a space/)
   })
@@ -74,13 +76,18 @@ describe('New Database without the DOM', () => {
     expect(messages('Sales', design({ containment: 'PARTIAL' }), windows)).toEqual(['Partial containment needs the server option contained database authentication.'])
     // Limits.
     const big = design({ files: [{ ...design().files[0], sizeMb: actionLimits.dataFileMb + 1 }, design().files[1]] })
-    expect(messages('Sales', big)[0]).toMatch(/initial size is a whole number of MB from 1 to 16,777,216/)
+    expect(messages('Sales', big)[0]).toMatch(/initial size is a whole number of MB from 1 to 16,777,215/)
     const log = design({ files: [design().files[0], { ...design().files[1], sizeMb: actionLimits.logFileMb + 1 }] })
     expect(messages('Sales', log)[0]).toMatch(/from 1 to 2,097,152/)
     const growth = design({ files: [{ ...design().files[0], growth: { enabled: true, unit: 'percent', by: 101 } }, design().files[1]] })
     expect(messages('Sales', growth)[0]).toMatch(/percent is a whole number from 1 to 100/)
     const max = design({ files: [{ ...design().files[0], growth: { enabled: true, unit: 'mb', by: 1, maxMb: 4 } }, design().files[1]] })
     expect(messages('Sales', max)[0]).toMatch(/maximum file size/)
+    // SQL Server refuses a growth in MB larger than the maximum (5169); in percent it does not.
+    const grows = (growth: NewDatabaseDesign['files'][number]['growth']) => design({ files: [{ ...design().files[0], growth }, design().files[1]] })
+    expect(messages('Sales', grows({ enabled: true, unit: 'mb', by: 65, maxMb: 64 }))).toEqual(['The file Sales: File growth cannot be larger than the maximum file size.'])
+    expect(messages('Sales', grows({ enabled: true, unit: 'mb', by: 64, maxMb: 64 }))).toEqual([])
+    expect(messages('Sales', grows({ enabled: true, unit: 'percent', by: 100, maxMb: 64 }))).toEqual([])
   })
   it('orders the filegroup changes after CREATE and counts every statement', () => {
     const value = design({
@@ -106,6 +113,22 @@ describe('New Database without the DOM', () => {
     expect(brokerOff.options.brokerEnabled).toBe('true')
     expect(changedFrom(brokerOff.options, brokerOff.options)).toEqual({})
     expect(changedFrom(brokerOff.options, { ...brokerOff.options, brokerEnabled: 'false' })).toEqual({ brokerEnabled: 'false' })
+  })
+  it('routes Enter and Escape as SSMS\'s dialog does, leaving the focused control its own keys (finding 6)', () => {
+    const element = (tagName: string, inside: string[] = [], attributes: string[] = []) =>
+      ({ tagName, closest: (selector: string) => selector.split(', ').some(item => inside.includes(item)) ? {} : null, hasAttribute: (name: string) => attributes.includes(name) })
+    expect(newDatabaseKey('Enter', element('INPUT'))).toBe('ok')
+    expect(newDatabaseKey('Escape', element('INPUT'))).toBe('cancel')
+    expect(newDatabaseKey('Escape', element('INPUT', ['table']))).toBe('cancel')
+    // A grid cell edits in place, a button presses itself, a drop-down opens, and a field with suggestions picks one.
+    expect(newDatabaseKey('Enter', element('INPUT', ['table']))).toBeUndefined()
+    expect(newDatabaseKey('Enter', element('BUTTON'))).toBeUndefined()
+    expect(newDatabaseKey('Enter', element('SELECT'))).toBeUndefined()
+    expect(newDatabaseKey('Enter', element('INPUT', [], ['list']))).toBeUndefined()
+    // The Script drawer's editor keeps both.
+    expect(newDatabaseKey('Enter', element('TEXTAREA', ['.monaco-editor']))).toBeUndefined()
+    expect(newDatabaseKey('Escape', element('TEXTAREA', ['.monaco-editor']))).toBeUndefined()
+    expect(newDatabaseKey('a', element('INPUT'))).toBeUndefined()
   })
   it('validates OK\'s request in main as the backend does', () => {
     const request = { action: 'createDatabase', connectionId: crypto.randomUUID(), requestId: crypto.randomUUID(), target: { kind: 'database', name: 'Sales' }, design: design() }
@@ -255,6 +278,78 @@ describe('New Database as a document', () => {
     await settled()
     expect(api.scriptObjectAction.mock.calls).toEqual([[expect.objectContaining({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' } })]])
     expect(state().script).toEqual({ state: 'ready', text: 'CREATE DATABASE [Sales]' })
+  })
+  it('numbers a second New Database tab, so tabs that read alike can be told apart (finding 11)', async () => {
+    const { newDatabase, documents, id, state } = opened()
+    expect(state().title).toBe('New Database')
+    const second = newDatabase.open(folderNode()), third = newDatabase.open(folderNode())
+    expect([second, third].map(item => [newDatabase.get(item)?.title, documents.get(item)?.name])).toEqual([['New Database (2)', 'New Database (2)'], ['New Database (3)', 'New Database (3)']])
+    // A closed tab's title is free again.
+    await documents.close(id)
+    expect(newDatabase.get(newDatabase.open(folderNode()))?.title).toBe('New Database')
+  })
+  it('creates on Save (Ctrl+S), as D1 binds it, from any tab (finding 6)', async () => {
+    const { newDatabase, documents, files, id, executes, api } = opened()
+    await settled()
+    newDatabase.setName(id, 'Sales')
+    const other = newDatabase.open(folderNode())
+    expect(documents.getSnapshot().activeId).toBe(other)
+    expect(files.canSave(id)).toBe(true)
+    api.executeObjectAction.mockResolvedValueOnce(created)
+    await files.save(id)
+    expect(executes().map(request => request.target)).toEqual([{ kind: 'database', name: 'Sales' }])
+    expect(documents.get(id)).toBeUndefined()
+  })
+  it('says the backend stopped, not the server, when its connection is lost with its backend (finding 3)', async () => {
+    const { newDatabase, connections, id, state, api } = opened()
+    await settled()
+    newDatabase.setName(id, 'Sales')
+    const answer = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(answer.promise)
+    const running = newDatabase.create(id)
+    connections.markLostBefore(2)
+    expect(state()).toMatchObject({ phase: 'ready', error: { code: 'CONNECTION_LOST', message: newDatabaseMessages.backendLost } })
+    answer.resolve({ ok: false, error: 'The backend stopped.', code: 'BACKEND_LOST' })
+    expect(await running).toBe(false)
+  })
+  it('selects the new database in Databases when opened from a database under System Databases (finding 13)', async () => {
+    const { newDatabase, explorer, executes, api } = opened()
+    const master = { id: 9, connectionId: 'c1', ref: { type: 'object', object: { kind: 'database', name: 'master' } }, kind: 'database', label: 'master', lost: false, engine: 'box' } as ExplorerMenuNode
+    const folder = vi.spyOn(explorer, 'databasesFolderOf').mockReturnValue(3)
+    const reconcile = vi.mocked(explorer.reconcile)
+    const id = newDatabase.open(master)
+    expect(folder.mock.calls).toEqual([[9]])
+    await settled()
+    newDatabase.setName(id, 'Sales')
+    api.executeObjectAction.mockResolvedValueOnce(created)
+    expect(await newDatabase.create(id)).toBe(true)
+    expect(executes()).toHaveLength(1)
+    expect(reconcile.mock.calls).toEqual([[3, { select: { type: 'object', object: { kind: 'database', name: 'Sales' } } }]])
+  })
+  it('offers a memory-optimized filegroup\'s container where FILESTREAM is off, Linux included, and keeps the last log (finding 14)', async () => {
+    const { newDatabase, id, state } = opened(newDatabaseModel({ linux: true, dataPath: '/var/opt/mssql/data', logPath: '/var/opt/mssql/log' }))
+    await settled()
+    newDatabase.setName(id, 'Sales')
+    expect(fileTypesFor(state(), { type: 'rows' })).toEqual(['rows', 'log'])
+    expect(filegroupsFor(state(), 'filestream')).toEqual([])
+    const group = newDatabase.addFilegroup(id, 'memoryOptimized')
+    expect(group).toBe(state().filegroups.at(-1)?.key)
+    newDatabase.setFilegroup(id, group!, { name: 'Memory' })
+    expect(fileTypesFor(state(), { type: 'rows' })).toEqual(['rows', 'log', 'filestream'])
+    expect(filegroupsFor(state(), 'filestream').map(item => item.name)).toEqual(['Memory'])
+    expect(filegroupsFor(state(), 'rows').map(item => item.name)).toEqual(['PRIMARY'])
+    const container = newDatabase.addFile(id)!
+    newDatabase.setFile(id, container, { name: 'Memory_c', type: 'filestream' })
+    expect(state().files.at(-1)).toMatchObject({ type: 'filestream', filegroup: 'Memory' })
+    expect(newDatabaseStateProblems(state())).toEqual([])
+    // The primary data file and the only log file stay; a second log can go.
+    const [primary, log] = state().files
+    expect([newDatabase.removable(id, primary.key), newDatabase.removable(id, log.key), newDatabase.removable(id, container)]).toEqual([false, false, true])
+    const second = newDatabase.addFile(id, 'log')!
+    expect([newDatabase.removable(id, log.key), newDatabase.removable(id, second)]).toEqual([true, true])
+    newDatabase.removeFile(id, log.key)
+    newDatabase.removeFile(id, second)
+    expect(state().files.filter(row => row.type === 'log')).toHaveLength(1)
   })
   it('refuses a read that fails as a value, and Retry reads again', async () => {
     const { newDatabase, id, state } = opened(newDatabaseModel(), true)

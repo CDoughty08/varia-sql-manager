@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { actionLimits, dialogSpecs, type PageId } from '../../../shared/actions/catalog.ts'
 import { autogrowthText, fileTypeLabel, notApplicable, optionDef, type Growth } from '../../../shared/actions/database.ts'
 import { newDatabaseBaseline, newDatabaseOptionKeys, newDatabaseScopedKeys, primaryFilegroup, type NewDatabaseProblem, type NewFilegroupType, type NewFileType } from '../../../shared/actions/new-database.ts'
@@ -17,12 +17,29 @@ import Skeleton from '../kit/Skeleton'
 import StepList from '../kit/StepList'
 import Switch from '../kit/Switch'
 import { OptionField, SelectOwner } from '../properties/DatabaseProperties'
-import { newDatabaseStateProblems, rowFileName, type NewDatabaseService, type NewDatabaseState, type NewFileRow, type NewGroupRow } from './NewDatabaseService'
+import { filegroupsFor, fileTypesFor, newDatabaseKey, newDatabaseStateProblems, rowFileName, type NewDatabaseService, type NewDatabaseState, type NewFileRow, type NewGroupRow } from './NewDatabaseService'
 
 const fieldId = (documentId: string, key: string) => `new-database-${documentId}-${key}`
 /** SSMS's header fields above the other options; Collation and Containment type are CREATE DATABASE's own. */
 const headerOptionKeys = ['recoveryModel', 'compatibilityLevel']
-const fileTypes: readonly NewFileType[] = ['rows', 'log', 'filestream']
+
+/**
+ * Where the caret goes after Add or Remove changes a list (a removed row's focused Remove would otherwise drop it on the
+ * page): the row's first field, found by its key once the list has drawn it, or `fallback` (Add) when no row is left.
+ */
+function useFocusAfter(container: () => HTMLElement | null) {
+  const pending = useRef<{ readonly key?: number; readonly fallback?: HTMLElement | null }>(undefined)
+  useLayoutEffect(() => {
+    const target = pending.current
+    if (!target) return
+    const field = target.key === undefined ? undefined
+      : container()?.querySelector<HTMLElement>(`[data-row-key="${target.key}"] input:not(:disabled), [data-row-key="${target.key}"] select:not(:disabled)`)
+    if (field || target.key === undefined) { pending.current = undefined; (field ?? target.fallback)?.focus() }
+  })
+  return (key: number | undefined, fallback?: HTMLElement | null) => { pending.current = { ...key === undefined ? {} : { key }, fallback } }
+}
+/** The row the caret goes to after one is removed: the next, or the previous when the last went. */
+const neighbour = (keys: readonly number[], removed: number): number | undefined => { const at = keys.indexOf(removed); return keys[at + 1] ?? keys[at - 1] }
 const groupTables: readonly { readonly type: NewFilegroupType; readonly title: string }[] = [
   { type: 'rows', title: 'Rows' }, { type: 'filestream', title: 'FILESTREAM' }, { type: 'memoryOptimized', title: 'Memory Optimized Data' }
 ]
@@ -50,8 +67,10 @@ export function ChangeAutogrowth({ file, onOk, onCancel }: { readonly file: NewF
   const whole = (text: string, low: number, high: number) => /^[0-9]{1,10}$/.test(text) && Number(text) >= low && Number(text) <= high
   const growthOk = !enabled || whole(by, 1, unit === 'mb' ? actionLimits.growthMb : actionLimits.growthPercent)
   const maxOk = !enabled || !limited || whole(max, file.sizeMb ?? 1, ceiling)
+  // SQL Server refuses a growth in MB larger than the maximum (5169).
+  const fitsOk = !enabled || !limited || unit !== 'mb' || !growthOk || !maxOk || Number(by) <= Number(max)
   const growth = (): Growth => enabled ? { enabled: true, unit, by: Number(by), ...limited ? { maxMb: Number(max) } : {} } : { enabled: false }
-  return <SubDialog title={`Change Autogrowth for ${file.name || 'the file'}`} okDisabled={!growthOk || !maxOk} onOk={() => onOk(growth())} onCancel={onCancel} className="new-database-autogrowth">
+  return <SubDialog title={`Change Autogrowth for ${file.name || 'the file'}`} okDisabled={!growthOk || !maxOk || !fitsOk} onOk={() => onOk(growth())} onCancel={onCancel} className="new-database-autogrowth">
     <label className="new-database-check"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />Enable Autogrowth</label>
     <fieldset className="new-database-fieldset" disabled={!enabled}>
       <legend>File Growth</legend>
@@ -69,6 +88,7 @@ export function ChangeAutogrowth({ file, onOk, onCancel }: { readonly file: NewF
     </fieldset>
     {!growthOk && <p className="property-field-error" role="alert"><Icon name="error" />{unit === 'mb' ? `File growth is a whole number of MB from 1 to ${actionLimits.growthMb.toLocaleString()}.` : 'File growth in percent is a whole number from 1 to 100.'}</p>}
     {growthOk && !maxOk && <p className="property-field-error" role="alert"><Icon name="error" />{`The maximum is a whole number of MB from the initial size to ${ceiling.toLocaleString()}.`}</p>}
+    {!fitsOk && <p className="property-field-error" role="alert"><Icon name="error" />File growth cannot be larger than the maximum file size.</p>}
   </SubDialog>
 }
 
@@ -88,10 +108,19 @@ function GeneralSection({ state, editable, problems, service }: SectionProps) {
   const fileProblems = problems.filter(problem => problem.field === 'files')
   const cellError = (index: number, column: NewDatabaseProblem['column']) => show && fileProblems.some(problem => problem.file === index && problem.column === column) || undefined
   const growing = state.files.find(row => row.key === autogrowth)
-  const linux = model.linux, filestream = !linux && model.model.server.filestreamLevel > 0
-  const groupsOf = (type: NewFileType) => state.filegroups.filter(group => type === 'rows' ? group.type === 'rows' : group.type !== 'rows')
-  const removable = selected !== undefined && state.files[0]?.key !== selected && state.files.some(row => row.key === selected)
-  return <div className="new-database-general">
+  const removable = service.removable(state.id, selected)
+  const selectedIndex = state.files.findIndex(row => row.key === selected)
+  const selectedLabel = selectedIndex < 0 ? undefined : state.files[selectedIndex].name || `File ${selectedIndex + 1}`
+  const root = useRef<HTMLDivElement>(null), add = useRef<HTMLButtonElement>(null)
+  const focusAfter = useFocusAfter(() => root.current)
+  const remove = () => {
+    if (selected === undefined || !removable) return
+    const next = neighbour(state.files.map(row => row.key), selected)
+    service.removeFile(state.id, selected)
+    setSelected(next)
+    focusAfter(next, add.current)
+  }
+  return <div className="new-database-general" ref={root}>
     <div className="properties-fields">
       <PropertyField id={nameId} label="Database name" error={nameError}>
         <input id={nameId} className="property-input" type="text" maxLength={128} spellCheck={false} autoComplete="off" value={state.name} disabled={!editable} data-new-database-focus
@@ -116,18 +145,18 @@ function GeneralSection({ state, editable, problems, service }: SectionProps) {
         </tr></thead>
         <tbody>{state.files.map((row, index) => {
           const primary = index === 0, label = row.name || `File ${index + 1}`, defaultName = rowFileName(state, { ...row, fileName: undefined })
-          return <tr key={row.key} data-file-row={index} data-selected={selected === row.key || undefined} onFocus={() => setSelected(row.key)} onClick={() => setSelected(row.key)}>
-            <td><input className="new-database-cell" type="text" maxLength={128} spellCheck={false} aria-label={`Logical Name of ${label}`} value={row.name} disabled={!editable} aria-invalid={cellError(index, 'name')}
-              onChange={event => service.setFile(state.id, row.key, { name: event.target.value })} /></td>
+          return <tr key={row.key} data-file-row={index} data-row-key={row.key} data-selected={selected === row.key || undefined} onFocus={() => setSelected(row.key)} onClick={() => setSelected(row.key)}>
+            <td><input className="new-database-cell new-database-name" type="text" maxLength={128} spellCheck={false} aria-label={`Logical Name of ${label}`} value={row.name} title={row.name || undefined} disabled={!editable}
+              aria-invalid={cellError(index, 'name')} onChange={event => service.setFile(state.id, row.key, { name: event.target.value })} /></td>
             <td data-wrap="never">{primary ? fileTypeLabel.rows
               : <select className="new-database-cell" aria-label={`File Type of ${label}`} value={row.type} disabled={!editable} onChange={event => service.setFile(state.id, row.key, { type: event.target.value as NewFileType })}>
-                {fileTypes.filter(type => type !== 'filestream' || filestream || row.type === 'filestream').map(type => <option key={type} value={type}>{fileTypeLabel[type]}</option>)}
+                {fileTypesFor(state, row).map(type => <option key={type} value={type}>{fileTypeLabel[type]}</option>)}
               </select>}</td>
             <td>{row.type === 'log' ? notApplicable : primary ? primaryFilegroup
               : <select className="new-database-cell" aria-label={`Filegroup of ${label}`} value={row.filegroup ?? ''} disabled={!editable} aria-invalid={cellError(index, 'filegroup')}
                 onChange={event => service.setFile(state.id, row.key, { filegroup: event.target.value })}>
                 {row.filegroup === undefined && <option value="">&nbsp;</option>}
-                {groupsOf(row.type).map(group => <option key={group.key} value={group.name}>{displayText(group.name) || '(unnamed)'}</option>)}
+                {filegroupsFor(state, row.type).map(group => <option key={group.key} value={group.name}>{displayText(group.name) || '(unnamed)'}</option>)}
               </select>}</td>
             <td data-wrap="never">{row.type === 'filestream' ? <span className="new-database-muted">Unlimited</span>
               : <input className="new-database-cell new-database-number" type="number" step={1} min={1} max={row.type === 'log' ? actionLimits.logFileMb : actionLimits.dataFileMb} aria-label={`Initial Size (MB) of ${label}`}
@@ -138,19 +167,20 @@ function GeneralSection({ state, editable, problems, service }: SectionProps) {
                 onClick={() => setAutogrowth(row.key)}>…</button>}
             </span></td>
             <td data-wrap="anywhere"><span className="new-database-browse">
-              <input className="new-database-cell" type="text" spellCheck={false} maxLength={actionLimits.serverPath} aria-label={`Path of ${label}`} value={row.path} disabled={!editable} aria-invalid={cellError(index, 'path')}
-                onChange={event => service.setFile(state.id, row.key, { path: event.target.value })} />
+              <input className="new-database-cell new-database-path" type="text" spellCheck={false} maxLength={actionLimits.serverPath} aria-label={`Path of ${label}`} value={row.path} title={row.path || undefined} disabled={!editable}
+                aria-invalid={cellError(index, 'path')} onChange={event => service.setFile(state.id, row.key, { path: event.target.value })} />
               <button type="button" className="property-browse" aria-label={`Browse for the path of ${label}`} title="Browse the server's folders" disabled={!editable} onClick={() => void service.choosePath(state.id, row.key)}>…</button>
             </span></td>
             <td><input className="new-database-cell new-database-file-name" type="text" spellCheck={false} maxLength={actionLimits.serverPath} aria-label={`File Name of ${label}`} placeholder={defaultName}
-              value={row.fileName ?? ''} disabled={!editable} aria-invalid={cellError(index, 'fileName')} onChange={event => service.setFile(state.id, row.key, { fileName: event.target.value })} /></td>
+              title={row.fileName ?? defaultName} value={row.fileName ?? ''} disabled={!editable} aria-invalid={cellError(index, 'fileName')} onChange={event => service.setFile(state.id, row.key, { fileName: event.target.value })} /></td>
           </tr>
         })}</tbody>
       </table>
     </div>
     <div className="new-database-grid-bar">
-      <button type="button" disabled={!editable || state.files.length >= actionLimits.newDatabaseFiles} onClick={() => service.addFile(state.id)}>Add</button>
-      <button type="button" disabled={!editable || !removable} onClick={() => { if (selected !== undefined) { service.removeFile(state.id, selected); setSelected(undefined) } }}>Remove</button>
+      <button ref={add} type="button" disabled={!editable || state.files.length >= actionLimits.newDatabaseFiles} onClick={() => { const key = service.addFile(state.id); setSelected(key); focusAfter(key) }}>Add</button>
+      {/* Named after the row it removes: the selection's fill is all that shows it otherwise. */}
+      <button type="button" disabled={!editable || !removable} aria-label={removable && selectedLabel ? `Remove ${selectedLabel}` : undefined} onClick={remove}>Remove</button>
       <span className="field-note">{`${state.files.length} of ${actionLimits.newDatabaseFiles} files · paths are on the server ${state.server}`}</span>
     </div>
     {show && fileProblems.length > 0 && <ul className="new-database-problems" aria-label="Problems with the files">
@@ -222,16 +252,28 @@ function FilegroupsSection({ state, editable, problems, service }: SectionProps)
   const level = server.model.server.level
   const groupProblems = problems.filter(problem => problem.field === 'filegroups')
   const filesIn = (group: NewGroupRow) => state.files.filter(row => row.filegroup !== undefined && row.filegroup.toLowerCase() === group.name.toLowerCase()).length
+  const root = useRef<HTMLDivElement>(null), adds = useRef(new Map<NewFilegroupType, HTMLButtonElement | null>())
+  const focusAfter = useFocusAfter(() => root.current)
   const table = ({ type, title }: typeof groupTables[number]) => {
     const id = `${state.id}-new-filegroups-${type}`
     const rows = state.filegroups.map((group, index) => ({ group, index })).filter(({ group }) => group.type === type)
     const unavailable = type === 'filestream' ? server.linux ? 'SQL Server on Linux has no FILESTREAM.' : server.model.server.filestreamLevel === 0 ? greyNotes.filestream : undefined : undefined
     const canAdd = editable && !unavailable && state.filegroups.length < actionLimits.newDatabaseFilegroups && !(type === 'memoryOptimized' && rows.length > 0)
-    const removable = rows.some(({ group }) => group.key === selected && state.filegroups[0]?.key !== group.key)
+    const chosen = rows.find(({ group }) => group.key === selected && state.filegroups[0]?.key !== group.key)
     const flag = (group: NewGroupRow, index: number, key: 'readOnly' | 'isDefault' | 'autogrowAllFiles', label: string, disabled: boolean) =>
       <td data-wrap="never"><input type="checkbox" aria-label={`${label} of ${group.name || `filegroup ${index + 1}`}`} checked={group[key]} disabled={!editable || disabled}
         onChange={event => service.setFilegroup(state.id, group.key, { [key]: event.target.checked })} /></td>
-    return <div className="properties-filegroups-group" key={type}>
+    const remove = () => {
+      if (!chosen) return
+      const next = neighbour(rows.filter(({ index }) => index > 0).map(({ group }) => group.key), chosen.group.key)
+      service.removeFilegroup(state.id, chosen.group.key)
+      // A filegroup that still holds files stays (the service says why), and so does the caret.
+      if (state.files.some(row => row.filegroup === chosen.group.name)) return
+      setSelected(next)
+      focusAfter(next, adds.current.get(type))
+    }
+    // A group per list, so its Add Filegroup and Remove are told apart by more than their place.
+    return <div className="properties-filegroups-group" key={type} role="group" aria-labelledby={id}>
       <h3 className="properties-group-title" id={id}>{title}</h3>
       {unavailable && <p className="field-note">{unavailable}</p>}
       {rows.length > 0 && <div className="properties-table">
@@ -243,9 +285,9 @@ function FilegroupsSection({ state, editable, problems, service }: SectionProps)
           </tr></thead>
           <tbody>{rows.map(({ group, index }) => {
             const primary = index === 0, invalid = state.touched && groupProblems.some(problem => problem.filegroup === index) || undefined
-            return <tr key={group.key} data-selected={selected === group.key || undefined} onFocus={() => setSelected(group.key)} onClick={() => setSelected(group.key)}>
-              <td>{primary ? primaryFilegroup : <input className="new-database-cell" type="text" maxLength={128} spellCheck={false} aria-label={`Name of filegroup ${index + 1}`} value={group.name} disabled={!editable}
-                aria-invalid={invalid} onChange={event => service.setFilegroup(state.id, group.key, { name: event.target.value })} />}</td>
+            return <tr key={group.key} data-row-key={group.key} data-selected={selected === group.key || undefined} onFocus={() => setSelected(group.key)} onClick={() => setSelected(group.key)}>
+              <td>{primary ? primaryFilegroup : <input className="new-database-cell new-database-name" type="text" maxLength={128} spellCheck={false} aria-label={`Name of filegroup ${index + 1}`} value={group.name}
+                title={group.name || undefined} disabled={!editable} aria-invalid={invalid} onChange={event => service.setFilegroup(state.id, group.key, { name: event.target.value })} />}</td>
               <td data-wrap="never">{filesIn(group)}</td>
               {type === 'rows' && flag(group, index, 'readOnly', 'Read-Only', primary)}
               {type !== 'memoryOptimized' && flag(group, index, 'isDefault', 'Default', false)}
@@ -255,12 +297,13 @@ function FilegroupsSection({ state, editable, problems, service }: SectionProps)
         </table>
       </div>}
       <div className="new-database-grid-bar">
-        <button type="button" disabled={!canAdd} onClick={() => service.addFilegroup(state.id, type)}>Add Filegroup</button>
-        <button type="button" disabled={!editable || !removable} onClick={() => { if (selected !== undefined) { service.removeFilegroup(state.id, selected); setSelected(undefined) } }}>Remove</button>
+        <button ref={button => { adds.current.set(type, button) }} type="button" disabled={!canAdd} aria-label={`Add Filegroup to ${title}`}
+          onClick={() => { const key = service.addFilegroup(state.id, type); setSelected(key); focusAfter(key) }}>Add Filegroup</button>
+        <button type="button" disabled={!editable || !chosen} aria-label={chosen ? `Remove filegroup ${chosen.group.name || chosen.index + 1}` : `Remove from ${title}`} onClick={remove}>Remove</button>
       </div>
     </div>
   }
-  return <div className="properties-filegroups">
+  return <div className="properties-filegroups" ref={root}>
     {groupTables.map(table)}
     {state.touched && groupProblems.length > 0 && <ul className="new-database-problems" aria-label="Problems with the filegroups">
       {groupProblems.map((problem, index) => <li key={index} className="property-field-error"><Icon name="error" />{problem.message}</li>)}
@@ -274,7 +317,7 @@ function FilegroupsSection({ state, editable, problems, service }: SectionProps)
  * runs. Its service keeps the design, so switching tabs loses nothing.
  */
 export default function NewDatabase({ documentId }: { documentId: string }) {
-  const { newDatabase } = useWorkbench()
+  const { newDatabase, commands } = useWorkbench()
   const { documents } = useServiceSnapshot(newDatabase)
   const state = documents[documentId]
   if (!state) return <div className="new-database" />
@@ -306,7 +349,16 @@ export default function NewDatabase({ documentId }: { documentId: string }) {
     {state.steps && state.steps.length > 0 && <StepList labelledBy={`${state.id}-new-steps`} steps={state.steps.map(step => ({ state: step.status, text: step.message ?? step.title }))} />}
     <span id={`${state.id}-new-steps`} className="visually-hidden">Steps</span>
   </>
-  return <FieldHints><DocumentFrame id={`new-database-${state.id}`} title="New Database"
+  // SSMS's dialog keys: Enter outside a grid presses OK and Escape cancels, here as the document's own (the keybinding service runs
+  // the catalogue's keys; these belong to this document's focus only, as a dialog's do).
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return
+    const verb = newDatabaseKey(event.key, event.target as HTMLElement)
+    if (!verb || (verb === 'cancel' ? state.phase === 'creating' : !editable)) return
+    event.preventDefault()
+    void commands.execute(verb === 'ok' ? 'newDatabase.ok' : 'newDatabase.cancel', args, 'toolbar')
+  }
+  return <FieldHints><DocumentFrame id={`new-database-${state.id}`} title={state.title} onKeyDown={onKeyDown}
     crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}
     verbs={verbs} banner={banner} sections={sections} frame={state.frame} onFrame={frame => newDatabase.setFrame(state.id, frame)} attributes={{ 'data-new-database': state.id }}
     script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void newDatabase.deliver(state.id, destination) }} hint={<FieldHintStrip />} /></FieldHints>

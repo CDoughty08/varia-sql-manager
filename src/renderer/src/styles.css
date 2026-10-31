@@ -1308,6 +1308,13 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-grid tr[data-selected] > td { background: var(--varia-list-inactiveSelectionBackground); }
 .new-database-browse { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
 .new-database-browse > .new-database-cell, .new-database-growth { flex: 1; min-width: 0; }
+/* Each field keeps room for a readable name or path at any width: past that the grid scrolls (.properties-table) rather
+   than squeezing a field to a few letters. Its title shows the whole value. */
+.new-database-cell.new-database-name { min-width: 16ch; }
+.new-database-cell.new-database-file-name { min-width: 20ch; }
+.new-database-browse > .new-database-path { min-width: 24ch; }
+/* Forced colours drop the selection's fill, the only sign of the row Remove takes. */
+@media (forced-colors: active) { .object-dialog-grid tr[data-selected] { outline: 2px solid Highlight; outline-offset: -2px; } }
 .new-database-muted { color: var(--varia-descriptionForeground); }
 .new-database-grid-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
 .new-database-grid-bar > .field-note { margin: 0; }

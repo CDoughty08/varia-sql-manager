@@ -76,14 +76,15 @@ export const primaryFilegroup = 'PRIMARY'
 /** The separator a server path uses: a Linux path starts with /. */
 export const separatorOf = (path: string): ServerPathSeparator => path.startsWith('/') ? '/' : '\\'
 const windowsForbidden = /[\u0000-\u001f\\/:*?"<>|]/g
-// ServerPath refuses * ? " < > | on every platform, so a Linux file name cannot hold them either.
-const linuxForbidden = /[\u0000-\u001f/*?"<>|]/g
+// ServerPath refuses * ? " < > | on every platform, so a Linux file name cannot hold them either. SQL Server on Linux reads a
+// backslash as a separator too (it maps Windows-style paths onto Linux ones), so a\b.mdf would land in a folder a.
+const linuxForbidden = /[\u0000-\u001f\\/*?"<>|]/g
 const brokenPairs = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
 const windowsReserved = /^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i
 /**
  * A logical name made safe as a file name on the server's platform: characters the platform refuses (and control characters,
  * and halves of surrogate pairs) become _, and on Windows trailing dots and spaces (which it drops) become _ and a reserved
- * device name gets a leading _. A database named a\b gets the file a_b.mdf rather than a path into a folder b.
+ * device name gets a leading _. A database named a\b gets the file a_b.mdf rather than a path into a folder, on Linux too.
  */
 export function sanitiseFileName(name: string, separator: ServerPathSeparator): string {
   let text = name.replace(separator === '\\' ? windowsForbidden : linuxForbidden, '_').replace(brokenPairs, '_')
@@ -109,7 +110,7 @@ export function fileNameProblem(fileName: string, separator: ServerPathSeparator
   if (fileName.length > actionLimits.serverPath) return `A file name is at most ${actionLimits.serverPath} characters.`
   if (fileName === '.' || fileName === '..') return 'A file name cannot be . or ..'
   if (new RegExp((separator === '\\' ? windowsForbidden : linuxForbidden).source).test(fileName)) {
-    return separator === '\\' ? 'A file name cannot contain control characters or \\ / : * ? " < > |.' : 'A file name cannot contain control characters or / * ? " < > |.'
+    return separator === '\\' ? 'A file name cannot contain control characters or \\ / : * ? " < > |.' : 'A file name cannot contain control characters or \\ / * ? " < > |.'
   }
   if (new RegExp(brokenPairs.source).test(fileName)) return 'The file name holds a broken character (half of a surrogate pair).'
   if (separator === '\\' && /[. ]$/.test(fileName)) return 'On Windows a file name cannot end with a dot or a space.'
@@ -179,6 +180,8 @@ function growthProblem(file: NewDatabaseFile): string | undefined {
   if (growth.maxMb !== undefined && !(whole(growth.maxMb) && growth.maxMb >= (file.sizeMb ?? 1) && growth.maxMb <= ceiling)) {
     return `The maximum file size is a whole number of MB from the initial size to ${ceiling.toLocaleString('en-US')}.`
   }
+  // SQL Server refuses it (5169): FILEGROWTH cannot be greater than MAXSIZE.
+  if (growth.unit === 'mb' && growth.maxMb !== undefined && growth.by > growth.maxMb) return 'File growth cannot be larger than the maximum file size.'
   return undefined
 }
 

@@ -89,6 +89,19 @@ internal static class NewDatabaseLiveChecks
         check(mismatches.Count == 0 && after == before, "SQL Server's New Database builder composes exactly CREATE DATABASE for every hostile database, file and filegroup name, file name and path, and the dry run creates nothing: "
             + string.Join(", ", mismatches));
 
+        // At the catalogue's ceilings (sizes from 2 TB on are written in MB, as SQL Server reads a size's number as an int) the builder
+        // composes the statement exactly, and SQL Server accepts its sizes: it checks them (1842) before it looks for the folder, which
+        // does not exist, so the statement fails there (5133) and creates nothing.
+        var nowhere = dataFolder + separator + "VariaMissing_" + Guid.NewGuid().ToString("N");
+        var ceilings = NewDatabaseChecks.Ceilings(unused, nowhere);
+        var ceilingBuilt = await service.Actions.DryRunCreateAsync(info.Id, ceilings, model.Linux, CancellationToken.None);
+        var ceilingStatement = CreateDatabaseSql.Statement(ceilings, model.Linux);
+        var attempted = await Sql(ceilingStatement + ";");
+        var nothing = (await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(unused) + ";")).Scalar;
+        check(ceilingBuilt.Count == 1 && ceilingBuilt[0] == ceilingStatement && ceilingStatement.Contains("SIZE = 16777215MB, MAXSIZE = 16777215MB, FILEGROWTH = 2097152MB", StringComparison.Ordinal)
+            && attempted.Error is { } refusal && refusal.Contains("Directory lookup", StringComparison.Ordinal) && nothing == "0",
+            "SQL Server's New Database builder composes sizes at the catalogue's ceilings exactly, and SQL Server parses them and accepts their sizes: " + attempted.Error);
+
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
             Console.WriteLine("New Database scratch-database checks skipped. Set VARIA_TEST_SQL_SCRATCH=1 to allow creating and dropping a uniquely named database on a disposable development server.");
@@ -98,8 +111,8 @@ internal static class NewDatabaseLiveChecks
         var name = scratch.NewDatabase;
         scratch.Adopt(name);
         var created = new NewDatabaseDesignDto(
-            [new("nd'1", "rows", growth, dataFolder, "nd'1.mdf", "PRIMARY", 9), new("nd]2", "rows", new(true, "percent", 10, 100), dataFolder, "nd]2.ndf", "FG]'x", 2),
-             new("nd_log", "log", new(true, "mb", 3), logFolder, "nd'_log.ldf", SizeMb: 4)],
+            [new("nd'1", "rows", new(true, "mb", 2_097_152, 16_777_215), dataFolder, "nd'1.mdf", "PRIMARY", 9), new("nd]2", "rows", new(true, "percent", 10, 100), dataFolder, "nd]2.ndf", "FG]'x", 2),
+             new("nd_log", "log", new(true, "mb", 2_097_152), logFolder, "nd'_log.ldf", SizeMb: 4)],
             [new("PRIMARY", "rows"), new("FG]'x", "rows", IsDefault: true)], "NONE", new() { ["recoveryModel"] = "SIMPLE" }, []);
         // A folder that does not exist is refused before any DDL, never left to CREATE DATABASE.
         var missing = await client.Create(name, Plain(name, dataFolder + separator + "VariaMissing_" + Guid.NewGuid().ToString("N"), logFolder));
@@ -120,14 +133,14 @@ internal static class NewDatabaseLiveChecks
         var full = (string file) => dataFolder + separator + file;
         var expectedFiles = new[]
         {
-            Row("nd'1", full("nd'1.mdf"), (9 * 128).ToString(CultureInfo.InvariantCulture), (64 * 128).ToString(CultureInfo.InvariantCulture), "0", "-1"),
-            Row("nd_log", logFolder + separator + "nd'_log.ldf", (4 * 128).ToString(CultureInfo.InvariantCulture), (3 * 128).ToString(CultureInfo.InvariantCulture), "0", "268435456"),
+            Row("nd'1", full("nd'1.mdf"), (9 * 128).ToString(CultureInfo.InvariantCulture), (2_097_152L * 128).ToString(CultureInfo.InvariantCulture), "0", (16_777_215L * 128).ToString(CultureInfo.InvariantCulture)),
+            Row("nd_log", logFolder + separator + "nd'_log.ldf", (4 * 128).ToString(CultureInfo.InvariantCulture), (2_097_152L * 128).ToString(CultureInfo.InvariantCulture), "0", "268435456"),
             Row("nd]2", full("nd]2.ndf"), (2 * 128).ToString(CultureInfo.InvariantCulture), "10", "1", (100 * 128).ToString(CultureInfo.InvariantCulture))
         };
         var actualFiles = files.Sets.Count > 0 ? files.Sets[0].Select(row => Row([.. row.Select(cell => cell ?? "")])).ToList() : [];
         var groups = files.Sets.Count > 1 ? files.Sets[1].Select(row => Row([.. row.Select(cell => cell ?? "")])).ToList() : [];
         check(files.Status == "completed" && actualFiles.SequenceEqual(expectedFiles, StringComparer.OrdinalIgnoreCase) && groups.SequenceEqual(["PRIMARY|0", "FG]'x|1"]) && files.Sets[2][0][0] == "SIMPLE",
-            "the new database has exactly the files, sizes, growth and maximums the design names (a quote and a bracket in the names and file names, the unlimited log at 2 TB), FG]'x as its default and SIMPLE recovery: "
+            "the new database has exactly the files, sizes, growth and maximums the design names (a quote and a bracket in the names and file names, growth of 2 TB written in MB, a data file's ceiling, the unlimited log at 2 TB), FG]'x as its default and SIMPLE recovery: "
             + files.Error + " " + string.Join(" / ", actualFiles) + " ; " + string.Join(" / ", groups));
 
         // What CREATE DATABASE does not copy from model: the document starts from model's options with newDatabaseOverrides over them,
@@ -149,7 +162,55 @@ internal static class NewDatabaseLiveChecks
         var warned = await client.Script(name, created);
         check(again.Error?.Code == "NAME_IN_USE" && again.Steps.All(step => step.Status != "done") && warned is { Error: null } && warned.Warnings.Count > 0,
             "New Database refuses a name in use before any DDL, and its Script warns about it (" + again.Error?.Code + ")");
+
+        await StopDuringCreateAsync(check, service, info, Sql, Plain, name, dataFolder, logFolder, separator, major);
     }
+
+    /// <summary>Stop during CREATE DATABASE (D1 §11.1): SQL Server ends the statement and leaves no database and no files, so the
+    /// document can say the create was cancelled and leave the Databases folder as it is. The log is zero-filled however the server
+    /// initialises files, so a 1 GB log keeps CREATE running long enough to be seen in sys.dm_exec_requests and stopped there; a
+    /// server that finishes it first is given one more try with a 4 GB log.</summary>
+    private static async Task StopDuringCreateAsync(Action<bool, string> check, SqlService service, ConnectionInfo info, Func<string, string, Task<SqlRun>> sql,
+        Func<string, string, string, NewDatabaseDesignDto> plain, string name, string dataFolder, string logFolder, char separator, int major)
+    {
+        var drop = "IF DB_ID(" + Literal(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";";
+        var running = "SELECT COUNT(*) FROM sys.dm_exec_requests AS r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t WHERE r.command = N'CREATE DATABASE' AND CHARINDEX("
+            + Literal("CREATE DATABASE " + Bracket(name) + " ") + ", t.text) > 0;";
+        async Task<(ActionExecuteResult? Result, bool Seen)> Attempt(int logMb)
+        {
+            await sql(drop, "master");
+            var design = plain(name, dataFolder, logFolder);
+            design = design with { Files = [design.Files[0], design.Files[1] with { SizeMb = logMb }] };
+            using var stop = new CancellationTokenSource();
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var create = service.Actions.ExecuteAsync(new ActionArgs("createDatabase", info.Id, Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: name), Design: design), stop.Token);
+            var seen = false;
+            // Polls the statement's own state, never a clock; past a minute it stops anyway, so a server that hides it ends the check.
+            while (!create.IsCompleted && !seen)
+            {
+                seen = (await sql(running, "master")).Scalar == "1";
+                if (seen || watch.Elapsed > TimeSpan.FromMinutes(1)) stop.Cancel();
+            }
+            try { return (await create, seen); }
+            catch (OperationCanceledException) { return (null, seen); }
+        }
+        try
+        {
+            var (result, seen) = await Attempt(1024);
+            if (!seen && result?.Error is null) (result, seen) = await Attempt(4096);
+            var left = (await sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(name) + ";", "master")).Scalar;
+            var paths = new[] { dataFolder + separator + name + ".mdf", logFolder + separator + name + "_log.ldf" };
+            var files = major >= 14
+                ? (await sql("SELECT SUM(CONVERT(int, f.file_exists)) FROM (VALUES (" + Literal(paths[0]) + "), (" + Literal(paths[1]) + ")) AS p(path) CROSS APPLY sys.dm_os_file_exists(p.path) AS f;", "master")).Scalar
+                : "0";
+            check(seen && result is { Error.Code: "CANCELLED", Steps: [{ Title: ActionService.CreateDatabaseTitle, Status: "cancelled" }, ..] } && left == "0" && files == "0",
+                "Stop during CREATE DATABASE cancels the statement and leaves no database and no files (" + (seen ? "" : "CREATE finished before it was seen; ")
+                + (result is null ? "the reply answered an unknown outcome" : result.Error?.Code + ": " + string.Join(", ", result.Steps.Select(step => step.Status + ":" + step.Title))) + "; databases " + left + ", files " + files + ")");
+        }
+        finally { await sql(drop, "master"); }
+    }
+
+    private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
 
     /// <summary>What a new database does not take from model, as new-database.ts' newDatabaseOverrides lists it: CREATE DATABASE enables
     /// Service Broker whatever model says.</summary>

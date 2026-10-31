@@ -721,15 +721,39 @@ try {
   await expect(newFiles().getByLabel('File Name of Sales', { exact: true })).toHaveAttribute('placeholder', 'Sales.mdf')
   await expect(newFiles().getByLabel('Path of Sales', { exact: true })).toHaveValue(String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\DATA`)
   await expect(newVerb('OK')).toBeEnabled()
-  // Add puts a ROWS file in PRIMARY, which needs a name before OK; Remove takes away the selected row.
+  // Add puts a ROWS file in PRIMARY, which needs a name before OK, with the caret in its name; Remove, named after the row it
+  // takes, leaves the caret on the row before. The primary data file and the only log file cannot be removed.
   await newDatabase().getByRole('button', { name: 'Add', exact: true }).click()
   await expect(newFiles().getByRole('row')).toHaveCount(4)
   await expect(newDatabase().getByText('3 of 256 files · paths are on the server server-a', { exact: true })).toBeVisible()
   await expect(newVerb('OK')).toBeDisabled()
+  await expect(newFiles().getByLabel('Logical Name of File 3', { exact: true })).toBeFocused()
   await newFiles().getByLabel('Logical Name of File 3', { exact: true }).fill('Sales2')
   await expect(newFiles().getByLabel('File Name of Sales2', { exact: true })).toHaveAttribute('placeholder', 'Sales2.ndf')
-  await newDatabase().getByRole('button', { name: 'Remove', exact: true }).first().click()
+  // Forced colours drop the selection's fill, so the row Remove takes is outlined.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const selectedOutline = await newFiles().getByRole('row').nth(3).evaluate(row => getComputedStyle(row).outlineStyle)
+  await page.emulateMedia({ forcedColors: null })
+  expect(selectedOutline, 'forced colours: the selected file row is outlined').toBe('solid')
+  await newDatabase().getByRole('button', { name: 'Remove Sales2', exact: true }).click()
   await expect(newFiles().getByRole('row')).toHaveCount(3)
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toBeFocused()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  await newFiles().getByLabel('Logical Name of Sales', { exact: true }).focus()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  // Each filegroup list's buttons say which list they act on.
+  await expect(newDatabase().getByRole('group', { name: 'Rows', exact: true }).getByRole('button', { name: 'Add Filegroup to Rows', exact: true })).toBeEnabled()
+  await expect(newDatabase().getByRole('button', { name: 'Remove from Memory Optimized Data', exact: true })).toBeDisabled()
+  // At 1024 x 768 a name and a path stay readable: the grid scrolls rather than squeezing them.
+  const sizeBeforeNarrow = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await resizeWindow(application, page, 1024, 768)
+  const readable = await Promise.all(['Logical Name of Sales', 'Path of Sales', 'File Name of Sales'].map(label => newFiles().getByLabel(label, { exact: true })
+    .evaluate(input => Math.round(input.getBoundingClientRect().width / parseFloat(getComputedStyle(input).fontSize)))))
+  await resizeWindow(application, page, ...sizeBeforeNarrow)
+  // In font sizes (about two characters each): 16, 24 and 20 characters at least.
+  expect(readable[0], 'Logical Name at 1024 x 768').toBeGreaterThanOrEqual(8)
+  expect(readable[1], 'Path at 1024 x 768').toBeGreaterThanOrEqual(12)
+  expect(readable[2], 'File Name at 1024 x 768').toBeGreaterThanOrEqual(10)
   // Change Autogrowth over the document: percent growth, and the cell says so.
   await newFiles().getByRole('button', { name: 'Change Autogrowth of Sales', exact: true }).click()
   const autogrowth = page.getByRole('dialog', { name: 'Change Autogrowth for Sales', exact: true })
@@ -763,7 +787,8 @@ try {
   await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
   await expect(databaseName).toBeFocused()
   await databaseName.fill('Held')
-  await newVerb('OK').click()
+  // Enter outside the grids is OK, as in SSMS's dialog.
+  await databaseName.press('Enter')
   await expect(newVerb('Stop')).toBeVisible()
   await expect(newDatabase().getByRole('status').filter({ hasText: 'Creating the database…' })).toBeVisible()
   await newVerb('Stop').click()
@@ -771,7 +796,26 @@ try {
   await expect(newVerb('OK')).toBeEnabled()
   await newVerb('Cancel').click()
   await expect(newDatabase()).toHaveCount(0)
-  console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files, changes autogrowth, browses the server for a path, scripts, creates and selects the database, and stops a create.')
+  // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(databaseName).toBeFocused()
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  const secondDatabase = documentFrame(page, 'New Database (2)')
+  await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
+  const secondName = secondDatabase.getByLabel('Database name', { exact: true })
+  await expect(secondName).toBeFocused()
+  await secondName.fill('Sales3')
+  await page.keyboard.press('Control+S')
+  await expect(secondDatabase).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales3' } })
+  await documentTab(page, 'New Database').click()
+  await expect(newDatabase()).toBeVisible()
+  await databaseName.focus()
+  await page.keyboard.press('Escape')
+  await expect(newDatabase()).toHaveCount(0)
+  console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files with the caret kept and buttons named, keeps names and paths readable at 1024 x 768, changes autogrowth, browses the server for a path, scripts, creates and selects the database, stops a create, numbers a second tab, and takes Enter, Ctrl+S and Escape.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

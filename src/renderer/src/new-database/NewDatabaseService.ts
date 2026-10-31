@@ -10,6 +10,7 @@ import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
 import type { NewDatabaseContextState, NewDatabaseKeys } from '../core/contextkeys'
+import { dialogEnter, type EnterTarget } from '../dialogs/dialog-keys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -41,6 +42,8 @@ export interface NewGroupRow { readonly key: number; readonly name: string; read
 export type NewDatabasePhase = 'loading' | 'loadFailed' | 'ready' | 'creating'
 export interface NewDatabaseState {
   readonly id: string
+  /** The tab's title: New Database, then New Database (2) and on while others are open (D1 §2). */
+  readonly title: string
   readonly server: string
   readonly login?: string
   /** The Databases folder a success reloads and selects the new database in. */
@@ -77,7 +80,7 @@ export interface NewDatabaseServiceOptions {
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'update' | 'activate' | 'getSnapshot' | 'close'> & DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  readonly explorer: { listingFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
+  readonly explorer: { databasesFolderOf(nodeId: number): number | undefined; reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
   readonly longRuns?: Pick<LongRunService, 'begin'>
   readonly serverFiles?: { pick(request: ServerFilePick): Promise<string | undefined> }
   readonly focusEditor?: () => void
@@ -110,6 +113,35 @@ export function newDatabaseFacts(model: NewDatabaseModel): NewDatabaseFacts {
   return { level: server.level, separator: model.linux ? '/' : '\\', linux: model.linux, filestreamLevel: server.filestreamLevel, containedAuthentication: server.containedAuthentication }
 }
 const separatorFor = (state: NewDatabaseState): ServerPathSeparator => state.model?.linux ? '/' : state.model ? '\\' : separatorOf(state.files[0]?.path ?? '')
+
+/**
+ * A row's File Type choices: ROWS Data and LOG, and FILESTREAM Data (the container of a FILESTREAM or memory-optimized
+ * filegroup) where the server has FILESTREAM or the database has a memory-optimized filegroup, whose container needs no
+ * FILESTREAM (on Linux too). A row keeps the type it has.
+ */
+export function fileTypesFor(state: NewDatabaseState, row: Pick<NewFileRow, 'type'>): NewFileType[] {
+  const containers = filestreamOn(state) || state.filegroups.some(group => group.type === 'memoryOptimized')
+  return (['rows', 'log', 'filestream'] as const).filter(type => type !== 'filestream' || containers || row.type === 'filestream')
+}
+/** Whether the server can hold FILESTREAM data: not on Linux, and only where FILESTREAM is enabled. */
+export const filestreamOn = (state: NewDatabaseState): boolean => !!state.model && !state.model.linux && state.model.model.server.filestreamLevel > 0
+/** The filegroups a row of this type can go in: rows filegroups for ROWS Data; FILESTREAM ones (where the server has it) and the
+ *  memory-optimized one for a container. */
+export function filegroupsFor(state: NewDatabaseState, type: NewFileType): readonly NewGroupRow[] {
+  return state.filegroups.filter(group => type === 'rows' ? group.type === 'rows' : group.type === 'memoryOptimized' || group.type === 'filestream' && filestreamOn(state))
+}
+
+/**
+ * Enter and Escape in the document, as in SSMS's dialog (D1 §2): Escape cancels, and Enter is OK, but where the key is the
+ * focused control's own: a button, a drop-down, a grid cell (Enter edits there), a field with suggestions (Enter picks one), and
+ * the Script drawer's editor.
+ */
+export function newDatabaseKey(key: string, target: (EnterTarget & { hasAttribute?(name: string): boolean }) | null): 'ok' | 'cancel' | undefined {
+  if (target?.closest?.('.monaco-editor')) return undefined
+  if (key === 'Escape') return 'cancel'
+  if (key !== 'Enter' || target?.hasAttribute?.('list')) return undefined
+  return dialogEnter(target) === 'ok' ? 'ok' : undefined
+}
 
 /** The file name a row has: as typed, or SSMS's default for its logical name. The first file is the primary data file. */
 export function rowFileName(state: NewDatabaseState, row: NewFileRow): string {
@@ -150,7 +182,6 @@ export function newDatabaseStateProblems(state: NewDatabaseState): readonly NewD
 export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'newDatabase' as const
   readonly inSaveAll = false
-  readonly saves = false
   private readonly newId: () => string
   private readonly timers: Timers
   private readonly registration: Disposable
@@ -183,10 +214,15 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
     if (!folder && !database) throw new Error('Select the Databases folder in Object Explorer.')
     if (!connection) throw new Error('Connect to the server first.')
-    const document = this.options.documents.openCustom('newDatabase', newDatabaseMessages.title, connection.id, 'master')
-    const folderNodeId = folder ? node.id : this.options.explorer.listingFolderOf(node.id)
+    // Tabs that read alike cannot be told apart in the tab strip, the Window menu or a screen reader: a second one is numbered.
+    const titles = new Set(Object.values(this.getSnapshot().documents).map(state => state.title))
+    let title: string = newDatabaseMessages.title
+    for (let n = 2; titles.has(title); n++) title = `${newDatabaseMessages.title} (${n})`
+    const document = this.options.documents.openCustom('newDatabase', title, connection.id, 'master')
+    // A database under System Databases or Database Snapshots is listed there, but a new database appears in Databases.
+    const folderNodeId = folder ? node.id : this.options.explorer.databasesFolderOf(node.id)
     this.put({
-      id: document.id, server: connection.server, ...connection.login ? { login: connection.login } : {}, ...folderNodeId === undefined ? {} : { folderNodeId },
+      id: document.id, title, server: connection.server, ...connection.login ? { login: connection.login } : {}, ...folderNodeId === undefined ? {} : { folderNodeId },
       phase: 'loading', name: '', owner: '', files: [], filegroups: [], collation: '', containment: 'NONE', ledger: false, options: {}, scoped: {}, revision: 0, touched: false,
       frame: initialFrameState(sections), script: { state: 'idle', message: newDatabaseMessages.noScript }
     })
@@ -251,14 +287,15 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     this.edit(id, { options: { ...values.options }, scoped: { ...values.scoped } })
   }
 
-  /** Add: a ROWS data file in the default rows filegroup, sized as model's, in the default data folder (SSMS's new row). */
-  addFile(id: string, type: NewFileType = 'rows'): void {
+  /** Add: a ROWS data file in the default rows filegroup, sized as model's, in the default data folder (SSMS's new row). Its key,
+   *  so the view can put the caret in it. */
+  addFile(id: string, type: NewFileType = 'rows'): number | undefined {
     const state = this.get(id)
-    if (!state?.model || !this.canEdit(id) || state.files.length >= actionLimits.newDatabaseFiles) return
+    if (!state?.model || !this.canEdit(id) || state.files.length >= actionLimits.newDatabaseFiles) return undefined
     const separator: ServerPathSeparator = state.model.linux ? '/' : '\\'
     const template = state.files.find(row => row.type === (type === 'log' ? 'log' : 'rows'))
     const group = type === 'log' ? undefined : type === 'filestream'
-      ? state.filegroups.find(item => item.type !== 'rows')?.name
+      ? filegroupsFor(state, 'filestream')[0]?.name
       : (state.filegroups.find(item => item.type === 'rows' && item.isDefault) ?? state.filegroups[0])?.name
     const row: NewFileRow = {
       key: ++this.keys, name: '', named: true, type, ...group === undefined ? {} : { filegroup: group }, ...type === 'filestream' ? {} : { sizeMb: template?.sizeMb ?? 8 },
@@ -266,11 +303,17 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
       path: folderOf(type === 'log' ? state.model.logPath : state.model.dataPath, separator)
     }
     this.edit(id, { files: [...state.files, row] })
+    return row.key
   }
-  /** Remove: any file but the primary data file. */
+  /** Whether Remove can take a file: any but the primary data file and the last log file (a database needs both). */
+  removable(id: string, key: number | undefined): boolean {
+    const state = this.get(id), row = state?.files.find(item => item.key === key)
+    return !!state && !!row && state.files[0]?.key !== key && !(row.type === 'log' && state.files.filter(item => item.type === 'log').length === 1)
+  }
+  /** Remove: a file Remove can take. */
   removeFile(id: string, key: number): void {
     const state = this.get(id)
-    if (!state || !this.canEdit(id) || state.files[0]?.key === key) return
+    if (!state || !this.canEdit(id) || !this.removable(id, key)) return
     this.edit(id, { files: state.files.filter(row => row.key !== key) })
   }
   /** A cell of the files grid. A blank File Name goes back to the default; a type change moves the file to a filegroup of its kind. */
@@ -282,8 +325,7 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
       let next: NewFileRow = { ...row, ...patch, ...patch.name !== undefined ? { named: true } : {} }
       if (patch.fileName !== undefined && patch.fileName.trim() === '') next = { ...next, fileName: undefined }
       if (patch.type !== undefined && patch.type !== row.type) {
-        const group = patch.type === 'log' ? undefined : patch.type === 'filestream' ? state.filegroups.find(item => item.type !== 'rows')?.name
-          : state.filegroups.find(item => item.type === 'rows')?.name
+        const group = patch.type === 'log' ? undefined : filegroupsFor(state, patch.type)[0]?.name
         next = { ...next, filegroup: group, ...patch.type === 'filestream' ? { sizeMb: undefined, growth: { enabled: false } } : { sizeMb: row.sizeMb ?? 8 } }
       }
       const result = next as NewFileRow & Record<string, unknown>
@@ -300,11 +342,14 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
     if (chosen !== undefined && this.get(id)) this.setFile(id, key, { path: folderOf(chosen, state.model.linux ? '/' : '\\') })
   }
 
-  /** Add Filegroup: a new rows, FILESTREAM or memory-optimized filegroup, named FILEGROUPn (filled in by the person). */
-  addFilegroup(id: string, type: NewFilegroupType): void {
+  /** Add Filegroup: a new rows, FILESTREAM or memory-optimized filegroup, its name filled in by the person. Its key, so the view
+   *  can put the caret in its name. */
+  addFilegroup(id: string, type: NewFilegroupType): number | undefined {
     const state = this.get(id)
-    if (!state || !this.canEdit(id) || state.filegroups.length >= actionLimits.newDatabaseFilegroups) return
-    this.edit(id, { filegroups: [...state.filegroups, { key: ++this.keys, name: '', type, readOnly: false, isDefault: false, autogrowAllFiles: false }] })
+    if (!state || !this.canEdit(id) || state.filegroups.length >= actionLimits.newDatabaseFilegroups) return undefined
+    const key = ++this.keys
+    this.edit(id, { filegroups: [...state.filegroups, { key, name: '', type, readOnly: false, isDefault: false, autogrowAllFiles: false }] })
+    return key
   }
   /** Remove: a filegroup but PRIMARY, once no file is in it. */
   removeFilegroup(id: string, key: number): void {
@@ -456,8 +501,9 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
 
   // --- CustomDocumentProvider ----------------------------------------------------------------------------------------
 
-  /** Nothing to save: the document is never dirty, and File › Save is not offered on it. */
-  async save(): Promise<boolean> { return false }
+  /** Ctrl+S (⌘S) is OK, as D1 §2 binds it and Database Properties' Save is Apply. The document is never dirty, so Save All passes
+   *  it by and closing it discards it. */
+  save(id: string): Promise<boolean> { this.show(id); return this.create(id) }
   canClose(id: string): string | undefined { return this.get(id)?.phase === 'creating' ? newDatabaseMessages.creating : undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
@@ -536,17 +582,21 @@ export class NewDatabaseService extends SnapshotStore<NewDatabaseSnapshot> imple
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }
   }
-  /** A server that disconnects: a running OK's outcome is unknown, a read fails, and their requests are cancelled. */
+  /** A server that disconnects: a running OK's outcome is unknown, a read fails, and their requests are cancelled. A connection
+   *  still listed but lost went with its backend (a crash or a restart), not with its server. */
   private connectionsChanged(): void {
+    const connections = this.options.connections.getSnapshot()
     for (const state of Object.values(this.getSnapshot().documents)) {
       if (this.live(state.id)) continue
+      const connectionId = this.connectionOf(state.id)
+      const backendGone = connections.some(connection => connection.id === connectionId && connection.lost)
       const request = this.requests.get(state.id), preview = this.previews.get(state.id)
       if (preview) { this.previews.delete(state.id); this.cancel([preview]); this.patch(state.id, { script: { state: 'failed', error: { message: newDatabaseMessages.disconnected, code: 'CONNECTION_LOST' } } }) }
       if (!request || request.dropped) continue
       request.dropped = true
       this.requests.delete(state.id)
       this.cancel([request.id])
-      if (request.kind === 'create') this.patch(state.id, { phase: 'ready', error: error('CONNECTION_LOST', newDatabaseMessages.connectionLost) })
+      if (request.kind === 'create') this.patch(state.id, { phase: 'ready', error: error('CONNECTION_LOST', backendGone ? newDatabaseMessages.backendLost : newDatabaseMessages.connectionLost) })
       else this.patch(state.id, { phase: 'loadFailed', error: error('CONNECTION_LOST', newDatabaseMessages.disconnected) })
     }
     this.publishContext()

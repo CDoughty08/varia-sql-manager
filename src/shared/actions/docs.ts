@@ -49,7 +49,7 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
   newDatabaseFiles: 'Files one New Database request may create',
   newDatabaseFilegroups: 'Filegroups one New Database request may create, PRIMARY included',
-  dataFileMb: 'A data file\'s initial and maximum size in New Database, in MB (16 TB)',
+  dataFileMb: 'A data file\'s initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server\'s ceiling for a file, just under 16 TB)',
   logFileMb: 'A log file\'s initial and maximum size in New Database, in MB (2 TB, SQL Server\'s ceiling for a log file)',
   growthMb: 'A file\'s autogrowth in MB, in New Database',
   growthPercent: 'A file\'s autogrowth in percent, in New Database'
@@ -406,8 +406,9 @@ function newDatabaseDocs(): string[] {
         spec.engines.map(engine => engineNames[engine]).join(', '), code(spec.longRun)]
     })),
     '',
-    'New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel or closing it discards it,',
-    'as SSMS\'s Cancel does). Its describe reads model as Database Properties reads it (a new database starts as a copy of',
+    'New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel, Escape or closing it',
+    'discards it, as SSMS\'s Cancel does, and Save (Ctrl+S), or Enter outside its grids, is OK). A second one open is titled',
+    'New Database (2), and so on. Its describe reads model as Database Properties reads it (a new database starts as a copy of',
     'model), the instance\'s default data and log folders, the server\'s collation, whether the login may create a database,',
     'master\'s compatibility level and the platform. The document sends the files, filegroups, collation, containment and',
     'ledger, and only the options and scoped configurations that differ from model: Script writes those, never every option as',
@@ -419,15 +420,19 @@ function newDatabaseDocs(): string[] {
     'the filegroup changes (Autogrow all files, Set the default filegroup, Make the filegroup read-only) and "Set the owner".',
     'A failure after CREATE leaves the database, as SSMS does, and the steps say what completed. OK registers the',
     '`newDatabase` long run while it runs, and Stop cancels the running statement. On success the document closes, Object',
-    'Explorer reloads the Databases folder and selects the new database, and the toolbar\'s database list refreshes.',
+    'Explorer reloads the Databases folder (the one above System Databases, when it was opened on a system database) and',
+    'selects the new database, and the toolbar\'s database list refreshes.',
     '',
     'The builder has SQL Server compose CREATE DATABASE from one JSON parameter: names through `QUOTENAME`, file names and',
     'paths as N\'\' literals quoted on the server (`REPLACE` under `Latin1_General_BIN2`), sizes through `CONVERT` of typed',
-    'numbers, the collation only as `sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution',
+    'numbers (in KB up to 2,097,151 MB, as SQL Server reads a size as an int, and in MB above), the collation only as',
+    '`sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution',
     'form, `EXEC @module @stmt` with `@module = QUOTENAME(@db) + N\'.sys.sp_executesql\'`. Before it, the preflight refuses a',
     'name in use, a login without CREATE ANY DATABASE, a missing owner or collation, a folder that does not exist or a file',
     'that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM where it is off, ledger before SQL Server',
-    '2022, and Partial containment without contained database authentication.',
+    '2022, and Partial containment without contained database authentication. `CreateDatabaseSql.Lint` checks the builder',
+    'with the table designer\'s OPENJSON rules (`JsonBuilderLint`): every column a number or `nvarchar(max)`, text only inside',
+    '`QUOTENAME` (or the quoted-literal form), and JSON columns only into the arrays it shreds again.',
     ''
   ]
 }

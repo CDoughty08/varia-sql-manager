@@ -58,11 +58,13 @@ internal static class NewDatabaseChecks
             ("a read-only PRIMARY", Create(good with { Filegroups = [new("PRIMARY", "rows", ReadOnly: true)] })),
             ("two rows defaults", Create(Design(good.Files[0] with { Name = "a", FileName = "a.ndf", Filegroup = "A" }) with { Filegroups = [new("PRIMARY", "rows", IsDefault: true), new("A", "rows", IsDefault: true)] })),
             ("257 files", Create(Design(many))), ("257 filegroups", Create(good with { Filegroups = groups })),
-            ("a data file over 16 TB", Create(good with { Files = [good.Files[0] with { SizeMb = 16_777_217 }, good.Files[1]] })),
+            ("a data file over 2147483647 pages", Create(good with { Files = [good.Files[0] with { SizeMb = 16_777_216 }, good.Files[1]] })),
             ("a log file over 2 TB", Create(good with { Files = [good.Files[0], good.Files[1] with { SizeMb = 2_097_153 }] })),
             ("a growth of 0 MB", Create(good with { Files = [good.Files[0] with { Growth = new(true, "mb", 0) }, good.Files[1]] })),
             ("a growth of 101 percent", Create(good with { Files = [good.Files[0] with { Growth = new(true, "percent", 101) }, good.Files[1]] })),
             ("a maximum under the size", Create(good with { Files = [good.Files[0] with { Growth = new(true, "mb", 1, 4) }, good.Files[1]] })),
+            ("a growth over the maximum", Create(good with { Files = [good.Files[0] with { Growth = new(true, "mb", 100, 50) }, good.Files[1]] })),
+            ("a data maximum over 2147483647 pages", Create(good with { Files = [good.Files[0] with { Growth = new(true, "mb", 64, 16_777_216) }, good.Files[1]] })),
             ("growth members without growth", Create(good with { Files = [good.Files[0] with { Growth = new(false, "mb", 1) }, good.Files[1]] })),
             ("a container with a size", Create(Design(new NewDatabaseFileDto("s", "filestream", None, "C:\\Data", "s", "FS", 8)) with { Filegroups = [.. good.Filegroups, new("FS", "filestream")] })),
             ("a container that grows", Create(Design(new NewDatabaseFileDto("s", "filestream", Mb64, "C:\\Data", "s", "FS")) with { Filegroups = [.. good.Filegroups, new("FS", "filestream")] })),
@@ -71,6 +73,7 @@ internal static class NewDatabaseChecks
             ("a device name on Windows", Create(good with { Files = [good.Files[0] with { FileName = "CON.mdf" }, good.Files[1]] })),
             ("a trailing dot on Windows", Create(good with { Files = [good.Files[0] with { FileName = "a." }, good.Files[1]] })),
             ("a slash in a Linux file name", Create(good with { Files = [good.Files[0] with { Path = "/var/opt", FileName = "a/b.mdf" }, good.Files[1]] })),
+            ("a backslash in a Linux file name", Create(good with { Files = [good.Files[0] with { Path = "/var/opt", FileName = "a\\b.mdf" }, good.Files[1] with { Path = "/var/opt" }] })),
             ("collation as an option", Create(good with { Options = new() { ["collation"] = "Latin1_General_BIN2" } })),
             ("containment as an option", Create(good with { Options = new() { ["containmentType"] = "PARTIAL" } })),
             ("an unknown option", Create(good with { Options = new() { ["bogus"] = "true" } })), ("a fact option", Create(good with { Options = new() { ["isLedgerDatabase"] = "true" } })),
@@ -84,7 +87,8 @@ internal static class NewDatabaseChecks
             "a file name holding half a surrogate pair is refused, a whole pair accepted");
         var verdicts = invalid.Select(item => (item.Name, Verdict: Verdict(item.Args))).ToList();
         var accepted = new[] { Create(good), Create(good with { Owner = "AppUser", Collation = "Latin1_General_BIN2", Containment = "PARTIAL", Ledger = true, Options = new() { ["recoveryModel"] = "SIMPLE" }, Scoped = new() { ["maxDop"] = "4" } }),
-            Create(good with { Files = [good.Files[0] with { Path = "/var/opt/mssql/data", FileName = "a:b.mdf" }, good.Files[1] with { Path = "/var/opt/mssql/data" }] }), Create(Design(many[..254])) };
+            Create(good with { Files = [good.Files[0] with { Path = "/var/opt/mssql/data", FileName = "a:b.mdf" }, good.Files[1] with { Path = "/var/opt/mssql/data" }] }), Create(Design(many[..254])),
+            Create(good with { Files = [.. Ceilings("Sales").Files.Select(file => (NewDatabaseFileDto)new(file.Name, file.Type, file.Growth, file.Path, file.FileName, file.Filegroup, file.SizeMb))] }) };
         check(verdicts.All(item => item.Verdict == "INVALID_PARAMS") && accepted.All(args => Verdict(args) == "accepted"),
             "New Database's validation accepts what zod accepts (a Linux file name may hold a colon) and refuses the rest, as INVALID_PARAMS: "
             + string.Join(", ", verdicts.Where(item => item.Verdict != "INVALID_PARAMS").Select(item => item.Name + " " + item.Verdict)) + string.Join(", ", accepted.Select(Verdict).Where(verdict => verdict != "accepted")));
@@ -128,6 +132,14 @@ internal static class NewDatabaseChecks
         new("Sales_log2", "log", new(true, "mb", 1, 2_097_152), "C:\\Logs", "Sales_log2.ldf", SizeMb: 1)],
         [new("PRIMARY", "rows"), new("A", "rows", IsDefault: true), new("FS", "filestream", IsDefault: true)], "NONE", [], [], Collation: "Latin1_General_BIN2", Ledger: true));
 
+    /// <summary>Files at the catalogue's ceilings: a data file of 2147483647 pages that grows by 2 TB, one just under 2 TB (the last
+    /// size SSMS's KB form can write) and a 2 TB log.</summary>
+    internal static NewDatabasePlan Ceilings(string name, string folder = "C:\\Data") => NewDatabaseValidator.Validate(Catalog, name, new([
+        new(name, "rows", new(true, "mb", 2_097_152, 16_777_215), folder, "c.mdf", "PRIMARY", 16_777_215),
+        new(name + "_2", "rows", new(true, "mb", 2_097_151, 2_097_151), folder, "c2.ndf", "PRIMARY", 2_097_151),
+        new(name + "_log", "log", new(true, "mb", 2_097_152, 2_097_152), folder, "c.ldf", SizeMb: 2_097_152)],
+        [new("PRIMARY", "rows", IsDefault: true)], "NONE", [], []));
+
     private static void Goldens(Action<bool, string> check)
     {
         var plan = Full();
@@ -162,6 +174,21 @@ internal static class NewDatabaseChecks
             && files[1].GetProperty("max").GetInt64() == 102_400 && files[3].GetProperty("size").ValueKind == JsonValueKind.Null && files[3].GetProperty("default").GetBoolean()
             && !files[2].GetProperty("default").GetBoolean() && design.RootElement.GetProperty("collated").GetBoolean() && !design.RootElement.ToString().Contains("CREATE", StringComparison.Ordinal),
             "New Database's design parameter carries each file's lead, kinds and sizes in KB (a log at 2 TB as 2048GB), and a rows default is not CREATE's");
+        // SQL Server reads a size's number as an int: 2147483648KB is a syntax error, so from 2 TB on a size is written in MB.
+        var ceilings = Ceilings("Big");
+        check(CreateDatabaseSql.Statement(ceilings, linux: false) == "CREATE DATABASE [Big] CONTAINMENT = NONE ON PRIMARY "
+            + "( NAME = N'Big', FILENAME = N'C:\\Data\\c.mdf', SIZE = 16777215MB, MAXSIZE = 16777215MB, FILEGROWTH = 2097152MB ), "
+            + "( NAME = N'Big_2', FILENAME = N'C:\\Data\\c2.ndf', SIZE = 2147482624KB, MAXSIZE = 2147482624KB, FILEGROWTH = 2147482624KB ) "
+            + "LOG ON ( NAME = N'Big_log', FILENAME = N'C:\\Data\\c.ldf', SIZE = 2097152MB, MAXSIZE = 2048GB, FILEGROWTH = 2097152MB )",
+            "New Database writes a size in KB while its number fits an int and in MB from 2 TB on: " + CreateDatabaseSql.Statement(ceilings, linux: false));
+        using var big = JsonDocument.Parse(CreateDatabaseSql.DesignJson(ceilings, linux: false));
+        var bigFiles = big.RootElement.GetProperty("files").EnumerateArray().ToList();
+        long Number(JsonElement file, string name) => file.GetProperty(name).GetInt64();
+        check(Number(bigFiles[0], "size") == 16_777_215 && Number(bigFiles[0], "sizeUnit") == 1 && Number(bigFiles[0], "max") == 16_777_215 && Number(bigFiles[0], "maxUnit") == 1
+            && Number(bigFiles[0], "growth") == 2_097_152 && Number(bigFiles[0], "growthUnit") == 1 && Number(bigFiles[1], "size") == 2_147_482_624 && Number(bigFiles[1], "sizeUnit") == 0
+            && Number(bigFiles[1], "growthUnit") == 0 && bigFiles[2].GetProperty("max").ValueKind == JsonValueKind.Null && bigFiles[2].GetProperty("maxUnit").ValueKind == JsonValueKind.Null
+            && files[1].GetProperty("growthUnit").ValueKind == JsonValueKind.Null && Number(files[0], "growthUnit") == 0,
+            "New Database's design parameter gives each size its unit as a kind (KB or MB), never as text");
     }
 
     private static void ServerRules(Action<bool, string> check)
@@ -197,6 +224,9 @@ internal static class NewDatabaseChecks
             "New Database sets a rows default, Read-Only and Autogrow All Files with ALTER DATABASE … MODIFY FILEGROUP after CREATE, never a FILESTREAM default: " + string.Join(" | ", statements));
     }
 
+    /// <summary>The builder's quoted-literal form of a file's logical name.</summary>
+    private const string QuotedName = "N'N''' + REPLACE(j.[name] COLLATE Latin1_General_BIN2, N'''', N'''''') + N''''";
+
     private static void Lint(Action<bool, string> check)
     {
         var results = CreateDatabaseSql.LintAll().ToList();
@@ -226,7 +256,19 @@ internal static class NewDatabaseChecks
             ("a quote in a literal", Swap(good, "N' DEFAULT'", "N' DEFAULT'''"), false),
             ("a comment literal", Swap(good, "N' DEFAULT'", "N' DEFAULT --'"), false),
             ("a bracket literal", Swap(good, "N' DEFAULT'", "N' [DEFAULT]'"), false),
-            ("a format hole", Swap(good, "N'CREATE DATABASE '", "N'CREATE DATABASE {0}'"), false)
+            ("a format hole", Swap(good, "N'CREATE DATABASE '", "N'CREATE DATABASE {0}'"), false),
+            // Design text of another type, or read through a variable, is still design text.
+            ("a raw file name as nvarchar(128)", Swap(Swap(good, "[default] bit, [name] nvarchar(max)", "[default] bit, [name] nvarchar(128)"), QuotedName, "j.[name]"), false),
+            ("a raw file name as sysname", Swap(Swap(good, "[default] bit, [name] nvarchar(max)", "[default] bit, [name] sysname"), QuotedName, "j.[name]"), false),
+            ("a raw database name as varchar(max)", Swap(Swap(good, "([name] nvarchar(max), containment int", "([name] varchar(max), containment int"), "@name = QUOTENAME(d.[name])", "@name = d.[name]"), false),
+            ("a variable read from a short text column", Swap(Swap(good, "DECLARE @stmt nvarchar(max)",
+                "DECLARE @raw nvarchar(max) = (SELECT TOP (1) x.[name] FROM OPENJSON(@files) WITH ([name] nvarchar(128)) AS x ORDER BY x.[name]);\nDECLARE @stmt nvarchar(max)"),
+                "N'CREATE DATABASE ' + @name", "N'CREATE DATABASE ' + @raw"), false),
+            ("a design column without its alias", Swap(good, "@name = QUOTENAME(d.[name])", "@name = [name]"), false),
+            ("a JSON column outside an array", Swap(good, "@collate = CASE d.collated", "@collate = d.files + CASE d.collated"), false),
+            ("an OPENJSON with a long alias", Swap(good, "AS j;", "AS jj;"), false),
+            ("an index outside CONVERT", Swap(good, "CONVERT(int, a.[key])", "a.[key]"), false),
+            ("a whole row", Swap(good, "IF NOT EXISTS (SELECT 1 FROM @f)", "IF NOT EXISTS (SELECT * FROM OPENJSON(@files) WITH ([name] nvarchar(max)) AS z)"), false)
         };
         var missed = mutations.Where(mutation => mutation.Text == (mutation.Dry ? dry : good) || CreateDatabaseSql.Lint(mutation.Text, CreateDatabaseSql.Messages, mutation.Dry).Count == 0).Select(mutation => mutation.Name).ToList();
         check(missed.Count == 0, "New Database's builder lint catches every mutation that would let design text reach the statement or run text another way: " + string.Join(", ", missed));

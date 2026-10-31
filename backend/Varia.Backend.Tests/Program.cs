@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--server-files-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--server-files-live" or "--new-database-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -47,6 +47,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await ExplorerStatusLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Object Explorer status checks.");
+        }
+        else if (lane == "--new-database-live")
+        {
+            await NewDatabaseLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            Console.WriteLine("Passed " + passed + " focused New Database checks.");
         }
         else if (lane == "--server-files-live")
         {

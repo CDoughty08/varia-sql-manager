@@ -337,14 +337,6 @@ internal static partial class ActionSql
 
     [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;,]*'$")]
     private static partial Regex DesignKeywordLiteral();
-    /// <summary>A JSON text column of an OPENJSON WITH clause (not AS JSON): a value from the request.</summary>
-    [GeneratedRegex(@"(\[?\w+\]?) nvarchar\(max\)(?! AS JSON)")]
-    private static partial Regex JsonText();
-    /// <summary>An OPENJSON WITH clause's columns (its alias is one lowercase letter).</summary>
-    [GeneratedRegex(@"OPENJSON\([^)]*\) WITH \((.*?)\) AS [a-z](?=[ ;\n])")]
-    private static partial Regex WithClause();
-    [GeneratedRegex(@"\b\w+\.(\[?\w+\]?)")]
-    private static partial Regex Qualified();
     /// <summary>A row of the builders' constant type table: (id, N'keyword', form, lob).</summary>
     [GeneratedRegex(@"\(\d+, (N'[^']*'), \d, [01]\)")]
     private static partial Regex TypeRow();
@@ -355,9 +347,10 @@ internal static partial class ActionSql
 
     /// <summary>Problems with one of the table designer's builder batches (Designer/DesignerSql.Builder), which has SQL Server
     /// shred one JSON parameter and compose the statement: a format hole, no quoting guard, @db outside QUOTENAME, @design
-    /// outside ISJSON or OPENJSON, a JSON text value used anywhere but inside QUOTENAME, a JSON array or element used
-    /// anywhere but OPENJSON (or an index's CONVERT to int), an undeclared variable, and a literal that is neither one of the
-    /// rules' messages nor keyword text (a type keyword must be one of the catalogue's).</summary>
+    /// outside ISJSON or OPENJSON, the OPENJSON rules of <see cref="JsonBuilderLint"/> (a JSON text value used anywhere but inside
+    /// QUOTENAME, a JSON array or element used anywhere but OPENJSON or an index's CONVERT to int, a column of another type), an
+    /// undeclared variable, and a literal that is neither one of the rules' messages nor keyword text (a type keyword must be one of
+    /// the catalogue's).</summary>
     public static List<string> LintExecutable(string text, DesignBuilderRules rules)
     {
         var problems = new List<string>();
@@ -367,22 +360,8 @@ internal static partial class ActionSql
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         if (Variable().Matches(text.Replace("ISJSON(@design)", "", StringComparison.Ordinal).Replace("OPENJSON(@design)", "", StringComparison.Ordinal)).Any(used => used.Value == "@design"))
             problems.Add("uses @design outside ISJSON or OPENJSON");
-        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column).
-        var texts = WithClause().Matches(text).SelectMany(clause => JsonText().Matches(clause.Groups[1].Value)).Select(match => match.Groups[1].Value.Trim('[', ']')).ToHashSet(StringComparer.Ordinal);
-        foreach (Match used in Qualified().Matches(text))
-        {
-            var column = used.Groups[1].Value.Trim('[', ']');
-            if (texts.Contains(column) && !(text[..used.Index].EndsWith("QUOTENAME(", StringComparison.Ordinal) && text[(used.Index + used.Length)..].StartsWith(')')))
-                problems.Add("uses the JSON text " + used.Value + " outside QUOTENAME");
-            if (column == "value" && !(text[..used.Index].EndsWith("OPENJSON(", StringComparison.Ordinal) || text[..used.Index].EndsWith("CONVERT(int, ", StringComparison.Ordinal)))
-                problems.Add("uses " + used.Value + " outside OPENJSON or an index's CONVERT");
-        }
-        foreach (var json in new[] { "@columns", "@key" })
-        {
-            var rest = text.Replace("OPENJSON(" + json + ")", "", StringComparison.Ordinal).Replace(json + " = d.", "", StringComparison.Ordinal).Replace(json + " IS NULL", "", StringComparison.Ordinal)
-                .Replace(json + " nvarchar(max)", "", StringComparison.Ordinal);
-            if (Variable().Matches(rest).Any(used => used.Value == json)) problems.Add("uses " + json + " outside OPENJSON");
-        }
+        // JSON text (a name) reaches the statement only as QUOTENAME(alias.column), the arrays only through OPENJSON.
+        problems.AddRange(JsonBuilderLint.Problems(text, ["@columns", "@key"]));
         var declared = Declaration().Matches(text).SelectMany(match => DeclaredName().Matches(match.Groups[1].Value).Select(name => name.Groups[1].Value)).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@db" or "@design") && !declared.Contains(used.Value)) problems.Add("uses the undeclared " + used.Value);
         foreach (Match literal in LiteralPattern().Matches(text))

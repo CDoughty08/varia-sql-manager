@@ -538,7 +538,7 @@ export const actionLimits = {
   serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1,
   /** New Database: files and filegroups one design holds, sizes in MB (a data file up to 16 TB, a log file and a growth up to
    *  2 TB, as SQL Server bounds them), and a growth in percent. */
-  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_216, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
+  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
 } as const
 
 /** Whether an action runs on a server of this engine. */

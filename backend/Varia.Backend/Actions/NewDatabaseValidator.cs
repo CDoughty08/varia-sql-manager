@@ -65,8 +65,9 @@ internal static partial class NewDatabaseValidator
         for (var i = 0; i < name.Length; i++)
         {
             var c = name[i];
-            if (c < 0x20 || c is '/' or '*' or '?' or '"' or '<' or '>' or '|') return false;
-            if (separator == '\\' && c is '\\' or ':') return false;
+            // SQL Server on Linux reads a backslash as a separator too, so no file name holds one on either platform.
+            if (c < 0x20 || c is '/' or '\\' or '*' or '?' or '"' or '<' or '>' or '|') return false;
+            if (separator == '\\' && c == ':') return false;
             if (char.IsHighSurrogate(c) && (i + 1 == name.Length || !char.IsLowSurrogate(name[++i]))) return false;
             if (char.IsLowSurrogate(c)) return false;
         }
@@ -128,7 +129,7 @@ internal static partial class NewDatabaseValidator
                 if (growth.Unit is not null || growth.By is not null || growth.MaxMb is not null) throw Invalid("a file's growth.");
             }
             else if (file.Type == "filestream" || growth.Unit is not ("mb" or "percent") || !Whole(growth.By, 1, catalog.Limit(growth.Unit == "mb" ? "growthMb" : "growthPercent"))
-                || growth.MaxMb is { } max && !Whole(max, file.SizeMb ?? 1, ceiling)) throw Invalid("a file's growth.");
+                || growth.MaxMb is { } max && (!Whole(max, file.SizeMb ?? 1, ceiling) || growth.Unit == "mb" && growth.By > max)) throw Invalid("a file's growth.");
             if (!ServerPath.Valid(file.Path, serverPath)) throw Invalid("a file's path.");
             var separator = SeparatorOf(file.Path);
             if (file.FileName is null || !FileNameValid(file.FileName, separator, serverPath)) throw Invalid("a file name.");

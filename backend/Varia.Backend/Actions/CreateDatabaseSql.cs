@@ -41,7 +41,7 @@ internal static partial class CreateDatabaseSql
 
     // --- The statement ---------------------------------------------------------------------------------------------------
 
-    /// <summary>MAXSIZE: none (a container, or no autogrowth), UNLIMITED (a data file), a size in KB, or 2048GB (an unlimited log file,
+    /// <summary>MAXSIZE: none (a container, or no autogrowth), UNLIMITED (a data file), a size, or 2048GB (an unlimited log file,
     /// SQL Server's ceiling for one). A log limited to that ceiling is written as SSMS writes it: 2048GB, whose KB would not fit in an
     /// int (model's log reads back as limited to 2097152 MB, so every New Database that copies it meets this).</summary>
     internal static int MaxKind(NewFilePlan file) => file.Container || !file.Growth.Enabled ? 0
@@ -49,9 +49,18 @@ internal static partial class CreateDatabaseSql
         : file.Log && max >= LogCeilingMb ? 3 : 2;
     /// <summary>A log file's largest size, 2 TB, in MB.</summary>
     internal const long LogCeilingMb = 2_097_152;
-    /// <summary>FILEGROWTH: none (a container), in KB, in percent, or 0 (no autogrowth).</summary>
+    /// <summary>FILEGROWTH: none (a container), a size, in percent, or 0 (no autogrowth).</summary>
     private static int GrowthKind(NewFilePlan file) => file.Container ? 0 : !file.Growth.Enabled ? 3 : file.Growth.Unit == "mb" ? 1 : 2;
-    private static long GrowthValue(NewFilePlan file) => file.Growth.Unit == "mb" ? file.Growth.By!.Value * 1024 : file.Growth.By!.Value;
+    /// <summary>The largest size SSMS's KB form can write: SQL Server reads a size's number as an int, so 2147483648KB (2 TB) is a
+    /// syntax error (102). From there on a size is written in MB, which holds every size a file can have (2147483647 pages).</summary>
+    internal const long KbCeilingMb = int.MaxValue / 1024;
+    /// <summary>A size in MB as the statement writes it: its number and whether that is in MB (otherwise KB, as SSMS writes it).</summary>
+    internal static (long Number, bool Mb) Size(long mb) => mb <= KbCeilingMb ? (mb * 1024, false) : (mb, true);
+    private static string SizeText(long mb)
+    {
+        var (number, inMb) = Size(mb);
+        return Number(number) + (inMb ? "MB" : "KB");
+    }
     private static int GroupKind(NewFilegroupPlan group) => group.Type switch { "rows" => 0, "filestream" => 1, _ => 2 };
     /// <summary>CREATE DATABASE writes DEFAULT only for a FILESTREAM filegroup; a rows one becomes the default after CREATE, as SSMS does.</summary>
     private static bool CreateDefault(NewFilegroupPlan group) => group.Type == "filestream" && group.IsDefault;
@@ -59,9 +68,9 @@ internal static partial class CreateDatabaseSql
     private static string Spec(NewFilePlan file, char separator)
     {
         var text = new StringBuilder("( NAME = ").Append(Literal(file.Name)).Append(", FILENAME = ").Append(Literal(NewDatabaseValidator.FullPath(file, separator)));
-        if (file.SizeMb is { } size) text.Append(", SIZE = ").Append(Number(size * 1024)).Append("KB");
-        text.Append(MaxKind(file) switch { 1 => ", MAXSIZE = UNLIMITED", 2 => ", MAXSIZE = " + Number(file.Growth.MaxMb!.Value * 1024) + "KB", 3 => ", MAXSIZE = 2048GB", _ => "" });
-        text.Append(GrowthKind(file) switch { 1 => ", FILEGROWTH = " + Number(GrowthValue(file)) + "KB", 2 => ", FILEGROWTH = " + Number(GrowthValue(file)) + "%", 3 => ", FILEGROWTH = 0", _ => "" });
+        if (file.SizeMb is { } size) text.Append(", SIZE = ").Append(SizeText(size));
+        text.Append(MaxKind(file) switch { 1 => ", MAXSIZE = UNLIMITED", 2 => ", MAXSIZE = " + SizeText(file.Growth.MaxMb!.Value), 3 => ", MAXSIZE = 2048GB", _ => "" });
+        text.Append(GrowthKind(file) switch { 1 => ", FILEGROWTH = " + SizeText(file.Growth.By!.Value), 2 => ", FILEGROWTH = " + Number(file.Growth.By!.Value) + "%", 3 => ", FILEGROWTH = 0", _ => "" });
         return text.Append(" )").ToString();
     }
 
@@ -115,7 +124,7 @@ internal static partial class CreateDatabaseSql
         string.Join(NL, Clauses(plan, linux).Select(clause => clause.Spec ? clause.Text : " " + clause.Text)).TrimStart() + NL + "GO" + NL;
 
     /// <summary>The builder's one parameter: the database's name, containment, ledger, the collation, and each file with its lead, filegroup,
-    /// kinds and numbers (sizes in KB, typed).</summary>
+    /// kinds and numbers (typed, each size with its unit: 0 KB, 1 MB).</summary>
     public static string DesignJson(NewDatabasePlan plan, bool linux)
     {
         var separator = linux ? '/' : '\\';
@@ -138,17 +147,31 @@ internal static partial class CreateDatabaseSql
                 json.WriteBoolean("default", group is not null && CreateDefault(group));
                 json.WriteString("name", file.Name);
                 json.WriteString("file", NewDatabaseValidator.FullPath(file, separator));
-                if (file.SizeMb is { } size) json.WriteNumber("size", size * 1024); else json.WriteNull("size");
+                WriteSize(json, "size", file.SizeMb);
                 json.WriteNumber("maxKind", MaxKind(file));
-                if (MaxKind(file) == 2) json.WriteNumber("max", file.Growth.MaxMb!.Value * 1024); else json.WriteNull("max");
+                WriteSize(json, "max", MaxKind(file) == 2 ? file.Growth.MaxMb : null);
                 json.WriteNumber("growthKind", GrowthKind(file));
-                if (GrowthKind(file) is 1 or 2) json.WriteNumber("growth", GrowthValue(file)); else json.WriteNull("growth");
+                if (GrowthKind(file) == 1) WriteSize(json, "growth", file.Growth.By);
+                else
+                {
+                    if (GrowthKind(file) == 2) json.WriteNumber("growth", file.Growth.By!.Value); else json.WriteNull("growth");
+                    json.WriteNull("growthUnit");
+                }
                 json.WriteEndObject();
             }
             json.WriteEndArray();
             json.WriteEndObject();
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    /// <summary>A size as the builder reads it: its number, and its unit as a kind (0 KB, 1 MB), never as text.</summary>
+    private static void WriteSize(Utf8JsonWriter json, string name, long? mb)
+    {
+        if (mb is not { } value) { json.WriteNull(name); json.WriteNull(name + "Unit"); return; }
+        var (number, inMb) = Size(value);
+        json.WriteNumber(name, number);
+        json.WriteNumber(name + "Unit", inMb ? 1 : 0);
     }
 
     // --- The builder -----------------------------------------------------------------------------------------------------
@@ -173,17 +196,20 @@ internal static partial class CreateDatabaseSql
     /// <summary>The one place the design's collation is read: matched, exactly, against the server's own names.</summary>
     private const string CollationJoin = "c.name COLLATE Latin1_General_BIN2 = d.collation COLLATE Latin1_General_BIN2";
 
+    /// <summary>A size's unit from its kind: an unknown kind is NULL, which leaves the file's spec NULL for the guard to refuse.</summary>
+    private static string Unit(string column) => "CASE j." + column + " WHEN 0 THEN N'KB' WHEN 1 THEN N'MB' END";
+
     private static readonly string Files = "DECLARE @f TABLE (ordinal int PRIMARY KEY, spec nvarchar(max) NULL);\n"
         + "INSERT @f (ordinal, spec) SELECT CONVERT(int, a.[key]), CASE j.lead WHEN 0 THEN N', ' WHEN 1 THEN N' ON PRIMARY ' "
         + "WHEN 2 THEN N', FILEGROUP ' + QUOTENAME(j.[group]) + CASE j.kind WHEN 0 THEN N'' WHEN 1 THEN N' CONTAINS FILESTREAM' WHEN 2 THEN N' CONTAINS MEMORY_OPTIMIZED_DATA' END "
         + "+ CASE j.[default] WHEN 1 THEN N' DEFAULT' WHEN 0 THEN N'' END + N' ' WHEN 3 THEN N' LOG ON ' END "
         + "+ N'( NAME = ' + " + Quoted("name") + " + N', FILENAME = ' + " + Quoted("file") + " "
-        + "+ CASE WHEN j.size IS NULL THEN N'' ELSE N', SIZE = ' + CONVERT(nvarchar(20), j.size) + N'KB' END "
-        + "+ CASE j.maxKind WHEN 0 THEN N'' WHEN 1 THEN N', MAXSIZE = UNLIMITED' WHEN 2 THEN N', MAXSIZE = ' + CONVERT(nvarchar(20), j.[max]) + N'KB' WHEN 3 THEN N', MAXSIZE = 2048GB' END "
-        + "+ CASE j.growthKind WHEN 0 THEN N'' WHEN 1 THEN N', FILEGROWTH = ' + CONVERT(nvarchar(20), j.growth) + N'KB' WHEN 2 THEN N', FILEGROWTH = ' + CONVERT(nvarchar(20), j.growth) + N'%' "
+        + "+ CASE WHEN j.size IS NULL THEN N'' ELSE N', SIZE = ' + CONVERT(nvarchar(20), j.size) + " + Unit("sizeUnit") + " END "
+        + "+ CASE j.maxKind WHEN 0 THEN N'' WHEN 1 THEN N', MAXSIZE = UNLIMITED' WHEN 2 THEN N', MAXSIZE = ' + CONVERT(nvarchar(20), j.[max]) + " + Unit("maxUnit") + " WHEN 3 THEN N', MAXSIZE = 2048GB' END "
+        + "+ CASE j.growthKind WHEN 0 THEN N'' WHEN 1 THEN N', FILEGROWTH = ' + CONVERT(nvarchar(20), j.growth) + " + Unit("growthUnit") + " WHEN 2 THEN N', FILEGROWTH = ' + CONVERT(nvarchar(20), j.growth) + N'%' "
         + "WHEN 3 THEN N', FILEGROWTH = 0' END + N' )' "
         + "FROM OPENJSON(@files) AS a CROSS APPLY OPENJSON(a.value) WITH (lead int, [group] nvarchar(max), kind int, [default] bit, [name] nvarchar(max), [file] nvarchar(max), "
-        + "size bigint, maxKind int, [max] bigint, growthKind int, growth bigint) AS j;\n"
+        + "size bigint, sizeUnit int, maxKind int, [max] bigint, maxUnit int, growthKind int, growth bigint, growthUnit int) AS j;\n"
         + "IF NOT EXISTS (SELECT 1 FROM @f) OR EXISTS (SELECT 1 FROM @f AS x WHERE x.spec IS NULL) THROW 50000, N'A file could not be built.', 1;\n";
 
     /// <summary>The single execution form (critic A9): the statement runs in @db (master) through its sp_executesql.</summary>
@@ -204,13 +230,6 @@ internal static partial class CreateDatabaseSql
     /// <summary>Keyword text: letters, digits, underscores, spaces and the punctuation a file spec uses. No quote, bracket, comment or line break.</summary>
     [GeneratedRegex(@"^N'[A-Za-z0-9_ ():=;,%]*'$")]
     private static partial Regex KeywordLiteral();
-    /// <summary>An OPENJSON WITH clause: its columns and its one-letter alias.</summary>
-    [GeneratedRegex(@"OPENJSON\([^)]*\) WITH \((.*?)\) AS ([a-z])(?=[ ;\n])")]
-    private static partial Regex WithClause();
-    [GeneratedRegex(@"(\[?\w+\]?) nvarchar\(max\)(?! AS JSON)")]
-    private static partial Regex JsonText();
-    [GeneratedRegex(@"\b([a-z])\.(\[?\w+\]?)")]
-    private static partial Regex Qualified();
     /// <summary>The quoted-literal form of a design text: N'N''' + REPLACE(alias.column COLLATE Latin1_General_BIN2, N'''', N'''''') + N''''.</summary>
     [GeneratedRegex(@"N'N''' \+ REPLACE\(([a-z]\.\[?\w+\]?) COLLATE Latin1_General_BIN2, N'''', N''''''\) \+ N''''")]
     private static partial Regex QuotedForm();
@@ -220,11 +239,12 @@ internal static partial class CreateDatabaseSql
     private static partial Regex DeclaredName();
 
     /// <summary>Problems with one New Database builder batch (form 5, which D1d's file changes reuse): a format hole, a secret, no quoting
-    /// guard, @db outside QUOTENAME, @design outside ISJSON or OPENJSON, a JSON array outside OPENJSON, STRING_AGG (SQL Server 2017), any
-    /// execution but the single QUOTENAME(@db) sp_executesql form (none in a dry run), a design text anywhere but QUOTENAME, the
-    /// server-side quoted-literal form or the collation lookup, a quote literal outside that form, an undeclared variable, and a literal
+    /// guard, @db outside QUOTENAME, @design outside ISJSON or OPENJSON, STRING_AGG (SQL Server 2017), any execution but the single
+    /// QUOTENAME(@db) sp_executesql form (none in a dry run), a design text anywhere but QUOTENAME, the server-side quoted-literal form or
+    /// the collation lookup, the other OPENJSON rules of <see cref="JsonBuilderLint"/> (<paramref name="arrays"/> are the variables a JSON
+    /// column may fill, @files unless the caller names others), a quote literal outside that form, an undeclared variable, and a literal
     /// that is neither one of <paramref name="messages"/> nor keyword text.</summary>
-    public static List<string> Lint(string text, IReadOnlySet<string> messages, bool dryRun)
+    public static List<string> Lint(string text, IReadOnlySet<string> messages, bool dryRun, IReadOnlyCollection<string>? arrays = null)
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
@@ -240,22 +260,12 @@ internal static partial class CreateDatabaseSql
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         if (Variable().Matches(text.Replace("ISJSON(@design)", "", StringComparison.Ordinal).Replace("OPENJSON(@design)", "", StringComparison.Ordinal)).Any(used => used.Value == "@design"))
             problems.Add("uses @design outside ISJSON or OPENJSON");
-        var arrays = text.Replace("OPENJSON(@files)", "", StringComparison.Ordinal).Replace("@files = d.", "", StringComparison.Ordinal).Replace("@files IS NULL", "", StringComparison.Ordinal)
-            .Replace("@files nvarchar(max)", "", StringComparison.Ordinal);
-        if (Variable().Matches(arrays).Any(used => used.Value == "@files")) problems.Add("uses @files outside OPENJSON");
-        // Design texts (alias, column): only QUOTENAME(x.c), the quoted-literal form, or the collation lookup reach the statement.
-        var texts = WithClause().Matches(text).SelectMany(clause => JsonText().Matches(clause.Groups[1].Value).Select(match => clause.Groups[2].Value + "." + match.Groups[1].Value.Trim('[', ']')))
-            .ToHashSet(StringComparer.Ordinal);
+        // Design texts reach the statement only through QUOTENAME, the server-side quoted-literal form or the collation lookup; the
+        // shared OPENJSON rules check every column once those two forms are reduced to QUOTENAME.
         var lookups = text.Contains("LEFT JOIN sys.fn_helpcollations() AS c ON " + CollationJoin, StringComparison.Ordinal) ? 1 : 0;
         var safe = QuotedForm().Replace(text, match => "QUOTENAME(" + match.Groups[1].Value + ")");
         if (lookups == 1) safe = safe.Replace(CollationJoin, "", StringComparison.Ordinal);
-        foreach (Match used in Qualified().Matches(safe))
-        {
-            var key = used.Groups[1].Value + "." + used.Groups[2].Value.Trim('[', ']');
-            if (texts.Contains(key) && !(safe[..used.Index].EndsWith("QUOTENAME(", StringComparison.Ordinal) && safe[(used.Index + used.Length)..].StartsWith(')')))
-                problems.Add("uses the design text " + used.Value + " outside QUOTENAME, the quoted-literal form or the collation lookup");
-            if (used.Groups[2].Value == "value" && !safe[..used.Index].EndsWith("OPENJSON(", StringComparison.Ordinal)) problems.Add("uses " + used.Value + " outside OPENJSON");
-        }
+        problems.AddRange(JsonBuilderLint.Problems(safe, arrays ?? ["@files"]));
         var declared = Declaration().Matches(text).SelectMany(match => DeclaredName().Matches(match.Groups[1].Value).Select(name => name.Groups[1].Value)).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Variable().Matches(text)) if (used.Value is not ("@db" or "@design") && !declared.Contains(used.Value)) problems.Add("uses the undeclared " + used.Value);
         // Quote literals are legal only inside the quoted-literal form, which `safe` no longer holds.
