@@ -186,6 +186,8 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground', 'objectExplorer.actionForeground'], sideBar),
   ...graphic(['icon.foreground', 'objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], sideBarHover),
   ...graphic(['objectExplorer.chevronForeground', 'objectExplorer.folderIconForeground', 'objectExplorer.objectIconForeground'], treeHover, treeServer),
+  // A row icon's status badge sits on its own sideBar-coloured disc: disabled and errors in red, a denied login in amber.
+  ...graphic(['errorForeground', 'warningForeground'], sideBar),
   // A server's connection dot keeps its color on every row state; its shape (dot or ring) and the row's words say the same.
   ...graphic(['objectExplorer.connectedIndicator', 'objectExplorer.connectionErrorIndicator', 'objectExplorer.disconnectedIndicator'], sideBar, treeHover, treeServer, treeActive, treeInactive),
   // So does the active query's server glyph, which is all that marks that row.

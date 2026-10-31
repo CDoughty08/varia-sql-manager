@@ -5,7 +5,7 @@ import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tr
 import {
   activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
   executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, resultGrid, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  queryStatus, resultGrid, statusChips, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -634,6 +634,21 @@ try {
   expect((await loads()).filter(([, node]) => node === 'serverRoles')).toHaveLength(1)
   await toggle('server-a', 'Security', 'Logins')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Logins', 'sa')).toBeVisible()
+  // D4a: a disabled login and one denied permission to connect differ in badge, chip and name; one that can connect has neither.
+  const login = name => explorerRow(page, 'server-a', 'Security', 'Logins', name)
+  await expect(await login('AppUser')).toHaveAttribute('aria-label', 'AppUser')
+  await expect(await login('sa')).toHaveAttribute('aria-label', 'sa, Disabled')
+  await expect(await login('Denied')).toHaveAttribute('aria-label', 'Denied, Permission to connect denied')
+  await expect(statusChips(await login('sa'))).toHaveText(['DISABLED'])
+  await expect(statusChips(await login('Denied'))).toHaveText(['CONNECT DENIED'])
+  await expect(statusChips(await login('AppUser'))).toHaveCount(0)
+  await expect((await login('sa')).locator(part.explorerBadge)).toHaveAttribute('data-badge', 'disabled')
+  await expect((await login('Denied')).locator(part.explorerBadge)).toHaveAttribute('data-badge', 'noAccess')
+  await expect((await login('AppUser')).locator(part.explorerBadge)).toHaveCount(0)
+  await expect(await login('AppUser')).toHaveAttribute('title', 'AppUser\nLogin\nSQL Server authentication · Password policy enforced · Password expiration enforced')
+  await expect(await login('Denied')).toHaveAttribute('aria-description', 'Login\nSQL Server authentication · Permission to connect denied · Password policy enforced\nCONNECT SQL is denied: the login cannot connect.')
+  await expect(await login('CONTOSO\\Ops')).toHaveAttribute('title', 'CONTOSO\\Ops\nLogin\nWindows group')
+  await page.screenshot({ path: artifact('explorer-logins.png') })
   // An empty folder loses its chevron.
   await toggle('server-a', 'Security', 'Credentials')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Credentials')).not.toHaveAttribute('aria-expanded')

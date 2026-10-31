@@ -207,6 +207,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .oe-icon .oe-badge { position: absolute; right: -3px; bottom: -3px; font-size: var(--varia-glyph-badge); line-height: var(--varia-glyph-badge); width: var(--varia-glyph-badge); height: var(--varia-glyph-badge); border-radius: 50%; background: var(--varia-sideBar-background); }
 .oe-badge[data-badge="disabled"], .oe-badge[data-badge="error"] { color: var(--varia-errorForeground); }
 .oe-badge[data-badge="unavailable"], .oe-badge[data-badge="lost"] { color: var(--varia-disabledForeground); }
+.oe-badge[data-badge="noAccess"] { color: var(--varia-warningForeground); }
 .oe-badge[data-badge="loading"] { animation: oe-spin var(--varia-motion-spin) steps(30) infinite; }
 @keyframes oe-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .oe-badge[data-badge="loading"] { animation: none; } }

@@ -3,7 +3,7 @@ import { explorerLimits, folderSpecs, kindSpecs } from '../../../shared/explorer
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { environmentTag } from '../../../shared/environments'
 import EnvironmentTag from '../EnvironmentTag'
-import type { StatusChip } from '../../../shared/explorer/status.ts'
+import { loginChips, type StatusChip } from '../../../shared/explorer/status.ts'
 import { codiconClass } from '../../../shared/icons'
 import Icon from '../Icon'
 import StatusPill from '../kit/StatusPill'
@@ -71,6 +71,8 @@ const statusSentences = {
   noAccess: 'The current login cannot open this database.',
   readOnly: ''
 } as const
+/** A row's static chips, from its listing rather than a probe: a login's Disabled or Connect denied (D4a). */
+const listedChips = (node: Pick<TreeNode, 'kind' | 'status'>): StatusChip[] => node.kind === 'login' ? loginChips(node.status) : []
 const lostSentence = 'The connection was lost when the SQL backend restarted. Reconnect, or remove the server.'
 /** A database whose live state is not the one Databases listed it with (its chevron and folders are the list's). */
 export const changedSentence = 'Its state changed since Databases loaded. Refresh Databases to update it.'
@@ -97,7 +99,9 @@ const connectionWords: Readonly<Record<ConnectionState, string>> = { online: 'Co
 function tooltipFacts(node: TreeNode, counted: boolean, note?: string): string[] {
   const kind = node.kind === 'folder' ? undefined : [kindSpecs[node.kind].title, node.created && `Created ${node.created.replace('T', ' ')}`].filter(Boolean).join(' · ')
   const error = node.error ?? node.connectionError, count = counted ? itemCount(node) : undefined
-  return [kind, node.detail && displayText(node.detail), count !== undefined && items(count), node.lost ? lostSentence : node.status && statusSentences[node.status], note,
+  const listed = listedChips(node)
+  const status = node.lost ? lostSentence : listed.length ? listed.map(chip => chip.title).join('\n') : node.status && statusSentences[node.status]
+  return [kind, node.detail && displayText(node.detail), count !== undefined && items(count), status, note,
     error && `Could not load: ${displayText(error.message)}`, node.note && displayText(node.note.sentence)].filter((line): line is string => !!line)
 }
 /** The row's tooltip: name, kind and creation date, facts, status, `note` (such as a live state), any error, and another
@@ -130,10 +134,12 @@ function StatusChips({ chips }: { chips: readonly StatusChip[] }) {
     {chips.map(chip => <StatusPill key={chip.id} tone={chip.tone} label={displayText(chip.label)} {...chip.value !== undefined ? { value: displayText(chip.value) } : {}} size="small" title={chip.title.split('\n').map(displayText).join('\n')} {...chip.icon !== undefined ? { icon: chip.icon } : {}} />)}
   </span>
 }
-/** The row's accessible name: the label and sublabel as shown, then its state. */
+/** The row's accessible name: the label and sublabel as shown, then its state (a static chip's words, as a server's chips say theirs). */
 export function rowName(node: TreeNode): string {
   const sublabel = node.lost ? '(connection lost)' : node.sublabel
-  const state = node.load === 'error' || node.more === 'error' || node.connectionError ? ', could not load' : node.status ? statusWords[node.status] : ''
+  const listed = listedChips(node)
+  const state = node.load === 'error' || node.more === 'error' || node.connectionError ? ', could not load'
+    : listed.length ? listed.map(chip => ', ' + chip.words).join('') : node.status ? statusWords[node.status] : ''
   const note = !node.lost && node.note ? ' ' + displayText(node.note.label) : ''
   return `${displayText(node.label)}${node.filtered ? ' (filtered)' : ''}${sublabel ? ' ' + displayText(sublabel) : ''}${note}${state}`
 }
@@ -243,9 +249,9 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const dimmed = node.status === 'disabled' || node.status === 'unavailable' || node.status === 'noAccess' || node.lost
   const sublabel = shownSublabel(node), counted = !partial
   const tag = root ? environmentTag(environment) : undefined
-  // A server's chips (running jobs, availability groups) follow its name and come before its environment. Only server and
-  // database rows show chips; group names are the server's text.
-  const chips = live || root ? status?.chips : undefined
+  // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server and database
+  // rows show live chips (group names are the server's text); a login shows its listing's static chip.
+  const chips = live || root ? status?.chips : listedChips(node)
   const serverWords = root && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, counted, note), serverWords, tag?.description].filter(Boolean).join('\n')

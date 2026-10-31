@@ -4,7 +4,10 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, Dictionary<string, string> Messages, List<string> OwnRefuses, List<LoginRuleJson> Rules, int SaPrincipalId,
-    Dictionary<string, string> TypeSubtypes);
+    Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail);
+/// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
+/// password policy.</summary>
+internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
 
 /// <summary>Login subtypes and the protected-principal rules (D4 §4) as logins.ts declares them: Object Explorer's login
 /// subtype, and the refusal the login preflight answers for a verb. C# holds no rules of its own.</summary>
@@ -21,6 +24,8 @@ internal sealed class LoginRules
         rules = json.Rules.ToDictionary(rule => rule.Subtype, StringComparer.Ordinal);
         if (json.TypeSubtypes.Values.Any(subtype => !rules.ContainsKey(subtype)) || !rules.ContainsKey("sa") || !rules.ContainsKey("system"))
             throw new InvalidOperationException("The login rules do not cover every login subtype.");
+        if (json.Detail is null || json.TypeSubtypes.Keys.Any(type => !json.Detail.Types.ContainsKey(type)))
+            throw new InvalidOperationException("The login detail words do not name every login type.");
     }
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
@@ -35,6 +40,24 @@ internal sealed class LoginRules
         if (principalId == json.SaPrincipalId) return "sa";
         if (name.Length >= 4 && name.StartsWith("##", StringComparison.Ordinal) && name.EndsWith("##", StringComparison.Ordinal)) return "system";
         return byType;
+    }
+
+    /// <summary>A login row's status (logins.ts loginStatusOf): disabled, else noAccess while CONNECT SQL is denied, else none.
+    /// The two were one status before D4a; they stay apart because Enable does not lift a DENY CONNECT SQL.</summary>
+    public string? StatusOf(bool disabled, bool connectDenied) => disabled ? "disabled" : connectDenied ? "noAccess" : null;
+
+    /// <summary>A login row's detail (logins.ts loginDetail): its kind, then Disabled, Permission to connect denied (both when
+    /// both apply) and the password policy flags, joined with " · ".</summary>
+    public string Detail(string type, bool disabled, bool connectDenied, bool policyChecked, bool expirationChecked)
+    {
+        var words = json.Detail;
+        var parts = new List<string>();
+        if (words.Types.TryGetValue(type.Trim(), out var kind)) parts.Add(kind);
+        if (disabled) parts.Add(words.Disabled);
+        if (connectDenied) parts.Add(words.ConnectDenied);
+        if (policyChecked) parts.Add(words.PolicyChecked);
+        if (expirationChecked) parts.Add(words.ExpirationChecked);
+        return string.Join(" · ", parts);
     }
 
     /// <summary>'allowed', 'greyed' or 'hidden'.</summary>

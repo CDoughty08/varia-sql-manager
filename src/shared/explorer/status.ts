@@ -1,6 +1,6 @@
-// Object Explorer's live status chips (docs/object-explorer.md, Live status): what the `explorer` live source's probes
-// (src/shared/live/catalog.ts) report, turned into the chips a node shows. Only a probe's own rows make a chip; nothing
-// here guesses. Erasable TypeScript (no enums), so Node's type stripping can load it as well.
+// Object Explorer's status chips (docs/object-explorer.md, Live status and Login status): what the `explorer` live source's
+// probes (src/shared/live/catalog.ts) report, turned into the chips a node shows, and a login's static chip from its listing.
+// Only a probe's own rows or the listing's own columns make a chip; nothing here guesses. Erasable TypeScript (no enums), so Node's type stripping can load it as well.
 import type { IconId } from '../icons.ts'
 import type { StatusTone } from '../theme/tones.ts'
 
@@ -73,6 +73,20 @@ export function databaseChips(row: DatabaseStatusRow | undefined, progress?: Pro
   if (user) chips.push({ id: 'access', tone: 'warning', label: user.label, words: user.words, title: user.title, icon: 'person' })
   return chips
 }
+
+/** A login row's chip, static: the Logins listing's status (logins.ts loginStatusOf), never a probe's. Calm Pro states it in
+ *  words beside the badge, and Connect denied looks different from Disabled. */
+const loginStates = {
+  disabled: { id: 'state', tone: 'neutral', label: 'DISABLED', words: 'Disabled', title: 'The login is disabled: new connections are refused; open sessions continue.', icon: 'arrow-small-down' },
+  noAccess: { id: 'state', tone: 'warning', label: 'CONNECT DENIED', words: 'Permission to connect denied', title: 'CONNECT SQL is denied: the login cannot connect.', icon: 'circle-slash' }
+} as const satisfies Readonly<Record<string, StatusChip>>
+/** A login's chips: one for a disabled login or one denied permission to connect, none otherwise. */
+export function loginChips(status: string | undefined): StatusChip[] {
+  return status === 'disabled' || status === 'noAccess' ? [loginStates[status]] : []
+}
+/** Every chip a login can show, for docs/object-explorer.md. */
+export const loginChipDocs: readonly { readonly status: string; readonly chip: string; readonly tone: string; readonly words: string; readonly title: string }[] =
+  (Object.keys(loginStates) as (keyof typeof loginStates)[]).map(status => ({ status, chip: loginStates[status].label, tone: loginStates[status].tone, words: loginStates[status].words, title: loginStates[status].title }))
 
 /** At most this many groups are named in the availability chip's tooltip. */
 export const maxGroupLines = 10

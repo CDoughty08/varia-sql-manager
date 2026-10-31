@@ -172,6 +172,32 @@ describe('Object Explorer row visuals', () => {
     // Other rows take no database state from a status.
     expect(render(node(), { status: restoring })).not.toMatch(/Restoring|RESTORING|oe-chips/)
   })
+  it('show a login\'s Disabled or Connect denied as a static chip beside its badge, and say it in words', () => {
+    const login = (name: string, fields: Partial<TreeNode> = {}) => node({ kind: 'login', label: name, lower: name.toLowerCase(), ref: { type: 'object', object: { kind: 'login', name } }, icon: 'login', level: 4, hasChildren: false, subtype: 'sql', ...fields })
+    const sa = login('sa', { subtype: 'sa', status: 'disabled', detail: 'SQL Server authentication · Disabled · Password policy enforced' })
+    const denied = login('Denied', { status: 'noAccess', detail: 'SQL Server authentication · Permission to connect denied' })
+    const plain = login('AppUser', { detail: 'SQL Server authentication' })
+    // The chip's words replace the generic state words, as a server's chips say theirs.
+    expect(rowName(sa)).toBe('sa, Disabled')
+    expect(rowName(denied)).toBe('Denied, Permission to connect denied')
+    expect(rowName(plain)).toBe('AppUser')
+    // The tooltip's state is the chip's sentence: a database's "cannot open this database" would be wrong for a login.
+    expect(rowTooltip(denied)).toBe('Denied\nLogin\nSQL Server authentication · Permission to connect denied\nCONNECT SQL is denied: the login cannot connect.')
+    expect(rowDescription(sa)).toBe('Login\nSQL Server authentication · Disabled · Password policy enforced\nThe login is disabled: new connections are refused; open sessions continue.')
+    const disabledRow = render(sa), deniedRow = render(denied), plainRow = render(plain)
+    expect(disabledRow).toContain('<span class="oe-chips" aria-hidden="true"><span class="status-pill small" data-tone="neutral" title="The login is disabled: new connections are refused; open sessions continue.">')
+    expect(disabledRow).toContain('<span class="status-pill-label">DISABLED</span>')
+    expect(disabledRow).toContain('data-badge="disabled"')
+    expect(deniedRow).toContain('data-tone="warning"')
+    expect(deniedRow).toContain('<span class="status-pill-label">CONNECT DENIED</span>')
+    expect(deniedRow).toContain('data-badge="noAccess"')
+    for (const markup of [disabledRow, deniedRow]) expect(markup).toContain('class="explorer-row dimmed"')
+    expect(plainRow).not.toMatch(/oe-chips|dimmed|data-badge/)
+    expect(plainRow).toContain('aria-label="AppUser"')
+    // Other kinds keep their status words and no chip: a disabled trigger, a database the login cannot open.
+    expect(render(node({ kind: 'trigger', label: 'trg', status: 'disabled' }))).not.toContain('oe-chips')
+    expect(rowName(node({ kind: 'database', label: 'Locked', status: 'noAccess' }))).toBe('Locked, no access')
+  })
   it('end a server row with its live chips before its environment tag, and say them after its name', () => {
     const chips = serverChips(2, [{ name: 'AG‮1', health: 1, role: 1 }])
     const status: RowStatus = { chips, live: true, words: chips.map(chip => chip.words).join(', ') }

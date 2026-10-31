@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--logins-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -42,6 +42,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await SeamLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused wave 5 seam checks.");
+        }
+        else if (lane == "--logins-live")
+        {
+            await LoginListingLiveChecks.RunAsync(Check, focusedService, focusedInfo, json);
+            Console.WriteLine("Passed " + passed + " focused Logins listing checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -505,6 +510,7 @@ try
     await ScriptingLiveChecks.RunAsync(Check, service, info, Live, json);
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
+    await LoginListingLiveChecks.RunAsync(Check, service, info, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);

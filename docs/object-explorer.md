@@ -249,6 +249,33 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 | `error` | `error` |
 | `loading` | `loading` |
 
+## Login status
+
+Security › Logins reads catalog views only (`sys.server_principals`, `sys.server_permissions` and `sys.sql_logins`), never
+`LOGINPROPERTY`, which waits for another session's open `ALTER LOGIN` whatever the isolation level. A disabled login is
+`disabled`; otherwise one denied permission to connect (`DENY CONNECT SQL`) is `noAccess`. They keep apart, with their own
+badge and chip, because they are lifted apart: Enable leaves a denial in place. The chip is static, from the listing (no
+probe), and its words join the row's accessible name ("sa, Disabled"); its sentence is the tooltip's state. A row's subtype
+comes from `src/shared/actions/logins.ts`: `sa` by principal_id 1 whatever its name, `system` for SQL Server's own `##…##`
+logins, else by type. Its tooltip names its kind, then Disabled and Permission to connect denied (both when both apply),
+then "Password policy enforced" and "Password expiration enforced" for a SQL login whose policy flags are on.
+Lock-out, expiry and must-change are not shown: only LOGINPROPERTY knows them.
+
+| Type | Subtype | Kind in the tooltip |
+| --- | --- | --- |
+| `S` | `sql` | SQL Server authentication |
+| `U` | `windowsUser` | Windows user |
+| `G` | `windowsGroup` | Windows group |
+| `C` | `certificateMapped` | Mapped to a certificate |
+| `K` | `asymmetricKeyMapped` | Mapped to an asymmetric key |
+| `E` | `externalUser` | Microsoft Entra user or application |
+| `X` | `externalGroup` | Microsoft Entra group |
+
+| Status | Chip | Tone | Words | Tooltip |
+| --- | --- | --- | --- | --- |
+| `disabled` | DISABLED | neutral | Disabled | The login is disabled: new connections are refused; open sessions continue. |
+| `noAccess` | CONNECT DENIED | warning | Permission to connect denied | CONNECT SQL is denied: the login cannot connect. |
+
 ## Live status
 
 While Object Explorer shows (and Environment › Live Data › Show live status in Object Explorer is on), each connected

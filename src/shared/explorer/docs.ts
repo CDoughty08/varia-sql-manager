@@ -3,7 +3,8 @@ import {
   childParentKinds, explorerLimits, filterPropertyLabels, folderIds, folderOwnerKinds, folderServed, folderSpecs, kindScopes, kindSpecs, laterFolders, maxBand, nodeKinds, scopeFields, statusBadges,
   statusChipKinds, subfolders, type FolderId, type InsertStyle, type KindSpec, type LaterFolder, type NodeKind, type NodeSubtype
 } from './catalog.ts'
-import { statusChipDocs } from './status.ts'
+import { loginChipDocs, statusChipDocs } from './status.ts'
+import { loginDetailWords, loginTypeSubtypes, type LoginType } from '../actions/logins.ts'
 import { glyphSizes } from '../theme/metrics.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -157,6 +158,22 @@ export function renderExplorerDocs(): string {
     'Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.',
     '',
     table(['Status', 'Badge'], Object.entries(statusBadges).map(([status, badge]) => [code(status), code(badge)])),
+    '',
+    '## Login status',
+    '',
+    'Security › Logins reads catalog views only (`sys.server_principals`, `sys.server_permissions` and `sys.sql_logins`), never',
+    '`LOGINPROPERTY`, which waits for another session\'s open `ALTER LOGIN` whatever the isolation level. A disabled login is',
+    '`disabled`; otherwise one denied permission to connect (`DENY CONNECT SQL`) is `noAccess`. They keep apart, with their own',
+    'badge and chip, because they are lifted apart: Enable leaves a denial in place. The chip is static, from the listing (no',
+    'probe), and its words join the row\'s accessible name ("sa, Disabled"); its sentence is the tooltip\'s state. A row\'s subtype',
+    'comes from `src/shared/actions/logins.ts`: `sa` by principal_id 1 whatever its name, `system` for SQL Server\'s own `##…##`',
+    'logins, else by type. Its tooltip names its kind, then Disabled and Permission to connect denied (both when both apply),',
+    `then "${loginDetailWords.policyChecked}" and "${loginDetailWords.expirationChecked}" for a SQL login whose policy flags are on.`,
+    'Lock-out, expiry and must-change are not shown: only LOGINPROPERTY knows them.',
+    '',
+    table(['Type', 'Subtype', 'Kind in the tooltip'], (Object.keys(loginTypeSubtypes) as LoginType[]).map(type => [code(type), code(loginTypeSubtypes[type]), loginDetailWords.types[type]])),
+    '',
+    table(['Status', 'Chip', 'Tone', 'Words', 'Tooltip'], loginChipDocs.map(doc => [code(doc.status), doc.chip, doc.tone, doc.words, doc.title])),
     '',
     '## Live status',
     '',
