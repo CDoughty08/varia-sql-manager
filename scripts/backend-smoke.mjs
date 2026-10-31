@@ -257,20 +257,24 @@ try {
   await expect(dialog).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toBeVisible()
   // A long action's progress (D1c): main checks the backend's action.progress EVENTs and pushes them to the window that sent the
-  // request, at most 4 a second (the first of each step at once), with only the request id, step and percent.
+  // request, at most 4 a second (each step's start at once, the latest held percent at the interval's end), with only the
+  // request id, step and percent. Which of step 0's two EVENTs goes depends on when main reads them, so only what holds either
+  // way is asserted.
   await expect.poll(async () => (await calls()).some(call => call.params?.connectionId)).toBe(true)
   const connectionId = (await calls()).findLast(call => call.params?.connectionId).params.connectionId
   const progress = await page.evaluate(async connectionId => {
-    const seen = []
-    const stop = window.varia.onActionProgress(value => seen.push(value))
+    const seen = window.__smokeProgress = []
+    window.__smokeProgressStop = window.varia.onActionProgress(value => seen.push(value))
     const requestId = crypto.randomUUID()
     const result = await window.varia.executeObjectAction({ action: 'delete', connectionId, requestId, target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, closeConnections: false, deleteHistory: false })
-    await new Promise(resolve => setTimeout(resolve, 200))
-    stop()
-    return { error: result.ok ? undefined : result.error, seen, requestId }
+    return { error: result.ok ? undefined : result.error, requestId }
   }, connectionId)
   expect(progress.error).toBeUndefined()
-  expect(progress.seen).toEqual([{ requestId: progress.requestId, step: 0, percent: 25 }, { requestId: progress.requestId, step: 1, percent: 40 }])
+  await expect.poll(() => page.evaluate(() => window.__smokeProgress.at(-1))).toEqual({ requestId: progress.requestId, step: 1, percent: 40 })
+  const seen = await page.evaluate(() => { window.__smokeProgressStop(); return window.__smokeProgress })
+  expect(seen[0]).toEqual({ requestId: progress.requestId, step: 0, percent: 25 })
+  expect(seen.length).toBeLessThanOrEqual(3)
+  expect(seen.every(value => Object.keys(value).sort().join() === 'percent,requestId,step' && value.requestId === progress.requestId && value.percent <= 100)).toBe(true)
   await typeSql('SELECT 1;')
   // The script is running when the backend crashes.
   await writeFile(join(control, 'hold', 'query.execute'), '')

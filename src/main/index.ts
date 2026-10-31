@@ -724,17 +724,17 @@ app.whenReady().then(async () => {
       const cancellable = cancellableRequests(method, { explorer: explorerRequests, scripting: scriptingRequests, actions: actionRequests, ssis: ssisRequests, activity: activityRequests, connections: connectionRequests }, prepared.context?.requestId)
       const load = cancellable?.begin(prepared.context?.requestId ?? (validated as RpcMethods['explorer.children' | 'scripting.script' | 'actions.describe' | 'actions.script' | 'actions.execute' | 'ssis.describe' | 'ssis.execute' | 'ssis.catalogSetup' | 'activity.details']['params']).requestId)
       // A long action's STATS progress goes back only to the window that sent it (varia:actions-progress).
-      const sender = event.sender
-      const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, value => {
-        if (!sender.isDestroyed()) sender.send('varia:actions-progress', value)
-      }) : undefined
+      const progress = method === 'actions.execute' ? actionProgressRelay((validated as RpcMethods['actions.execute']['params']).requestId, event.sender) : undefined
       let result: unknown
       let outcome: Settled
       try {
         try {
           result = await backend.request(method as RpcMethod, prepared.params as never, queryId !== undefined ? { onEvent: queryEvent => results.queryEvent(queryId, queryEvent) }
-            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress } : {} } : {})
-        } finally { load?.end() }
+            : load ? { onSent: load.sent, ...progress ? { onActionProgress: progress.event } : {} } : {})
+        } finally {
+          load?.end()
+          progress?.close()
+        }
         result = validateResult(method as RpcMethod, result)
         outcome = { ok: true, value: result }
       } catch (error) { outcome = { ok: false, error } }

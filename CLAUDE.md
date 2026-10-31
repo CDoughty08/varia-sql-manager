@@ -182,7 +182,7 @@ pages, limits, error codes, display formats, benchmarks).
   or the status bar's for a rename), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`. The test-only dry
   run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
-  never `ExecuteNonQuery`, whose info messages SqlClient holds until the statement ends; a long action (the catalogue's `long`)
+  never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), whose info messages SqlClient holds until the statement ends; a long action (the catalogue's `long`)
   takes the long gate (per Varia connection, like the others) and reports message 3211 as droppable `action.progress` EVENTs
   that main relays only to the requesting window (`varia:actions-progress`), and a closing backend stops it and waits for
   its cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).

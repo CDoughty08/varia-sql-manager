@@ -71,26 +71,59 @@ internal static class ActionProgressChecks
     {
         long now = 1_000;
         var sent = new List<string>();
-        var progress = new ActionProgress(value => sent.Add(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web))), TimeSpan.FromMilliseconds(250), () => now);
+        var due = new List<Action>();
+        var delays = new List<long>();
+        var progress = new ActionProgress(value => sent.Add(Short(value)), TimeSpan.FromMilliseconds(250), () => now,
+            (delay, run) => { delays.Add((long)delay.TotalMilliseconds); due.Add(run); });
         var early = progress.Observe(3211, "5 percent processed.");
         progress.Begin(2);
         var other = progress.Observe(4035, "Processed 100 pages.");
+        // Inside the interval the step's start opened: held for the trailing edge, and a later one replaces it.
         progress.Observe(3211, "10 percent processed.");
         now += 100;
         progress.Observe(3211, "20 percent processed.");
         now += 150;
         progress.Observe(3211, "30 percent processed.");
+        due[0]();
+        now += 10;
         progress.Begin(3);
         now += 10;
         progress.Observe(3211, "40 percent processed.");
         now += 300;
         progress.Observe(3211, "garbled");
-        check(early && !other && sent.SequenceEqual(["{\"type\":\"action.progress\",\"step\":2,\"percent\":10}", "{\"type\":\"action.progress\",\"step\":2,\"percent\":30}"])
-            && progress.PercentOf(2) == 30 && progress.PercentOf(3) == 40 && progress.PercentOf(0) is null,
-            "progress EVENTs carry the running step's index and percent at most once per interval, and every percent still counts for its step's reply: " + string.Join(" ", sent));
+        // The trailing edge sends the held 40 when the interval ends, though no message follows it.
+        due[1]();
+        now += 30;
+        // A percent still held when the next step starts goes out first, then the new step's start.
+        progress.Observe(3211, "70 percent processed.");
+        progress.Begin(4);
+        due[2]();
+        check(early && !other && sent.SequenceEqual(["2:0", "2:30", "3:0", "3:40", "3:70", "4:0"]) && delays.SequenceEqual([250L, 240L, 220L])
+            && progress.PercentOf(2) == 30 && progress.PercentOf(3) == 70 && progress.PercentOf(4) is null && progress.PercentOf(0) is null,
+            "progress EVENTs announce each step's start, carry the running step's percent at most once per interval, and send the last one "
+            + "the interval held back when it ends or before the next step starts; every percent still counts for its step's reply: "
+            + string.Join(" ", sent) + " after " + string.Join(",", delays));
         var silent = new ActionProgress(null, TimeSpan.Zero);
         silent.Begin(0);
         check(silent.Observe(3211, "50 percent processed.") && silent.PercentOf(0) == 50, "with no listener a step still records its percent");
+
+        // The default clock and timer: a step's last percent arrives by itself once the interval ends, with no message after it.
+        var real = new List<string>();
+        using var arrived = new ManualResetEventSlim();
+        var timed = new ActionProgress(value => { lock (real) { real.Add(Short(value)); if (real.Count == 2) arrived.Set(); } }, TimeSpan.FromMilliseconds(250));
+        timed.Begin(0);
+        timed.Observe(3211, "95 percent processed.");
+        timed.Observe(3211, "100 percent processed.");
+        var flushed = arrived.Wait(5_000);
+        lock (real)
+            check(flushed && real.SequenceEqual(["0:0", "0:100"]), "the trailing edge sends a held percent when the interval ends: " + string.Join(" ", real));
+    }
+
+    private static string Short(object value)
+    {
+        var element = JsonSerializer.SerializeToElement(value, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        return element.GetProperty("type").GetString() == "action.progress" && element.EnumerateObject().Count() == 3
+            ? element.GetProperty("step").GetInt32() + ":" + element.GetProperty("percent").GetInt32() : "?" + element;
     }
 
     private static void Messages(Action<bool, string> check)
@@ -130,7 +163,7 @@ internal static class ActionProgressChecks
         using var service = new ActionService(new HeldHost());
         await using var connection = new SqlConnection("Data Source=tcp:127.0.0.1,1;Connect Timeout=1;Pooling=false;Encrypt=false");
         var events = new List<string>();
-        var progress = new ActionProgress(value => events.Add(JsonSerializer.Serialize(value, new JsonSerializerOptions(JsonSerializerDefaults.Web))), TimeSpan.Zero);
+        var progress = new ActionProgress(value => events.Add(Short(value)), TimeSpan.Zero);
         RunStep Step(string title, params int[] percents) => new(title, _ =>
         {
             foreach (var percent in percents) progress.Observe(3211, percent + " percent processed.");
@@ -139,10 +172,8 @@ internal static class ActionProgressChecks
         RunStep[] plan = [Step("Prepare"), Step("Restore", 10, 60, 100), Step("Verify", 40), Step("Fail"), Step("After")];
         var outcome = await service.RunStepsAsync(connection, plan, null, CancellationToken.None, TimeSpan.FromSeconds(1), progress: progress);
         check(outcome.Steps.Select(step => step.Title + ":" + step.Progress).SequenceEqual(["Prepare:", "Restore:100", "Verify:40", "Fail:", "After:"])
-            && events.SequenceEqual([
-                "{\"type\":\"action.progress\",\"step\":1,\"percent\":10}", "{\"type\":\"action.progress\",\"step\":1,\"percent\":60}", "{\"type\":\"action.progress\",\"step\":1,\"percent\":100}",
-                "{\"type\":\"action.progress\",\"step\":2,\"percent\":40}"]),
-            "runner v2 counts a step's progress for its index in the reply, and each step carries the last percent it reached: "
+            && events.SequenceEqual(["0:0", "1:0", "1:10", "1:60", "1:100", "2:0", "2:40", "3:0"]),
+            "runner v2 announces each step it starts and counts its progress for its index in the reply, and each step carries the last percent it reached: "
             + string.Join(", ", outcome.Steps.Select(step => step.Title + ":" + step.Progress)) + " | " + string.Join(" ", events));
     }
 
@@ -173,20 +204,25 @@ internal static class ActionProgressChecks
         host.Release.TrySetResult();
         var ended = await Task.WhenAll(first, second, rename);
         const string LongBusy = "BUSY: Another restore or backup is running on this connection. Retry after it finishes.";
-        check(sameConnection == LongBusy && third == LongBusy && renameOpened && host.Opened.ToArray().SequenceEqual(["A", "B", "A"]) && ended.All(code => code.StartsWith("CANCELLED", StringComparison.Ordinal)),
-            $"the long gate allows one long action per Varia connection and two in all, says so for this connection, and leaves the execute gate free: {sameConnection} / {third} / {string.Join(", ", ended)} / {string.Join(",", host.Opened)}");
+        const string LongElsewhere = "BUSY: Restores or backups are already running on other connections. Retry after one finishes.";
+        check(sameConnection == LongBusy && third == LongElsewhere && renameOpened && host.Opened.ToArray().SequenceEqual(["A", "B", "A"]) && ended.All(code => code.StartsWith("CANCELLED", StringComparison.Ordinal)),
+            $"the long gate allows one long action per Varia connection and two in all, says which (this connection, or the others when all long slots are taken), and leaves the execute gate free: {sameConnection} / {third} / {string.Join(", ", ended)} / {string.Join(",", host.Opened)}");
 
         var shortHost = new HeldHost();
         using var shortService = new ActionService(shortHost, new ActionServiceOptions { GateWait = TimeSpan.FromMilliseconds(200) });
         using var shortStop = new CancellationTokenSource();
         var holding = Outcome(shortService.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "delete", Nothing, null, shortStop.Token));
-        SpinWait.SpinUntil(() => shortHost.Opened.Count == 1, 5_000);
+        var holdingB = Outcome(shortService.ExecuteStepsAsync("B", Guid.NewGuid().ToString(), "delete", Nothing, null, shortStop.Token));
+        SpinWait.SpinUntil(() => shortHost.Opened.Count == 2, 5_000);
         var busy = await Outcome(shortService.ExecuteStepsAsync("A", Guid.NewGuid().ToString(), "rename", Nothing, null, shortStop.Token));
+        var elsewhere = await Outcome(shortService.ExecuteStepsAsync("C", Guid.NewGuid().ToString(), "rename", Nothing, null, shortStop.Token));
         shortStop.Cancel();
         shortHost.Release.TrySetResult();
-        await holding;
-        check(busy == "BUSY: Other object actions are running on this connection. Retry after they finish.",
-            "a second action on a Varia connection whose execute gate is taken is BUSY, worded for this connection (critic A26): " + busy);
+        await Task.WhenAll(holding, holdingB);
+        check(busy == "BUSY: Other object actions are running on this connection. Retry after they finish."
+            && elsewhere == "BUSY: Object actions are already running on other connections. Retry after they finish.",
+            "a second action on a Varia connection whose execute gate is taken is BUSY, worded for this connection (critic A26), and one refused "
+            + "because actions on other connections hold every slot says so: " + busy + " / " + elsewhere);
     }
 
     private static async Task DrainAsync(Action<bool, string> check)

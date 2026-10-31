@@ -961,8 +961,8 @@ async function workbench(id, method, params, credit) {
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
-    // Progress EVENTs as a long step's STATS sends them, at once: main pushes the first of each step and drops the second of step 0
-    // (inside its 250 ms) and the out-of-range one.
+    // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
+    // 250 ms) until step 1 replaces it, and drops the out-of-range one.
     case 'actions.execute':
       for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
       return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })

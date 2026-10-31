@@ -337,15 +337,18 @@ the .NET checks and is not reachable from the wire.
 
 **Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
 gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this
-connection."), not the execute gate, so a rename on the same connection still runs. Every action statement runs through a data
-reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they arrive only for a reader; SQL Server's
-message 3211 ("n percent processed.", from `STATS`) becomes the running step's percent, and the request sends droppable
-`{ type: 'action.progress', step, percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100) at most
-every 250 ms (`progressEventMs`). 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
+connection.", or "Restores or backups are already running on other connections." when the two slots are taken elsewhere; the
+execute gate words its two cases the same way), not the execute gate, so a rename on the same connection still runs. Every
+action statement runs through a data reader, never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), because SqlClient
+raises informational messages as they arrive only for a reader; SQL Server's message 3211 ("n percent processed.", from
+`STATS`) becomes the running step's percent, and a long action's request sends droppable `{ type: 'action.progress', step,
+percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100): each step's start at once as percent 0,
+then its percents at most every 250 ms (`progressEventMs`, on a Stopwatch), a percent held inside the interval going out when it
+ends or before the next step's start. 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
 reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
 because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`
-(`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request, the first EVENT of each step
-at once (`actionProgressRelay`); the preload's `onActionProgress(listener)` passes on only those three fields and returns its
+(`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request: a new step at once, and the
+latest percent held inside the interval when it ends, never after the request ended (`actionProgressRelay`); the preload's `onActionProgress(listener)` passes on only those three fields and returns its
 unsubscribe. The renderer's `ActionProgressService` keeps the latest percent of each request it tracks (at most 128) and fills
 the running step's progress bar in a `StepList`. Like `job.progress`, these EVENTs are per request and droppable, not periodic
 data (live data flows only through the results port). When a generation closes, the backend's CancelAll stops its long
@@ -1666,7 +1669,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
-| Action progress | EVENTs every ≥ 250 ms; pushed ≤ 4 a second per request (the first of each step at once); step 0 – 519, percent 0 – 100; the renderer tracks ≤ 128 requests | backend, main and renderer |
+| Action progress | EVENTs every ≥ 250 ms besides each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (a new step at once, the latest held one at the interval's end); step 0 – 519, percent 0 – 100; the renderer tracks ≤ 128 requests | backend, main and renderer |
 | Long object actions | 1 per Varia connection, 2 in all, waited for ≤ 30 s, then `BUSY`; a closing generation waits 10 s plus the action's cleanup budget plus 5 s | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |

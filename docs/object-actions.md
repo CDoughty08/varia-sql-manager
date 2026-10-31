@@ -137,12 +137,16 @@ connections…").
 
 An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:
 1 per Varia connection and 2 in all. Another waits up to `gateWaitMs`, then answers `BUSY`
-("Another restore or backup is running on this connection."), so a long run never blocks a rename or a delete.
+("Another restore or backup is running on this connection.", or "Restores or backups are already running on other
+connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.
 Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they
 arrive only for a reader: SQL Server's message 3211 ("n percent processed.", from `STATS`) becomes a droppable
 `action.progress` EVENT `{step, percent}` at most every 250 ms, and is never one of the 32 messages the reply keeps.
-Main checks each EVENT and pushes `varia:actions-progress {requestId, step, percent}` to the window that sent the request, at most 4 a
-second (the first of each step always goes); an invalid EVENT is dropped, never a reason to stop the run. The page keeps
+Each step's start goes out at once as percent 0, and a percent the interval held back goes out when the interval ends (or
+before the next step's start), so a step's last percent is not lost and a finished step never looks stuck while the next waits.
+Main checks each EVENT and pushes `varia:actions-progress {requestId, step, percent}` only to the window that sent the request, at most 4 a
+second: a new step at once, and the latest percent held inside the interval when it ends (`actionProgressRelay`); an
+invalid EVENT is dropped, never a reason to stop the run. The page keeps
 the latest percent per request (`ActionProgressService`) and draws it under the running step of its `StepList`; the
 reply's steps carry the last percent each step reached as `progress`.
 

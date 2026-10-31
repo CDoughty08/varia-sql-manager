@@ -251,12 +251,13 @@ internal sealed partial class ActionService : IDisposable
             error => new ActionScriptResult(null, database, [], error));
     }
 
-    /// <param name="events">Queues a droppable EVENT on the request (action.progress), or null when nothing listens.</param>
+    /// <param name="events">Queues a droppable EVENT on the request (action.progress), or null when nothing listens. Only a long
+    /// action sends them: the others report no STATS, and their step starts would only add traffic.</param>
     public Task<ActionExecuteResult> ExecuteAsync(ActionArgs args, CancellationToken token, Action<object>? events = null)
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
-        var progress = new ActionProgress(events, Options.ProgressInterval);
+        var progress = new ActionProgress(catalog.IsLong(args.Action) ? events : null, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
@@ -329,10 +330,10 @@ internal sealed partial class ActionService : IDisposable
                 _ => (executeGates, Options.ExecutePerConnection, executeTotal)
             };
             var gate = gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(perConnection));
-            if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy(kind);
+            if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy(kind, total: false);
             try
             {
-                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy(kind);
+                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy(kind, total: true);
                 try
                 {
                     await using var connection = host.Connection(connectionId);
@@ -361,10 +362,16 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>Which gates a request takes: describe and script the read gates, DDL the execute gates, a long action's DDL the long ones.</summary>
     private enum ActionGate { Read, Execute, Long }
 
-    /// <summary>The gates are per Varia connection (critic A26): two connections to one server have a gate each.</summary>
-    private static RequestException Busy(ActionGate kind) => kind == ActionGate.Long
-        ? new("BUSY", "Another restore or backup is running on this connection. Retry after it finishes.")
-        : new("BUSY", "Other object actions are running on this connection. Retry after they finish.");
+    /// <summary>The gates are per Varia connection (critic A26): two connections to one server have a gate each. A request that
+    /// holds its connection's gate but not a total slot waits on actions of other connections, so the message says so: the user
+    /// must look for them there.</summary>
+    private static RequestException Busy(ActionGate kind, bool total) => (kind, total) switch
+    {
+        (ActionGate.Long, false) => new("BUSY", "Another restore or backup is running on this connection. Retry after it finishes."),
+        (ActionGate.Long, true) => new("BUSY", "Restores or backups are already running on other connections. Retry after one finishes."),
+        (_, false) => new("BUSY", "Other object actions are running on this connection. Retry after they finish."),
+        _ => new("BUSY", "Object actions are already running on other connections. Retry after they finish.")
+    };
 
     /// <summary>For a backend that is shutting down, after CancelAll: waits for every long job to end, each within its Stop wait
     /// (StopGrace plus its cleanup budget), so a restore stopped by a reload, a quit or Restart SQL Backend still removes what it
