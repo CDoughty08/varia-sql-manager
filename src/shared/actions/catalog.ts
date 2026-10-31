@@ -156,7 +156,9 @@ export const databaseActionRules: readonly DatabaseActionRule[] = [
   // Learn (database states): a database that is restoring cannot be set OFFLINE, ONLINE or EMERGENCY.
   { action: 'takeOffline', states: ['restoring', 'recovering', 'copying', 'offlineSecondary'], reason: 'A database that is restoring or recovering cannot be taken offline.' },
   { action: 'bringOnline', states: ['online'], reason: 'The database is online.' },
-  { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' }
+  { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' },
+  // MODIFY NAME opens the database: SQL Server answers 942 for one that is offline (probed on 2025), and the other states cannot be opened either.
+  { action: 'rename', states: ['restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other'], reason: 'The database must be online to be renamed.' }
 ]
 const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
   !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
@@ -382,6 +384,15 @@ const dialogSpecData = {
   bringOnline: { title: 'Bring Database Online', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'bringOnline', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
+/**
+ * Describes that open no dialog: the facts an inline action reads before it runs, by id, with the action they serve and the
+ * kinds they describe. D3c's rename of a database reads its sessions, access and identity, and whether logins default to it.
+ */
+export const factDescribeSpecs = {
+  renameDatabase: { action: 'rename', kinds: ['database'] }
+} as const satisfies { readonly [id: string]: { readonly action: ObjectAction; readonly kinds: readonly NodeKind[] } }
+export type FactDescribeId = keyof typeof factDescribeSpecs
+export const factDescribeIds = Object.keys(factDescribeSpecs) as FactDescribeId[]
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
 export type ModalDialogId = { readonly [D in DialogId]: typeof dialogSpecData[D]['surface'] extends 'modal' ? D : never }[DialogId]
 export type DocumentDialogId = Exclude<DialogId, ModalDialogId>
@@ -471,6 +482,7 @@ export function actionsCatalogJson(): string {
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "databaseRules": ${block(databaseActionRules)},`,
     `  "databaseStates": ${line(databaseStateIds)},`,
+    `  "describes": ${block(factDescribeIds.map(describe => ({ describe, ...factDescribeSpecs[describe] })))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
     `  "errors": ${block(actionErrorCodes.map(code => ({ code, retryable: actionErrorRetryable[code] })))},`,
     `  "limits": ${line(actionLimits)},`,

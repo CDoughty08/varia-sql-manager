@@ -187,9 +187,9 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
+/// what an inline action reads first (renameDatabase), or what the table designer needs of a database (tableDesigner).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
-/// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
+/// <summary>actions.script and actions.execute: rename takes NewName (a database's also CloseConnections and Identity), delete the two database options, properties
 /// CloseConnections and Changes, takeOffline DropConnections, createTable (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, bool? DropConnections = null);
@@ -234,8 +234,12 @@ internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? 
 /// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.</summary>
 internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
     List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
+/// <summary>What a database's rename reads first (src/shared/actions/schema.ts RenameDatabaseFacts): the database read, its user_access,
+/// the sessions in it without the backend's own pooled ones (null counts: no VIEW SERVER STATE), the logins whose default database it
+/// is, and whether Varia may close the sessions (not on Managed Instance).</summary>
+internal sealed record RenameDatabaseDto(string Name, DatabaseIdentityDto Identity, int UserAccess, int? Sessions, int? WithTransaction, int LoginsDefaulting, bool CanClose);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null);
+    TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null, RenameDatabaseDto? RenameDatabase = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

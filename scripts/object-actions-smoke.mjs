@@ -6,7 +6,7 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, propertiesScript, scriptText, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow, queryDatabase,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -668,6 +668,58 @@ try {
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
+  // 9. Rename of a database (D3c): F2 reads the database first; another session is using it, so main's prompt asks (the test
+  // answers Close Connections and Rename), and the rename closes connections. The tree, a query window on the database and its
+  // Database Properties document follow the new name; renaming it back with no session asks nothing.
+  const openOnAppData = async name => {
+    await expect(async () => {
+      await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
+      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+    }).toPass()
+    await explorerMenu().getByRole('menuitem', { name, exact: true }).click(fast)
+  }
+  await openOnAppData('Properties')
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await openOnAppData('New Query')
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  const asked = (await application.evaluate(() => globalThis.variaStub.prompts)).length
+  await application.evaluate(() => { globalThis.variaStub.renameSessions = 1; globalThis.variaStub.answers.push(0) })
+  await select(...appData)
+  await page.keyboard.press('F2')
+  await expect(renameBox(page)).toBeFocused()
+  await expect(renameBox(page)).toHaveValue('AppData')
+  await renameBox(page).fill('Sales')
+  await page.keyboard.press('Enter')
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^Sales\b/ })).toHaveCount(1)
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).slice(asked)).toEqual([{ title: 'Rename Database', message: '1 connection is using AppData. Close them and rename the database?',
+    buttons: ['Close Connections and Rename', 'Rename When Free', 'Cancel'], defaultId: 0, cancelId: 2 }])
+  // The rename's describe, then Database Properties reading the database again under its new name.
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'renameDatabase').at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' } })
+  await expect.poll(async () => (await stubCalls('actions.describe')).at(-1)).toMatchObject({ dialog: 'databaseProperties', target: { kind: 'database', name: 'Sales' } })
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'rename', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'database', name: 'AppData' },
+    newName: 'Sales', closeConnections: true, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
+  await expect(queryDatabase(page)).toHaveValue('Sales')
+  await expect(documentTab(page, 'Database Properties - Sales')).toHaveCount(1)
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-rename-database-dark.png') })
+  // Back to AppData, which no other session uses: no prompt, and MODIFY NAME alone.
+  await application.evaluate(() => { globalThis.variaStub.renameSessions = 0 })
+  await select('server-a', 'Databases', 'Sales')
+  await page.keyboard.press('F2')
+  await expect(renameBox(page)).toBeFocused()
+  await renameBox(page).fill('AppData')
+  await page.keyboard.press('Enter')
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1)
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(1)
+  await expect(queryDatabase(page)).toHaveValue('AppData')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'database', name: 'Sales' }, newName: 'AppData', closeConnections: false })
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).length).toBe(asked + 1)
+  await closeDocumentButton(page, 'Database Properties - AppData').click()
+  await expect(documentTab(page, 'Database Properties - AppData')).toHaveCount(0)
+  await expect(explorerTree(page)).toHaveAttribute('aria-busy', 'false')
+  console.log('Object action checks: F2 on a database another session uses asks before closing connections, then the tree, a query window and Database Properties follow the new name; with no session it renames at once.')
+
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
   await expect(async () => {
@@ -689,7 +741,7 @@ try {
   console.log('Object action checks: a database\'s Delete Object offers SSMS\'s options with their defaults, and a lost server leaves only Close.')
 
   expect(failures).toEqual([])
-  console.log('Object action checks passed: menus, Select Top for views, inline Rename, the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
+  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database's with its prompt), the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'object-actions-failure.png') }).catch(() => {})
   throw error

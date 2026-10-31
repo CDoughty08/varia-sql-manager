@@ -1,5 +1,6 @@
 import { actionLimits, actionMenuState, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
-import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
+import { promptLimits, promptTabFacts } from '../../../shared/actions/prompts.ts'
+import type { ActionExecuteResult, DatabaseIdentity, RenameDatabaseFacts } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { ident } from '../../../shared/explorer/schema.ts'
@@ -11,9 +12,10 @@ import type { Disposable, ExternalStore } from '../core/types'
 import type { ExplorerMenuNode } from '../menus/targets'
 import { scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
+import type { DatabaseRenameHooks } from './database-rename'
 
 export interface ObjectActionServiceOptions {
-  readonly api: Pick<VariaApi, 'tableColumns' | 'executeObjectAction' | 'cancelObjectActions'>
+  readonly api: Pick<VariaApi, 'tableColumns' | 'executeObjectAction' | 'cancelObjectActions' | 'describeObject' | 'confirmAction'>
   readonly explorer: {
     beginRename(nodeId: number): boolean
     endRename(): void
@@ -27,6 +29,10 @@ export interface ObjectActionServiceOptions {
   readonly report: { error(message: string): void; warning(message: string): void }
   /** Tools › Options › SQL Server Object Explorer › Commands: Select Top <n> Rows. */
   readonly selectTopCount: () => number
+  /** A database's rename (D3c): Varia's query windows in it, and what follows the new name. Without it the prompt counts none and nothing follows. */
+  readonly databases?: DatabaseRenameHooks
+  /** A toast: the logins whose default database a rename took away. */
+  readonly notify?: (notice: { readonly severity: 'info' | 'warning'; readonly message: string }) => void
   readonly timers?: Timers
   readonly newId?: () => string
 }
@@ -62,13 +68,24 @@ export function stateJobsText(jobs: readonly Pick<StateJob, 'verb' | 'label' | '
 
 /** sp_rename leaves a module's definition text with its old name, as SQL Server does. */
 export const moduleRenameNote = 'The definition text keeps the old name; script the object with CREATE OR ALTER to update it.'
+const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 export const renameMessages = {
   running: (label: string, verb: StateVerb = 'rename') => `${verb === 'rename' ? 'A rename of' : 'An action on'} ${label} is already running. Wait for it, or stop it in the status bar.`,
+  /** The status bar's step while SINGLE_USER WITH ROLLBACK IMMEDIATE closes the other connections. */
+  closing: 'Closing connections',
+  /** A login whose default database was renamed away gets 4064 when it connects without naming a database (Learn). */
+  loginsDefaulting: (logins: number, database: string) =>
+    `${count(logins, 'login has', 'logins have')} ${database} as ${logins === 1 ? 'its' : 'their'} default database, which no longer exists under that name. ${logins === 1 ? 'It cannot' : 'They cannot'} connect without naming a database until ${logins === 1 ? 'its default is' : 'their defaults are'} changed.`,
   stoppedUnknown: 'The rename was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.'
 } as const
 const maxNewName = 400
+/** The rename step's title in a reply (the backend's ActionService.StepTitle for MODIFY NAME and sp_rename). */
+export const renameStepTitle = 'Rename'
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const objectOf = (node: Pick<ExplorerMenuNode, 'ref'>): ObjectRef | undefined => node.ref.type === 'object' ? node.ref.object : undefined
+const promptCount = (value: number) => Math.min(Math.max(0, Math.trunc(value)), promptLimits.count)
+/** What a database's rename sends after its describe and prompt: the database read, and whether to close the connections. */
+interface DatabaseRenamePlan { readonly identity: DatabaseIdentity; readonly closeConnections: boolean; readonly facts: RenameDatabaseFacts }
 
 interface Job { readonly connectionId: string; readonly requestId: string; readonly verb: StateVerb; readonly label: string; readonly newName?: string; step?: string; dropped: boolean; stopped: boolean; visible: boolean; timer?: unknown }
 /** How a state job ended: the backend's answer, unless the job was dropped (its server went) or the call threw. */
@@ -83,6 +100,8 @@ export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResu
  */
 export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> implements Disposable {
   private readonly jobs = new Map<number, Job>()
+  /** Nodes whose database rename is reading its facts or asking: a second commit meanwhile is refused as a running one is. */
+  private readonly preparing = new Set<number>()
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly unsubscribe: () => void
@@ -135,7 +154,18 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const characters = [...displayText(text)]
     const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
     const folder = this.options.explorer.listingFolderOf(node.id)
-    const outcome = await this.runStateJob(node, 'rename', newName, requestId => this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text }))
+    let plan: DatabaseRenamePlan | undefined
+    if (object.kind === 'database') {
+      if (this.jobs.has(node.id) || this.preparing.has(node.id)) { this.options.report.error(renameMessages.running(this.jobs.get(node.id)?.label ?? scriptObjectLabel(object))); return true }
+      this.preparing.add(node.id)
+      try { plan = await this.prepareDatabaseRename(node, object) } finally { this.preparing.delete(node.id) }
+      if (!plan || this.disposed || !this.isLive(node.connectionId)) return true
+    }
+    const closing = plan?.closeConnections
+    const outcome = await this.runStateJob(node, 'rename', newName, requestId => {
+      if (closing) this.setJobStep(requestId, renameMessages.closing)
+      return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {} })
+    })
     if (!outcome) return true
     const { result, thrown, dropped, stopped } = outcome
     if (thrown !== undefined) { if (!dropped) this.options.report.error(thrown instanceof Error ? thrown.message : 'The rename failed.'); return true }
@@ -146,14 +176,63 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
       this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `Rename failed for ${node.label}: ${result.error}`)
       return true
     }
-    // Stop cancelled the statement in SQL Server, so the object keeps its name, as the label already shows.
-    if (result.value.error?.code === 'CANCELLED') return true
-    if (result.value.error) { this.options.report.error(`Rename failed for ${node.label}: ${result.value.error.message}`); return true }
+    // A database's MODIFY NAME can complete before a later step fails or is stopped (its access not restored): it has the new name.
+    const error = result.value.error
+    const renamed = !error || (object.kind === 'database' && result.value.steps.some(step => !step.compensates && step.status === 'done' && step.title === renameStepTitle))
+    if (error && !renamed) {
+      // Stop cancelled the statement in SQL Server, so the object keeps its name, as the label already shows; a stopped database
+      // rename that undid its SINGLE_USER says so.
+      if (error.code === 'CANCELLED' && !result.value.steps.some(step => step.compensates)) return true
+      this.options.report.error(`Rename failed for ${node.label}: ${error.message}`)
+      return true
+    }
     if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
+    if (object.kind === 'database' && object.name !== undefined) this.databaseRenamed(node.connectionId, object.name, text, plan?.facts)
+    if (error) { this.options.report.error(`${node.label} was renamed to ${newName}, but: ${error.message}`); return true }
     // sp_rename's caution is a warning; MODIFY NAME's "The database name 'x' has been set." only confirms the rename.
     const caution = object.kind === 'database' ? '' : result.value.messages.join(' ')
     if (caution) this.options.report.warning(object.kind === 'table' ? caution : `${caution} ${moduleRenameNote}`)
     return true
+  }
+
+  /**
+   * A database's rename reads its facts first (actions.describe renameDatabase): the preflight's refusal, the database read, and
+   * who is using it. With no other session it runs at once, as before; otherwise main's prompt (critic A13) asks whether to close
+   * the connections (rolling back their open transactions, which it counts and names for Varia's own windows, A7), to wait for them
+   * with Stop, or to cancel. Undefined: refused, failed or cancelled, already reported.
+   */
+  private async prepareDatabaseRename(node: ExplorerMenuNode, object: ObjectRef): Promise<DatabaseRenamePlan | undefined> {
+    const { connectionId } = node, database = object.name!
+    const fail = (message: string) => { if (!this.disposed && this.isLive(connectionId)) this.options.report.error(`Rename failed for ${node.label}: ${message}`) }
+    let described
+    try { described = await this.options.api.describeObject({ connectionId, requestId: this.newId(), dialog: 'renameDatabase', target: object }) }
+    catch (thrown) { fail(thrown instanceof Error ? thrown.message : 'The database could not be read.'); return undefined }
+    if (this.disposed || !this.isLive(connectionId)) return undefined
+    if (!described.ok) { fail(described.error); return undefined }
+    const facts = described.value.renameDatabase
+    if (described.value.error || !facts) { fail(described.value.error?.message ?? 'The database could not be read.'); return undefined }
+    if (facts.sessions === 0) return { identity: facts.identity, closeConnections: false, facts }
+    let tabs: { readonly count: number; readonly withTransactions: readonly string[] } = { count: 0, withTransactions: [] }
+    try { if (this.options.databases) tabs = await this.options.databases.tabs(connectionId, database) } catch (thrown) { onUnexpectedError(thrown) }
+    if (this.disposed || !this.isLive(connectionId)) return undefined
+    let answer
+    try {
+      answer = await this.options.api.confirmAction({
+        prompt: 'renameDatabase',
+        facts: {
+          database, ...facts.sessions !== undefined ? { sessions: promptCount(facts.sessions) } : {}, ...facts.withTransaction !== undefined ? { transactions: promptCount(facts.withTransaction) } : {},
+          tabs: promptCount(tabs.count), ...promptTabFacts(tabs.withTransactions), canClose: facts.canClose
+        }
+      })
+    } catch (thrown) { fail(thrown instanceof Error ? thrown.message : 'The confirmation failed.'); return undefined }
+    if (!answer.ok) { fail(answer.error); return undefined }
+    if (answer.value === 'cancel' || this.disposed || !this.isLive(connectionId)) return undefined
+    return { identity: facts.identity, closeConnections: answer.value === 'closeAndRename', facts }
+  }
+  /** After SQL Server renamed a database: query windows and Database Properties follow the new name, and a toast names the logins whose default it was. */
+  private databaseRenamed(connectionId: string, database: string, newName: string, facts: RenameDatabaseFacts | undefined): void {
+    try { this.options.databases?.renamed(connectionId, database, newName) } catch (thrown) { onUnexpectedError(thrown) }
+    if (facts?.loginsDefaulting) this.options.notify?.({ severity: 'warning', message: renameMessages.loginsDefaulting(facts.loginsDefaulting, displayText(database)) })
   }
 
   /**

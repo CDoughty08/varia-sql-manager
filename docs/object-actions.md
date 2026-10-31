@@ -64,6 +64,7 @@ Rules narrow a database's actions by it, each with the reason a greyed item show
 | Take Database Offline | restoring, recovering, copying, offlineSecondary | Any | Any | Greyed | A database that is restoring or recovering cannot be taken offline. |
 | Bring Database Online | online | Any | Any | Greyed | The database is online. |
 | Bring Database Online | restoring, recovering, copying | Any | Any | Greyed | A database that is restoring or recovering cannot be brought online. |
+| Rename | restoring, recovering, recoveryPending, suspect, emergency, offline, copying, offlineSecondary, other | Any | Any | Greyed | The database must be online to be renamed. |
 
 An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
 the Runs on column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
@@ -127,6 +128,32 @@ user in it, to sysadmin while another session holds it SINGLE_USER, and to every
 Server's 5011 is PERMISSION_DENIED too. After either, the Databases folder is listed again ("(Offline)" in the sublabel),
 and the database's Database Properties documents on that server read it again, or, while they hold changes, keep them
 with an Offline status and a banner; Apply still runs, and its preflight refuses a database that is not online.
+
+### Rename of a database
+
+F2 on a user database first reads its facts (`actions.describe` with `renameDatabase`, one of the fact describes, which
+open no dialog): the preflight's refusals, the database's identity and user access, how many other sessions are in it and
+how many of those hold an open transaction (with VIEW SERVER STATE, after the backend closed its own idle pooled connections
+there, as the rename does), and how many logins have it as their default database. With no other session the rename runs
+at once, `ALTER DATABASE … MODIFY NAME` alone. Otherwise the Rename Database confirmation (Confirmations, below) asks: Close Connections and
+Rename sets `SINGLE_USER WITH ROLLBACK IMMEDIATE`, renames, and restores the access the database had (MULTI_USER, or
+RESTRICTED_USER), the status bar saying "Closing connections" while it runs; Rename When Free runs MODIFY NAME alone, which
+waits for the other sessions until they leave or Stop cancels it; Cancel sends nothing. The prompt names Varia's own query
+windows on the database whose session holds an open transaction (A7). A database already in single-user mode is renamed
+without setting it again (SQL Server refuses that with 5064 while another session holds it, probed).
+
+If the rename fails or is stopped after SINGLE_USER completed, Varia restores the access it changed, under the old name, or
+under the new one when MODIFY NAME completed first, and only that: never another session's change. A rename that completed
+before a later step failed still counts, and the message says what was left. After a rename, the database's query windows on
+that server (through any connection to it) and its Database Properties documents follow the new name, and when logins
+default to the old name a warning says how many, since they cannot connect without naming a database until their
+defaults change.
+
+Rename is greyed unless the database is online, and refused on an availability group database. It needs CONTROL SERVER,
+ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before
+anything runs, because SQL Server refuses its MODIFY NAME with 916 (probed). Managed Instance renames, but cannot set
+SINGLE_USER, so its prompt offers Rename When Free only. The backend refuses a database whose identity changed since the
+describe read it.
 
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and

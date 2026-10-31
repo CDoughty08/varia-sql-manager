@@ -51,6 +51,10 @@ internal static class ActionChecks
         check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "takeOffline", "bringOnline"]) && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline",
             "the catalogue lists the action error codes and the Delete Object, Database Properties, Take Offline and Bring Online dialogs");
+        check(Catalog.Describes.Keys.SequenceEqual(["renameDatabase"]) && Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
+            && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, true, true) is null
+            && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, false, false) == "The database must be online to be renamed."),
+            "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online (D3c)");
         // The database rules are the menu's (databaseActionState, tests/object-actions-catalog.test.ts): the preflight refuses what the menu greys.
         check(Catalog.DatabaseStateOf(0) == "online" && Catalog.DatabaseStateOf(6) == "offline" && Catalog.DatabaseStateOf(10) == "offlineSecondary" && Catalog.DatabaseStateOf(42) == "other"
             && Catalog.DatabaseRefusal("takeOffline", 0, 0, false, false) is null && Catalog.DatabaseRefusal("takeOffline", 6, 0, false, false) == "The database is offline."
@@ -58,7 +62,7 @@ internal static class ActionChecks
             && Catalog.DatabaseRefusal("takeOffline", 10, 0, false, false) is not null && Catalog.DatabaseRefusal("takeOffline", 0, 1, true, true) is null
             && Catalog.DatabaseRefusal("bringOnline", 0, 0, false, false) == "The database is online." && Catalog.DatabaseRefusal("bringOnline", 6, 1, true, false) is null
             && Catalog.DatabaseRefusal("bringOnline", 2, 0, false, false) == "A database that is restoring or recovering cannot be brought online."
-            && new[] { 3, 4, 5, 10, 42 }.All(state => Catalog.DatabaseRefusal("bringOnline", state, 0, false, false) is null) && Catalog.DatabaseRefusal("rename", 6, 0, false, false) is null
+            && new[] { 3, 4, 5, 10, 42 }.All(state => Catalog.DatabaseRefusal("bringOnline", state, 0, false, false) is null) && Catalog.DatabaseRefusal("properties", 6, 0, false, false) is null
             && Catalog.Allows("database", "", "takeOffline") && !Catalog.Allows("database", "system", "takeOffline") && !Catalog.Allows("database", "snapshot", "bringOnline"),
             "Take Offline and Bring Online are refused in the states the menu greys them in, with its reasons, and never on a snapshot or SQL Server's own databases");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
@@ -81,7 +85,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 6 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 7 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -160,7 +164,27 @@ internal static class ActionChecks
         check(Script(TakeOffline(database, drop: false)) == Use("ALTER DATABASE [AppData] SET  OFFLINE") && Script(TakeOffline(database, drop: true)) == Use("ALTER DATABASE [AppData] SET  OFFLINE WITH ROLLBACK IMMEDIATE")
             && Script(BringOnline(database)) == Use("ALTER DATABASE [AppData] SET  ONLINE") && ActionService.Plan(BringOnline(database), database).Single().Database == "master",
             "Take Offline and Bring Online script SSMS's ALTER DATABASE in master: SET OFFLINE, with ROLLBACK IMMEDIATE only when connections are dropped, and SET ONLINE");
-        check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" && ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
+        // D3c: Close Connections and Rename scripts SINGLE_USER, MODIFY NAME and the access back under the new name; its compensations
+        // put the access back under the old name (the rename failed or was stopped) or the new one (only the restore did not complete).
+        var close = Rename(database, "B") with { CloseConnections = true };
+        check(ActionService.ScriptText(ActionService.Plan(close, database)) == Use("ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE") + Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
+            + Use("ALTER DATABASE [B] SET  MULTI_USER") && ActionService.ScriptText(ActionService.Plan(close, database, userAccess: 2)).EndsWith(Use("ALTER DATABASE [B] SET  RESTRICTED_USER"), StringComparison.Ordinal),
+            "Close Connections and Rename scripts SINGLE_USER, MODIFY NAME and the original access under the new name, compensation left out");
+        check(Script(Rename(database, "B")) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]") && Script(Rename(database, "B") with { CloseConnections = false }) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
+            && ActionService.Plan(close, database, userAccess: 1).Select(plan => plan.Template).SequenceEqual([ActionTemplate.RenameDatabase]),
+            "Rename When Free, and a database already in SINGLE_USER, run MODIFY NAME alone");
+        var plan = ActionService.Plan(close, database);
+        var compensations = plan.Where(statement => statement.Kind == StepKind.Compensation).ToList();
+        bool Due(PlannedStatement statement, params string[] statuses) => statuses[statement.Undoes!.Value] == "done" && statement.When!(statuses);
+        check(plan.Select(statement => (statement.Template, statement.Kind, string.Join("/", statement.Names))).SequenceEqual([
+                (ActionTemplate.SetSingleUser, StepKind.Main, "AppData"), (ActionTemplate.RenameDatabase, StepKind.Main, "AppData/B"), (ActionTemplate.SetMultiUser, StepKind.Main, "B"),
+                (ActionTemplate.SetMultiUser, StepKind.Compensation, "AppData"), (ActionTemplate.SetMultiUser, StepKind.Compensation, "B")])
+            && compensations.All(statement => statement.Undoes == 0 && statement.Database == "master")
+            && Due(compensations[0], "done", "failed", "skipped") && Due(compensations[0], "done", "cancelled", "skipped") && !Due(compensations[1], "done", "failed", "skipped")
+            && !Due(compensations[0], "done", "done", "failed") && Due(compensations[1], "done", "done", "failed") && Due(compensations[1], "done", "done", "cancelled")
+            && !Due(compensations[0], "failed", "skipped", "skipped") && !Due(compensations[1], "failed", "skipped", "skipped"),
+            "the rename's compensations restore the access under the old name when MODIFY NAME did not complete, under the new one when only the restore did not, and never without SINGLE_USER");
+        check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" &&ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
             && ActionService.StepTitle(ActionTemplate.SetOnline) == "Bring database online", "the state steps have their own titles");
     }
 

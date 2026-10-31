@@ -33,12 +33,14 @@ internal sealed class ActionsCatalog
 
     private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
+    /// <summary>A fact describe (src/shared/actions/catalog.ts factDescribeSpecs): the action it serves and the kinds it describes.</summary>
+    private sealed record DescribeJson(string Describe, string Action, List<string> Kinds);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
     /// <summary>A database rule (src/shared/actions/catalog.ts DatabaseActionRule): states and access by name, as databaseStates names them.</summary>
     private sealed record DatabaseRuleJson(string Action, string Reason, List<string>? States = null, List<string>? Access = null, bool? ReadOnly = null, bool? Hide = null);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DatabaseRuleJson> DatabaseRules,
-        Dictionary<string, string> DatabaseStates, List<DialogJson> Dialogs, List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows,
+        Dictionary<string, string> DatabaseStates, List<DescribeJson> Describes, List<DialogJson> Dialogs, List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows,
         List<OptionJson> ScopedConfigurations);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
@@ -60,6 +62,8 @@ internal sealed class ActionsCatalog
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
         dialogActions = json.Dialogs.ToDictionary(row => row.Dialog, row => row.Action, StringComparer.Ordinal);
+        Describes = json.Describes.ToDictionary(row => row.Describe, row => (IReadOnlyList<string>)row.Kinds, StringComparer.Ordinal);
+        foreach (var row in json.Describes) dialogActions.Add(row.Describe, row.Action);
         Limits = json.Limits;
         DatabaseOptions = json.DatabaseOptions.ToDictionary(row => row.Key, StringComparer.Ordinal);
         ScopedConfigurations = json.ScopedConfigurations.ToDictionary(row => row.Key, StringComparer.Ordinal);
@@ -76,6 +80,8 @@ internal sealed class ActionsCatalog
 
     public IReadOnlyList<string> Actions { get; }
     public IReadOnlyDictionary<string, IReadOnlyList<string>> Dialogs { get; }
+    /// <summary>The fact describes (renameDatabase), which open no dialog, by id: the kinds each describes.</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> Describes { get; }
     public IReadOnlyDictionary<string, long> Limits { get; }
     public IEnumerable<ActionRow> Rows => rows.Values;
     public IEnumerable<string> ErrorCodes => errors.Keys;
@@ -96,7 +102,7 @@ internal sealed class ActionsCatalog
     /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
     public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));
 
-    /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
+    /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties), or a fact describe serves (renameDatabase: rename).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);
 
     /// <summary>Whether the action also serves SQL Server's own objects (Properties on master, model, msdb and tempdb).</summary>

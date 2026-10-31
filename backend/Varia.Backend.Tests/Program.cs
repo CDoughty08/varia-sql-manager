@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--database-state-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--database-state-live" or "--rename-database-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -38,7 +38,12 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        if (lane == "--database-state-live")
+        if (lane == "--rename-database-live")
+        {
+            await RenameDatabaseLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused database rename checks.");
+        }
+        else if (lane == "--database-state-live")
         {
             await DatabaseStateLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Take Offline and Bring Online checks.");
@@ -511,6 +516,7 @@ try
     await ActionLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabaseStateLiveChecks.RunAsync(Check, service, info, Live, json);
+    await RenameDatabaseLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);

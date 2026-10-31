@@ -124,6 +124,17 @@ describe('IPC validation', () => {
       ['actions.execute', { ...rename, dropConnections: false }], ['actions.execute', { ...properties, dropConnections: false }],
       ['actions.describe', { ...ids, dialog: 'takeOffline', target }], ['actions.describe', { ...ids, dialog: 'bringOnline', target: { kind: 'database', name: 'msdb' } }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // A database's rename (D3c): closeConnections and the identity its describe read, on databases only; the describe of its facts likewise.
+    const renameDatabase = { action: 'rename', ...ids, target: database, newName: 'b', closeConnections: true, identity }
+    expect(validateRequest('actions.execute', renameDatabase)).toEqual(renameDatabase)
+    expect(validateRequest('actions.script', { ...renameDatabase, closeConnections: false, identity: undefined })).toMatchObject({ closeConnections: false })
+    expect(validateRequest('actions.describe', { ...ids, dialog: 'renameDatabase', target: database })).toMatchObject({ dialog: 'renameDatabase' })
+    for (const [method, value] of [
+      ['actions.execute', { ...rename, identity }], ['actions.execute', { ...renameDatabase, identity: { ...identity, id: 0 } }], ['actions.execute', { ...renameDatabase, dropConnections: true }],
+      ['actions.execute', { ...renameDatabase, deleteHistory: false }], ['actions.execute', { ...renameDatabase, closeConnections: 'yes' }],
+      ['actions.describe', { ...ids, dialog: 'renameDatabase', target }], ['actions.describe', { ...ids, dialog: 'renameDatabase', target: { kind: 'database', name: 'model' } }],
+      ['actions.describe', { ...ids, dialog: 'renameDatabase', target: { kind: 'login', name: 'sa' } }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // The table designer: describe and createTable take a database, SQL Server's own included; main refuses malformed designs.
     const design = { schema: 'dbo', name: "q]'); DROP TABLE x; --", columns: [{ name: 'Id', type: { system: 'int' }, allowNulls: false, identity: { seed: '1', increment: '1' } }], primaryKey: [0] }
     const createTable = { action: 'createTable', ...ids, target: { kind: 'database', name: 'master' }, design }

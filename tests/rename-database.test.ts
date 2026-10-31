@@ -1,0 +1,189 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ActionDescribeResult, ActionExecuteResult, RenameDatabaseFacts } from '../src/shared/actions/schema'
+import type { ApiResult } from '../src/shared/contracts'
+import { databaseRenameHooks, ownTabReads } from '../src/renderer/src/actions/database-rename'
+import { renameMessages } from '../src/renderer/src/actions/ObjectActionService'
+import { deferred } from './fixtures/documents'
+import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
+
+const cleanups: (() => void)[] = []
+afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
+
+const identity = { id: 7, created: '2026-01-02T03:04:05.000' }
+const facts = (patch: Partial<RenameDatabaseFacts> = {}): ApiResult<ActionDescribeResult> =>
+  ({ ok: true, value: { renameDatabase: { name: 'AppData', identity, userAccess: 0, sessions: 0, withTransaction: 0, loginsDefaulting: 0, canClose: true, ...patch }, elapsedMs: 1 } })
+const done = (...titles: string[]): ApiResult<ActionExecuteResult> => ({ ok: true, value: { steps: titles.map(title => ({ status: 'done' as const, title })), messages: [], elapsedMs: 1 } })
+
+/**
+ * A workbench connected to server-a twice (two connections to one server) and to server-b, with Object Explorer expanded to
+ * AppData, and query windows: two in AppData on server-a (one per connection, each with a session), one in AppData that never
+ * ran, one in AppData on server-b, and one in master on server-a.
+ */
+async function setup() {
+  const fixture = workbenchFixture()
+  cleanups.push(fixture.dispose)
+  fixture.api.push(readyBackend())
+  fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+  fixture.connections.add({ ...connectionInfo('server-a2'), server: 'SERVER-A.example ' }, connectionOptions)
+  fixture.connections.add(connectionInfo('server-b'), connectionOptions)
+  const find = async (label: string) => {
+    let id: number | undefined
+    await vi.waitFor(() => { id = fixture.explorer.getSnapshot().rows.nodes.find(node => node?.label === label && node.connectionId === 'server-a')?.id; expect(id, label).toBeDefined() })
+    return id!
+  }
+  fixture.explorer.expand(await find('Databases'))
+  const appData = await find('AppData')
+  const run = async (name: string, connectionId: string, database: string) => {
+    const tab = fixture.documents.create(name, 'SELECT 1', database, connectionId)
+    fixture.api.execute.mockResolvedValueOnce({ ok: true, value: { ...queryOutput, database, spid: 60 } })
+    await fixture.queries.execute(tab.id)
+    return tab
+  }
+  const tabs = {
+    first: await run('first.sql', 'server-a', 'AppData'), second: await run('second.sql', 'server-a2', 'AppData'), idle: fixture.documents.create('idle.sql', '', 'AppData', 'server-a'),
+    other: await run('other.sql', 'server-b', 'AppData'), master: await run('master.sql', 'server-a', 'master')
+  }
+  const node = () => fixture.explorer.menuNode(appData)!
+  return { ...fixture, appData, node, tabs }
+}
+
+describe('Rename of a database (D3c)', () => {
+  it('reads the database first and, with no other session, renames it at once; the query windows on that server follow the new name', async () => {
+    const { actions, api, node, tabs, documents, commands } = await setup()
+    api.describeObject.mockResolvedValueOnce(facts())
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    expect(await actions.commitRename(node(), 'Sales')).toBe(true)
+    expect(api.describeObject.mock.calls[0][0]).toMatchObject({ connectionId: 'server-a', dialog: 'renameDatabase', target: { kind: 'database', name: 'AppData' } })
+    expect(api.confirmAction).not.toHaveBeenCalled()
+    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'rename', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'database', name: 'AppData' }, newName: 'Sales', closeConnections: false, identity })
+    expect(commands.getSnapshot().error).toBe('')
+    // Every connection to the server, whatever its spelling, and a window that never ran; not another server's, nor another database's.
+    expect([tabs.first, tabs.second, tabs.idle, tabs.other, tabs.master].map(tab => documents.get(tab.id)?.database)).toEqual(['Sales', 'Sales', 'Sales', 'AppData', 'master'])
+  })
+  it('asks before closing other connections, naming its own windows with open transactions, and closes them on Close Connections and Rename', async () => {
+    const { actions, api, node, sessionStates, tabs } = await setup()
+    sessionStates.set(tabs.first.id, 2)
+    sessionStates.set(tabs.second.id, 'unchecked')
+    sessionStates.set(tabs.other.id, 1)
+    api.describeObject.mockResolvedValueOnce(facts({ sessions: 3, withTransaction: 2 }))
+    api.confirmAction.mockResolvedValueOnce({ ok: true, value: 'closeAndRename' })
+    const pending = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(pending.promise)
+    const running = actions.commitRename(node(), 'Sales')
+    await vi.waitFor(() => expect(api.executeObjectAction).toHaveBeenCalled())
+    // Two windows hold a session in it (the one that never ran holds none), and both may have a transaction; another server's does not count.
+    expect(api.confirmAction.mock.calls[0][0]).toEqual({ prompt: 'renameDatabase', facts: { database: 'AppData', sessions: 3, transactions: 2, tabs: 2, tabsWithTransactions: ['first.sql', 'second.sql'], canClose: true } })
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ closeConnections: true, identity })
+    // The status bar says the job is closing connections.
+    expect(actions.getSnapshot().jobs).toEqual([expect.objectContaining({ label: 'AppData', newName: 'Sales', step: renameMessages.closing })])
+    pending.resolve(done('Close existing connections', 'Rename', 'Restore multi-user access'))
+    await running
+    expect(actions.getSnapshot().jobs).toEqual([])
+  })
+  it('asks when the sessions could not be counted, and waits for them on Rename When Free', async () => {
+    const { actions, api, node } = await setup()
+    api.describeObject.mockResolvedValueOnce(facts({ sessions: undefined, withTransaction: undefined, canClose: false }))
+    api.confirmAction.mockResolvedValueOnce({ ok: true, value: 'renameWhenFree' })
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    await actions.commitRename(node(), 'Sales')
+    expect(api.confirmAction.mock.calls[0][0].facts).toEqual({ database: 'AppData', tabs: 2, tabsWithTransactions: [], canClose: false })
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ closeConnections: false, identity })
+    expect(actions.getSnapshot().jobs).toEqual([])
+  })
+  it('sends nothing on Cancel, or when the describe refuses or fails, which it reports', async () => {
+    const { actions, api, node, commands, tabs, documents } = await setup()
+    api.describeObject.mockResolvedValueOnce(facts({ sessions: 1 }))
+    await actions.commitRename(node(), 'Sales')
+    expect(api.confirmAction).toHaveBeenCalledTimes(1)
+    expect(commands.getSnapshot().error).toBe('')
+    api.describeObject.mockResolvedValueOnce({ ok: true, value: { elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: 'The database must be online to be renamed.', retryable: false } } })
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('Rename failed for AppData: The database must be online to be renamed.')
+    api.describeObject.mockResolvedValueOnce({ ok: false, error: 'The SQL backend stopped.', code: 'BACKEND_LOST' })
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('Rename failed for AppData: The SQL backend stopped.')
+    api.describeObject.mockResolvedValueOnce(facts({ sessions: 1 }))
+    api.confirmAction.mockResolvedValueOnce({ ok: false, error: 'Invalid confirmation.' })
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('Rename failed for AppData: Invalid confirmation.')
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(documents.get(tabs.first.id)?.database).toBe('AppData')
+  })
+  it('refuses a second rename of the database while the first reads its facts or asks', async () => {
+    const { actions, api, node, commands } = await setup()
+    const asked = deferred<ApiResult<ActionDescribeResult>>()
+    api.describeObject.mockReturnValueOnce(asked.promise)
+    const first = actions.commitRename(node(), 'Sales')
+    await actions.commitRename(node(), 'Other')
+    expect(commands.getSnapshot().error).toBe(renameMessages.running('AppData'))
+    expect(api.describeObject).toHaveBeenCalledTimes(1)
+    asked.resolve(facts())
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    await first
+    expect(api.executeObjectAction.mock.calls.map(call => (call[0] as { newName?: string }).newName)).toEqual(['Sales'])
+  })
+  it('names the logins whose default database it was in a toast', async () => {
+    const { actions, api, node, notifications } = await setup()
+    api.describeObject.mockResolvedValueOnce(facts({ loginsDefaulting: 2 }))
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    await actions.commitRename(node(), 'Sales')
+    expect(notifications.getSnapshot().visible).toEqual([expect.objectContaining({ severity: 'warning', message: renameMessages.loginsDefaulting(2, 'AppData') })])
+    expect(renameMessages.loginsDefaulting(2, 'AppData')).toBe('2 logins have AppData as their default database, which no longer exists under that name. They cannot connect without naming a database until their defaults are changed.')
+    expect(renameMessages.loginsDefaulting(1, 'AppData')).toBe('1 login has AppData as its default database, which no longer exists under that name. It cannot connect without naming a database until its default is changed.')
+  })
+  it('follows a rename that completed before a later step failed, and reports that step; a failed or stopped rename keeps the old name', async () => {
+    const { actions, api, node, commands, tabs, documents } = await setup()
+    const failure = (steps: ActionExecuteResult['steps'], code: 'SQL_ERROR' | 'CANCELLED', message: string): ApiResult<ActionExecuteResult> =>
+      ({ ok: true, value: { steps, messages: [], elapsedMs: 1, error: { code, message, retryable: true } } })
+    // MODIFY NAME failed (1801) and the access came back on the old name.
+    api.describeObject.mockResolvedValue(facts({ sessions: 1 }))
+    api.confirmAction.mockResolvedValue({ ok: true, value: 'closeAndRename' })
+    api.executeObjectAction.mockResolvedValueOnce(failure([{ status: 'done', title: 'Close existing connections' }, { status: 'failed', title: 'Rename' }, { status: 'skipped', title: 'Restore multi-user access' },
+      { status: 'done', title: 'Restore multi-user access', compensates: true }], 'SQL_ERROR', 'Database \'Sales\' already exists. Then "Restore multi-user access" completed.'))
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('Rename failed for AppData: Database \'Sales\' already exists. Then "Restore multi-user access" completed.')
+    expect(documents.get(tabs.first.id)?.database).toBe('AppData')
+    // Stopped during MODIFY NAME: the steps say SINGLE_USER was undone.
+    commands.clearError()
+    api.executeObjectAction.mockResolvedValueOnce(failure([{ status: 'done', title: 'Close existing connections' }, { status: 'cancelled', title: 'Rename' }, { status: 'skipped', title: 'Restore multi-user access' },
+      { status: 'done', title: 'Restore multi-user access', compensates: true }], 'CANCELLED', 'The action was stopped at "Rename". Then "Restore multi-user access" completed.'))
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('Rename failed for AppData: The action was stopped at "Rename". Then "Restore multi-user access" completed.')
+    expect(documents.get(tabs.first.id)?.database).toBe('AppData')
+    // Renamed, but the access could not be restored: the windows follow, and the error says the rename happened.
+    commands.clearError()
+    api.executeObjectAction.mockResolvedValueOnce(failure([{ status: 'done', title: 'Close existing connections' }, { status: 'done', title: 'Rename' }, { status: 'failed', title: 'Restore multi-user access' },
+      { status: 'failed', title: 'Restore multi-user access', compensates: true }], 'SQL_ERROR', 'Failed. Then "Restore multi-user access" failed.'))
+    await actions.commitRename(node(), 'Sales')
+    expect(commands.getSnapshot().error).toBe('AppData was renamed to Sales, but: Failed. Then "Restore multi-user access" failed.')
+    expect(documents.get(tabs.first.id)?.database).toBe('Sales')
+  })
+  it('retitles a Database Properties document on that server, which Properties on the renamed database then finds', async () => {
+    const { actions, api, node, properties, documents } = await setup()
+    const id = properties.open(node())
+    await vi.waitFor(() => expect(properties.get(id)?.phase).not.toBe('loading'))
+    expect(documents.get(id)?.name).toBe('Database Properties - AppData')
+    api.describeObject.mockResolvedValueOnce(facts())
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    await actions.commitRename(node(), 'Sales')
+    expect(documents.get(id)).toMatchObject({ name: 'Database Properties - Sales', database: 'Sales' })
+    expect(properties.get(id)).toMatchObject({ target: { kind: 'database', name: 'Sales' }, label: 'Sales' })
+    // A clean document reads the database again, under its new name.
+    await vi.waitFor(() => expect(api.describeObject.mock.calls.at(-1)?.[0]).toMatchObject({ dialog: 'databaseProperties', target: { name: 'Sales' } }))
+  })
+})
+
+describe('database rename hooks', () => {
+  it('reads the open transaction of at most ownTabReads windows, counting the rest', async () => {
+    const documents = Array.from({ length: ownTabReads + 4 }, (_, index) => ({ id: `t${index}`, name: `q${index}.sql`, kind: 'sql', connectionId: 'a', database: 'AppData' }))
+    const transactionState = vi.fn(async () => ({ transactions: 1 }))
+    const hooks = databaseRenameHooks({
+      documents: { getSnapshot: () => ({ documents }) } as never, queries: { getSnapshot: () => Object.fromEntries(documents.map(item => [item.id, { session: { connectionId: 'a', spid: 1 } }])), transactionState } as never,
+      connections: { getSnapshot: () => [{ id: 'a', server: 's' }], subscribe: () => () => {} } as never, targets: { changeDatabase: vi.fn() }, properties: { databaseRenamed: vi.fn() }
+    })
+    const tabs = await hooks.tabs('a', 'AppData')
+    expect(tabs.count).toBe(ownTabReads + 4)
+    expect(tabs.withTransactions).toHaveLength(ownTabReads)
+    expect(transactionState).toHaveBeenCalledTimes(ownTabReads)
+  })
+})

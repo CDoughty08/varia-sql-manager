@@ -75,6 +75,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>Where the Take Offline and Bring Online checks take a database offline and back (created on demand).</summary>
     public string DatabaseState => Name + "_dbs";
+    /// <summary>Where the database rename checks (D3c) rename a database, the name they rename it to, and the name its compensation check takes first (created on demand).</summary>
+    public string Rename => Name + "_ren";
+    public string Renamed => Name + "_renn";
+    public string RenameTaken => Name + "_rent";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -86,8 +90,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', and
-    // _dbs Take Offline's and Bring Online's (a crashed run can leave it offline, which the sweep drops by state).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_dbs)?$")]
+    // _dbs Take Offline's and Bring Online's (a crashed run can leave it offline, which the sweep drops by state); _ren, _renn and
+    // _rent the database rename checks' (D3c): a crashed run can leave either name, or one in SINGLE_USER, which the DROP handles.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_dbs|_ren|_renn|_rent)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -358,6 +363,16 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>Creates the empty, marked database the Take Offline and Bring Online checks change the state of.</summary>
     public Task<string> CreateDatabaseStateAsync() => CreateMarkedAsync(DatabaseState);
+
+    /// <summary>Creates the empty, marked database the rename checks rename; disposal also drops it under its new name.</summary>
+    public Task<string> CreateRenameAsync()
+    {
+        created.Add(Renamed);
+        return CreateMarkedAsync(Rename);
+    }
+
+    /// <summary>Creates the marked database whose name the rename compensation check takes.</summary>
+    public Task<string> CreateRenameTakenAsync() => CreateMarkedAsync(RenameTaken);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);

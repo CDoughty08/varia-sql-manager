@@ -148,11 +148,17 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
+    /// dialog and a target its action serves, a fact describe and a target of a kind it describes, or the table designer and a
+    /// database, SQL Server's own included.</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
+        if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var kinds))
+        {
+            if (args.Target is null || !kinds.Contains(args.Target.Kind)) throw Invalid("target.");
+            return Target(args.Target, catalog.ActionOf(args.Dialog));
+        }
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
@@ -179,11 +185,14 @@ internal sealed partial class ActionService : IDisposable
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.DropConnections is not null)
+                if (args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.DropConnections is not null)
                     throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
+                // Only a database has connections to close (D3c) and an identity its describe read.
+                if (renamed.Kind != "database" && (args.CloseConnections is not null || args.Identity is not null)) throw Invalid("only a database has connections to close and an identity.");
+                if (args.Identity is { } read && !DatabaseAlter.IdentityValid(read)) throw Invalid("identity.");
                 return renamed;
             case "delete":
                 if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.DropConnections is not null) throw Invalid("delete takes no new name or changes.");
@@ -236,6 +245,7 @@ internal sealed partial class ActionService : IDisposable
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "takeOffline" or "bringOnline" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job),
+                "renameDatabase" => DescribeRenameJobAsync(connection, args.ConnectionId, target, profile.Explorer(explorer).ServerEngine, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -265,7 +275,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
-                _ => ExecuteJobAsync(connection, args, target, band, job)
+                _ => ExecuteJobAsync(connection, args, target, profile.Explorer(explorer).ServerEngine, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
     }
@@ -509,7 +519,7 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>The preflight's verdict for running <paramref name="action"/> now: SQL Server's own objects, subtypes the
     /// catalogue greys, advisory permissions, and a name already taken. A login answers by the protected-principal rules
     /// (src/shared/actions/logins.ts).</summary>
-    private ActionError? Refusal(ActionSubject subject, ActionArgs args)
+    private ActionError? Refusal(ActionSubject subject, ActionArgs args, string? engine = null)
     {
         if (subject.Login is { } login)
         {
@@ -523,6 +533,7 @@ internal sealed partial class ActionService : IDisposable
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, args.Action))
             return Error("NOT_SUPPORTED", (args.Action == "rename" ? "Rename" : "Delete") + " for this kind of " + subject.Title.ToLowerInvariant() + " is not supported yet.");
+        if (args.Action == "rename" && subject.Target.Kind == "database") return DatabaseRenameRefusal(subject, args.NewName, args.Identity, args.CloseConnections == true, engine);
         if (args.Action == "rename")
         {
             if (!row.Bool("can_alter")) return Error("PERMISSION_DENIED", "You do not have permission to rename " + subject.Display + " (ALTER on it).");
@@ -532,6 +543,24 @@ internal sealed partial class ActionService : IDisposable
         if (!row.Bool("can_drop")) return Error("PERMISSION_DENIED", "You do not have permission to delete " + subject.Display + ".");
         if (subject.Target.Kind == "database" && row.Bool("is_snapshot") && (args.CloseConnections == true || args.DeleteHistory == true))
             return Error("NOT_SUPPORTED", "Close existing connections and deleting backup history do not apply to a database snapshot.");
+        return null;
+    }
+
+    /// <summary>A database rename's verdict (D3c), past the system and snapshot checks: a database other than the one the describe read
+    /// (<paramref name="read"/>), a state the catalogue's rename rule greys (MODIFY NAME opens the database), an availability group
+    /// (SQL Server refuses MODIFY NAME for its databases), the permission (can_rename: ALTER on it, or CONTROL SERVER or ownership,
+    /// which HAS_PERMS_BY_NAME on the database denies while another session holds it SINGLE_USER), the new name taken, and closing the
+    /// connections on Managed Instance, which cannot set SINGLE_USER.</summary>
+    private ActionError? DatabaseRenameRefusal(ActionSubject subject, string? newName, DatabaseIdentityDto? read, bool closeConnections, string? engine)
+    {
+        var row = subject.Row;
+        if (read is not null && (row.Int("database_id") != read.Id || DatabaseProperties.Iso(row.Raw("create_date")) != read.Created))
+            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one Object Explorer read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+        if (catalog.DatabaseRefusal("rename", row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby")) is { } reason) return Error("NOT_SUPPORTED", reason);
+        if (row.Bool("in_availability_group")) return Error("NOT_SUPPORTED", "The database is in an availability group; remove it from the group to rename it.");
+        if (!row.Bool("can_rename")) return Error("PERMISSION_DENIED", "You do not have permission to rename " + subject.Display + " (ALTER on it).");
+        if (newName is not null && row.Bool("name_in_use")) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(newName) + " is already in use by another database.");
+        if (closeConnections && engine == "managedInstance") return Error("NOT_SUPPORTED", "Managed Instance cannot set SINGLE_USER, so Varia cannot close the connections. Rename when they are free instead.");
         return null;
     }
 
@@ -550,17 +579,16 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
-    /// <summary>The statements an action runs, in order.</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
+    /// <summary>The statements an action runs, in order, with the compensations runner v2 runs after a failure or Stop.
+    /// <paramref name="userAccess"/> is a database's sys.databases user_access, which a rename that closes connections restores.</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, int userAccess = 0)
     {
         // SSMS's Take Offline rolls other connections back only when Drop All Active Connections is checked; without it SET OFFLINE
         // waits for them to leave until Stop.
         if (args.Action == "takeOffline") return [new(args.DropConnections == true ? ActionTemplate.SetOfflineRollback : ActionTemplate.SetOffline, "master", [target.Name!])];
         if (args.Action == "bringOnline") return [new(ActionTemplate.SetOnline, "master", [target.Name!])];
-        if (args.Action == "rename")
-            return target.Kind == "database"
-                ? [new(ActionTemplate.RenameDatabase, "master", [target.Name!, args.NewName!])]
-                : [new(ActionTemplate.RenameObject, target.Database!, [target.Schema!, target.Name!, args.NewName!])];
+        if (args.Action == "rename" && target.Kind != "database") return [new(ActionTemplate.RenameObject, target.Database!, [target.Schema!, target.Name!, args.NewName!])];
+        if (args.Action == "rename") return RenameDatabasePlan(target.Name!, args.NewName!, args.CloseConnections == true, userAccess);
         if (target.Kind != "database") return [new(ActionSql.DropOf(target.Kind), target.Database!, [target.Schema!, target.Name!])];
         // SSMS deletes the backup history first; deleting it after the DROP keeps it when the DROP fails (IN_USE).
         var plan = new List<PlannedStatement>();
@@ -568,6 +596,25 @@ internal sealed partial class ActionService : IDisposable
         plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         return plan;
+    }
+
+    /// <summary>A database's rename (D3c, spec 7). Closing the connections is SINGLE_USER WITH ROLLBACK IMMEDIATE on the action's own
+    /// connection, which keeps the database until MODIFY NAME (critic A12), and then the original access back under the new name.
+    /// The compensations put the access back where the database is: under the old name when the rename failed or was stopped, under the
+    /// new one when only the restore did not complete. A database already in SINGLE_USER keeps it, so it has nothing to restore.</summary>
+    internal static List<PlannedStatement> RenameDatabasePlan(string name, string newName, bool closeConnections, int userAccess)
+    {
+        var rename = new PlannedStatement(ActionTemplate.RenameDatabase, "master", [name, newName]);
+        if (!closeConnections || userAccess == 1) return [rename];
+        var restore = userAccess == 2 ? ActionTemplate.SetRestrictedUser : ActionTemplate.SetMultiUser;
+        return
+        [
+            new(ActionTemplate.SetSingleUser, "master", [name]),
+            rename,
+            new(restore, "master", [newName]),
+            new(restore, "master", [name], StepKind.Compensation, 0, statuses => statuses[1] != "done"),
+            new(restore, "master", [newName], StepKind.Compensation, 0, statuses => statuses[1] == "done" && statuses[2] != "done")
+        ];
     }
 
     /// <summary>A step's title in the reply (at most 64 characters).</summary>
@@ -681,7 +728,7 @@ internal sealed partial class ActionService : IDisposable
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = ScriptText(Plan(args, target));
+        var text = ScriptText(Plan(args, target, target.Kind == "database" ? subject.Row.Int("user_access") : 0));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
@@ -691,14 +738,14 @@ internal sealed partial class ActionService : IDisposable
     internal static string ScriptText(IEnumerable<PlannedStatement> plan) =>
         string.Concat(plan.Where(statement => statement.Kind == StepKind.Main).Select(ActionSql.Checked).Select(ActionSql.ScriptText));
 
-    private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, string engine, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         var state = args.Action is "takeOffline" or "bringOnline";
-        if ((state ? StateRefusal(subject, args.Action, args.Identity) : Refusal(subject, args)) is { } refused) return new([], [], 0, refused);
-        var plan = Plan(args, target);
+        if ((state ? StateRefusal(subject, args.Action, args.Identity) : Refusal(subject, args, engine)) is { } refused) return new([], [], 0, refused);
+        var plan = Plan(args, target, target.Kind == "database" ? subject.Row.Int("user_access") : 0);
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it. An offline
@@ -791,6 +838,37 @@ internal sealed partial class ActionService : IDisposable
         var model = new DatabaseStateDto(subject.Display, identity, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby"), sessions, withTransaction,
             list, sessions is { } total && total > list.Count, warnings);
         return new(null, 0, DatabaseState: model);
+    }
+
+    /// <summary>What a database's rename reads first (D3c, spec 7): the preflight's verdict for a rename, then, as Take Offline's describe
+    /// does, the database freed of the backend's own idle pooled sessions and read again when it had sessions (they are no one's work,
+    /// and the rename frees it of them itself), the sessions left and those with open transactions (critic A7), and the logins whose
+    /// default database it is. The renderer asks before closing anyone's connections.</summary>
+    private async Task<ActionDescribeResult> DescribeRenameJobAsync(SqlConnection connection, string connectionId, ObjectRefDto target, string engine, int band, CancellationToken token)
+    {
+        var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+        if (subject is null) return new(null, 0, error);
+        var probe = new ActionArgs("rename", connectionId, Guid.Empty.ToString(), target);
+        if (Refusal(subject, probe, engine) is { } refused) return new(null, 0, refused);
+        if (subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
+        {
+            (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+            if (subject is null) return new(null, 0, error);
+            if (Refusal(subject, probe, engine) is { } changed) return new(null, 0, changed);
+        }
+        var row = subject.Row;
+        int logins;
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = ActionSql.LoginsDefaulting;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
+            logins = Convert.ToInt32(await command.ExecuteScalarAsync(token) ?? 0, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        int? sessions = row.Long("sessions") is { } count ? (int)count : null;
+        int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
+        var identity = new DatabaseIdentityDto(row.Int("database_id"), DatabaseProperties.Iso(row.Raw("create_date")) ?? "");
+        return new(null, 0, RenameDatabase: new(subject.Display, identity, row.Int("user_access"), sessions, withTransaction, logins, engine != "managedInstance"));
     }
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>

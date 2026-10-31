@@ -502,6 +502,20 @@ adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read u
 completed (left out if it cannot be read, so a late Stop never turns the success into `CANCELLED`). SQL Server's error 5011 (no ALTER on the database)
 answers `PERMISSION_DENIED`.
 
+**Rename of a database** (D3c) uses the same methods too. Before it renames, the page sends `actions.describe { connectionId,
+requestId, dialog: 'renameDatabase', target: { kind: 'database', name } }` (a fact describe: no dialog opens), which answers
+`{ renameDatabase: { name, identity: { id, created }, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose },
+elapsedMs }`, read in master after the backend's own idle pooled connections in the database were closed (the counts are absent
+without VIEW SERVER STATE; `loginsDefaulting` counts the logins whose default database it is, and `canClose` is false on
+Managed Instance, which cannot set SINGLE_USER), or an `error` value where the rename cannot run: `NOT_SUPPORTED` for a database
+that is not online, in an availability group, or on Managed Instance with `closeConnections`; `PERMISSION_DENIED` without
+CONTROL SERVER, ownership or ALTER on the database; `NAME_IN_USE`; `NOT_FOUND` for an identity that changed. The rename itself is
+`actions.execute { action: 'rename', connectionId, requestId, target, newName, closeConnections?, identity? }` (both only for a
+database; `identity` as for Database Properties). `closeConnections` runs `Close existing connections` (SINGLE_USER WITH
+ROLLBACK IMMEDIATE, unless the database is already single-user), `Rename` and `Restore multi-user access` (or `Restore
+restricted user access`); a failure or Stop after the first step runs a compensating step restoring the access under whichever
+name the database then has. Without it, `Rename` alone waits for other sessions until Stop.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same

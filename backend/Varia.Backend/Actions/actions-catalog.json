@@ -60,9 +60,13 @@
     {"action":"takeOffline","reason":"The database is offline.","states":["offline"]},
     {"action":"takeOffline","reason":"A database that is restoring or recovering cannot be taken offline.","states":["restoring","recovering","copying","offlineSecondary"]},
     {"action":"bringOnline","reason":"The database is online.","states":["online"]},
-    {"action":"bringOnline","reason":"A database that is restoring or recovering cannot be brought online.","states":["restoring","recovering","copying"]}
+    {"action":"bringOnline","reason":"A database that is restoring or recovering cannot be brought online.","states":["restoring","recovering","copying"]},
+    {"action":"rename","reason":"The database must be online to be renamed.","states":["restoring","recovering","recoveryPending","suspect","emergency","offline","copying","offlineSecondary","other"]}
   ],
   "databaseStates": {"0":"online","1":"restoring","2":"recovering","3":"recoveryPending","4":"suspect","5":"emergency","6":"offline","7":"copying","10":"offlineSecondary"},
+  "describes": [
+    {"action":"rename","describe":"renameDatabase","kinds":["database"]}
+  ],
   "dialogs": [
     {"action":"delete","dialog":"deleteObject","pages":["general"]},
     {"action":"properties","dialog":"databaseProperties","pages":["general","files","filegroups","options"]},

@@ -17,6 +17,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
  * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
  * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
+ * A database's rename (D3c) reads `renameSessions` other sessions (none at first) and renames AppData in the listings.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -31,7 +32,7 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false, offline: false, holding: false,
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false, offline: false, holding: false, database: 'AppData', renameSessions: 0,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
@@ -45,7 +46,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
     // As the backend lists a database: its runtime state, and offline, that state in the sublabel, unavailable, with nothing to expand.
-    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database', stub.offline
+    databases: () => [object({ kind: 'database', name: stub.database }, stub.database, 'database', stub.offline
       ? { sublabel: '(Offline)', status: 'unavailable', hasChildren: false, database: { state: 6, userAccess: 0, readOnly: false, standby: false } }
       : { database: { state: 0, userAccess: 0, readOnly: false, standby: false } })],
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
@@ -113,6 +114,17 @@ export function installActionsStub({ ipcMain }, { statics }) {
     stub.sessions = []
     return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
   }
+  /** What a database's rename reads first: `renameSessions` other sessions, one of them in a transaction, and no login defaulting to it. */
+  function renameFacts({ target }) {
+    const sessions = stub.renameSessions
+    return ok({ renameDatabase: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions, withTransaction: Math.min(sessions, 1), loginsDefaulting: 0, canClose: true }, elapsedMs: 1 })
+  }
+  /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise. */
+  function renameDatabase(params) {
+    stub.database = params.newName
+    const titles = params.closeConnections ? ['Close existing connections', 'Rename', 'Restore multi-user access'] : ['Rename']
+    return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [`The database name '${params.newName}' has been set.`], elapsedMs: 1 })
+  }
   function describe({ target }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }] : []
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
@@ -153,6 +165,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
+    if (params.action === 'rename' && target.kind === 'database') return renameDatabase(params)
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
       if (params.newName === 'Blocked') return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Rename' }], messages: [], elapsedMs: 1,
@@ -171,7 +184,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
       case 'system.health': return ok({ protocolVersion: 2, runtime: 'stub', platform: process.platform, smoVersion: 'stub', sqlClientVersion: 'stub' })
       case 'connections.connect': return ok({ id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1 })
       case 'connections.disconnect': return ok({ disconnected: true })
-      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
+      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: stub.database, isSystem: false, isSnapshot: false }])
       case 'explorer.children': return children(params)
       case 'tables.columns': return ok({ columns: [{ name: 'OrderId', dataType: 'int' }, { name: 'Total', dataType: 'money' }], truncated: false })
       case 'query.execute': return ok({
@@ -185,6 +198,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           case 'takeOffline': case 'bringOnline': return databaseState(params)
+          case 'renameDatabase': return renameFacts(params)
           default: return describe(params)
         }
       case 'actions.script':

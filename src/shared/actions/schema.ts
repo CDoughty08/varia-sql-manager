@@ -4,18 +4,25 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import { actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, factDescribeIds, factDescribeSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
 import { loginLimits } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue) or a designer (src/shared/designer/catalog.ts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds] as const
+/** What actions.describe describes: an object dialog (PR17's catalogue), an inline action's facts, or a designer (src/shared/designer/catalog.ts). */
+export const describeIds = [...dialogIds, ...factDescribeIds, ...designerDescribeIds] as const
 export type DescribeId = typeof describeIds[number]
 
 export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
-export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
+/**
+ * Rename. A database's (D3c) may close the other connections first (`closeConnections`: SINGLE_USER WITH ROLLBACK IMMEDIATE,
+ * MODIFY NAME, then its access back on the new name), and names the database its describe read (`identity`).
+ */
+export interface RenameRequest {
+  readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string; readonly closeConnections?: boolean
+  readonly identity?: DatabaseIdentity
+}
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
   readonly action: 'delete'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly deleteHistory: boolean
@@ -160,9 +167,27 @@ export interface DatabaseStateModel {
   /** Facts that make the statement fail or matter (an availability group, mirroring). */
   readonly warnings: readonly ActionWarning[]
 }
+/**
+ * What a database's rename needs to know before it runs (D3c): the database read, its access (the plan restores it after
+ * SINGLE_USER), who is using it, and the logins whose default database it is. Absent counts: no VIEW SERVER STATE. The
+ * sessions leave out the backend's own pooled connections, which the rename closes itself.
+ */
+export interface RenameDatabaseFacts {
+  readonly name: string
+  readonly identity: DatabaseIdentity
+  /** sys.databases user_access: 0 MULTI_USER, 1 SINGLE_USER, 2 RESTRICTED_USER. */
+  readonly userAccess: number
+  readonly sessions?: number
+  /** Of `sessions`, those with an open transaction, which closing them rolls back. */
+  readonly withTransaction?: number
+  /** Logins whose default database it is, of those this login can see: they get 4064 after the rename until changed. */
+  readonly loginsDefaulting: number
+  /** Whether Varia may close the sessions (SINGLE_USER): not on Managed Instance. */
+  readonly canClose: boolean
+}
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
-  readonly databaseState?: DatabaseStateModel
+  readonly databaseState?: DatabaseStateModel; readonly renameDatabase?: RenameDatabaseFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -220,6 +245,10 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
         break
+      case 'renameDatabase':
+        if (!(factDescribeSpecs[request.dialog].kinds as readonly string[]).includes(request.target.kind)) issue(context, 'target', 'Only a database is described for a rename.')
+        targetIssues(context, request.target, factDescribeSpecs[request.dialog].action)
+        break
       default:
         targetIssues(context, request.target, dialogSpecs[request.dialog].action)
     }
@@ -238,11 +267,11 @@ const exclusiveChange = (changes: DatabaseChanges) => Object.keys(changes.option
 /** How many statements a change set plans at most: one per option (incremental statistics shares one) and scoped configuration, and the owner. */
 export const plannedStatements = (changes: DatabaseChanges) => Object.keys(changes.options ?? {}).length + Object.keys(changes.scoped ?? {}).length + (changes.owner === undefined ? 0 : 1)
 
-// One schema per action, one per line, so later actions append cleanly.
-const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident }).strict()
-const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
+// One schema per action, one per line, so later actions append cleanly.
+const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, newName: ident, closeConnections: z.boolean().optional(), identity: identitySchema.optional() }).strict()
+const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
 const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
@@ -259,6 +288,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   switch (request.action) {
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
+      if (request.target.kind !== 'database' && (request.closeConnections !== undefined || request.identity)) issue(context, 'closeConnections', 'Only a database has connections to close and an identity.')
       break
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')
