@@ -268,7 +268,9 @@ describe('explorer request schemas', () => {
   })
   it('accepts a subtype only for an object of that kind', () => {
     rejects(explorerChildrenParamsSchema, params(object(minimal('table')), { subtype: 'scalar' }))
-    rejects(explorerChildrenParamsSchema, params(object(minimal('login')), { subtype: 'system' }))
+    rejects(explorerChildrenParamsSchema, params(object(minimal('serverRole')), { subtype: 'system' }))
+    accepts(explorerChildrenParamsSchema, params(object(minimal('login')), { subtype: 'sa' }))
+    rejects(explorerChildrenParamsSchema, params(object(minimal('login')), { subtype: 'snapshot' }))
     rejects(explorerChildrenParamsSchema, params(tables, { subtype: 'system' }))
     rejects(explorerChildrenParamsSchema, params(object(minimal('table')), { subtype: 'unknown' }))
     accepts(explorerChildrenParamsSchema, params(object({ kind: 'database', name: 'snap' }), { subtype: 'snapshot' }))
