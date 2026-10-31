@@ -55,6 +55,11 @@ describe('object action prompts (varia:confirm-action)', () => {
       'SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled.', 'This login is a member of sysadmin.'
     ])
     expect(service.defaultId).toBe(1)
+    // Varia's other connections that sign in as the login (critic D4-3), named through displayText.
+    expect(confirmActionBox(disable({ connections: ['Reporting (sql01)'] })).detail.split('\n\n')).toEqual([
+      'New connections will be refused.', "Varia's connection Reporting (sql01) signs in as this login, and cannot reconnect while it is disabled."
+    ])
+    expect(confirmActionBox(disable({ connections: ['a', 'b\nc'] })).detail.split('\n\n')[1]).toBe("Varia's connections a, b⟨U+000A⟩c sign in as this login, and cannot reconnect while it is disabled.")
   })
   it('shows names through displayText, so a name cannot add lines or hide characters in the box', () => {
     const box = confirmActionBox(disable({ login: 'evil\nDisable everything?‮' }))
@@ -72,7 +77,8 @@ describe('object action prompts (varia:confirm-action)', () => {
     for (const value of [
       rename({ database: long }), rename({ database: '' }), rename({ sessions: -1 }), rename({ sessions: promptLimits.count + 1 }), rename({ transactions: 1.5 }),
       rename({ tabsWithTransactions: Array.from({ length: promptLimits.tabs + 1 }, (_, index) => `Query${index}.sql`) }), rename({ tabsWithTransactions: ['x'.repeat(promptLimits.tabName + 1)] }),
-      disable({ login: long }), disable({ service: 'x'.repeat(promptLimits.service + 1) }),
+      disable({ login: long }), disable({ service: 'x'.repeat(promptLimits.service + 1) }), disable({ connections: [] }), disable({ connections: [''] }),
+      disable({ connections: Array.from({ length: promptLimits.connections + 1 }, (_, index) => `s${index}`) }), disable({ connections: ['x'.repeat(promptLimits.connectionName + 1)] }),
       { ...rename(), extra: 1 }, { prompt: 'renameDatabase', facts: { ...rename().facts, message: 'Delete?' } }, { prompt: 'dropDatabase', facts: {} }, undefined, 'renameDatabase'
     ]) {
       expect(actionPromptRequestSchema.safeParse(value).success, JSON.stringify(value)?.slice(0, 80)).toBe(false)

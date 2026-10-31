@@ -188,10 +188,11 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
+/// what the table designer needs of a database (tableDesigner), or a login's facts (loginFacts, before Disable).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, createTable (Target the database) Design; a login's disable and enable take nothing more.
+/// Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
@@ -211,9 +212,10 @@ internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
-/// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).</summary>
+/// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
+/// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only.</summary>
 internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
-    bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse);
+    bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse, string? Service = null);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
@@ -229,7 +231,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null);
+    TableDesignerModelDto? TableDesigner = null, LoginFactsDto? Login = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);
@@ -245,7 +247,8 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 /// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
 /// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
 internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+/// <summary>Sessions: a login action's count of the sessions connected as the login (VIEW SERVER STATE), which Disable leaves connected.</summary>
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, int? Sessions = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

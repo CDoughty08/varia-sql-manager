@@ -36,7 +36,7 @@ internal static class ActionChecks
     private static void CatalogChecks(Action<bool, string> check)
     {
         var rows = Catalog.Rows.ToList();
-        check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
+        check(rows.Count == 52 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
             "the embedded actions catalogue loads at version 3 and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
@@ -71,7 +71,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 5 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -178,7 +178,7 @@ internal static class ActionChecks
         {
             ("unknown action", Rename(table, "x") with { Action = "drop" }), ("connection id", Rename(table, "x") with { ConnectionId = "server-a" }),
             ("request id", Rename(table, "x") with { RequestId = "r1" }), ("ref shape", Rename(new ObjectRefDto("table", "AppData", Name: "Orders"), "x")),
-            ("a kind without rename", Rename(new ObjectRefDto("login", Name: "sa"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
+            ("a kind without rename", Rename(new ObjectRefDto("synonym", "AppData", "dbo", "s"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
             ("empty name", Rename(table, "")), ("the same name", Rename(table, "Orders")), ("delete flags on a rename", Rename(table, "x") with { CloseConnections = false }),
             ("a new name on a delete", Delete(table) with { NewName = "x" }), ("delete flags missing", Delete(table) with { DeleteHistory = null }),
             ("delete flags on a table", Delete(table, close: true)), ("a system database", Rename(new ObjectRefDto("database", Name: "master"), "x")),
@@ -208,7 +208,7 @@ internal static class ActionChecks
             "Select Top's column read on Azure SQL Database runs in the object's database with no cross-database call; box servers use QUOTENAME(@db)'s sp_executesql");
     }
 
-    private sealed class FakeHost(int edition = 3) : IActionHost
+    internal sealed class FakeHost(int edition = 3) : IActionHost
     {
         public int Connections;
         public List<string> Cleared { get; } = [];

@@ -4,14 +4,15 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
-import { loginLimits } from './logins.ts'
+import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import { loginLimits, type LoginFacts } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue) or a designer (src/shared/designer/catalog.ts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds] as const
+/** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), or an
+ *  object's facts without a dialog (the login actions' loginFacts). */
+export const describeIds = [...dialogIds, ...designerDescribeIds, ...actionDescribeIds] as const
 export type DescribeId = typeof describeIds[number]
 
 export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef }
@@ -37,8 +38,10 @@ export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
   readonly identity?: DatabaseIdentity
 }
+/** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master. */
+export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | LoginStateRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -125,6 +128,8 @@ export interface DatabasePropertiesModel {
 }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
+  /** loginFacts: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
+  readonly login?: LoginFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -156,18 +161,24 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /** A login action's target: the sessions connected as the login when it ran, which a Disable leaves connected; absent
+   *  without VIEW SERVER STATE. */
+  readonly sessions?: number
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled' }
+const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && (ref.name ?? '').length >= 4 && ref.name!.startsWith('##') && ref.name!.endsWith('##')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
   if (!actionOffered(ref.kind, action)) return [`A ${ref.kind} cannot be ${verbs[action]}.`]
   if (objectActionSpecs[action].systemObjects) return []
+  // SQL Server's own logins by name, as the Logins folder tells them; the backend re-derives the subtype in its preflight.
+  if (systemLogin(ref)) return ['This login belongs to SQL Server and cannot be changed.']
   if (ref.kind === 'database' ? systemDatabases.has(ref.name ?? '') : ref.schema !== undefined && systemSchemas.has(ref.schema)) return ['System objects cannot be changed.']
   return []
 }
@@ -181,6 +192,10 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
       // A new table goes in any database, SQL Server's own included, as in SSMS.
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
+        break
+      case 'loginFacts':
+        if (request.target.kind !== actionDescribeSpecs.loginFacts.kind) issue(context, 'target', 'Login facts describe a login.')
+        targetIssues(context, request.target, actionDescribeSpecs.loginFacts.action)
         break
       default:
         targetIssues(context, request.target, dialogSpecs[request.dialog].action)
@@ -205,12 +220,14 @@ const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uui
 const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
+const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
-  createTableSchema
+  createTableSchema,
+  loginStateSchema
 ]).superRefine((request, context) => {
   // A new table is not an object row's action: its target is the database, SQL Server's own included.
   if (request.action !== 'createTable') targetIssues(context, request.target, request.action)
@@ -245,7 +262,7 @@ const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.
  *  compensation and cleanup steps, at most statements + 8; bounded messages. */
 export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(), sessions: z.number().int().min(0).max(1_000_000).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 export const actionCancelSchema = z.object({

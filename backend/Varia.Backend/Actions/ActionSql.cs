@@ -8,11 +8,11 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER.</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and a login's rename (D4b).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -54,7 +54,8 @@ internal static partial class ActionSql
 
     public static int ParameterCount(ActionTemplate template) => template switch
     {
-        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase => 2,
+        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
+            or ActionTemplate.RenameLogin => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -113,6 +114,8 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => "DENY CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.GrantConnect => "GRANT CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
+            // SMO's text for a login's rename (probed for D4 §5.3), with no spaces around the equals sign.
+            ActionTemplate.RenameLogin => "ALTER LOGIN " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -146,6 +149,7 @@ internal static partial class ActionSql
             ActionTemplate.DenyConnect => Run("DECLARE @stmt nvarchar(max) = N'DENY CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.RenameLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -250,6 +254,13 @@ internal static partial class ActionSql
     public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
 
+    /// <summary>The services that run as a Windows login (D4 §5.4), at most loginLimits.serviceNames: the account compared without
+    /// case (a server may write NT Service\MSSQLSERVER), and LocalSystem as NT AUTHORITY\SYSTEM. It needs VIEW SERVER STATE, and
+    /// whether Linux and Managed Instance have the view is unverified, so a failure is no answer, never the describe's.</summary>
+    public const string LoginService = "SELECT TOP (@take) s.servicename AS service_name FROM sys.dm_server_services AS s "
+        + @"WHERE UPPER(s.service_account) = UPPER(@name) OR (UPPER(s.service_account) = N'LOCALSYSTEM' AND UPPER(@name) = N'NT AUTHORITY\SYSTEM') "
+        + "ORDER BY s.servicename;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -259,8 +270,8 @@ internal static partial class ActionSql
         "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
         // The shared templates (critic A21).
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
-        // The login preflight (Login).
-        "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
+        // The login preflight (Login), a login's rename, and the service lookup (LoginService).
+        "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'", "N' WITH NAME='", "N'LOCALSYSTEM'", @"N'NT AUTHORITY\SYSTEM'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -430,6 +441,7 @@ internal static partial class ActionSql
         }
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login service", LintCatalog(LoginService, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,

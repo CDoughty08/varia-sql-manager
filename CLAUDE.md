@@ -167,7 +167,7 @@ pages, limits, error codes, display formats, benchmarks).
   `HeaderGuard` to every SMO script with headers, leaves out SMO's comments for unresolved references (they hold names
   unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
-- Object actions (Select Top 1000 Rows, Rename, Delete, Properties), their dialogs, pages and database options live only
+- Object actions (Select Top 1000 Rows, Rename, Delete, Properties, a login's Disable and Enable), their dialogs, pages and database options live only
   in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
   only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),

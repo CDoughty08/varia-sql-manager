@@ -4,7 +4,7 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, Dictionary<string, string> Messages, List<string> OwnRefuses, List<LoginRuleJson> Rules, int SaPrincipalId,
-    Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail);
+    Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -38,9 +38,12 @@ internal sealed class LoginRules
     {
         if (type is null || !json.TypeSubtypes.TryGetValue(type.Trim(), out var byType)) return null;
         if (principalId == json.SaPrincipalId) return "sa";
-        if (name.Length >= 4 && name.StartsWith("##", StringComparison.Ordinal) && name.EndsWith("##", StringComparison.Ordinal)) return "system";
+        if (SystemName(name)) return "system";
         return byType;
     }
+
+    /// <summary>Whether a login's name is SQL Server's own form, ##…## (logins.ts loginSubtypeOf).</summary>
+    public static bool SystemName(string name) => name.Length >= 4 && name.StartsWith("##", StringComparison.Ordinal) && name.EndsWith("##", StringComparison.Ordinal);
 
     /// <summary>A login row's status (logins.ts loginStatusOf): disabled, else noAccess while CONNECT SQL is denied, else none.
     /// The two were one status before D4a; they stay apart because Enable does not lift a DENY CONNECT SQL.</summary>
@@ -85,6 +88,10 @@ internal sealed class LoginRules
         if (facts.Sysadmin && !facts.CanControlServer) return "controlServer";
         return null;
     }
+
+    /// <summary>The message id that refuses a login's new name, or null: a backslash in the name of a login SQL Server
+    /// authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>
+    public string? NameRefusal(string subtype, string newName) => json.NoBackslash.Contains(subtype) && newName.Contains('\\') ? "sqlBackslash" : null;
 
     public string Message(string id) => json.Messages.TryGetValue(id, out var text) ? text : throw new InvalidOperationException("Unknown login message " + id);
 

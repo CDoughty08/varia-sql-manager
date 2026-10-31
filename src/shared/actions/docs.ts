@@ -63,16 +63,25 @@ const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
   ownedDatabases: 'Databases a login owns that the login preflight names',
   mappedUsers: 'Mapped database users Delete Login lists',
   scanDatabases: 'Databases the mapped-user scan reads',
-  serviceNames: 'Service accounts the service lookup reads'
+  serviceNames: 'Service accounts the service lookup reads',
+  serviceName: 'Characters of the service name the login facts carry'
 }
 
 // As src/shared/commands/menus.ts titles them (that module needs a bundler; this one loads in plain Node).
 const submenuTitles = { 'explorer.tasks': 'Tasks', 'explorer.tasks.restore': 'Tasks › Restore' } as const
 /** Menus, statuses, database states and servers: what narrows an action beyond its kind and subtype. */
 function narrowingDocs(): string[] {
-  const overlays = nodeKinds.flatMap(kind => actionStatuses(kind).map(status => {
-    const overlay = actionKindSpecs[kind]?.statuses?.[status] ?? {}
-    return [code(kind), code(status), objectActions.filter(action => action in overlay).map(action => `${objectActionSpecs[action].title}: ${mark(overlay[action] || undefined)}`).join(', ')]
+  // A kind's overlay, then each subtype's own (a login's Enable depends on its subtype), runs of alike subtypes in one row.
+  const overlays = nodeKinds.flatMap(kind => actionStatuses(kind).flatMap(status => {
+    const spec = actionKindSpecs[kind]
+    const changes = (overlay: Partial<Record<string, string>>) => objectActions.filter(action => action in overlay).map(action => `${objectActionSpecs[action].title}: ${mark(overlay[action] || undefined)}`).join(', ')
+    const rows = spec?.statuses?.[status] ? [[code(kind), 'any', code(status), changes(spec.statuses[status])]] : []
+    const groups = new Map<string, string[]>()
+    for (const [subtype, overlays] of Object.entries(spec?.subtypeStatuses ?? {})) {
+      const overlay = overlays?.[status]
+      if (overlay) groups.set(changes(overlay), [...groups.get(changes(overlay)) ?? [], code(subtype)])
+    }
+    return [...rows, ...[...groups].map(([text, subtypes]) => [code(kind), subtypes.join(', '), code(status), text])]
   }))
   return [
     '## Menus, statuses, database states and servers',
@@ -82,7 +91,10 @@ function narrowingDocs(): string[] {
       ' stay hidden while nothing is placed in them, so they appear with their first action.',
     '',
     'A node\'s status badge (`explorerNodeStatus`) can overlay its row: a disabled login offers Enable in place of Disable.',
-    overlays.length ? table(['Kind', 'Status', 'Changes'], overlays) : 'No kind changes its actions by status yet.',
+    '',
+    overlays.length ? table(['Kind', 'Subtypes', 'Status', 'Changes'], overlays) : 'No kind changes its actions by status yet.',
+    '',
+    'Only `disabled` changes a login\'s actions: a login denied permission to connect can still be disabled, as in SSMS.',
     '',
     `A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.`,
     `Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: ${Object.values(databaseStateIds).map(code).join(', ')}, \`other\`.`,
@@ -99,7 +111,7 @@ function narrowingDocs(): string[] {
 
 const promptSamples: { readonly [P in ActionPromptRequest['prompt']]: Extract<ActionPromptRequest, { prompt: P }>['facts'] } = {
   renameDatabase: { database: 'Sales', sessions: 3, transactions: 1, tabs: 2, tabsWithTransactions: ['Query 1.sql'], canClose: true },
-  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false }
+  disableLogin: { login: 'app_user', sessions: 2, service: 'SQL Server Agent (MSSQLSERVER)', sysadmin: false, connections: ['Reporting (sql01)'] }
 }
 /** The native confirmations, with an example of each. */
 function promptDocs(): string[] {
@@ -142,9 +154,9 @@ function longRunDocs(): string[] {
     '',
     'Create Catalog is the only long run so far; the others are reserved for the actions that will use them.',
     '',
-    'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
-    'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
-    'connections…").',
+    'A short state action (a rename, a login\'s Disable and Enable) runs as a status-bar job instead: one per node, shown',
+    'with Stop after `statusDelayMs` ("Disabling app_user…", Stop disable), naming its step when it has several ("Renaming',
+    'Sales to Sales2: Closing connections…").',
     ''
   ]
 }
@@ -285,7 +297,6 @@ export function renderObjectActionsDocs(): string {
       ['Restore multi-user access', '`ALTER DATABASE [db] SET  MULTI_USER`'],
       ['Restore restricted user access', '`ALTER DATABASE [db] SET  RESTRICTED_USER`'],
       ['Detach the database', '`EXEC master.dbo.sp_detach_db @dbname = N\'db\', @skipchecks = \'false\'` (\'true\' when Update Statistics is cleared)'],
-      ['Disable the login, Enable the login', '`ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE`'],
       ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
       ['Drop the database user', '`DROP USER [user]`, in its database']
     ]),
@@ -314,9 +325,34 @@ function loginDocs(): string[] {
     '',
     `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
     'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
-    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
-    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
-    'another session is changing, and never a password hash, which no Varia statement may name.',
+    'The backend\'s login preflight reads the facts an action needs in the action\'s own connection from catalog views only:',
+    'never `LOGINPROPERTY`, which waits on a login another session is changing, and never a password hash, which no Varia',
+    'statement may name. Delete, Unlock and Properties arrive in later versions; their rules are data already.',
+    '',
+    '### Disable, Enable and Rename',
+    '',
+    'Disable and Enable are inline actions in a login\'s menu after Copy Name, one of them at a time: a disabled login offers',
+    'Enable. Each runs at once as a status-bar job with Stop, from the server\'s master database, and then Object Explorer',
+    'reselects the login with its new state. Disable first reads the login\'s facts (`actions.describe` with `loginFacts`, in',
+    'the action\'s own connection) and asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which',
+    'stay connected, warns when it is a member of sysadmin, names the service that runs as it (from',
+    '`sys.dm_server_services`, or an `NT SERVICE\\` name), and names Varia\'s other connections that sign in as it. Enable',
+    'asks nothing; its notice says when permission to connect is still denied.',
+    '',
+    'Rename uses Object Explorer\'s inline box, as for a table. A SQL Server login\'s name cannot hold a backslash: "' + loginMessages.sqlBackslash + '"',
+    'The box stays open with that message, since SQL Server would refuse it (15021). The backend refuses a name another',
+    'login or server role uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a',
+    'warning names Varia\'s other connections that sign in under the old name.',
+    '',
+    table(['Action', 'Step', 'As Script Action writes it'], [
+      ['Disable', 'Disable the login', '`ALTER LOGIN [login] DISABLE`'],
+      ['Enable', 'Enable the login', '`ALTER LOGIN [login] ENABLE`'],
+      ['Rename', 'Rename', '`ALTER LOGIN [login] WITH NAME=[new]`']
+    ]),
+    '',
+    'SQL Server\'s errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what',
+    'changing a login needs. SQL Server\'s own logins (`##…##`) are refused by the backend as system objects, whatever the',
+    'page asks.',
     '',
     '✓ allowed, ○ shown greyed and refused, – not offered.',
     '',

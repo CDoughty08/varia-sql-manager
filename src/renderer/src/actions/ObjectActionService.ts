@@ -1,5 +1,7 @@
 import { actionLimits, actionMenuState, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
-import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
+import { loginMessages, loginNameRefusal, loginRefusal, loginSubtypes, type LoginFacts, type LoginSubtype } from '../../../shared/actions/logins.ts'
+import { loginConnectionsText, promptLimits } from '../../../shared/actions/prompts.ts'
+import type { ActionDescribeResult, ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { ident } from '../../../shared/explorer/schema.ts'
@@ -13,7 +15,7 @@ import { scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
 
 export interface ObjectActionServiceOptions {
-  readonly api: Pick<VariaApi, 'tableColumns' | 'executeObjectAction' | 'cancelObjectActions'>
+  readonly api: Pick<VariaApi, 'tableColumns' | 'executeObjectAction' | 'cancelObjectActions' | 'describeObject' | 'confirmAction'>
   readonly explorer: {
     beginRename(nodeId: number): boolean
     endRename(): void
@@ -23,8 +25,11 @@ export interface ObjectActionServiceOptions {
   readonly documents: { newQuery(sql: string, name: string | undefined, connectionId: string, database: string, unsaved: boolean): unknown }
   readonly queries: { canExecute(): boolean; execute(): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
-  /** The command banner: a failed rename's message, or sp_rename's caution. */
-  readonly report: { error(message: string): void; warning(message: string): void }
+  /**
+   * The command banner (a failed action's message, sp_rename's caution, a login's other Varia connections) and, for what
+   * finished as asked but is worth knowing, an information notice (a login's sessions that stay connected).
+   */
+  readonly report: { error(message: string): void; warning(message: string): void; notice(message: string): void }
   /** Tools › Options › SQL Server Object Explorer › Commands: Select Top <n> Rows. */
   readonly selectTopCount: () => number
   readonly timers?: Timers
@@ -66,6 +71,24 @@ export const renameMessages = {
   running: (label: string, verb: StateVerb = 'rename') => `${verb === 'rename' ? 'A rename of' : 'An action on'} ${label} is already running. Wait for it, or stop it in the status bar.`,
   stoppedUnknown: 'The rename was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.'
 } as const
+/** The toast key of an action's notice: a newer one takes the older one's place rather than stacking up. */
+export const objectActionNoticeKey = 'objectActions.notice'
+/** What a login's Disable, Enable and Rename say (D4b): Varia's notes, recalled rather than SSMS's, which says nothing. */
+export const loginActionMessages = {
+  disabled: (label: string, sessions: number | undefined) => `Disabled the login ${label}.` + (sessions ? ` ${sessions === 1 ? '1 session connected as it stays' : `${sessions.toLocaleString('en-US')} sessions connected as it stay`} connected.` : ''),
+  // ENABLE leaves a DENY CONNECT SQL in place (D4 P18), which Login Properties › Status lifts.
+  enabled: (label: string, connectDenied: boolean) => `Enabled the login ${label}.` + (connectDenied ? ' Permission to connect is still denied.' : ''),
+  renamed: 'Database users mapped to this login keep their names.',
+  stoppedUnknown: (verb: 'disable' | 'enable') => `The ${verb} was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.`,
+  /** What Varia's other connections that sign in as the login cannot do afterwards (critic D4-3). */
+  disableConnections: 'cannot reconnect while it is disabled',
+  renameConnections: 'cannot reconnect under the old name',
+  unavailable: { disable: 'Select an enabled login in Object Explorer.', enable: 'Select a disabled login in Object Explorer.' }
+} as const
+const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable' } as const satisfies { readonly [V in StateVerb]: string }
+const isLoginSubtype = (subtype: string | undefined): subtype is LoginSubtype => (loginSubtypes as readonly string[]).includes(subtype ?? '')
+const sameText = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
+const connectionLabel = (connection: Pick<LiveConnection, 'displayName' | 'server'>) => connection.displayName ? `${connection.displayName} (${connection.server})` : connection.server
 const maxNewName = 400
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const objectOf = (node: Pick<ExplorerMenuNode, 'ref'>): ObjectRef | undefined => node.ref.type === 'object' ? node.ref.object : undefined
@@ -80,9 +103,12 @@ export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResu
  * failure goes to the command banner and the label shows the old name again. DDL waits for locks without a timeout, as
  * SSMS's does, so a rename that runs for a moment appears in the status bar with Stop, which cancels it in SQL Server.
  * At most one rename is in flight per node; a server that disconnects drops its renames and cancels them in the backend.
+ * A login's Disable and Enable (D4b) run the same way, after the login's facts and, for Disable, a native confirmation.
  */
 export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> implements Disposable {
   private readonly jobs = new Map<number, Job>()
+  /** Nodes whose login action is reading its facts or asking, before its job starts: a second one waits for it. */
+  private readonly preparing = new Set<number>()
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly unsubscribe: () => void
@@ -130,30 +156,117 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (!object || text === '' || text === object.name) { this.cancelRename(); return true }
     const parsed = ident.safeParse(text)
     if (!parsed.success) { this.options.report.error(parsed.error.issues[0]?.message ?? 'The name is not valid.'); return false }
+    // SQL Server would answer 15021, which does not say why; the backend repeats the rule from the login's type.
+    const badName = object.kind === 'login' && isLoginSubtype(node.subtype) ? loginNameRefusal(node.subtype, text) : undefined
+    if (badName) { this.options.report.error(loginMessages[badName]); return false }
     this.cancelRename()
     if (this.disposed || !this.isLive(node.connectionId)) return true
     const characters = [...displayText(text)]
     const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
     const folder = this.options.explorer.listingFolderOf(node.id)
+    // Read before the rename: a connection that signs in as the login keeps its old name.
+    const others = object.kind === 'login' ? this.loginConnections(node.connectionId, object.name) : []
     const outcome = await this.runStateJob(node, 'rename', newName, requestId => this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text }))
-    if (!outcome) return true
-    const { result, thrown, dropped, stopped } = outcome
-    if (thrown !== undefined) { if (!dropped) this.options.report.error(thrown instanceof Error ? thrown.message : 'The rename failed.'); return true }
-    if (dropped || this.disposed || !result) return true
-    if (!result.ok) {
-      // A Stop the backend could not confirm in time; otherwise CANCELLED is a disconnect, which drops the job first.
-      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(renameMessages.stoppedUnknown); return true }
-      this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `Rename failed for ${node.label}: ${result.error}`)
+    const value = this.succeeded(node, 'rename', outcome)
+    if (!value) return true
+    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
+    if (object.kind === 'login') {
+      this.options.report.notice(loginActionMessages.renamed)
+      if (others.length) this.options.report.warning(loginConnectionsText(others, loginActionMessages.renameConnections))
       return true
     }
-    // Stop cancelled the statement in SQL Server, so the object keeps its name, as the label already shows.
-    if (result.value.error?.code === 'CANCELLED') return true
-    if (result.value.error) { this.options.report.error(`Rename failed for ${node.label}: ${result.value.error.message}`); return true }
-    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
     // sp_rename's caution is a warning; MODIFY NAME's "The database name 'x' has been set." only confirms the rename.
-    const caution = object.kind === 'database' ? '' : result.value.messages.join(' ')
+    const caution = object.kind === 'database' ? '' : value.messages.join(' ')
     if (caution) this.options.report.warning(object.kind === 'table' ? caution : `${caution} ${moduleRenameNote}`)
     return true
+  }
+
+  /**
+   * A login's Disable or Enable (D4b). It reads the login's facts in the backend's own connection (the loginFacts
+   * describe) and refuses by logins.ts' rules (the login this connection uses, SQL Server's own, a Windows group, the
+   * permissions); Disable then asks, naming the sessions that stay connected, the service that runs as the login, a
+   * sysadmin member and Varia's other connections that sign in as it. The statement runs as a status-bar job with Stop;
+   * on success the listing folder is reconciled, so the row's badge and chip follow, and a notice says what changed.
+   */
+  async changeLoginState(node: ExplorerMenuNode, verb: 'disable' | 'enable'): Promise<void> {
+    const object = objectOf(node)
+    if (!this.canRun(verb, node) || object?.kind !== 'login' || object.name === undefined) throw new Error(loginActionMessages.unavailable[verb])
+    const running = this.jobs.get(node.id)
+    if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return }
+    if (this.preparing.has(node.id)) return
+    this.preparing.add(node.id)
+    let facts: LoginFacts
+    try {
+      const described = await this.describeLogin(node, object)
+      if (!described) return
+      facts = described
+      const refused = loginRefusal(facts, verb)
+      if (refused) { this.options.report.error(loginMessages[refused]); return }
+      if (verb === 'disable' && !await this.confirmDisable(node, object.name, facts)) return
+    } finally { this.preparing.delete(node.id) }
+    if (this.disposed || !this.isLive(node.connectionId)) return
+    const folder = this.options.explorer.listingFolderOf(node.id)
+    const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction({ action: verb, connectionId: node.connectionId, requestId, target: object }))
+    const value = this.succeeded(node, verb, outcome)
+    if (!value) return
+    if (folder !== undefined) this.options.explorer.reconcile(folder, { select: node.ref })
+    const label = displayText(object.name)
+    this.options.report.notice(verb === 'disable' ? loginActionMessages.disabled(label, value.sessions ?? facts.sessions) : loginActionMessages.enabled(label, facts.connectDenied))
+  }
+
+  /** The login's facts as the backend's preflight reads them, or undefined after reporting why not (or when the server went). */
+  private async describeLogin(node: ExplorerMenuNode, object: ObjectRef): Promise<LoginFacts | undefined> {
+    let result: ApiResult<ActionDescribeResult>
+    try { result = await this.options.api.describeObject({ connectionId: node.connectionId, requestId: this.newId(), dialog: 'loginFacts', target: object }) }
+    catch (error) { if (this.isLive(node.connectionId)) this.options.report.error(error instanceof Error ? error.message : 'The login could not be read.'); return undefined }
+    if (this.disposed || !this.isLive(node.connectionId)) return undefined
+    if (!result.ok) { this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? result.error : `Could not read ${node.label}: ${result.error}`); return undefined }
+    if (result.value.error || !result.value.login) { this.options.report.error(result.value.error?.message ?? `Could not read ${node.label}.`); return undefined }
+    return result.value.login
+  }
+
+  /** Disable's native confirmation (prompts.ts disableLogin): true only for Disable, never for Cancel, Escape or a failed box. */
+  private async confirmDisable(node: ExplorerMenuNode, login: string, facts: LoginFacts): Promise<boolean> {
+    const connections = this.loginConnections(node.connectionId, login)
+    const answer = await this.options.api.confirmAction({ prompt: 'disableLogin', facts: {
+      login, sysadmin: facts.sysadmin, ...facts.sessions !== undefined ? { sessions: Math.min(facts.sessions, promptLimits.count) } : {},
+      ...facts.service ? { service: facts.service.slice(0, promptLimits.service) } : {}, ...connections.length ? { connections } : {}
+    } })
+    if (!answer.ok) { this.options.report.error(answer.error); return false }
+    return answer.value === 'disable' && !this.disposed && this.isLive(node.connectionId)
+  }
+
+  /**
+   * Varia's other live connections to the node's server that sign in as `login`, by their labels (critic D4-3): renderer
+   * data only, compared without case as SQL Server compares names by default. At most `promptLimits.connections`.
+   */
+  private loginConnections(connectionId: string, login: string | undefined): string[] {
+    const all = this.options.connections.getSnapshot(), server = all.find(connection => connection.id === connectionId)?.server
+    const labels = all.filter(connection => connection.id !== connectionId && !connection.lost && sameText(connection.server, server) && sameText(connection.login, login))
+      .map(connection => [...connectionLabel(connection)].slice(0, promptLimits.connectionName).join(''))
+    return [...new Set(labels)].slice(0, promptLimits.connections)
+  }
+
+  /**
+   * A state job's outcome: the backend's reply when the action ran, or undefined after reporting why not. A dropped job
+   * (its server went) and a Stop SQL Server confirmed say nothing; a Stop it did not confirm, or a lost backend or
+   * connection, says the outcome is unknown.
+   */
+  private succeeded(node: ExplorerMenuNode, verb: StateVerb, outcome: StateJobOutcome | undefined): ActionExecuteResult | undefined {
+    if (!outcome) return undefined
+    const { result, thrown, dropped, stopped } = outcome, failed = `${verbTitle[verb]} failed for ${node.label}`
+    if (thrown !== undefined) { if (!dropped) this.options.report.error(thrown instanceof Error ? thrown.message : `${failed}.`); return undefined }
+    if (dropped || this.disposed || !result) return undefined
+    if (!result.ok) {
+      // A Stop the backend could not confirm in time; otherwise CANCELLED is a disconnect, which drops the job first.
+      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(verb === 'rename' ? renameMessages.stoppedUnknown : loginActionMessages.stoppedUnknown(verb)); return undefined }
+      this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `${failed}: ${result.error}`)
+      return undefined
+    }
+    // Stop cancelled the statement in SQL Server, so nothing changed, as the tree already shows.
+    if (result.value.error?.code === 'CANCELLED') return undefined
+    if (result.value.error) { this.options.report.error(`${failed}: ${result.value.error.message}`); return undefined }
+    return result.value
   }
 
   /**

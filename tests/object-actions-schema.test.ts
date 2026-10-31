@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { databaseOptionDefs, scopedConfigurationDefs } from '../src/shared/actions/database'
-import { actionCancelSchema, actionDescribeSchema, actionRequestSchema, actionTargetProblems } from '../src/shared/actions/schema'
+import { actionCancelSchema, actionDescribeSchema, actionExecuteResultSchema, actionRequestSchema, actionTargetProblems } from '../src/shared/actions/schema'
 
 const table = { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' } as const
 const database = { kind: 'database', name: 'AppData' } as const
@@ -24,7 +24,7 @@ describe('object action request schemas', () => {
   it('refuses U+0000, 129 units, the same name, an empty one, delete options on a table, and kinds or objects that never offer the action', () => {
     for (const [name, request] of [
       ['U+0000', rename({ newName: 'a\u0000b' })], ['129 units', rename({ newName: 'x'.repeat(129) })], ['the same name', rename({ newName: 'Orders' })], ['empty', rename({ newName: '' })],
-      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login', rename({ target: { kind: 'login', name: 'sa' } })],
+      ['close connections on a table', remove({ closeConnections: true })], ['history on a table', remove({ deleteHistory: true })], ['a login\'s delete', remove({ target: { kind: 'login', name: 'AppUser' } })],
       ['a system database', rename({ target: { kind: 'database', name: 'master' } })], ['a system view', remove({ target: { kind: 'view', database: 'AppData', schema: 'sys', name: 'objects' } })],
       ['a synonym', remove({ target: { kind: 'synonym', database: 'AppData', schema: 'dbo', name: 's' } })], ['an unknown action', rename({ action: 'drop' })],
       ['a new name on a delete', remove({ newName: 'x' })], ['delete flags on a rename', rename({ closeConnections: false })], ['delete flags missing', { ...remove(), deleteHistory: undefined }],
@@ -43,6 +43,31 @@ describe('object action request schemas', () => {
     expect(actionDescribeSchema.safeParse({ ...request, dialog: 'deleteObject', target: { kind: 'database', name: 'master' } }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, extra: true }).success).toBe(false)
+  })
+  it('takes a login\'s Disable and Enable with only a target, and refuses SQL Server\'s own logins and other kinds', () => {
+    const login = { kind: 'login', name: 'AppUser' } as const
+    const state = (action: 'disable' | 'enable', changes: Record<string, unknown> = {}) => ({ action, ...ids(), target: login, ...changes })
+    const request = state('disable')
+    expect(actionRequestSchema.parse(request)).toEqual(request)
+    expect([valid(state('enable')), valid(rename({ target: login, newName: 'App]User' })), valid(state('enable', { target: { kind: 'login', name: 'CONTOSO\\Ops' } }))]).toEqual([true, true, true])
+    // A backslash is left to the preflight, which knows whether the login is a SQL Server or a Windows login.
+    expect(valid(rename({ target: { kind: 'login', name: 'sa' }, newName: 'a\\b' }))).toBe(true)
+    const system = { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } as const
+    for (const [name, value] of [
+      ['a new name on a disable', state('disable', { newName: 'x' })], ['delete flags on an enable', state('enable', { closeConnections: false })], ['changes on a disable', state('disable', { changes: {} })],
+      ['a table\'s disable', state('disable', { target: table })], ['a database\'s enable', state('enable', { target: database })], ['SQL Server\'s own login', state('disable', { target: system })],
+      ['SQL Server\'s own login\'s rename', rename({ target: system })], ['secrets on a disable', state('disable', { secrets: { password: 'x' } })], ['a login without a name', state('disable', { target: { kind: 'login' } })]
+    ] as const) expect(valid(value), name).toBe(false)
+    expect(actionTargetProblems(system, 'disable')).toEqual(['This login belongs to SQL Server and cannot be changed.'])
+    expect(actionTargetProblems({ kind: 'login', name: '##' }, 'disable')).toEqual([])
+    // The loginFacts describe reads a login Disable may act on.
+    const describe = { ...ids(), dialog: 'loginFacts', target: login }
+    expect(actionDescribeSchema.parse(describe)).toEqual(describe)
+    for (const target of [table, database, system]) expect(actionDescribeSchema.safeParse({ ...describe, target }).success, target.kind).toBe(false)
+    // The reply carries the sessions connected as the login, bounded.
+    const reply = { steps: [{ status: 'done', title: 'Disable the login' }], messages: [], elapsedMs: 3 }
+    expect([0, 1_000_000].map(sessions => actionExecuteResultSchema.safeParse({ ...reply, sessions }).success)).toEqual([true, true])
+    expect([-1, 1_000_001, 1.5].map(sessions => actionExecuteResultSchema.safeParse({ ...reply, sessions }).success)).toEqual([false, false, false])
   })
   it('cancels 1 to 16 distinct request ids', () => {
     const id = randomUUID()

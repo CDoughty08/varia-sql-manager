@@ -32,11 +32,12 @@ internal sealed class ActionsCatalog
     });
 
     private sealed record ActionJson(string Action, string Class, string Title, List<string> Engines, long CleanupMs, bool? SystemObjects = null);
+    private sealed record DescribeJson(string Describe, string Kind, string Action);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
-    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
+    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DescribeJson> Describes, List<DialogJson> Dialogs,
+        List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
@@ -55,6 +56,7 @@ internal sealed class ActionsCatalog
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
         dialogActions = json.Dialogs.ToDictionary(row => row.Dialog, row => row.Action, StringComparer.Ordinal);
+        Describes = json.Describes.ToDictionary(row => row.Describe, row => (row.Kind, row.Action), StringComparer.Ordinal);
         Limits = json.Limits;
         DatabaseOptions = json.DatabaseOptions.ToDictionary(row => row.Key, StringComparer.Ordinal);
         ScopedConfigurations = json.ScopedConfigurations.ToDictionary(row => row.Key, StringComparer.Ordinal);
@@ -89,6 +91,10 @@ internal sealed class ActionsCatalog
     /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
     public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));
 
+    /// <summary>The describes that read an object's facts without a dialog (loginFacts), each with the kind it reads and the
+    /// action whose target rules it follows.</summary>
+    public IReadOnlyDictionary<string, (string Kind, string Action)> Describes { get; }
+
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);
 
@@ -104,8 +110,9 @@ internal sealed class ActionsCatalog
     /// preflight derives the subtype.</summary>
     public bool Offered(string kind, string action) => rows.Values.Any(row => row.Kind == kind && row.Enabled.Contains(action));
 
-    /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status: the preflights
-    /// that derive a status (a disabled login) arrive with the actions that need them.</summary>
+    /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status. A login answers by
+    /// its rules instead (LoginRules.Refusal), which decide every verb whatever its status: Disable and Enable are idempotent,
+    /// so a stale tree that offers one just runs it again.</summary>
     public bool Allows(string kind, string subtype, string action) => (Row(kind, subtype) ?? Row(kind, "")) is { } row && row.Enabled.Contains(action);
 
     public bool Retryable(string code) => errors.TryGetValue(code, out var retryable) ? retryable : throw new InvalidOperationException("Unknown object action error " + code);

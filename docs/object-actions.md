@@ -14,6 +14,8 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` | SQL Server, Managed Instance |
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` | SQL Server, Managed Instance |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
+| `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionDisable` | SQL Server, Managed Instance |
+| `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionEnable` | SQL Server, Managed Instance |
 
 "Runs on" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -30,28 +32,40 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties |
-| --- | --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ | ✓ |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – |
-| `view` | none | ✓ | ✓ | ✓ | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
-| `function` | `aggregate` | – | ✓ | ○ | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Disable Login | Enable Login |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – |
+| `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | – | – | ✓ | – |
+| `login` | `system` | – | ○ | – | – | ○ | – |
+| `login` | `windowsGroup` | – | ✓ | – | – | ○ | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | – | – | ✓ | – |
+| `database` | none | – | ✓ | ✓ | ✓ | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
 
 ## Menus, statuses, database states and servers
 
 An action's item goes in `explorer.context`, `explorer.tasks`, `explorer.tasks.restore`: Object Explorer's menu, or its Tasks submenus. Tasks (`explorer.tasks`) and Tasks › Restore (`explorer.tasks.restore`) stay hidden while nothing is placed in them, so they appear with their first action.
 
 A node's status badge (`explorerNodeStatus`) can overlay its row: a disabled login offers Enable in place of Disable.
-No kind changes its actions by status yet.
+
+| Kind | Subtypes | Status | Changes |
+| --- | --- | --- | --- |
+| `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | `disabled` | Disable Login: –, Enable Login: ✓ |
+| `login` | `system` | `disabled` | Disable Login: –, Enable Login: ○ |
+| `login` | `windowsGroup` | `disabled` | Disable Login: –, Enable Login: – |
+
+Only `disabled` changes a login's actions: a login denied permission to connect can still be disabled, as in SSMS.
 
 A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
@@ -99,7 +113,7 @@ choose its default. Database Properties' Open Connections prompt keeps its own c
 | Prompt | Title | Buttons | Example |
 | --- | --- | --- | --- |
 | `renameDatabase` | Rename Database | **Close Connections and Rename**, Rename When Free, Cancel | 3 connections are using Sales (2 query windows in Varia). Close them and rename the database? 1 session has an open transaction, which closing rolls back. Varia's query windows with open transactions: Query 1.sql. Rename When Free waits until they disconnect; Stop in the status bar ends the wait. |
-| `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. |
+| `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. Varia's connection Reporting (sql01) signs in as this login, and cannot reconnect while it is disabled. |
 
 The default button is bold. Rename Database defaults to Rename When Free where Varia may not close the connections, and
 Disable Login to Cancel for a login a service runs as.
@@ -129,9 +143,9 @@ last resort.
 
 Create Catalog is the only long run so far; the others are reserved for the actions that will use them.
 
-A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
-shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
-connections…").
+A short state action (a rename, a login's Disable and Enable) runs as a status-bar job instead: one per node, shown
+with Stop after `statusDelayMs` ("Disabling app_user…", Stop disable), naming its step when it has several ("Renaming
+Sales to Sales2: Closing connections…").
 
 ## Database Properties
 
@@ -307,7 +321,6 @@ names by a live dry run:
 | Restore multi-user access | `ALTER DATABASE [db] SET  MULTI_USER` |
 | Restore restricted user access | `ALTER DATABASE [db] SET  RESTRICTED_USER` |
 | Detach the database | `EXEC master.dbo.sp_detach_db @dbname = N'db', @skipchecks = 'false'` ('true' when Update Statistics is cleared) |
-| Disable the login, Enable the login | `ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE` |
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
 
@@ -315,9 +328,34 @@ names by a live dry run:
 
 Object Explorer gives each login a subtype from `sys.server_principals`: `sa` by principal_id 1 whatever its name, `system`
 for SQL Server's own logins (a name that starts and ends with `##`), else by type: `S` `sql`, `U` `windowsUser`, `G` `windowsGroup`, `C` `certificateMapped`, `K` `asymmetricKeyMapped`, `E` `externalUser`, `X` `externalGroup`.
-The login actions arrive in later versions; their rules are data already, and the backend's login preflight reads the
-facts they need in the action's own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login
-another session is changing, and never a password hash, which no Varia statement may name.
+The backend's login preflight reads the facts an action needs in the action's own connection from catalog views only:
+never `LOGINPROPERTY`, which waits on a login another session is changing, and never a password hash, which no Varia
+statement may name. Delete, Unlock and Properties arrive in later versions; their rules are data already.
+
+### Disable, Enable and Rename
+
+Disable and Enable are inline actions in a login's menu after Copy Name, one of them at a time: a disabled login offers
+Enable. Each runs at once as a status-bar job with Stop, from the server's master database, and then Object Explorer
+reselects the login with its new state. Disable first reads the login's facts (`actions.describe` with `loginFacts`, in
+the action's own connection) and asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which
+stay connected, warns when it is a member of sysadmin, names the service that runs as it (from
+`sys.dm_server_services`, or an `NT SERVICE\` name), and names Varia's other connections that sign in as it. Enable
+asks nothing; its notice says when permission to connect is still denied.
+
+Rename uses Object Explorer's inline box, as for a table. A SQL Server login's name cannot hold a backslash: "A SQL Server login's name cannot contain a backslash."
+The box stays open with that message, since SQL Server would refuse it (15021). The backend refuses a name another
+login or server role uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a
+warning names Varia's other connections that sign in under the old name.
+
+| Action | Step | As Script Action writes it |
+| --- | --- | --- |
+| Disable | Disable the login | `ALTER LOGIN [login] DISABLE` |
+| Enable | Enable the login | `ALTER LOGIN [login] ENABLE` |
+| Rename | Rename | `ALTER LOGIN [login] WITH NAME=[new]` |
+
+SQL Server's errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what
+changing a login needs. SQL Server's own logins (`##…##`) are refused by the backend as system objects, whatever the
+page asks.
 
 ✓ allowed, ○ shown greyed and refused, – not offered.
 
@@ -358,6 +396,7 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `mappedUsers` | 100 | Mapped database users Delete Login lists |
 | `scanDatabases` | 4,096 | Databases the mapped-user scan reads |
 | `serviceNames` | 4 | Service accounts the service lookup reads |
+| `serviceName` | 256 | Characters of the service name the login facts carry |
 
 ## Errors
 

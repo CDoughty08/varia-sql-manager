@@ -17,20 +17,27 @@ internal static class ActionErrors
     /// <summary>Its advice for any other change other connections are in the way of (Broker Enabled, Containment type, COLLATE's
     /// 5030, a single-user database's 924), which Open Connections never asks about.</summary>
     public const string OtherConnectionsAdvice = "Other connections use the database. Close them first.";
+    /// <summary>What a login action's PERMISSION_DENIED adds (D4 P4, P7): SQL Server's 15151 also says the login may not exist,
+    /// which the preflight has just ruled out.</summary>
+    public const string LoginPermissionAdvice = "Changing a login needs ALTER ANY LOGIN, and CONTROL SERVER for a member of sysadmin.";
     /// <summary>SQL Server error numbers by the code they map to (Lost also covers severity 20 and above), one mapping per line.</summary>
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {
         ["BLOCKED"] = [1222],
         // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user.
-        ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
+        // 15434: a login with sessions (DROP LOGIN, D4c).
+        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 15434],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
+        // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c).
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183],
         // 1828 and 5170: a logical file name or a physical file is taken.
-        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170],
+        // 15025: a server principal already has the name (a login's rename).
+        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025],
         // 15007: the login is not valid.
         ["NOT_FOUND"] = [15225, 15007],
         // 5058: the option cannot be set in this database (SQL Server's own).
-        ["NOT_SUPPORTED"] = [5058],
+        // 15405, 15021 (a SQL login's name with a backslash, D4 P3) and 15099: changes to logins SQL Server refuses outright.
+        ["NOT_SUPPORTED"] = [5058, 15405, 15021, 15099],
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]

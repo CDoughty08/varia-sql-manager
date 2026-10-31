@@ -86,8 +86,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks'.
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt)?$")]
     private static partial Regex Pattern();
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
+    // _lt is the login actions' taken name, and _lr]' -- the hostile name they rename the scratch login to and back (D4b).
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --)?$")]
     private static partial Regex LoginPattern();
+    /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
+    internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
     private static partial Regex JobPattern();
 
@@ -162,7 +165,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         }
         var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
-            if (LoginPattern().IsMatch(row[0]!))
+            if (SweepableLogin(row[0]!))
             {
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");

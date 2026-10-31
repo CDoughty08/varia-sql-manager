@@ -7,7 +7,7 @@ import { actionsStubData, caution, dependentsMessage, installActionsStub, proper
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
-  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
+  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -570,6 +570,92 @@ try {
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
 
+  // 8. A login's Disable, Enable and Rename (D4b): the menu offers one of Disable and Enable by the login's state, greys
+  // what its kind refuses; Disable asks first, then the row and its menu follow; the login this connection uses is refused
+  // before any prompt; Enable never asks; a Disable waiting on a lock shows in the status bar with Stop; Rename refuses a
+  // SQL Server login's backslash and keeps the box, then renames with a notice.
+  const logins = ['server-a', 'Security', 'Logins']
+  await expandExplorerPath(page, ...logins)
+  // Main's native message boxes: each is recorded and answered from a queue (Cancel when it is empty).
+  await application.evaluate(({ dialog }) => {
+    globalThis.loginPrompts = []
+    globalThis.loginAnswers = []
+    globalThis.previousShowMessageBox ??= dialog.showMessageBox
+    dialog.showMessageBox = async (_window, options) => {
+      globalThis.loginPrompts.push({ title: options.title, message: options.message, detail: options.detail, buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId })
+      return { response: globalThis.loginAnswers.shift() ?? options.cancelId, checkboxChecked: false }
+    }
+  })
+  const prompts = () => application.evaluate(() => globalThis.loginPrompts)
+  const answer = response => application.evaluate((_electron, value) => { globalThis.loginAnswers.push(value) }, response)
+  const promptCount = 0
+  const notice = () => toastMessage(toasts(page).last())
+  expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Refresh'])
+  await closeMenu()
+  expect(await menuOf(...logins, 'Retired')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
+  await closeMenu()
+  // A Windows group cannot be disabled (SQL Server refuses it), and SQL Server's own logins cannot be changed.
+  expect(await menuOf(...logins, 'CONTOSO\\Ops')).toEqual(['Script Login as', 'Copy Name', 'Disable', 'Rename', 'Refresh'])
+  expect(await disabled()).toEqual(['Disable'])
+  await closeMenu()
+  expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
+  expect(await disabled()).toEqual(['Enable', 'Rename'])
+  await closeMenu()
+  await answer(0)
+  await menuOf(...logins, 'AppUser')
+  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await expect.poll(async () => (await prompts()).length).toBe(promptCount + 1)
+  expect((await prompts()).at(-1)).toEqual({ title: 'Disable Login', message: 'Disable the login AppUser?', buttons: ['Disable', 'Cancel'], defaultId: 0, cancelId: 1,
+    detail: 'New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them.' })
+  await expect(notice()).toHaveText('Disabled the login AppUser. 2 sessions connected as it stay connected.')
+  expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' } })
+  await expect(async () => {
+    if (await explorerMenu().count()) await closeMenu()
+    expect(await menuOf(...logins, 'AppUser')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
+  }).toPass()
+  // Enable runs at once; the notice says the login still may not connect while its CONNECT SQL is denied.
+  await closeMenu()
+  await menuOf(...logins, 'Retired')
+  await explorerMenu().getByRole('menuitem', { name: 'Enable', exact: true }).click(fast)
+  await expect(notice()).toHaveText('Enabled the login Retired. Permission to connect is still denied.')
+  expect((await prompts()).length).toBe(promptCount + 1)
+  // The login this connection uses: refused before any prompt, and nothing runs.
+  const executed = (await stubCalls('actions.execute')).length
+  await menuOf(...logins, 'sa')
+  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await expect(commandBanner()).toHaveText('This is the login this connection uses. Connect with another login to change it.')
+  expect([(await prompts()).length, (await stubCalls('actions.execute')).length]).toEqual([promptCount + 1, executed])
+  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  // A Disable waiting on a lock: the status bar shows it with Stop, which cancels it in the backend.
+  await answer(0)
+  await menuOf(...logins, 'Held')
+  await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
+  await expect(status).toContainText('Disabling Held…')
+  const heldId = (await stubCalls('actions.execute')).at(-1).requestId
+  await status.getByRole('button', { name: 'Stop disable', exact: true }).click()
+  await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(heldId)
+  await expect(status).not.toContainText('Disabling')
+  await expect(commandBanner()).toHaveCount(0)
+  // Rename: F2 on a login; a backslash keeps the box with the reason, and a new name renames it with a notice.
+  await select(...logins, 'AppUser')
+  await page.keyboard.press('F2')
+  const loginBox = page.getByRole('textbox', { name: 'Rename Login', exact: true })
+  await expect(loginBox).toHaveValue('AppUser')
+  await page.keyboard.type('CONTOSO\\AppUser')
+  await page.keyboard.press('Enter')
+  await expect(commandBanner()).toHaveText("A SQL Server login's name cannot contain a backslash.")
+  await expect(loginBox).toBeVisible()
+  await loginBox.fill('AppOwner')
+  await page.keyboard.press('Enter')
+  await expect(notice()).toHaveText('Database users mapped to this login keep their names.')
+  await expect(await explorerRow(page, ...logins, 'AppOwner')).toBeVisible()
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'login', name: 'AppUser' }, newName: 'AppOwner' })
+  // The backslash's message stays until it is dismissed: dismissing it earlier would have left the box, which commits.
+  if (await commandBanner().count()) await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-logins-dark.png') })
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
+  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the own login is refused first, Stop reaches a waiting Disable, and Rename refuses a SQL login\'s backslash.')
+
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
   await expect(async () => {
@@ -591,7 +677,7 @@ try {
   console.log('Object action checks: a database\'s Delete Object offers SSMS\'s options with their defaults, and a lost server leaves only Close.')
 
   expect(failures).toEqual([])
-  console.log('Object action checks passed: menus, Select Top for views, inline Rename, the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
+  console.log('Object action checks passed: menus, Select Top for views, inline Rename, the Delete Object dialog with Script and errors, Database Properties, a login\'s Disable, Enable and Rename, database options, and a lost server.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'object-actions-failure.png') }).catch(() => {})
   throw error

@@ -29,6 +29,15 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => actions.canRun('rename', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) actions.beginRename(node) }
     }),
+    // A login's state: the facts, Disable's confirmation and the job run in ObjectActionService.
+    commands.register('explorer.disable', {
+      when: args => actions.canRun('disable', nodeOf(args)),
+      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'disable') }
+    }),
+    commands.register('explorer.enable', {
+      when: args => actions.canRun('enable', nodeOf(args)),
+      run: async args => { const node = nodeOf(args); if (node) await actions.changeLoginState(node, 'enable') }
+    }),
     commands.register('explorer.delete', {
       when: args => actions.canRun('delete', nodeOf(args)) && !dialogs.current,
       run: args => { const node = nodeOf(args); if (node) dialogs.open('deleteObject', node) }

@@ -102,7 +102,9 @@ export const loginMessages = {
   notOffered: 'This kind of login does not offer this action.',
   own: 'This is the login this connection uses. Connect with another login to change it.',
   alterAnyLogin: 'You do not have permission to change logins (ALTER ANY LOGIN).',
-  controlServer: 'The login is a member of sysadmin: changing it needs CONTROL SERVER.'
+  controlServer: 'The login is a member of sysadmin: changing it needs CONTROL SERVER.',
+  // SQL Server's own answer is 15021, which does not say what is wrong (D4 P3).
+  sqlBackslash: "A SQL Server login's name cannot contain a backslash."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -127,7 +129,9 @@ export const loginLimits = {
   sidHex: 172,
   /** An action step's title and detail (ActionStep). */
   stepTitle: 64, stepDetail: 128,
-  ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4
+  ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4,
+  /** sys.dm_server_services.servicename, as the login facts carry it. */
+  serviceName: 256
 } as const
 
 /** What the login preflight (ActionSql.Login) reads in the action's own connection, in master. Counts that need VIEW SERVER
@@ -149,6 +153,9 @@ export interface LoginFacts {
   readonly own: boolean
   readonly sysadmin: boolean
   readonly sessions?: number
+  /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
+   *  loginFacts describe only; at most loginLimits.serviceName characters. */
+  readonly service?: string
   readonly ownedDatabases: number
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
@@ -169,12 +176,21 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   return undefined
 }
 
+/** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
+export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
+/** Why a login may not take this new name, or undefined: a SQL Server login's name has no backslash (SQL Server answers
+ *  15021, "Invalid value given for parameter NAME", D4 P3), so Varia says why before sending; a Windows login's name is
+ *  DOMAIN\name. C#: LoginRules.NameRefusal. */
+export const loginNameRefusal = (subtype: LoginSubtype, newName: string): LoginMessageId | undefined =>
+  noBackslashSubtypes.includes(subtype) && newName.includes('\\') ? 'sqlBackslash' : undefined
+
 /** The rules as actions-catalog.json carries them, so C# needs no rules of its own. */
 export function loginsCatalog() {
   return {
     detail: loginDetailWords,
     limits: loginLimits,
     messages: loginMessages,
+    noBackslash: noBackslashSubtypes,
     ownRefuses: ownLoginRefuses,
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,

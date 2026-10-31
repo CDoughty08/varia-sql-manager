@@ -133,6 +133,8 @@ internal sealed partial class ActionService : IDisposable
         catch (RequestException) { throw Invalid("target."); }
         if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
         if (catalog.ServesSystemObjects(action)) return target;
+        // SQL Server's own logins by name, as the Logins folder tells them; the preflight re-derives the subtype.
+        if (target.Kind == "login" && LoginRules.SystemName(target.Name!)) throw Invalid("system objects cannot be changed.");
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
         return target;
     }
@@ -144,11 +146,17 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
+    /// dialog and a target its action serves, the table designer and a database, SQL Server's own included, or a describe
+    /// without a dialog (loginFacts) and a target of its kind that its action serves.</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
+        if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var describe))
+        {
+            if (args.Target?.Kind != describe.Kind) throw Invalid("target.");
+            return Target(args.Target, describe.Action);
+        }
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
@@ -164,8 +172,8 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
-    /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, the delete flags only for
-    /// databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
+    /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
+    /// with nothing but a target, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
     /// takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
@@ -191,6 +199,12 @@ internal sealed partial class ActionService : IDisposable
                 var target = Target(args.Target, "properties");
                 DatabaseAlter.Validate(catalog, args);
                 return target;
+            case "disable" or "enable":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
+                    throw Invalid(args.Action + " takes only a target.");
+                var login = Target(args.Target, args.Action);
+                if (login.Kind != "login") throw Invalid("target.");
+                return login;
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -214,12 +228,13 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.Describes.TryGetValue(args.Dialog, out var describe) ? describe.Action : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -481,6 +496,30 @@ internal sealed partial class ActionService : IDisposable
         return (facts, row);
     }
 
+    /// <summary>The services that run as a Windows login (ActionSql.LoginService), joined, else the service an NT SERVICE\ name
+    /// is; null when there is none. A failed read (no VIEW SERVER STATE, or a server without the view) is no answer.</summary>
+    private async Task<string?> LoginServiceAsync(SqlConnection connection, string name, CancellationToken token)
+    {
+        var names = new List<string>();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.LoginService;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, name);
+            Add(command, "@take", SqlDbType.Int, 0, (int)catalog.Logins.Limit("serviceNames"));
+            await using var reader = await command.ExecuteReaderAsync(token);
+            while (await reader.ReadAsync(token)) if (!reader.IsDBNull(0) && reader.GetString(0) is { Length: > 0 } service) names.Add(service);
+        }
+        catch (SqlException) when (!token.IsCancellationRequested) { names.Clear(); }
+        var text = names.Count > 0 ? string.Join(", ", names) : ServiceOfName(name);
+        return text is null ? null : ScriptingErrors.Clip(text, (int)catalog.Logins.Limit("serviceName"));
+    }
+
+    /// <summary>The service a per-service SID login names (NT SERVICE\SQLSERVERAGENT is SQLSERVERAGENT), or null.</summary>
+    internal static string? ServiceOfName(string name) =>
+        name.StartsWith(@"NT SERVICE\", StringComparison.OrdinalIgnoreCase) && name.Length > 11 ? name[11..] : null;
+
     /// <summary>The live checks' only way to read a login's facts as the login actions will (D4b-d), in the action's own connection.</summary>
     internal async Task<LoginFactsDto?> LoginFactsAsync(string connectionId, string name, CancellationToken token)
     {
@@ -495,13 +534,7 @@ internal sealed partial class ActionService : IDisposable
     /// (src/shared/actions/logins.ts).</summary>
     private ActionError? Refusal(ActionSubject subject, ActionArgs args)
     {
-        if (subject.Login is { } login)
-        {
-            if (catalog.Logins.Refusal(login, args.Action) is { } refused)
-                return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
-            if (args.Action == "rename" && login.NameInUse) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(args.NewName!) + " is already used by another login or server role.");
-            return null;
-        }
+        if (subject.Login is { } login) return LoginRefusal(login, args);
         var row = subject.Row;
         var system = subject.Target.Kind == "database" ? row.Bool("is_system") : row.Bool("is_ms_shipped");
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
@@ -519,9 +552,31 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
+    /// <summary>A login action's refusal from the facts its preflight read: the protected-principal rules (permissions answer
+    /// PERMISSION_DENIED, the rest NOT_SUPPORTED), then a rename's new name: a backslash in a SQL Server login's, or another
+    /// principal's.</summary>
+    internal ActionError? LoginRefusal(LoginFactsDto login, ActionArgs args)
+    {
+        if (catalog.Logins.Refusal(login, args.Action) is { } refused)
+            return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
+        if (args.Action != "rename") return null;
+        if (catalog.Logins.NameRefusal(login.Subtype, args.NewName!) is { } name) return Error("NOT_SUPPORTED", catalog.Logins.Message(name));
+        if (login.NameInUse) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(args.NewName!) + " is already used by another login or server role.");
+        return null;
+    }
+
     /// <summary>The statements an action runs, in order.</summary>
     public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
     {
+        // A login's statements run in master, as SMO scripts them.
+        if (target.Kind == "login")
+            return args.Action switch
+            {
+                "rename" => [new(ActionTemplate.RenameLogin, "master", [target.Name!, args.NewName!])],
+                "disable" => [new(ActionTemplate.DisableLogin, "master", [target.Name!])],
+                "enable" => [new(ActionTemplate.EnableLogin, "master", [target.Name!])],
+                _ => throw new InvalidOperationException("No plan for a login's " + args.Action + ".")
+            };
         if (args.Action == "rename")
             return target.Kind == "database"
                 ? [new(ActionTemplate.RenameDatabase, "master", [target.Name!, args.NewName!])]
@@ -541,7 +596,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DeleteBackupHistory => "Delete backup and restore history",
         ActionTemplate.SetSingleUser => "Close existing connections",
         ActionTemplate.DropDatabase => "Drop the database",
-        ActionTemplate.RenameDatabase or ActionTemplate.RenameObject => "Rename",
+        ActionTemplate.RenameDatabase or ActionTemplate.RenameObject or ActionTemplate.RenameLogin => "Rename",
         ActionTemplate.SetMultiUser => "Restore multi-user access",
         ActionTemplate.SetRestrictedUser => "Restore restricted user access",
         ActionTemplate.DetachDatabase => "Detach the database",
@@ -638,6 +693,16 @@ internal sealed partial class ActionService : IDisposable
         return new(deleted, 0);
     }
 
+    /// <summary>The loginFacts describe: the login preflight's facts (no owned database names) and, for a Windows login, the
+    /// services that run as it, which the Disable prompt names.</summary>
+    private async Task<ActionDescribeResult> DescribeLoginJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
+    {
+        var (facts, _) = await LoginAsync(connection, target.Name!, null, 0, token);
+        if (facts is null) return new(null, 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
+        var service = facts.Type == "U" ? await LoginServiceAsync(connection, target.Name!, token) : null;
+        return new(null, 0, Login: facts with { Service = service });
+    }
+
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var database = ScriptDatabase(target);
@@ -665,7 +730,9 @@ internal sealed partial class ActionService : IDisposable
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
         if (plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
             host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
-        return new(steps, messages.Collected(), 0, failure);
+        // 15151 says "does not exist or you do not have permission"; for a login the preflight found, it is the permission.
+        if (subject.Login is not null && failure is { Code: "PERMISSION_DENIED" }) failure = Error(failure.Code, failure.Message + " " + ActionErrors.LoginPermissionAdvice);
+        return new(steps, messages.Collected(), 0, failure, subject.Login?.Sessions);
     }
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>

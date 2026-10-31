@@ -485,11 +485,24 @@ metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's q
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
+**Login actions** use the same three methods, with no new method. `actions.describe { connectionId, requestId, dialog:
+'loginFacts', target: { kind: 'login', name } }` runs the login preflight in the action's own connection and answers
+`{ login: { principalId, type, subtype, disabled, connectDenied, own, sysadmin, sessions, canAlter, canControlServer, …,
+service?: ≤ 256 }, elapsedMs }`, `service` naming the SQL Server service that runs as a Windows login (from
+`sys.dm_server_services`, read only where VIEW SERVER STATE allows it, else from an `NT SERVICE\` name); a missing login is
+`error: NOT_FOUND`. The catalogue's `describes` block maps each such id to its kind and the action whose permissions it
+checks. `actions.script` and `actions.execute` take `{ action: 'disable' | 'enable', connectionId, requestId, target: { kind:
+'login', name } }` (strict: no other member) or a login's `rename` with `newName`; they run in master, Script answers
+`database: 'master'`, and execute answers `sessions`, the count of sessions connected as the login that the preflight read.
+The backend re-derives the subtype and refuses by `LoginRules` before any DDL: SQL Server's own logins (`##…##`) for every
+action, the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login
+or server role holds (`NAME_IN_USE`).
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same
 range), tabsWithTransactions: ≤ 8 names of ≤ 260, canClose }` or `disableLogin { login: 1–128, sessions?, service?: ≤ 256,
-sysadmin }`. Main writes the box from that catalogue (names through `displayText`, so none can add lines or hide
+sysadmin, connections?: 1–8 names of ≤ 260 (Varia's other connections that sign in as the login) }`. Main writes the box from that catalogue (names through `displayText`, so none can add lines or hide
 characters), shows it as the page's abortable dialog, and answers with the chosen button's id (`closeAndRename`,
 `renameWhenFree`, `disable`, or `cancel`, which Escape, a closed box and a reload or crash also answer). The page can
 neither word a prompt nor choose its default button. No backend method is involved.

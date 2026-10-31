@@ -14,6 +14,10 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
  * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
+ * Security › Logins lists AppUser (two sessions), CONTOSO\Ops (a Windows group), Held, Retired (disabled, its CONNECT SQL
+ * denied), sa (the login the stub connects as) and SQL Server's own ##MS_PolicyTsqlExecutionLogin## (disabled). The
+ * loginFacts describe answers their facts; Disable and Enable change what Logins lists, except Held's, which wait until
+ * their Stop arrives; a login renamed to "Taken" is NAME_IN_USE.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -26,7 +30,12 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false,
+    logins: [
+      { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2 },
+      { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup' }, { name: 'Held', type: 'S', subtype: 'sql' }, { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true },
+      { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
+    ] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -42,7 +51,27 @@ export function installActionsStub({ ipcMain }, { statics }) {
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })],
-    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : []
+    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : [],
+    logins: () => stub.logins.map(login => object({ kind: 'login', name: login.name }, login.name, 'login',
+      { hasChildren: false, subtype: login.subtype, ...login.disabled ? { status: 'disabled' } : login.connectDenied ? { status: 'noAccess' } : {} }))
+  }
+  const loginOf = target => stub.logins.find(login => login.name === target.name)
+  /** The login preflight's facts (ActionSql.Login), as the loginFacts describe answers them: the stub signs in as sa. */
+  function loginFacts({ target }) {
+    const login = loginOf(target)
+    if (!login) return ok({ elapsedMs: 1, error: { code: 'NOT_FOUND', message: `The login ${target.name} no longer exists. Refresh Object Explorer.`, retryable: false } })
+    return ok({ elapsedMs: 1, login: {
+      principalId: login.subtype === 'sa' ? 1 : 300, type: login.type, subtype: login.subtype, disabled: !!login.disabled, sid: '01', created: '2026-01-02T03:04:05.000', connectDenied: !!login.connectDenied,
+      own: login.name === 'sa', sysadmin: !!login.sysadmin, sessions: login.sessions ?? 0, ownedDatabases: 0, ownedDatabaseNames: [], ownedServerObjects: 0, canAlter: true, canControlServer: true, nameInUse: false
+    } })
+  }
+  /** A login's Disable or Enable: Held's waits until its Stop arrives; the others change what Logins lists. */
+  function loginState({ action, target, requestId }) {
+    const login = loginOf(target), title = action === 'disable' ? 'Disable the login' : 'Enable the login'
+    if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title }], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: `The action was stopped at "${title}"; SQL Server cancelled that statement.`, retryable: true } }))))
+    if (login) login.disabled = action === 'disable'
+    return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1, sessions: login?.sessions ?? 0 })
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -119,6 +148,13 @@ export function installActionsStub({ ipcMain }, { statics }) {
   function execute(params) {
     const { target } = params
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'disable' || params.action === 'enable') return loginState(params)
+    if (params.action === 'rename' && target.kind === 'login') {
+      if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already used by another login or server role.', retryable: false } })
+      const login = loginOf(target)
+      if (login) login.name = params.newName
+      return ok({ steps: [{ status: 'done', title: 'Rename' }], messages: [], elapsedMs: 1 })
+    }
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -151,6 +187,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'loginFacts': return loginFacts(params)
           default: return describe(params)
         }
       case 'actions.script':

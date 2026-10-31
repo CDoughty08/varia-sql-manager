@@ -45,7 +45,7 @@ import { backendContribution } from '../../src/renderer/src/contributions/backen
 import { helpContribution } from '../../src/renderer/src/contributions/help'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
-import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { objectActionNoticeKey, ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
 import { LongRunService } from '../../src/renderer/src/services/long-runs'
@@ -348,7 +348,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }, ...(options.timers ? { timers: options.timers } : {})
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
+    ...(options.timers ? { timers: options.timers } : {})
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {
