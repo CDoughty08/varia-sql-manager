@@ -22,9 +22,9 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   scriptMs: 'The backend\'s budget for building a script, in ms; then `TIMEOUT`',
   readLockTimeoutMs: '`LOCK_TIMEOUT` while reading for a dialog or a script, in ms; then `BLOCKED`. DDL itself waits without one',
   gateWaitMs: 'How long a request waits for its gate before the backend answers `BUSY`, in ms',
-  readPerConnection: 'Describe and script requests at once per server',
+  readPerConnection: 'Describe and script requests at once per connection',
   readTotal: 'Describe and script requests at once in total',
-  executePerConnection: 'Actions running at once per server',
+  executePerConnection: 'Actions running at once per connection; long actions take the long gate instead',
   executeTotal: 'Actions running at once in total',
   registered: 'Requests the backend tracks; more fail with `BUSY`',
   cancelIds: 'Request ids per cancellation',
@@ -47,7 +47,12 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
   browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
   browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
-  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates'
+  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
+  progressEventMs: 'How often a long step\'s progress (SQL Server\'s message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms',
+  progressPerSecond: 'Progress updates main pushes to the window per request each second, at most; the first of each step always goes',
+  longPerConnection: 'Long actions (a restore or backup) running at once per connection; another waits `gateWaitMs`, then `BUSY`',
+  longTotal: 'Long actions running at once in total',
+  drainMarginMs: 'What main adds to a long action\'s Stop wait (`stopGraceMs` plus its cleanup budget) when it lets a closing backend finish, in ms'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -150,6 +155,37 @@ function longRunDocs(): string[] {
     'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
     'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
     'connections…").',
+    '',
+    ...longActionDocs()
+  ]
+}
+
+/** The long gate, STATS progress and the drain of a closing backend (D1 §3.3, §9.4, §9.5). */
+function longActionDocs(): string[] {
+  const long = objectActions.filter(action => objectActionSpecs[action].long)
+  return [
+    '### Long actions and progress',
+    '',
+    'An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:',
+    `${actionLimits.longPerConnection} per Varia connection and ${actionLimits.longTotal} in all. Another waits up to \`gateWaitMs\`, then answers \`BUSY\``,
+    '("Another restore or backup is running on this connection.", or "Restores or backups are already running on other',
+    'connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.',
+    'Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they',
+    'arrive only for a reader: SQL Server\'s message 3211 ("n percent processed.", from `STATS`) becomes a droppable',
+    `\`action.progress\` EVENT \`{step, percent}\` at most every ${actionLimits.progressEventMs} ms, and is never one of the ${actionLimits.infoMessages} messages the reply keeps.`,
+    'Each step\'s start goes out at once as percent 0, and a percent the interval held back goes out when the interval ends (or',
+    'before the next step\'s start), so a step\'s last percent is not lost and a finished step never looks stuck while the next waits.',
+    `Main checks each EVENT and pushes \`varia:actions-progress {requestId, step, percent}\` only to the window that sent the request, at most ${actionLimits.progressPerSecond} a`,
+    'second: a new step at once, and the latest percent held inside the interval when it ends (`actionProgressRelay`); an',
+    'invalid EVENT is dropped, never a reason to stop the run. The page keeps',
+    'the latest percent per request (`ActionProgressService`) and draws it under the running step of its `StepList`; the',
+    'reply\'s steps carry the last percent each step reached as `progress`.',
+    '',
+    'When the backend\'s generation is closed (a quit, a reload, Restart SQL Backend), it stops its long actions itself and',
+    `runs their cleanup steps within their budgets; main lets that generation run \`stopGraceMs\` plus the action's cleanup budget plus ${actionLimits.drainMarginMs / 1000} s`,
+    'before it kills it (`actionDrainMs`, methodPolicies\' `drainMs`).',
+    '',
+    long.length ? `Long actions: ${long.map(action => objectActionSpecs[action].title).join(', ')}.` : 'No action is long yet; the restore, verify and backup actions that will be are still to come.',
     ''
   ]
 }

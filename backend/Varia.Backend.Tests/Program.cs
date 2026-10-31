@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--server-files-live" or "--restore-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live" or "--server-files-live" or "--restore-live" or "--action-progress-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -42,6 +42,11 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
         {
             await SeamLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused wave 5 seam checks.");
+        }
+        else if (lane == "--action-progress-live")
+        {
+            await ActionProgressLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused action progress checks.");
         }
         else if (lane == "--explorer-status-live")
         {
@@ -174,6 +179,7 @@ await ActionChecks.RunAsync(Check);
 await SeamChecks.RunAsync(Check);
 await ServerFilesChecks.RunAsync(Check);
 await RestoreChecks.RunAsync(Check);
+await ActionProgressChecks.RunAsync(Check);
 DatabasePropertiesChecks.Run(Check);
 DesignerChecks.Run(Check);
 await SsisChecks.RunAsync(Check);
@@ -208,13 +214,13 @@ Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123a
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master", "model", "Sales"))
     && ScratchDatabase.Lasting(Names("master", "model")) != ScratchDatabase.Lasting(Names("master")),
     "\"the server is unchanged\" checks ignore other runs' scratch databases but see any other database come or go");
-Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_seam", "_seamt", "_files", "_rst", "_rstr" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
+Check(new[] { "", "_ro", "_off", "_su", "_rs", "_rv", "_rvs", "_snap", "_rt", "_inj", "_act", "_actr", "_dbp", "_tbd", "_tbd.]", "_live", "_ssis", "_ssisref", "_ssiscc", "_seam", "_seamt", "_files", "_rst", "_rstr", "_ap" }.All(suffix => ScratchDatabase.Sweepable("VariaScratch_20261018120000_0123abcd" + suffix))
     && !new[] { "VariaScratch_20261018120000_0123abcd_acts", "VariaScratch_20261018120000_0123abcd_iso", "VariaScratch_20261018120000_0123abcd_dbpx", "VariaScratch_x_act", "varia_scratch_0123456789ab", "VariaScratch_20261018120000_0123ABCD",
-        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_file", "VariaScratch_20261018120000_0123abcd_rstx", "SSISDB" }.Any(ScratchDatabase.Sweepable)
+        "VariaScratch_20261018120000_0123abcd_ssisx", "VariaScratch_20261018120000_0123abcd_ssis_ref", "VariaScratch_20261018120000_0123abcd_ssiscc_", "VariaScratch_20261018120000_0123abcd_seamx", "VariaScratch_20261018120000_0123abcd_file", "VariaScratch_20261018120000_0123abcd_rstx", "VariaScratch_20261018120000_0123abcd_apx", "SSISDB" }.Any(ScratchDatabase.Sweepable)
     && ScratchDatabase.IsScratchJob("VariaScratch_20261018120000_0123abcd_job")
     && !new[] { "VariaScratch_x_job", "VariaScratch_cleanup_job", "VariaScratch_nightly_job", "VariaScratch_20261018120000_0123abcd", "VariaScratch_20261018120000_0123ABCD_job",
         "VariaScratch_20261018120000_0123abcd_job2", "VariaScratch_20261018120000_0123abcd_x_job", "xVariaScratch_20261018120000_0123abcd_job" }.Any(ScratchDatabase.IsScratchJob),
-    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the wave 5 seam checks' _seam and _seamt, the server file picker's _files, Restore Database's _rst and _rstr, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
+    "the sweep finds every scratch database a crashed run can leave, the object actions' _act and _actr, Database Properties' _dbp, the table designer's _tbd and _tbd.], the live tables' _live, the SSIS checks' _ssis, _ssisref and _ssiscc, the wave 5 seam checks' _seam and _seamt, the server file picker's _files, Restore Database's _rst and _rstr, the action progress checks' _ap, and Object Explorer status's _rs, _rv and _rvs included, and nothing else (never SSISDB); only an Agent job named as a run names its own (VariaScratch_<14 digits>_<8 hex>_job) can be swept");
 {
     // SQL Server on Linux cannot back up to /dev/null (error 3634 in DiskChangeFileSize), so its RESTORING database backs up to one file; Windows keeps NUL.
     const string rs = "VariaScratch_20261018120000_0123abcd_rs";
@@ -532,6 +538,7 @@ try
     await SeamLiveChecks.RunAsync(Check, service, info, Live, json);
     await ServerFilesLiveChecks.RunAsync(Check, service, info, Live, json);
     await RestoreLiveChecks.RunAsync(Check, service, info, json);
+    await ActionProgressLiveChecks.RunAsync(Check, service, info, Live, json);
     await DatabasePropertiesLiveChecks.RunAsync(Check, service, info, json);
     await DesignerLiveChecks.RunAsync(Check, service, info, Live("master"), json);
     await SsisLiveChecks.RunAsync(Check, service, info, Live, json);

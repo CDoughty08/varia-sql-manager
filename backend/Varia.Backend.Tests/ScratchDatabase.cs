@@ -85,6 +85,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Restore Database's forked source: FULL recovery, restored in place to a point in time between its log backups, so
     /// the next log forks; its backups are files like <see cref="RestoreSource"/>'s, deleted before its history.</summary>
     public string RestoreFork => Name + "_rstf";
+    /// <summary>Where the action progress checks back up with STATS and hold a lock (D1c; created on demand).</summary>
+    public string Progress => Name + "_ap";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -95,8 +97,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, and _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr|_rstf)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored, and _ap the action progress checks'.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr|_rstf|_ap)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -392,6 +394,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     }
     /// <summary>Creates the empty, marked server file picker database.</summary>
     public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
+
+    /// <summary>Creates the empty, marked action progress database.</summary>
+    public Task<string> CreateProgressAsync() => CreateMarkedAsync(Progress);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
