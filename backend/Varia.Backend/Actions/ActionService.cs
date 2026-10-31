@@ -40,6 +40,8 @@ internal interface IActionHost
     /// to the next client, and PoolSessions keeps a cleared pool's ids for minutes, so a query tab can hold one of them: it is the
     /// user's session, never Varia's pool's. Hosts that open no query sessions (the offline checks') have none.</summary>
     IReadOnlySet<int> QuerySessions(string connectionId) => new HashSet<int>();
+    /// <summary>The backend's open query sessions on connections to the same server, by SPID: each one's session id (its query tab).</summary>
+    IReadOnlyDictionary<int, string> QueryTabs(string connectionId) => new Dictionary<int, string>();
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -536,6 +538,14 @@ internal sealed partial class ActionService : IDisposable
     internal const string SnapshotsWarning = "The database has database snapshots; the DROP fails until they are deleted.";
     /// <summary>Why Delete Object greys Close existing connections on Azure SQL Managed Instance.</summary>
     internal const string ManagedInstanceCloseNote = "Managed Instance cannot set SINGLE_USER.";
+    /// <summary>Why it greys the option for an offline database: no session can be in it, and its Delete runs no SINGLE_USER (Plan).</summary>
+    internal const string OfflineCloseNote = "An offline database has no connections to close.";
+    /// <summary>The most query tabs Delete Object names as holding a transaction in the database (TransactionTabs).</summary>
+    internal const int TransactionTabLimit = 1000;
+
+    /// <summary>Why Delete Object greys Close existing connections, or null where it applies. A snapshot greys it by itself (isSnapshot).</summary>
+    internal static string? CloseConnectionsNote(string engine, bool snapshot, bool offline) =>
+        snapshot ? null : engine == "managedInstance" ? ManagedInstanceCloseNote : offline ? OfflineCloseNote : null;
 
     /// <summary>What a database's Delete plan needs from its row: whether it is offline, where no session can be (so no SINGLE_USER
     /// runs), and its user access (sys.databases user_access: 0 multi, 1 single, 2 restricted), which a failed DROP restores.</summary>
@@ -669,9 +679,10 @@ internal sealed partial class ActionService : IDisposable
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
         var (blockers, more) = sessions is null ? (null, false) : await BlockersAsync(connection, connectionId, target.Name!, token);
-        var note = engine == "managedInstance" && !snapshot ? ManagedInstanceCloseNote : null;
+        var tabs = sessions is null ? null : await TransactionTabsAsync(connection, connectionId, target.Name!, token);
+        var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
         var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
-            withTransaction, blockers, blockers is null ? null : more, note);
+            withTransaction, blockers, blockers is null ? null : more, note, tabs);
         return new(deleted, 0);
     }
 
@@ -702,6 +713,26 @@ internal sealed partial class ActionService : IDisposable
             blockers.Add(new(id, Clipped(3), Clipped(4), Number(2) > 0));
         }
         return (blockers, more);
+    }
+
+    /// <summary>The query tabs (their session ids) whose session has an open transaction in the database or holds one while in it
+    /// (ActionSql.TransactionSessions), at most TransactionTabLimit: Delete Object names them (A7), whatever database each tab is in.</summary>
+    private async Task<List<string>> TransactionTabsAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    {
+        var tabs = host.QueryTabs(connectionId);
+        var named = new List<string>();
+        if (tabs.Count == 0) return named;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.TransactionSessions;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@pid", SqlDbType.Int, 0, Environment.ProcessId);
+        // A few more than the tabs: another session of this process (a pool's, mid-transaction) may sort before them.
+        Add(command, "@take", SqlDbType.Int, 0, Math.Min(tabs.Count, TransactionTabLimit) + 64);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token) && named.Count < TransactionTabLimit)
+            if (tabs.TryGetValue(Convert.ToInt32(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture), out var tab)) named.Add(tab);
+        return named;
     }
 
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)

@@ -87,21 +87,13 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     return !this.disposed && !!connection && !connection.lost
   }
   /**
-   * The names of the idle query tabs on a database whose session holds an open transaction (A7: Delete Object names them), read
-   * as confirmSessions reads them: a few at a time, within `stateBudgetMs` in all. A tab not read in time, or whose count could
-   * not be read, is left out: the dialog names only what it knows.
+   * The names of the open query tabs among `ids`, in tab order. A query's session id is its tab's id, so the backend, which sees
+   * each session's transactions on the server, says which tabs hold one in a database (A7: Delete Object names them), whatever
+   * database the tab is in.
    */
-  async openTransactionTabs(connectionId: string, database: string): Promise<string[]> {
-    const tabs = this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && document.connectionId === connectionId && document.database === database && !this.isRunning(document.id))
-    const found = new Set<string>()
-    let expired = false
-    const reading = (async () => {
-      for (let next = 0; next < tabs.length && !expired; next += sessionRequests)
-        await Promise.all(tabs.slice(next, next + sessionRequests).map(async tab => { const state = await this.transactionState(tab.id); if (!expired && state.transactions > 0) found.add(tab.id) }))
-    })()
-    await Promise.race([reading, this.wait(stateBudgetMs)])
-    expired = true
-    return tabs.filter(tab => found.has(tab.id)).map(tab => tab.name)
+  tabNames(ids: readonly string[]): string[] {
+    const wanted = new Set(ids)
+    return this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && wanted.has(document.id)).map(document => document.name)
   }
   /** Whether the idle query's session may hold a transaction (read now, as transactionState does). */
   async mayHaveTransaction(id: string): Promise<boolean> {

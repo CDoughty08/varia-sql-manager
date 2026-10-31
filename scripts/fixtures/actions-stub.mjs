@@ -10,7 +10,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * its Stop arrives and then answers as the backend does once SQL Server cancelled it; a rename returns sp_rename's caution.
  * Database Properties describes AppData (two files, PRIMARY, one session) and master; Script returns `propertiesScript`.
  * Databases also lists Archive, which is offline: Delete Object warns that its files stay on disk, and deleting a database
- * drops it from the list. Delete Object on AppData lists two of its three sessions, one with an open transaction (D3d).
+ * drops it from the list, and greys Close existing connections there. Delete Object on AppData lists eight of its 23 sessions
+ * (long program and host names, four with an open transaction); with `variaStub.managed` set it is on Managed Instance (D3d).
  * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
  * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
@@ -30,7 +31,7 @@ export const offlineWarning = 'This database is offline. Deleting it removes it 
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -86,9 +87,11 @@ export function installActionsStub({ ipcMain }, { statics }) {
       server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 1
     }, elapsedMs: 1 })
   }
-  /** A database's sessions as the backend describes them: none in offline Archive; three in AppData, two listed, one with a transaction. */
-  const sessionsOf = name => name === 'Archive' ? { sessions: 0, withTransaction: 0, blockers: [], blockersTruncated: false }
-    : { sessions: 3, withTransaction: 1, blockers: [{ sessionId: 61, program: 'SQLCMD', host: 'BUILD-01', openTransaction: true }, { sessionId: 64, program: 'Report Builder', openTransaction: false }], blockersTruncated: true }
+  /** A database's sessions as the backend describes them: none in offline Archive, whose option is greyed; 23 in AppData, eight
+   *  listed with program and host names as long as the backend's 128-character clip allows, four with a transaction. */
+  const sessionsOf = name => name === 'Archive' ? { sessions: 0, withTransaction: 0, blockers: [], blockersTruncated: false, closeConnectionsNote: 'An offline database has no connections to close.' }
+    : { sessions: 23, withTransaction: 4, blockersTruncated: true, ...stub.managed ? { closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' } : {},
+      blockers: Array.from({ length: 8 }, (_, index) => ({ sessionId: 61 + index, program: `Report Builder ${index + 1} `.padEnd(128, 'p'), host: `BUILD-${index + 1}-`.padEnd(128, 'h'), openTransaction: index % 2 === 0 })) }
   function describe({ target }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }]
       : target.kind === 'database' && target.name === 'Archive' ? [{ text: offlineWarning, blocking: false }] : []

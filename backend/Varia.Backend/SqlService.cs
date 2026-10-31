@@ -615,6 +615,17 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             && ServerOf(session.ConnectionId) == server).Select(session => session.Spid!.Value).ToHashSet();
     }
 
+    /// <summary>The open query sessions on connections to the server by SPID, each with its session id (IActionHost.QueryTabs).</summary>
+    public IReadOnlyDictionary<int, string> QueryTabs(string connectionId)
+    {
+        var server = ServerOf(connectionId);
+        var tabs = new Dictionary<int, string>();
+        if (server is null) return tabs;
+        foreach (var (id, session) in sessions)
+            if (session.Spid is { } spid && session.Connection.State == System.Data.ConnectionState.Open && ServerOf(session.ConnectionId) == server) tabs[spid] = id;
+        return tabs;
+    }
+
     private static string Program(string application, string suffix)
     {
         var name = application + suffix;

@@ -7,7 +7,7 @@
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
 import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
-import type { ObjectRef } from '../../../shared/explorer/refs.ts'
+import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 
 /** A request without its ids. */
@@ -43,8 +43,26 @@ export interface ObjectDialogDefinition<Model, Draft> {
 
 /** Delete Object's checkboxes; they apply to databases only. */
 export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
-/** Whether Delete Object can close the database's connections: not for a snapshot, nor where the server cannot set SINGLE_USER (Managed Instance). */
+/** Whether Delete Object can close the database's connections: not for a snapshot, nor where the describe says why not (Managed Instance cannot set SINGLE_USER; an offline database has none). */
 export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
+const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** Varia's query tabs whose session holds an open transaction in the database, as `promptTabFacts` bounds them. */
+export interface TabTransactions { readonly tabsWithTransactions?: readonly string[]; readonly moreTabsWithTransactions?: number }
+/**
+ * What Close existing connections rolls back (A7): how many sessions hold an open transaction, and which of Varia's query
+ * windows. Where the option is greyed (Managed Instance, an offline database, a snapshot) it names no option the user cannot
+ * choose and only counts them.
+ */
+export function rollbackNote(model: DeleteTarget, tabs: TabTransactions): string {
+  const named = tabs.tabsWithTransactions ?? [], more = tabs.moreTabsWithTransactions ?? 0
+  return [
+    model.withTransaction ? `${count(model.withTransaction, 'session has an open transaction', 'sessions have open transactions')}${canCloseConnections(model) ? ', which Close existing connections rolls back' : ''}.` : '',
+    named.length ? `Varia's query windows with an open transaction: ${named.map(name => displayText(name)).join(', ')}${more > 0 ? ` and ${more.toLocaleString('en-US')} more` : ''}.` : ''
+  ].filter(Boolean).join(' ')
+}
+/** The ids of the notes that describe Close existing connections: why it is greyed, and what it rolls back. */
+export const closeDescription = (model: DeleteTarget, rollback: string): string | undefined =>
+  [model.closeConnectionsNote ? 'delete-object-close-note' : '', rollback ? 'delete-object-rollback-note' : ''].filter(Boolean).join(' ') || undefined
 export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, DeleteDraft> = {
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,

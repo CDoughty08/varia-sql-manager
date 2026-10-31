@@ -53,16 +53,18 @@ export interface DeleteTarget {
   /** More dependents exist than the 100 per kind listed. */
   readonly dependentsTruncated: boolean
   readonly isSnapshot?: boolean
-  /** Sessions in the database; absent without VIEW SERVER STATE. */
+  /** Sessions in the database or with a transaction in it; absent without VIEW SERVER STATE. */
   readonly sessions?: number
-  /** Sessions in the database with an open transaction, which Close existing connections rolls back; absent without VIEW SERVER STATE. */
+  /** Those with an open transaction, which Close existing connections rolls back; absent without VIEW SERVER STATE. */
   readonly withTransaction?: number
   /** The sessions a DROP waits for, at most `actionLimits.blockers` (never Varia's own pooled sessions); absent without VIEW SERVER STATE. */
   readonly blockers?: readonly DatabaseBlocker[]
   /** More sessions exist than `blockers` lists. */
   readonly blockersTruncated?: boolean
-  /** Why Close existing connections is unavailable on this server (Managed Instance cannot set SINGLE_USER). */
+  /** Why Close existing connections is unavailable (Managed Instance cannot set SINGLE_USER; an offline database has no connections). */
   readonly closeConnectionsNote?: string
+  /** Varia's query tabs (their session ids) whose session holds an open transaction in the database or while in it, whatever database the tab is in (A7). */
+  readonly transactionTabs?: readonly string[]
 }
 /** A session in a database that Delete Object lists; program and host are clipped to `actionLimits.blockerChars`. */
 export interface DatabaseBlocker {

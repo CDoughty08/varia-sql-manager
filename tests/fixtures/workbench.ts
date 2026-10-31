@@ -311,7 +311,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, focusEditor,
-    databaseGone: gone => databaseGone(gone), tabTransactions: (connectionId, database) => queries.openTransactionTabs(connectionId, database)
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })

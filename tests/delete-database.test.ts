@@ -7,7 +7,7 @@ import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionExecuteRes
 import type { ApiResult } from '../src/shared/contracts'
 import { displayText, type ObjectRef } from '../src/shared/explorer/refs'
 import { databaseGoneHandler, queryWindowsNotice } from '../src/renderer/src/dialogs/database-gone'
-import { deleteObjectDefinition } from '../src/renderer/src/dialogs/definitions'
+import { closeDescription, deleteObjectDefinition, rollbackNote } from '../src/renderer/src/dialogs/definitions'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { goneMessage } from '../src/renderer/src/properties/DatabasePropertiesService'
 import { databaseModel } from './fixtures/database-properties'
@@ -51,15 +51,39 @@ describe('Delete Object on a database (D3d)', () => {
     const managed = target({ closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' })
     expect(deleteObjectDefinition.request(appData, managed, { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: false, deleteHistory: true })
     expect(deleteObjectDefinition.request(appData, target(), { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: true })
+    // The backend greys it for an offline database too, which has no connections to close.
+    const offline = target({ closeConnectionsNote: 'An offline database has no connections to close.' })
+    expect(deleteObjectDefinition.request(appData, offline, { deleteHistory: true, closeConnections: true })).toMatchObject({ closeConnections: false })
+    const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
+    expect(service).toContain(`OfflineCloseNote = "${offline.closeConnectionsNote}"`)
   })
 
-  it('names Varia\'s query tabs on the database whose session holds an open transaction, as a prompt bounds them (A7)', async () => {
-    const fixture = workbench(target({ sessions: 12, withTransaction: 2 }))
-    const names = Array.from({ length: promptLimits.tabs + 2 }, (_, index) => `Query ${index + 1}.sql`)
-    for (const name of names) fixture.sessionStates.set(fixture.documents.newQuery('', name, 'c1', 'AppData').id, 1)
-    // Idle, but no transaction; and another database's tab with one.
-    fixture.sessionStates.set(fixture.documents.newQuery('', 'Clean.sql', 'c1', 'AppData').id, 0)
-    fixture.sessionStates.set(fixture.documents.newQuery('', 'Elsewhere.sql', 'c1', 'Sales').id, 3)
+  it('says what Close existing connections rolls back under it, and only counts the transactions where it is greyed (A7)', () => {
+    const tabs = { tabsWithTransactions: ['Load.sql'], moreTabsWithTransactions: 1 }
+    const busy = target({ withTransaction: 2 })
+    expect(rollbackNote(busy, tabs)).toBe('2 sessions have open transactions, which Close existing connections rolls back. Varia\'s query windows with an open transaction: Load.sql and 1 more.')
+    expect(closeDescription(busy, rollbackNote(busy, tabs))).toBe('delete-object-rollback-note')
+    // Managed Instance, an offline database and a snapshot grey the option: the note names no option the user cannot choose.
+    for (const greyed of [target({ withTransaction: 1, closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' }), target({ withTransaction: 1, closeConnectionsNote: 'An offline database has no connections to close.' }),
+      target({ withTransaction: 1, isSnapshot: true })])
+      expect(rollbackNote(greyed, {})).toBe('1 session has an open transaction.')
+    const managed = target({ withTransaction: 4, closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' })
+    expect(closeDescription(managed, rollbackNote(managed, {}))).toBe('delete-object-close-note delete-object-rollback-note')
+    expect(closeDescription(target(), rollbackNote(target(), {}))).toBeUndefined()
+    // A greyed option's label greys with it, and with GrayText in forced colours.
+    const css = readFileSync(new URL('../src/renderer/src/styles.css', import.meta.url), 'utf8')
+    expect(css).toContain('.object-dialog-options .checkbox-label:has(input:disabled) { color: var(--varia-disabledForeground); }')
+    expect(css).toContain('@media (forced-colors: active) { .object-dialog-options .checkbox-label:has(input:disabled) { color: GrayText; } }')
+  })
+
+  it('names the query tabs whose session the describe found holding a transaction in the database, whatever database each is in (A7)', async () => {
+    const fixture = workbench()
+    const names = Array.from({ length: promptLimits.tabs + 1 }, (_, index) => `Query ${index + 1}.sql`)
+    const holding = names.map(name => fixture.documents.newQuery('', name, 'c1', 'AppData').id)
+    // A tab in master whose transaction wrote to AppData is named; a tab on AppData without one is not.
+    holding.push(fixture.documents.newQuery('', 'FromMaster.sql', 'c1', 'master').id)
+    fixture.documents.newQuery('', 'Clean.sql', 'c1', 'AppData')
+    fixture.api.describeObject.mockResolvedValueOnce({ ok: true, value: { deleteTarget: target({ sessions: 12, withTransaction: 10, transactionTabs: [...holding, 'closed-tab'] }), elapsedMs: 1 } })
     fixture.dialogs.open('deleteObject', node())
     await settled()
     expect(fixture.dialogs.current).toMatchObject({ phase: 'ready', tabsWithTransactions: names.slice(0, promptLimits.tabs), moreTabsWithTransactions: 2 })

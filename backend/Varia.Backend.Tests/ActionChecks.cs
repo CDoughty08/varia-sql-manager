@@ -71,7 +71,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 5 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 6 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -151,6 +151,10 @@ internal static class ActionChecks
         check(ActionService.Plan(Delete(database, close: true, history: true), database, new(true, 0)).Select(plan => plan.Template)
                 .SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
             "an offline database has no sessions to close: its Delete runs no SINGLE_USER and nothing to restore");
+        check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
+            && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
+            && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,
+            "Delete Object greys Close existing connections with a reason for an offline database and on Managed Instance (a snapshot greys it by itself), and offers it elsewhere");
         var view = new ObjectRefDto("view", "AppData", "dbo", "V");
         check(ActionService.Plan(Rename(view, "W"), view).Single() is { Template: ActionTemplate.RenameObject, Database: "AppData" } renamed && renamed.Names.SequenceEqual(["dbo", "V", "W"])
             && ActionService.Plan(Rename(database, "B"), database).Single() is { Template: ActionTemplate.RenameDatabase, Database: "master" }

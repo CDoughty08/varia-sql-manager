@@ -1,28 +1,24 @@
+import { useState } from 'react'
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../../core/WorkbenchContext'
-import type { DatabaseBlocker, DeleteTarget } from '../../../../shared/actions/schema.ts'
+import type { DeleteTarget } from '../../../../shared/actions/schema.ts'
 import { queryWindowsOn } from '../database-gone'
-import { canCloseConnections, type DeleteDraft } from '../definitions'
+import { canCloseConnections, closeDescription, rollbackNote, type DeleteDraft } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
 import Icon from '../../Icon'
 
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
-const list = (names: readonly string[], more = 0) => names.map(name => displayText(name)).join(', ') + (more > 0 ? ` and ${more.toLocaleString('en-US')} more` : '')
-/** One session in the list: "Session 53: SQLCMD on HOST, open transaction". */
-const blockerText = (blocker: DatabaseBlocker) => {
-  const program = blocker.program ? displayText(blocker.program) : 'Unknown program', host = blocker.host ? ` on ${displayText(blocker.host)}` : ''
-  return `Session ${blocker.sessionId}: ${program}${host}${blocker.openTransaction ? ', open transaction' : ''}`
-}
 
 /**
  * Delete Object's General page, as SSMS lays it out: the "Object to be deleted" grid (Object Name, Object Type, Owner,
- * Status, Message), what blocks the DROP, and for a database the sessions using it, its two options and the query windows
- * that use it. Close existing connections says how many sessions it rolls back a transaction in, and names Varia's own query
- * tabs with one (A7); Managed Instance greys it with SQL Server's reason.
+ * Status, Message), what blocks the DROP, and for a database the sessions using it (a disclosure whose grid scrolls within
+ * its own height, so the options below stay in view), its two options and the query windows that use it. Close existing
+ * connections is described by its reason when greyed and by what it rolls back (A7).
  */
 export default function DeleteObjectPage({ open, editable }: PageProps) {
   const { dialogs, documents } = useWorkbench()
   const { documents: tabs } = useServiceSnapshot(documents)
+  const [sessionsOpen, setSessionsOpen] = useState(true)
   const model = open.model as DeleteTarget | undefined, draft = open.draft as DeleteDraft | undefined
   const database = open.target.kind === 'database'
   const windows = database && open.target.name !== undefined ? queryWindowsOn(tabs, open.connectionId, open.target.name) : 0
@@ -31,12 +27,12 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
   const message = open.phase === 'failed' ? failed?.message ?? open.error?.message ?? '' : ''
   const closable = !!model && canCloseConnections(model)
   const blockers = database ? model?.blockers ?? [] : []
-  const sessionNotes = database && model ? [
+  const listed = model?.blockersTruncated && (model.sessions ?? 0) > blockers.length ? model.sessions! : blockers.length
+  const rollback = database && model ? rollbackNote(model, open) : ''
+  const usage = database && model ? [
     windows > 0 ? `${count(windows, 'query window uses', 'query windows use')} this database.` : '',
-    model.sessions ? `${count(model.sessions, 'session is', 'sessions are')} connected to it.` : '',
-    model.withTransaction ? `${count(model.withTransaction, 'session has an open transaction', 'sessions have open transactions')}, which Close existing connections rolls back.` : '',
-    open.tabsWithTransactions?.length ? `Varia's query windows with an open transaction: ${list(open.tabsWithTransactions, open.moreTabsWithTransactions)}.` : ''
-  ].filter(Boolean) : []
+    model.sessions ? `${count(model.sessions, 'session is', 'sessions are')} connected to it.` : ''
+  ].filter(Boolean).join(' ') : ''
   return <div className="object-dialog-delete">
     <div className="object-dialog-caption" id="delete-object-grid">Object to be deleted</div>
     <table className="object-dialog-grid" role="grid" aria-labelledby="delete-object-grid">
@@ -49,18 +45,28 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
       {model.warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
       {model.dependentsTruncated && <li><Icon name="warning" /><span>More objects depend on it than are listed.</span></li>}
     </ul>}
-    {blockers.length > 0 && <ul className="object-dialog-sessions" aria-label="Sessions using the database">
-      {blockers.map(blocker => <li key={blocker.sessionId}><bdi>{blockerText(blocker)}</bdi></li>)}
-      {model?.blockersTruncated && <li>More sessions are connected than are listed.</li>}
-    </ul>}
+    {model && blockers.length > 0 && <section className="object-dialog-sessions" aria-labelledby="delete-object-sessions-toggle">
+      <button type="button" id="delete-object-sessions-toggle" className="object-dialog-disclosure" aria-expanded={sessionsOpen} aria-controls="delete-object-sessions"
+        onClick={() => setSessionsOpen(!sessionsOpen)}><Icon name={sessionsOpen ? 'chevron-down' : 'chevron-right'} /><span>Sessions using <bdi>{displayText(model.name)}</bdi> ({listed.toLocaleString('en-US')})</span></button>
+      {sessionsOpen && <div className="object-dialog-sessions-body" id="delete-object-sessions">
+        <table className="object-dialog-grid" aria-label="Sessions using the database">
+          <thead><tr><th scope="col">Session</th><th scope="col">Program</th><th scope="col">Host</th><th scope="col">Open transaction</th></tr></thead>
+          <tbody>{blockers.map(blocker => {
+            const program = blocker.program ? displayText(blocker.program) : '', host = blocker.host ? displayText(blocker.host) : ''
+            return <tr key={blocker.sessionId}><td>{blocker.sessionId}</td><td title={program}><bdi>{program}</bdi></td><td title={host}><bdi>{host}</bdi></td><td>{blocker.openTransaction ? 'Yes' : ''}</td></tr>
+          })}</tbody>
+        </table>
+        {model.blockersTruncated && <p className="field-note">More sessions are connected than are listed.</p>}
+      </div>}
+    </section>}
     {database && model && draft && <fieldset className="object-dialog-options" disabled={!editable}>
       <label className="checkbox-label"><input type="checkbox" checked={draft.deleteHistory && !model.isSnapshot} disabled={!!model.isSnapshot}
         onChange={event => dialogs.updateDraft({ deleteHistory: event.target.checked })} />Delete backup and restore history information for databases</label>
-      <label className="checkbox-label"><input type="checkbox" checked={draft.closeConnections && closable} disabled={!closable}
-        aria-describedby={model.closeConnectionsNote ? 'delete-object-close-note' : undefined}
+      <label className="checkbox-label"><input type="checkbox" checked={draft.closeConnections && closable} disabled={!closable} aria-describedby={closeDescription(model, rollback)}
         onChange={event => dialogs.updateDraft({ closeConnections: event.target.checked })} />Close existing connections</label>
       {model.closeConnectionsNote && <p className="field-note" id="delete-object-close-note">{model.closeConnectionsNote}</p>}
+      {rollback && <p className="field-note" id="delete-object-rollback-note">{rollback}</p>}
     </fieldset>}
-    {sessionNotes.length > 0 && <p className="field-note">{sessionNotes.join(' ')}</p>}
+    {usage && <p className="field-note">{usage}</p>}
   </div>
 }

@@ -334,10 +334,11 @@ cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: 
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?, warnings: { text,
 blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?, host?,
-openTransaction }[], blockersTruncated?, closeConnectionsNote? }`: for a database, the session count, those with an open
-transaction and the sessions listed (at most 8, never the backend's own pooled sessions; program and host at most 128
-characters) need VIEW SERVER STATE, and `closeConnectionsNote` says why Close existing connections is unavailable (Managed
-Instance).
+openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs? }`: for a database, the session count
+(sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
+most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
+session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
+`closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database).
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
 serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages

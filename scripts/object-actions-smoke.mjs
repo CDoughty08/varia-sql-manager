@@ -6,7 +6,7 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineWarning, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -595,6 +595,13 @@ try {
   await expect(objectDialogWarnings(dialog())).toHaveText([offlineWarning])
   await expect(dialog().getByText('1 query window uses this database.', { exact: true })).toBeVisible()
   await expect(objectDialogSessions(dialog())).toHaveCount(0)
+  // An offline database has no connections to close: the option is greyed with its reason, and its label greys with it.
+  const closeOption = () => dialog().getByLabel('Close existing connections', { exact: true })
+  const historyOption = () => dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })
+  const labelColour = option => option.evaluate(input => getComputedStyle(input.closest('label')).color)
+  await expect(closeOption()).toBeDisabled()
+  await expect(closeOption()).toHaveAccessibleDescription('An offline database has no connections to close.')
+  expect(await labelColour(closeOption())).not.toBe(await labelColour(historyOption()))
   await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-offline-dark.png') })
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
@@ -614,11 +621,38 @@ try {
   // how many hold a transaction that closing them rolls back, then a lost server leaves only Close.
   await databaseItem(appData, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
-  await expect(dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })).toBeChecked()
-  await expect(dialog().getByLabel('Close existing connections', { exact: true })).not.toBeChecked()
-  await expect(objectDialogSessions(dialog())).toHaveText(['Session 61: SQLCMD on BUILD-01, open transaction', 'Session 64: Report Builder', 'More sessions are connected than are listed.'])
-  await expect(dialog().getByText('1 session has an open transaction, which Close existing connections rolls back.', { exact: false })).toBeVisible()
+  await expect(historyOption()).toBeChecked()
+  await expect(closeOption()).not.toBeChecked()
+  // Eight sessions with long program and host names sit in a headed disclosure whose grid scrolls by itself, so the options
+  // and what closing rolls back stay in view; the rollback note describes the option it is about.
+  const rollback = '4 sessions have open transactions, which Close existing connections rolls back.'
+  await expect(objectDialogSessionsToggle(dialog())).toHaveText('Sessions using AppData (23)')
+  await expect(objectDialogSessionsToggle(dialog())).toHaveAttribute('aria-expanded', 'true')
+  await expect(objectDialogSessions(dialog())).toHaveCount(8)
+  await expect(objectDialogSessions(dialog()).first().getByRole('cell')).toHaveText(['61', /^Report Builder 1 p+$/, /^BUILD-1-h+$/, 'Yes'])
+  await expect(dialog().getByText('More sessions are connected than are listed.', { exact: true })).toBeVisible()
+  await expect(closeOption()).toHaveAccessibleDescription(rollback)
+  /** Whether the option's box and the note under it show inside the page without scrolling it. */
+  const optionsInView = () => objectDialogPage(dialog()).evaluate(area => {
+    const shown = area.getBoundingClientRect(), close = [...area.querySelectorAll('label')].find(label => label.textContent === 'Close existing connections')
+    const notes = [close, ...[...area.querySelectorAll('[id^="delete-object-"][id$="-note"]')]].map(element => element.getBoundingClientRect())
+    return area.scrollTop === 0 && notes.length > 1 && notes.every(rect => rect.top >= shown.top && rect.bottom <= shown.bottom)
+  })
+  await expect.poll(optionsInView, 'Close existing connections and its notes show without scrolling the page').toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-database-dark.png') })
+  await objectDialogSessionsToggle(dialog()).click()
+  await expect(objectDialogSessions(dialog())).toHaveCount(0)
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // On Managed Instance the option is greyed with its reason, and the note only counts the transactions it cannot roll back.
+  await application.evaluate(() => { globalThis.variaStub.managed = true })
+  await databaseItem(appData, 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(closeOption()).toBeDisabled()
+  await expect(closeOption()).toHaveAccessibleDescription('Managed Instance cannot set SINGLE_USER. 4 sessions have open transactions.')
+  expect(await labelColour(closeOption())).not.toBe(await labelColour(historyOption()))
+  await expect.poll(optionsInView, 'on Managed Instance too').toBe(true)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-database-managed-dark.png') })
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('varia:backend-state', {
     status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 60000
   }))

@@ -152,9 +152,9 @@ internal static class ActionLiveChecks
             var gone = (await Exec("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(offline) + ";")).Scalar == "0";
             var left = new List<bool>();
             foreach (var file in files) left.Add(await Exists(file));
-            check(described.DeleteTarget is { } target && target.Warnings.Contains(new ActionWarningDto(ActionService.OfflineWarning, false)) && Done(deleted)
+            check(described.DeleteTarget is { CloseConnectionsNote: ActionService.OfflineCloseNote } target && target.Warnings.Contains(new ActionWarningDto(ActionService.OfflineWarning, false)) && Done(deleted)
                 && deleted.Steps.Select(step => step.Title).SequenceEqual(["Drop the database", "Delete backup and restore history"]) && gone && files.Count >= 2 && left.All(stays => stays),
-                "an offline database's Delete warns that its files stay, runs no SINGLE_USER, drops it and leaves its " + files.Count + " files on disk (" + string.Join(", ", left) + ")");
+                "an offline database's Delete warns that its files stay, greys Close existing connections, runs no SINGLE_USER, drops it and leaves its " + files.Count + " files on disk (" + string.Join(", ", left) + ")");
         }
         finally
         {
@@ -187,6 +187,21 @@ internal static class ActionLiveChecks
                 + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, " + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.Error?.Message + ")");
         }
         finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(tab), json), json); }
+        // A query tab in master whose transaction wrote to the database: SINGLE_USER WITH ROLLBACK IMMEDIATE rolls it back too, so
+        // it is counted, listed with its transaction and named as a tab, though the session's own database is master.
+        await Exec("CREATE TABLE dbo.held (id int);", compensated);
+        var outside = Guid.NewGuid().ToString();
+        try
+        {
+            var spid = (await Sql("BEGIN TRANSACTION; INSERT INTO " + Bracket(compensated) + ".dbo.held VALUES (1); SELECT @@SPID;", "master", outside)).Scalar;
+            var described = await client.Describe(database);
+            var listed = described.DeleteTarget?.Blockers?.FirstOrDefault(blocker => blocker.SessionId.ToString(System.Globalization.CultureInfo.InvariantCulture) == spid);
+            check(described.DeleteTarget is { Sessions: >= 1, WithTransaction: >= 1 } target && listed is { OpenTransaction: true } && target.TransactionTabs is { } named && named.Contains(outside),
+                "Delete Object counts, lists and names a query tab in master holding a transaction in the database (session " + spid + "; listed "
+                + string.Join(", ", described.DeleteTarget?.Blockers?.Select(blocker => blocker.SessionId) ?? []) + "; " + described.DeleteTarget?.Sessions + " sessions, "
+                + described.DeleteTarget?.WithTransaction + " with a transaction; " + described.DeleteTarget?.TransactionTabs?.Count + " tabs named; " + described.Error?.Message + ")");
+        }
+        finally { await service.DispatchAsync("query.session.close", JsonSerializer.SerializeToElement(new SessionArgs(outside), json), json); }
         var multi = await client.Delete(database, close: true);
         var multiAccess = await Access(compensated);
         check(multi is { Error.Code: "DEPENDENTS" } && multi.Steps.Select(step => (step.Status, step.Title, step.Compensates)).SequenceEqual([("done", "Close existing connections", (bool?)null),

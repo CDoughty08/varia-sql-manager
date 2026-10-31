@@ -214,7 +214,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
-    databaseGone: gone => databaseGone(gone), tabTransactions: (connectionId, database) => queries.openTransactionTabs(connectionId, database)
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
