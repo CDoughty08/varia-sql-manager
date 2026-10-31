@@ -10,6 +10,7 @@ import {
   rootFolder, scopeFields, serverEngineOf, serverEngines, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
+import { loginSubtypes } from '../src/shared/actions/logins'
 import { iconSpec, isIconId } from '../src/shared/icons'
 
 const unique = (values: readonly unknown[]) => new Set(values).size === values.length
@@ -303,7 +304,7 @@ describe('generated catalogue files', () => {
     await expect(explorerCatalogJson()).toMatchFileSnapshot('../backend/Varia.Backend/Explorer/explorer-catalog.json')
   })
   it('exports served folders and every kind, with sorted keys and defaults spelled out', () => {
-    const catalog = JSON.parse(explorerCatalogJson()) as { version: number; folders: { id: string; engines: string[]; filter: string[] }[]; kinds: { kind: string; parents: string[]; subtypes: string[]; rows: string[]; maxName: number; list?: string }[]; queries: string[]; scopes: object; cloudEngineEditions: number[] }
+    const catalog = JSON.parse(explorerCatalogJson()) as { version: number; folders: { id: string; engines: string[]; filter: string[] }[]; kinds: { kind: string; parents: string[]; subtypes: string[]; rows: string[]; maxName: number; list?: string }[]; queries: string[]; scopes: object; cloudEngineEditions: number[]; managedInstanceEngineEditions: number[] }
     const sorted = (value: unknown, path: string): void => {
       if (Array.isArray(value)) { value.forEach((item, index) => sorted(item, `${path}[${index}]`)); return }
       if (!value || typeof value !== 'object') return
@@ -330,7 +331,8 @@ describe('generated catalogue files', () => {
       expect((folder(id).since ?? 12) <= profile.band && folder(id).engines.includes(profile.engine), `${id} ${profile.engine} ${profile.band}`).toBe(folderServed(id, profile))
     }
     expect(catalog.kinds.find(kind => kind.kind === 'column')?.parents).toEqual(['table', 'view', 'tableType', 'function'])
-    expect(catalog.kinds.find(kind => kind.kind === 'login')?.subtypes).toEqual([])
+    expect(catalog.kinds.find(kind => kind.kind === 'login')?.subtypes).toEqual([...loginSubtypes])
+    expect(catalog.managedInstanceEngineEditions).toEqual([8])
     for (const kind of catalog.kinds) { expect(kind.maxName, kind.kind).toBe(maxNameOf(kindSpecs[kind.kind as NodeKind])); expect(kind.rows, kind.kind).toEqual(kindSpecs[kind.kind as NodeKind].rows ?? []) }
     const json = explorerCatalogJson()
     for (const later of laterFolders) expect(json.includes(`"${later.label}"`), later.label).toBe(false)

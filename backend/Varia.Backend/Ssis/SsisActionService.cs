@@ -369,7 +369,7 @@ internal sealed class SsisActionService : IDisposable
                 // Mapped before explain reads again, while the connection's state is still the step's own.
                 var mapped = SsisErrors.FromSql(catalog, sql, connection, Options.CatalogDatabase, "the SSIS Catalog", doing);
                 var value = await explain(sql) ?? mapped;
-                steps.Add(new("failed", value.Message));
+                steps.Add(new("failed", title, value.Message));
                 var done = Completed(steps, "the failure");
                 failure = done.Length == 0 ? value : Error(value.Code, value.Message + done);
             }
@@ -437,7 +437,7 @@ internal sealed class SsisActionService : IDisposable
             catch (SqlException sql)
             {
                 var value = Mapped(sql, "master", "the server", "enable CLR integration");
-                steps.Add(new("failed", value.Message));
+                steps.Add(new("failed", titles[0], value.Message));
                 return new([.. steps, .. decided.Steps.Skip(1).Select(title => new ActionStepDto("skipped", title))], 0, value);
             }
         }
@@ -541,7 +541,7 @@ internal sealed class SsisActionService : IDisposable
                 var exists = sql.Number == 27135;
                 var value = exists ? Error("CATALOG_EXISTS", "There already exists a catalog (" + name + "), and only one catalog is supported on a server.")
                     : Mapped(sql, name, "the SSIS Catalog", "create the SSIS Catalog");
-                steps.Add(new("failed", value.Message));
+                steps.Add(new("failed", title, value.Message));
                 steps.AddRange(plan.Skip(index + 1).Select(item => new ActionStepDto("skipped", item.Title)));
                 // A refused restore made nothing; a failed one may have left the database restoring, which only this restore made.
                 if (exists) return new(steps, 0, value);
@@ -606,7 +606,7 @@ internal sealed class SsisActionService : IDisposable
 
     private static string Completed(List<ActionStepDto> steps, string before)
     {
-        var done = steps.Where(step => step.Status == "done").Select(step => step.Message!).ToList();
+        var done = steps.Where(step => step.Status == "done").Select(step => step.Title).ToList();
         return done.Count == 0 ? "" : " Completed before " + before + ": " + string.Join(", ", done) + ".";
     }
 

@@ -156,21 +156,10 @@ internal sealed partial class ActionService
         var (filegroup, refused, _) = await PlanDesignerAsync(connection, plan, target.Name!, band, execute: true, token);
         if (filegroup is null) return new([], [], 0, refused);
         var design = DesignerSql.DesignJson(designer, plan, filegroup);
-        var transaction = (SqlTransaction)await connection.BeginTransactionAsync(token);
-        var committed = false;
-        var work = DesignerSql.Statements(plan, filegroup).Select(statement => (StepTitle(statement.Part),
-            (Func<Task>)(() => RunBuilderAsync(connection, transaction, statement.Part, target.Name!, design, dryRun: false, token)))).ToList();
-        // Stop has no say once the commit is sent: its outcome is the server's.
-        work.Add(("Commit", async () => { await transaction.CommitAsync(CancellationToken.None); committed = true; }));
-        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token);
-        if (!committed)
-        {
-            try { await transaction.RollbackAsync(CancellationToken.None).WaitAsync(Options.StopGrace, CancellationToken.None); }
-            // XACT_ABORT or the attention may have rolled it back already; otherwise closing the session does.
-            catch (Exception) { try { await connection.CloseAsync(); } catch (Exception) { } }
-            if (failure is not null && failure.Code != "CONNECTION_LOST") failure = failure with { Message = ScriptingErrors.Clip(failure.Message + " " + RolledBack, ActionErrors.MaxMessage) };
-        }
-        await transaction.DisposeAsync();
+        // Runner v2's transaction mode: the builders, then the commit; a failure or Stop rolls back.
+        var work = DesignerSql.Statements(plan, filegroup).Select(statement => new RunStep(StepTitle(statement.Part),
+            context => RunBuilderAsync(connection, context.Transaction, statement.Part, target.Name!, design, dryRun: false, context.Token))).ToList();
+        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token, CleanupBudget(args.Action), transaction: true, rolledBack: RolledBack);
         return new(steps, messages.Collected(), 0, failure);
     }
 

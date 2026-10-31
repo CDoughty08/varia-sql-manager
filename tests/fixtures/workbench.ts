@@ -261,12 +261,12 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
     scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
-    executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } })),
+    executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
     catalogSetupSsis: vi.fn<VariaApi['catalogSetupSsis']>(async () => ({ ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: false,
       backupFile: 'C:\\SSIS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf' }, elapsedMs: 1 } })),
-    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', message: 'Restore the catalog database' }], elapsedMs: 1 } })),
+    executeSsis: vi.fn<VariaApi['executeSsis']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Restore the catalog database' }], elapsedMs: 1 } })),
     // No catalog unless a test says otherwise.
     describeSsis: vi.fn<VariaApi['describeSsis']>(async () => ({ ok: true, value: { elapsedMs: 1, error: { code: 'CATALOG_MISSING', message: 'The SSIS Catalog does not exist on this server.', retryable: false } } })),
     cancelSsis: vi.fn<VariaApi['cancelSsis']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),

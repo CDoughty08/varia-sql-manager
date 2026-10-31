@@ -221,7 +221,7 @@ internal static class SsisCreateLiveChecks
         }
         SqlConnection Direct() => new(new SqlConnectionStringBuilder(ConnectionSettings.Build(live(db)).ConnectionString) { Pooling = false, InitialCatalog = "master" }.ConnectionString);
         var password = HostilePassword();
-        string[] Statuses(SsisExecuteResult result) => [.. result.Steps.Select(step => step.Status + " " + step.Message)];
+        string[] Statuses(SsisExecuteResult result) => [.. result.Steps.Select(step => step.Status + " " + (step.Status == "failed" ? step.Message : step.Title))];
         // A check that throws (a lost session, a hook's failure) is a named failure (a failed check throws already), and the database
         // it left is dropped.
         async Task Guarded(string name, Func<Task> body)
@@ -333,7 +333,7 @@ internal static class SsisCreateLiveChecks
             var failed = await CreateAsync(service, info.Id, password);
             check(failed.Error is { Code: "SQL_ERROR" } error && error.Message.Contains("Varia removed what Create Catalog had created, so the catalog does not exist.", StringComparison.Ordinal)
                 && !error.Message.Contains(password[..8], StringComparison.Ordinal) && failed.Steps.Select(step => step.Status).SequenceEqual(["done", "failed", "done"])
-                && failed.Steps[^1].Message == SsisCatalog.Current.CleanupStep && await State() is null,
+                && failed.Steps[^1].Title == SsisCatalog.Current.CleanupStep && await State() is null,
                 "a step that fails after the restore removes the database it restored, says so, and never echoes the password: " + Dump(failed));
         });
 
@@ -550,8 +550,8 @@ internal static class SsisCreateLiveChecks
         }
         void Saw(SsisExecuteResult result)
         {
-            if (result.Steps is [{ Status: "done" } first, ..] && first.Message == Titles[0]) clrChanged = true;
-            if (result.Steps.Any(step => step.Message == Titles[3] && step.Status is "done" or "failed" or "cancelled")) serverObjects = true;
+            if (result.Steps is [{ Status: "done" } first, ..] && first.Title == Titles[0]) clrChanged = true;
+            if (result.Steps.Any(step => step.Title == Titles[3] && step.Status is "done" or "failed" or "cancelled")) serverObjects = true;
         }
         async Task Drop()
         {

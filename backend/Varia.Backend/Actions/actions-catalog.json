@@ -1,9 +1,9 @@
 {
   "actions": [
-    {"action":"selectTop","class":"query","title":"Select Top 1000 Rows"},
-    {"action":"rename","class":"inline","title":"Rename"},
-    {"action":"delete","class":"dialog","title":"Delete"},
-    {"action":"properties","class":"dialog","systemObjects":true,"title":"Properties"}
+    {"action":"selectTop","class":"query","cleanupMs":10000,"engines":["box","managedInstance","cloud"],"title":"Select Top 1000 Rows"},
+    {"action":"rename","class":"inline","cleanupMs":10000,"engines":["box","managedInstance"],"title":"Rename"},
+    {"action":"delete","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"title":"Delete"},
+    {"action":"properties","class":"dialog","cleanupMs":10000,"engines":["box","managedInstance"],"systemObjects":true,"title":"Properties"}
   ],
   "compatibilityLevels": [100,110,120,130,140,150,160,170],
   "databaseOptions": [
@@ -75,7 +75,8 @@
     {"code":"AUTH_UNSUPPORTED","retryable":true},
     {"code":"AUTH_ENTRA","retryable":true}
   ],
-  "limits": {"cancelIds":16,"collations":8192,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"filegroups":256,"files":1024,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"logins":1024,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":1000000,"scriptMs":25000,"statements":512,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
+  "limits": {"cancelIds":16,"cleanupMs":10000,"collations":8192,"dependents":100,"describeMs":40000,"executePerConnection":1,"executeTotal":2,"filegroups":256,"files":1024,"gateWaitMs":30000,"infoMessageChars":512,"infoMessages":32,"logins":1024,"messageChars":2048,"newName":128,"readLockTimeoutMs":10000,"readPerConnection":2,"readTotal":4,"registered":128,"scriptChars":1000000,"scriptMs":25000,"statements":512,"statusDelayMs":300,"stopGraceMs":10000,"tombstoneMs":60000,"tombstones":64},
+  "logins": {"limits":{"asymmetricKeys":1024,"certificates":1024,"credentials":16,"databases":4096,"languages":64,"mappedUsers":100,"mappings":256,"ownedDatabases":100,"password":128,"permissions":512,"roles":256,"scanDatabases":4096,"schemas":1024,"serverRoles":256,"serviceNames":4,"sidHex":172,"stepDetail":128,"stepTitle":64},"messages":{"alterAnyLogin":"You do not have permission to change logins (ALTER ANY LOGIN).","controlServer":"The login is a member of sysadmin: changing it needs CONTROL SERVER.","externalRename":"A Microsoft Entra login cannot be renamed.","notOffered":"This kind of login does not offer this action.","own":"This is the login this connection uses. Connect with another login to change it.","saDelete":"The sa login cannot be deleted.","system":"This login belongs to SQL Server and cannot be changed.","windowsGroupDisable":"A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status."},"ownRefuses":["disable","rename","delete"],"rules":[{"delete":"greyed","disable":"allowed","enable":"allowed","greyed":{"delete":"saDelete"},"rename":"allowed","subtype":"sa","unlock":"allowed"},{"delete":"greyed","disable":"greyed","enable":"greyed","greyed":{"delete":"system","disable":"system","enable":"system","rename":"system","unlock":"system"},"rename":"greyed","subtype":"system","unlock":"greyed"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{},"rename":"allowed","subtype":"sql","unlock":"allowed"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{},"rename":"allowed","subtype":"windowsUser","unlock":"hidden"},{"delete":"allowed","disable":"greyed","enable":"hidden","greyed":{"disable":"windowsGroupDisable"},"rename":"allowed","subtype":"windowsGroup","unlock":"hidden"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{},"rename":"allowed","subtype":"certificateMapped","unlock":"hidden"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{},"rename":"allowed","subtype":"asymmetricKeyMapped","unlock":"hidden"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{"rename":"externalRename"},"rename":"greyed","subtype":"externalUser","unlock":"hidden"},{"delete":"allowed","disable":"allowed","enable":"allowed","greyed":{"rename":"externalRename"},"rename":"greyed","subtype":"externalGroup","unlock":"hidden"}],"saPrincipalId":1,"typeSubtypes":{"C":"certificateMapped","E":"externalUser","G":"windowsGroup","K":"asymmetricKeyMapped","S":"sql","U":"windowsUser","X":"externalGroup"}},
   "ownerNotOn": ["master","model","tempdb"],
   "rows": [
     {"disabled":[],"enabled":["rename","delete","properties"],"kind":"database","subtype":""},
@@ -121,5 +122,5 @@
     {"control":"choice","key":"queryOptimizerFixes","label":"Query Optimizer Fixes","refusedReadOnly":true,"settable":true,"since":13,"smoOrder":56,"sql":{"kind":"scoped","name":"QUERY_OPTIMIZER_HOTFIXES","secondary":false,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["ON","OFF"]},
     {"control":"choice","key":"queryOptimizerFixesForSecondary","label":"Query Optimizer Fixes for Secondary","refusedReadOnly":true,"settable":true,"since":13,"smoOrder":57,"sql":{"kind":"scoped","name":"QUERY_OPTIMIZER_HOTFIXES","secondary":true,"tokens":{"OFF":"Off","ON":"On","PRIMARY":"Primary"}},"tokens":["PRIMARY","ON","OFF"]}
   ],
-  "version": 2
+  "version": 3
 }

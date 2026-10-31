@@ -153,8 +153,8 @@ internal static class SsisCreate
 
     /// <summary>The removal's step: done, or failed with what failed, clipped as every SSIS message is (messageChars).</summary>
     public static ActionStepDto CleanupStep(SsisCatalog catalog, string? failure) => failure is null
-        ? new("done", catalog.CleanupStep)
-        : new("failed", SsisErrors.Create(catalog, "SQL_ERROR", catalog.CleanupStep + ": " + failure).Message);
+        ? new("done", catalog.CleanupStep, Compensates: true)
+        : new("failed", catalog.CleanupStep, SsisErrors.Create(catalog, "SQL_ERROR", catalog.CleanupStep + ": " + failure).Message, Compensates: true);
 
     /// <summary>sp_procoption's choice: on only when the request checked "Enable automatic execution of Integration Services stored
     /// procedure at SQL Server startup".</summary>

@@ -194,7 +194,9 @@ describe('object action catalogue', () => {
     expect(offeredOnEngine(['box', 'managedInstance'], undefined)).toBe(true)
     expect(offeredOnEngine(['box', 'managedInstance'], 'managedInstance')).toBe(true)
     expect(offeredOnEngine(['box'], 'cloud')).toBe(false)
-    for (const engine of ['box', 'managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
+    for (const engine of ['box', 'managedInstance'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
+    // The catalogue's engines (W5-0b): Azure SQL Database keeps Select Top 1000 Rows only.
+    expect(actionMenuState({ kind: 'table', engine: 'cloud' })).toEqual({ selectTop: 'enabled', rename: '', delete: '', properties: '' })
   })
   it('composes the menu state from the status overlay, the database rules and the engine gate, in that order', () => {
     // As D1b and D3a will declare them: Delete for box servers only, an overlay for unavailable databases, and a rule.
