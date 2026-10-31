@@ -99,7 +99,8 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   state(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> { return actionMenuState(target) }
   /** Whether `action` is enabled for the node now: its kind and subtype offer it, and its server is live. */
   canRun(action: ObjectAction, node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
-    return !!node && !node.lost && node.ref.type === 'object' && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
+    // A folder offers only the actions declared on it (the Databases folder's Restore Database…); actionMenuState knows which.
+    return !!node && !node.lost && (node.ref.type === 'object' || (node.ref.type === 'folder' && !!node.folder)) && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
   }
 
   /** SSMS's Select Top N Rows: the columns, one per line, in a new unmarked query on the object's database, run at once. */

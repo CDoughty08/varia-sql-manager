@@ -9,7 +9,7 @@ import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest 
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
-import { backupSetTypes, backupSetTypeSpecs, plannedSetTypes, restoreDescribeId, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreSourceKinds, restoreSystemDatabases, timelineIntervals, timelineIntervalSpecs } from './restore.ts'
+import { backupSetTypes, backupSetTypeSpecs, plannedSetTypes, restoreDescribeId, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreSourceKinds, restoreStepTitles, restoreSystemDatabases, timelineIntervals, timelineIntervalSpecs } from './restore.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -512,19 +512,20 @@ const restoreLimitNotes: Readonly<Record<keyof typeof restoreLimits, string>> = 
   lsnDigits: 'Digits of an LSN, numeric(25, 0) sent as decimal text',
   position: 'A backup set\'s position in its media set (RESTORE … WITH FILE)',
   stats: 'STATS = n in the script, as SSMS asks SMO for',
+  databases: 'Database ids a run\'s preflight reads (SQL Server\'s most): its cleanup drops only a database whose id was not among them',
   scriptChars: 'Characters of a restore\'s script, checked as each statement is written (every RESTORE repeats the moves)'
 }
 
-/** Restore Database (D1e): the reads, the planner, the document and its script; the run comes with D1f. */
+/** Restore Database: the reads, the planner, the document and its script (D1e), and the run (D1f). */
 function restoreDocs(): string[] {
   return [
     '## Restore Database',
     '',
     'Restore Database is a document tab ("Restore Database - <database>") with SSMS\'s pages as sections',
     `(${restoreSections.map(section => section.title).join(', ')}), the Select backup devices and Backup Timeline sub-dialogs, and a Script`,
-    'drawer. Its OK, Stop, progress and the Tasks › Restore › Database… menu item come in a later update (D1f): until OK',
-    'restores, no menu item, command or palette entry opens it, only the smoke tests\' hook (`window.__variaRestore`, test',
-    `mode only), and the document says "${restoreMessages.runUnavailable}"`,
+    'drawer. The Databases folder\'s Restore Database… (R) and a user database\'s Tasks › Restore › Database… (D) open it, on',
+    'SQL Server itself (not Azure SQL Database or Managed Instance); from a database, that database is the source. Its header',
+    'verbs are Refresh and Restore, and Stop while it runs (catalogue commands, so the palette offers them too).',
     '',
     `Its reads are \`actions.describe\` with ${code(restoreDescribeId)}, the server as its target and a \`restore\` member, one of`,
     `${restoreSourceKinds.map(code).join(', ')}:`,
@@ -582,7 +583,7 @@ function restoreDocs(): string[] {
     'backups cover. Its point is a slider: the arrow keys move it a minute, Shift and an arrow or Page Up and Page Down an',
     'hour, Home and End to the interval\'s ends. A point outside the covered band (other than a full or differential',
     'backup\'s finish) leaves OK disabled. SSMS also allows a point after the last log backup, restoring the tail-log backup',
-    'it takes first; that comes with the run (D1f), so here such a point is refused.',
+    'it takes first; Varia refuses such a point (a known gap: restore to the last backup taken, or past it in T-SQL).',
     '',
     '### Options and script',
     '',
@@ -601,6 +602,42 @@ function restoreDocs(): string[] {
     '`NORECOVERY` or `STANDBY`, `STOPAT`, `NOUNLOAD`, `STATS = 5`), `SET MULTI_USER` after it, and `GO`. Live checks compare',
     'the text with SMO\'s `Script()` for hostile names and paths; Varia writes two spaces after SET (`SET  SINGLE_USER`), as its',
     'other database options do, where SMO writes one.',
+    '',
+    '### Run',
+    '',
+    'Restore (SSMS\'s OK) reads the server again, then asks in the document, with Cancel focused, when a fact calls for it:',
+    'REPLACE over an existing database (which is left restoring if the run stops or fails part way, and whose contents are',
+    'lost outright when it is not the database the backups are of), a tail-log backup that could be taken but is off, and',
+    'Close existing connections, with the sessions it ends, those with open transactions it rolls back, and Varia\'s own',
+    'query windows in the database that are running or may hold one. SSMS asks none of these. It then runs `actions.execute`',
+    'with the same request Script takes, as a long run (closing the window, Disconnect of the server and Restart are refused',
+    'while it runs) on the long gate, and the Run panel lists its steps with the running RESTORE\'s STATS percent',
+    '(`action.progress`), an overall percent (the sets done and the running set\'s percent, each set alike) and the time.',
+    '',
+    'The backend first checks what the request names, on the action\'s own connection: the destination\'s identity (an',
+    'existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the',
+    'tail-log backup can be taken, each set\'s header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues',
+    'the set before it; `RestoreChain`), REPLACE over another database\'s backups (`BACKUP_MISMATCH`), and Restore As paths other',
+    'databases hold. Then the steps, each its own statement with every name, path and number a parameter (`RestoreSql`):',
+    '',
+    table(['Step', 'When'], [
+      [restoreStepTitles.close, 'Close existing connections is checked and the destination exists (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, after Varia\'s own pooled sessions in it are cleared)'],
+      [restoreStepTitles.tailLog, 'The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked)'],
+      [`${restoreStepTitles.full}, ${restoreStepTitles.differential}, ${restoreStepTitles.log} (n of m)`, 'One RESTORE per set of the plan, NORECOVERY on all but the last'],
+      [restoreStepTitles.multiUser, 'After a RECOVERY restore that closed connections, unless Restrict access is checked'],
+      [restoreStepTitles.recover, 'Compensation: the tail-log backup left the database restoring and no RESTORE has written to it (`RESTORE DATABASE … WITH RECOVERY`)'],
+      [`${restoreStepTitles.multiUserBack}`, 'Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted)'],
+      [restoreStepTitles.remove, 'Cleanup: the destination did not exist, and a RESTORE left it RESTORING; dropped only when its name, state 1 and an id absent at the preflight all match, which the DROP\'s own batch checks again']
+    ]),
+    '',
+    'After a failure or Stop the compensations and the cleanup run in order under a fresh 30 s budget, and are listed only',
+    'when they run. Varia never drops a database that existed (owner decision 5). Stop cancels the running statement in SQL',
+    'Server; over a database that existed it asks first ("Stopping leaves <database> restoring and unusable until a restore',
+    'finishes", Keep restoring focused). A refusal SQL Server makes while it plans a RESTORE (3101, 3154, 3159, 3201, 4305…)',
+    'has not written to the database, so the compensations still run. The reply lists the steps, and the database\'s state and',
+    'access as the run left it (`restored`: `sys.databases` read last; the access comes from the backup). The Databases folder',
+    'is reconciled once the run ends, and Restore again keeps the choices. A run whose backend or server is lost says that how',
+    'far it got is not known.',
     '',
     `SQL Server's own databases (${restoreSystemDatabases.join(', ')}) are refused as destinations, in any case (MSDB too): "${restoreMessages.systemDatabase}"`,
     'Their backups can still be sources, restored under another name (msdb_copy), as SSMS allows.',

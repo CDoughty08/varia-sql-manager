@@ -21,8 +21,8 @@ internal static class ActionErrors
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {
         ["BLOCKED"] = [1222],
-        // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user.
-        ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
+        // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user, 3101 a restore's exclusive access.
+        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3101],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
         ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
         // 1828 and 5170: a logical file name or a physical file is taken.
@@ -37,6 +37,11 @@ internal static class ActionErrors
         // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system
         // error (RestoreDescribe.MediaError).
         ["MEDIA"] = [3241, 3242, 3183, 3189],
+        // A restore over a database the backup is not of without WITH REPLACE (3154); over the database itself without its tail-log
+        // backup (3159); sets out of sequence: too early or too late in the chain (4305, 4326), or no restore to continue (3117).
+        ["BACKUP_MISMATCH"] = [3154],
+        ["TAIL_LOG_NEEDED"] = [3159],
+        ["RESTORE_SEQUENCE"] = [4305, 4326, 3117],
         // 5120: a file SQL Server's account cannot open.
         ["FILE_ACCESS"] = [5120],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]

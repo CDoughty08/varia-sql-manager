@@ -1,13 +1,13 @@
-// Restore Database (D1e): its describe id, request action, limits, labels and messages, and the shapes of what the
-// describe answers. The backend embeds restoreCatalog() in actions-catalog.json, so its limits and refusals are these.
-// `restore` is not in objectActions: no menu item, command or palette entry reaches it until its OK runs (critic A17);
-// D1e's document opens only through the test hook. Erasable TypeScript, so Node's type stripping can load it too.
+// Restore Database (D1e, D1f): its describe id, request action, limits, labels, step titles and messages, and the shapes of
+// what the describe answers. The backend embeds restoreCatalog() in actions-catalog.json, so its limits, refusals and step
+// titles are these. Its menu items and command are objectActions' `restore` (catalog.ts), live since its OK runs (D1f,
+// critic A17). Erasable TypeScript, so Node's type stripping can load it too.
 import type { ServerEngine } from '../explorer/catalog.ts'
 import type { ServerPathSeparator } from './files.ts'
 
 /** actions.describe's id for the document; its `restore` member says what to read. */
 export const restoreDescribeId = 'restoreDatabase' as const
-/** actions.script's action (actions.execute takes it from D1f). */
+/** actions.script's and actions.execute's action. */
 export const restoreRequestActions = ['restore'] as const
 /** RESTORE FROM DISK runs only on SQL Server itself: Managed Instance restores from URL only, and Azure SQL Database has no RESTORE (critic A1). */
 export const restoreEngines: readonly ServerEngine[] = ['box']
@@ -46,6 +46,8 @@ export const restoreLimits = {
   position: 32_767,
   /** SMO's restore plan writes STATS = 5, as SSMS asks. */
   stats: 5,
+  /** SQL Server holds at most 32,767 databases: the run's preflight reads every id there is (a cleanup drops only one it created). */
+  databases: 32_767,
   /** Restore's Script: every RESTORE repeats the moves, so a long log chain with many files outgrows the object actions' cap;
    *  Script As's cap, which the backend checks as it writes, before the text is whole. */
   scriptChars: 4_000_000
@@ -54,10 +56,8 @@ export const restoreLimits = {
 /** What the document says where SSMS has no words of its own, and the refusals main and the backend share. */
 export const restoreMessages = {
   systemDatabase: 'Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.',
-  /** Prompt before restoring each backup splits one restore into requests (critic A22), and Verify Backup Media runs with D1f. */
+  /** Prompt before restoring each backup splits one restore into requests (critic A22), and Verify Backup Media (D1g). */
   notYetAvailable: 'Not yet available',
-  /** OK while the run is still to come (critic A17: the document opens only through the test hook until then). */
-  runUnavailable: 'Restoring runs in a later update. Script shows what it will run.',
   invalidPlan: 'The selected backup sets do not form a valid restore plan.',
   noFullBackup: 'No full backup precedes the point to restore to.',
   afterLastBackup: 'The point to restore to is after the last log backup.',
@@ -71,6 +71,8 @@ export const restoreMessages = {
   /** Why Manual Selection cannot check a set the planner never uses (the row's title and its checkbox's description). */
   damaged: 'This backup set is marked damaged.',
   copyOnlyLog: 'A copy-only log backup is not part of the log chain.',
+  /** Stop reached SQL Server only as it finished the last RESTORE WITH RECOVERY: the run's reply says so ({database} shown through displayText). */
+  finishedAtStop: 'Stop came as SQL Server finished the restore: {database} is restored and online.',
   notPlanned: 'File and partial backups restore with T-SQL.'
 } as const
 
@@ -166,7 +168,7 @@ export interface BackupFileRow {
   readonly sizeBytes: number
   readonly fileId: number
 }
-/** A database a restore can overwrite: sys.databases minus master and tempdb. */
+/** A database a restore can overwrite: sys.databases minus master and tempdb (and snapshots). */
 export interface RestoreDestination {
   readonly name: string
   readonly id: number
@@ -178,6 +180,8 @@ export interface RestoreDestination {
   readonly recoveryModel: string
   /** Sessions in it; absent without VIEW SERVER STATE. */
   readonly sessions?: number
+  /** Of them, the sessions with an open transaction, which closing connections rolls back (critic A7); absent without VIEW SERVER STATE. */
+  readonly withTransaction?: number
 }
 export interface RestoreServerFacts {
   readonly separator: ServerPathSeparator
@@ -272,6 +276,29 @@ export function restoreAsPath(file: BackupFileRow, source: string, destination: 
   return inFolder(folder, separator, fileNamePart(renamed, separator))
 }
 
+// --- Run ----------------------------------------------------------------------------------------------------------------
+
+/**
+ * The run's step titles (D1f), which the backend's reply and the document's step list share: the document lists the steps it
+ * plans in these words before the reply comes, and the backend titles the reply's steps with the same. A log backup's step adds
+ * "n of count" when the plan restores more than one. close and multiUser are the shared templates' titles (ActionService.StepTitle).
+ */
+export const restoreStepTitles = {
+  close: 'Close existing connections',
+  tailLog: 'Back up the tail of the log',
+  full: 'Restore the full backup',
+  differential: 'Restore the differential backup',
+  log: 'Restore log backup',
+  multiUser: 'Restore multi-user access',
+  /** Compensation: the tail-log backup left the database RESTORING and no RESTORE started (critic A11d). */
+  recover: 'Bring the database back online',
+  /** Compensations: Close existing connections set SINGLE_USER and no RESTORE started. */
+  multiUserBack: 'Restore multi-user access',
+  restrictedUserBack: 'Restore restricted user access',
+  /** Cleanup: the restore created the database and stopped or failed part way (critic A11a). */
+  remove: 'Remove the partly restored database'
+} as const
+
 // --- Backend copy -------------------------------------------------------------------------------------------------------
 
 /** The restore block of actions-catalog.json: ids, engines, limits, the system databases and the messages C# answers with. */
@@ -279,6 +306,10 @@ export function restoreCatalog() {
   return {
     describe: restoreDescribeId, requests: restoreRequestActions, engines: restoreEngines, limits: restoreLimits, systemDatabases: restoreSystemDatabases,
     sourceKinds: restoreSourceKinds, recoveryStates: restoreRecoveryStates,
-    messages: { systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets }
+    messages: {
+      systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets, invalidPlan: restoreMessages.invalidPlan,
+      damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, finishedAtStop: restoreMessages.finishedAtStop
+    },
+    steps: restoreStepTitles
   }
 }

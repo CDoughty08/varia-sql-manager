@@ -12,7 +12,7 @@ import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
-import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionProgress, ActionRequest, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
@@ -275,7 +275,7 @@ export interface RpcMethods {
   /** An action's script, for the dialog's Script button; it runs nothing. */
   'actions.script': { params: ActionScriptRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
-  'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  'actions.execute': { params: ActionExecuteRequest; result: ActionExecuteResult }
   /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
   'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
   /** Changes the SSIS Catalog (Stop Operation, Create Catalog) on its own unpooled connection after a preflight; never re-sent,
@@ -417,7 +417,7 @@ export interface VariaApi {
   /** Scripts an object action (the dialog's Script button) without running it. */
   scriptObjectAction(params: ActionScriptRequest): Promise<ApiResult<ActionScriptResult>>
   /** Runs an object action: Rename, or Delete Object's OK. Its steps report what ran; it is never re-sent. */
-  executeObjectAction(params: ActionRequest): Promise<ApiResult<ActionExecuteResult>>
+  executeObjectAction(params: ActionExecuteRequest): Promise<ApiResult<ActionExecuteResult>>
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

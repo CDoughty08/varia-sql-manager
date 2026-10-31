@@ -168,8 +168,9 @@ describe('restore requests', () => {
       restore: { ...options, stopAt: '2026-10-29T21:05:43', relocate: [{ logical: "l'o]g", physical: '/var/opt/mssql/data/x\'y.ldf' }], recovery: 'standby', standbyFile: '\\\\files\\share\\u.bak',
         tailLog: { file: 'C:\\Backup\\t.bak', noRecovery: true }, closeConnections: true, replace: true, restrictedUser: true } }
     expect(validateRequest('actions.script', hostile)).toEqual(hostile)
-    // actions.execute takes no restore until D1f runs one (critic A17).
-    expect(() => validateRequest('actions.execute', request)).toThrow('Invalid request')
+    // actions.execute takes the same restore (D1f), and refuses what actions.script refuses.
+    expect(validateRequest('actions.execute', hostile)).toEqual(hostile)
+    expect(() => validateRequest('actions.execute', { ...request, restore: { ...options, sets: [] } })).toThrow('Invalid request')
     // In any case: a case-insensitive server, the default, takes MSDB for msdb.
     for (const name of ['master', 'model', 'msdb', 'tempdb', 'MSDB', 'Master', 'Model', 'TempDB']) {
       expect(() => validateRequest('actions.script', { ...request, target: { kind: 'database', name } }), name).toThrow('Invalid request')

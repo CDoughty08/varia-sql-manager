@@ -36,7 +36,7 @@ describe('fuzzy matching', () => {
     expect(palette('use')[0]).toBe('Query: Change Database…')
     expect(palette('run')[0]).toBe('Query: Execute')
     // A category match is no better than the same words in a title, so an available command wins the tie.
-    const explorerCommands = commandIds.map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
+    const explorerCommands = commandIds.filter(id => commandDescriptor(id).palette !== false).map(paletteLabel).filter(label => label.startsWith('Object Explorer: '))
     expect(palette('object explorer', explorerCommands)).toEqual(['View: Show Object Explorer', ...palette('object explorer').filter(label => label !== 'View: Show Object Explorer')])
     expect(palette('object explorer', explorerCommands).slice(1).sort()).toEqual(explorerCommands.filter(label => palette('object explorer').includes(label)).sort())
     expect(palette('exe').slice(0, 2)).toEqual(['Query: Execute', 'Query: Cancel Executing Query'])
@@ -52,7 +52,7 @@ describe('fuzzy matching', () => {
       expect(palette(query), query).not.toContain(label)
     }
     // Words that start with it match, not "Reload Themes" scattered.
-    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…'])
+    expect(palette('refresh')).toEqual(['Object Explorer: Refresh', 'Restore Database: Refresh', 'Database Properties: Refresh', 'Activity Monitor: Refresh Now', 'Integration Services: Refresh Operations', 'Integration Services: Refresh Properties', 'Activity Monitor: Set Refresh Interval…'])
     expect(palette('go to')[0]).toBe('Go to Query…')
     // The last capital of an acronym starts the next word.
     expect(highlight('q1', 'SQLQuery1.sql')).toEqual(['Q', '1'])

@@ -147,7 +147,7 @@ export interface Workbench extends Disposable {
   readonly serverFiles: ServerFilePickerService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
-  /** The long runs (Create Catalog, later a restore): they refuse a window close, a Disconnect of their server and Restart. */
+  /** The long runs (Create Catalog, a restore): they refuse a window close, a Disconnect of their server and Restart. */
   readonly longRuns: LongRunService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
@@ -155,7 +155,7 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
-  /** Restore Database documents (D1e: read and Script; opened only by the test hook until D1f's OK restores). */
+  /** Restore Database documents: read, Script (D1e) and run with Stop (D1f), opened from the Databases folder and a database's Tasks › Restore. */
   readonly restore: RestoreService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
@@ -240,8 +240,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
+  // Before Restore Database, whose runs track their STATS progress in it.
+  const actionProgress = new ActionProgressService(api)
   const restore = new RestoreService({
-    api, documents, files, connections, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, longRuns, progress: actionProgress, explorer, transactions: queries, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
   const activity = new ActivityMonitorService({
@@ -271,6 +273,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     designer: designers.context,
     properties: properties.context,
+    restore: restore.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -289,7 +292,6 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
-  const actionProgress = new ActionProgressService(api)
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }

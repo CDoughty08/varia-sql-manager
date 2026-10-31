@@ -1,9 +1,11 @@
 import { actionLimits } from '../../../shared/actions/catalog.ts'
 import { restoreMessages, restoreSections, restoreSetIdPattern, type RestoreModel, type RestoreSource } from '../../../shared/actions/restore.ts'
-import type { ActionError } from '../../../shared/actions/schema.ts'
+import type { RestoreRequest } from '../../../shared/actions/restore-schema.ts'
+import type { ActionError, ActionExecuteResult, ActionStep, RestoredDatabase } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
-import { displayText } from '../../../shared/explorer/refs.ts'
+import { displayText, type ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
+import type { RestoreContextState, RestoreKeys } from '../core/contextkeys'
 import { onUnexpectedError } from '../core/errors'
 import { SnapshotStore } from '../core/store'
 import { browserTimers, type Timers } from '../core/timers'
@@ -13,12 +15,40 @@ import type { ScriptContent } from '../kit/ScriptDrawer'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
-import { draftPlan, initialDraft, restoreRequest, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
+import { destinationOf, draftPlan, initialDraft, restoreRequest, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
+import { confirmLines, outcomeOf, plannedSteps, type PlannedStep, type RunOutcome } from './run'
 
 /** loading (the server and msdb's databases) → ready, or loadFailed; the sets and files load beside it as the source changes. */
 export type RestorePhase = 'loading' | 'ready' | 'loadFailed'
 export type RestoreLoad = 'idle' | 'loading' | 'ready' | 'failed'
 export type RestoreSubDialog = 'devices' | 'timeline'
+/**
+ * A restore's run (D1f): checking (the server read again, this window's queries asked about their transactions) → confirm,
+ * when a fact calls for it (owner decision 4) → running → done, failed, stopped or unknown (the backend or the server was lost).
+ */
+export type RestoreRunPhase = 'checking' | 'confirm' | 'running' | RunOutcome
+export interface RestoreRun {
+  readonly phase: RestoreRunPhase
+  /** The destination as the request named it. */
+  readonly database: string
+  /** Whether it existed at the check: a Stop then asks first, and Varia never drops it (owner decision 5). */
+  readonly existed: boolean
+  readonly replace: boolean
+  readonly planned: readonly PlannedStep[]
+  /** The confirm bar's lines (phase confirm). */
+  readonly confirm?: readonly string[]
+  readonly requestId?: string
+  readonly startedAt?: number
+  readonly endedAt?: number
+  /** Stop over a database that existed asks first, in the document (critic A11c). */
+  readonly stopConfirm?: boolean
+  /** Stop was sent: the reply waits for SQL Server to end the statement and the cleanup to run. */
+  readonly stopping?: boolean
+  readonly steps?: readonly ActionStep[]
+  readonly error?: ActionError
+  /** The destination as the run left it (critic A12), or absent when no database has its name any more. */
+  readonly restored?: RestoredDatabase
+}
 export interface RestoreState {
   readonly id: string
   readonly server: string
@@ -37,14 +67,32 @@ export interface RestoreState {
   readonly script: ScriptContent
   readonly scriptRevision?: number
   readonly scriptNotice?: string
+  /** The Databases folder it was opened from, reconciled after a run. */
+  readonly folderNodeId?: number
+  readonly run?: RestoreRun
+  /** Why Restore could not start after the server was read again (the choices no longer form a restore). */
+  readonly runNotice?: string
+  /** Why a window close, Disconnect or Restart was just refused while this restore runs. */
+  readonly refusal?: string
 }
+/** The tab's title: "Restore Database - <destination>", or "Restore Database" before there is one. */
+export const restoreTabTitle = (destination: string | undefined) => destination ? `Restore Database - ${displayText(destination)}` : 'Restore Database'
+
 export interface RestoreSnapshot { readonly documents: Readonly<Record<string, RestoreState>> }
 
 export interface RestoreServiceOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
-  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate'> & DeliverScriptDeps['documents']
+  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText'>
+  readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate'> & DeliverScriptDeps['documents'] & Partial<Pick<DocumentService, 'subscribe' | 'update'>>
   readonly files: DeliverScriptDeps['files']
   readonly connections: ExternalStore<readonly LiveConnection[]>
+  /** A restore is a long run: while it runs, closing the window, disconnecting its server and Restart are refused. */
+  readonly longRuns?: { begin(run: { readonly kind: 'restore'; readonly connectionId: string; readonly server: string; refused?(message: string): void }): Disposable }
+  /** The STATS progress of the run's steps (ActionProgressService). */
+  readonly progress?: { track(requestId: string): boolean; forget(requestId: string): void }
+  /** Object Explorer: the Databases folder is reconciled once the run ends (owner decision 9), the database selected. */
+  readonly explorer?: { reconcile(nodeId: number, options?: { readonly select?: ExplorerNodeRef }): void }
+  /** This window's queries in the destination that closing connections would roll back (critic A7). */
+  readonly transactions?: { transactionTabs(connectionId: string, database: string): Promise<string[]> }
   readonly focusEditor?: () => void
   readonly focus?: (id: string) => void
   readonly timers?: Timers
@@ -55,19 +103,27 @@ export interface RestoreServiceOptions {
 export const restoreServiceMessages = {
   disconnected: 'The server was disconnected. Reconnect, or open Restore Database again on a connected server.',
   readFailed: 'The backups could not be read.',
-  noScript: 'Choose what to restore to script it.'
+  noScript: 'Choose what to restore to script it.',
+  /** A close of the tab while it restores. */
+  running: 'A restore is running. Stop it first, or wait for it to finish.',
+  /** No answer: the backend or the server went away while the restore ran. */
+  unknown: 'The connection was lost while the restore ran, so how far it got is not known. Check the database\'s state in Object Explorer.'
 } as const
 /** How long the Script preview waits after the last change, so typing sends one request. */
 export const restorePreviewDelayMs = 300
 const error = (code: ActionError['code'], message: string): ActionError => ({ code, message, retryable: true })
 const emptyFacts: RestoreFacts = { historyDatabases: [], sets: [], setsTruncated: false, files: [] }
 const uuid = /^[0-9a-f]{8}-/
+/** Run phases in which the choices may not change and nothing else may run. */
+const busyRun = (run: RestoreRun | undefined): boolean => run?.phase === 'checking' || run?.phase === 'running'
 
 /**
- * Restore Database as a document (D1e): one tab per open, its General, Files and Options pages as sections, the Select
- * backup devices and Backup Timeline sub-dialogs, and the Script drawer, which shows what the restore will run. It reads
- * through actions.describe and scripts through actions.script; nothing runs a restore until D1f adds OK, so no menu item,
- * command or palette entry opens it (critic A17): only the test hook does. Failures are values in the snapshot.
+ * Restore Database as a document: one tab per open, its General, Files and Options pages as sections, the Select backup
+ * devices and Backup Timeline sub-dialogs, and the Script drawer, which shows what the restore will run (D1e). Restore (D1f)
+ * reads the server again, asks in the document when a fact calls for it, then runs `actions.execute`'s restore as a long run
+ * with its steps and STATS progress; Stop cancels it in SQL Server (asking first over a database that existed), and the
+ * reply lists the steps, the cleanup and the database's state. The Databases folder's Restore Database… and a database's
+ * Tasks › Restore › Database… open it. Failures are values in the snapshot.
  */
 export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Disposable, CustomDocumentProvider {
   readonly kind = 'restoreDatabase' as const
@@ -77,11 +133,14 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private readonly timers: Timers
   private readonly now: () => Date
   private readonly registration: Disposable
-  private readonly unsubscribe: () => void
+  private readonly unsubscribe: (() => void)[]
   /** Each document's reads in flight, by what they read, so a newer read or a close cancels the older one. */
   private readonly reads = new Map<string, Map<'server' | 'sets' | 'files', string>>()
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
+  /** The request a confirm bar waits on, by document. */
+  private readonly pending = new Map<string, RestoreRequest>()
+  private readonly contextStore = new (class extends SnapshotStore<RestoreContextState> { set(value: RestoreContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private disposed = false
 
   constructor(private readonly options: RestoreServiceOptions) {
@@ -90,20 +149,25 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.timers = options.timers ?? browserTimers
     this.now = options.now ?? (() => new Date())
     this.registration = options.documents.registerProvider(this)
-    this.unsubscribe = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (failure) { onUnexpectedError(failure) } })
+    this.unsubscribe = [
+      options.connections.subscribe(() => { try { this.connectionsChanged(); this.publishContext() } catch (failure) { onUnexpectedError(failure) } }),
+      // A reconnect moves the document to the new connection (TargetService.retarget), which can make Restore possible again.
+      ...options.documents.subscribe ? [options.documents.subscribe(() => { try { this.publishContext() } catch (failure) { onUnexpectedError(failure) } })] : []
+    ]
   }
 
+  get context(): ExternalStore<RestoreContextState> { return this.contextStore }
   get(id: string): RestoreState | undefined { return this.getSnapshot().documents[id] }
 
-  /** Opens a Restore Database document on a connection, its source the database (when msdb has backups of it). */
-  open(connectionId: string, database?: string): string {
+  /** Opens a Restore Database document on a connection, its source the database (when msdb has backups of it); `folderNodeId` is the Databases folder to reconcile after a run. */
+  open(connectionId: string, database?: string, folderNodeId?: number): string {
     if (this.disposed) throw new Error('Restore Database is not available.')
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost)
     if (!connection) throw new Error('Connect to the server first.')
-    const document = this.options.documents.openCustom('restoreDatabase', database ? `Restore Database - ${displayText(database)}` : 'Restore Database', connection.id, 'master')
+    const document = this.options.documents.openCustom('restoreDatabase', restoreTabTitle(database), connection.id, 'master')
     this.put({
       id: document.id, server: connection.server, ...connection.login ? { login: connection.login } : {}, phase: 'loading', facts: emptyFacts, sets: 'idle', files: 'idle', revision: 0,
-      frame: initialFrameState(restoreSections), script: { state: 'idle', message: restoreServiceMessages.noScript }
+      frame: initialFrameState(restoreSections), script: { state: 'idle', message: restoreServiceMessages.noScript }, ...folderNodeId !== undefined ? { folderNodeId } : {}
     })
     void this.start(document.id, database)
     return document.id
@@ -163,6 +227,17 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.schedulePreview(id)
   }
 
+  /** The server's facts again (its databases, their sessions and files), keeping the sets and the draft; undefined when it was dropped. */
+  private async readServer(id: string): Promise<ActionError | 'read' | undefined> {
+    const model = await this.read(id, 'server', { kind: 'history' })
+    const state = this.get(id)
+    if (!state || model === undefined) return undefined
+    if ('code' in model) return model
+    const facts: RestoreFacts = { ...state.facts, ...model.server ? { server: model.server } : {}, historyDatabases: model.historyDatabases ?? state.facts.historyDatabases }
+    this.patch(id, { facts, revision: state.revision + 1 })
+    return 'read'
+  }
+
   /** One describe: its model, a failure as a value, or undefined when a newer read, a close or a disconnect dropped it. */
   private async read(id: string, slot: 'server' | 'sets' | 'files', restore: RestoreSource): Promise<RestoreModel | ActionError | undefined> {
     const connectionId = this.connectionOf(id)
@@ -186,7 +261,9 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   /** A change to the draft. A new source database reads its sets, and the destination follows it as SSMS's does. */
   updateDraft(id: string, patch: Partial<RestoreDraft>): void {
     const state = this.get(id)
-    if (!state?.draft || state.phase !== 'ready') return
+    if (!state?.draft || state.phase !== 'ready' || busyRun(state.run)) return
+    // A confirm bar asks about the choices it was shown for: a change withdraws it.
+    if (state.run?.phase === 'confirm') this.dropConfirm(id)
     let draft: RestoreDraft = { ...state.draft, ...patch }
     for (const key of Object.keys(patch) as (keyof RestoreDraft)[]) if (patch[key] === undefined) delete (draft as Partial<Record<keyof RestoreDraft, unknown>>)[key]
     const reread = (patch.database !== undefined && patch.database !== state.draft.database) || (patch.source !== undefined && patch.source !== state.draft.source)
@@ -202,13 +279,13 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
       if (rechosen && following) draft = { ...draft, destination: sourceDatabase(draft, state.facts) }
     }
     if (patch.destination !== undefined || reread || rechosen) draft = { ...draft, tailLog: tailLogPossible(draft, state.facts) && (patch.tailLog ?? true) }
-    this.patch(id, { draft, revision: state.revision + 1, scriptNotice: undefined })
+    this.patch(id, { draft, revision: (this.get(id)?.revision ?? state.revision) + 1, scriptNotice: undefined, runNotice: undefined })
     if (reread) void this.loadSets(id)
     else { this.schedulePreview(id); void this.loadFiles(id) }
   }
   openDialog(id: string, dialog: RestoreSubDialog | undefined): void {
     const state = this.get(id)
-    if (!state || state.dialog === dialog || (dialog && state.phase !== 'ready')) return
+    if (!state || state.dialog === dialog || (dialog && (state.phase !== 'ready' || busyRun(state.run)))) return
     this.patch(id, { dialog })
   }
   setFrame(id: string, frame: FrameState): void {
@@ -218,13 +295,129 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.patch(id, { frame })
     if (opened) this.schedulePreview(id, 0)
   }
+  /** Whether Refresh can read again: nothing runs in the document, and its server is connected. */
+  canRefresh(id: string): boolean {
+    const state = this.get(id)
+    return !!state && !this.disposed && state.phase !== 'loading' && !busyRun(state.run) && this.live(id)
+  }
   /** Reads the server and the source again, keeping the draft. */
   refresh(id: string): void {
-    const state = this.get(id)
-    if (!state || state.phase === 'loading') return
+    if (!this.canRefresh(id)) return
+    if (this.get(id)?.run?.phase === 'confirm') this.dropConfirm(id)
+    const state = this.get(id)!
     if (!state.draft) { this.patch(id, { phase: 'loading', error: undefined }); void this.start(id); return }
-    this.patch(id, { facts: { ...state.facts, filesFor: undefined } })
+    this.patch(id, { facts: { ...state.facts, filesFor: undefined }, runNotice: undefined })
     void this.loadSets(id)
+  }
+
+  // --- Run ------------------------------------------------------------------------------------------------------------
+
+  /** Whether Restore can start: the backups are read, the choices form a restore, nothing runs in the document, and its server is connected. */
+  canRun(id: string): boolean {
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    if (!state?.draft || !connectionId || this.disposed || state.phase !== 'ready' || state.sets !== 'ready' || state.files === 'loading' || busyRun(state.run) || !this.live(id)) return false
+    return !('problem' in restoreRequest(state.draft, state.facts, { connectionId, requestId: 'check' }))
+  }
+  isRunning(id: string): boolean { return this.get(id)?.run?.phase === 'running' }
+
+  /**
+   * Restore (SSMS's OK): reads the server again, so the confirm bar and the backend's preflight see the databases as they are,
+   * and this window's queries in the destination when it closes connections; then asks in the document when a fact calls for
+   * it (owner decision 4), else runs at once.
+   */
+  async run(id: string): Promise<void> {
+    if (!this.canRun(id)) return
+    this.dropConfirm(id)
+    const first = this.get(id)!
+    this.patch(id, { run: { phase: 'checking', database: first.draft!.destination, existed: false, replace: first.draft!.replace, planned: [] }, runNotice: undefined, error: undefined })
+    const read = await this.readServer(id)
+    const state = this.get(id), connectionId = this.connectionOf(id)
+    if (!state?.draft || state.run?.phase !== 'checking' || !connectionId) return
+    if (read !== 'read') { this.patch(id, { run: undefined, ...read ? { error: read } : {} }); return }
+    const request = restoreRequest(state.draft, state.facts, { connectionId, requestId: this.newId() })
+    if ('problem' in request) { this.patch(id, { run: undefined, runNotice: request.problem }); return }
+    const destination = destinationOf(state.facts, state.draft.destination)
+    let tabs: string[] = []
+    if (destination && state.draft.closeConnections && this.options.transactions) {
+      try { tabs = await this.options.transactions.transactionTabs(connectionId, destination.name) } catch (failure) { onUnexpectedError(failure) }
+    }
+    const current = this.get(id)
+    if (!current?.draft || current.run?.phase !== 'checking' || current.revision !== state.revision) return
+    const run: RestoreRun = { phase: 'checking', database: request.target.name, existed: !!request.identity, replace: request.restore.replace, planned: plannedSteps(request) }
+    const lines = confirmLines(current.draft, current.facts, { tabs })
+    if (lines.length === 0) { await this.execute(id, request, run); return }
+    this.pending.set(id, request)
+    this.patch(id, { run: { ...run, phase: 'confirm', confirm: lines } })
+  }
+  /** The confirm bar's Restore. */
+  async confirmRun(id: string): Promise<void> {
+    const state = this.get(id), request = this.pending.get(id)
+    if (state?.run?.phase !== 'confirm' || !request) return
+    this.pending.delete(id)
+    if (!this.live(id)) { this.patch(id, { run: undefined, error: error('CONNECTION_LOST', restoreServiceMessages.disconnected) }); return }
+    await this.execute(id, request, state.run)
+  }
+  /** The confirm bar's Cancel, or Escape: nothing runs. */
+  cancelRun(id: string): void {
+    if (this.get(id)?.run?.phase === 'confirm') this.dropConfirm(id)
+  }
+  /** Stop: over a database that existed it asks first (Keep restoring is the default); otherwise it cancels at once. */
+  stop(id: string): void {
+    const run = this.get(id)?.run
+    if (run?.phase !== 'running' || run.stopping || run.stopConfirm) return
+    if (run.existed) { this.patch(id, { run: { ...run, stopConfirm: true } }); return }
+    this.sendStop(id)
+  }
+  /** The Stop question's answer: Stop cancels the restore in SQL Server; Keep restoring leaves it running. */
+  answerStop(id: string, stop: boolean): void {
+    const run = this.get(id)?.run
+    if (run?.phase !== 'running' || !run.stopConfirm) return
+    this.patch(id, { run: { ...run, stopConfirm: undefined } })
+    if (stop) this.sendStop(id)
+  }
+  private sendStop(id: string): void {
+    const run = this.get(id)?.run
+    if (run?.phase !== 'running' || !run.requestId || run.stopping) return
+    this.patch(id, { run: { ...run, stopping: true, stopConfirm: undefined } })
+    this.cancel([run.requestId])
+  }
+  private dropConfirm(id: string): void {
+    this.pending.delete(id)
+    const state = this.get(id)
+    if (state?.run?.phase === 'confirm' || state?.run?.phase === 'checking') this.patch(id, { run: undefined })
+  }
+
+  /** Runs the restore as a long run with its progress tracked, then shows how it ended and reconciles the Databases folder. */
+  private async execute(id: string, request: RestoreRequest, run: RestoreRun): Promise<void> {
+    const state = this.get(id)
+    if (!state) return
+    const requestId = request.requestId
+    this.options.progress?.track(requestId)
+    this.patch(id, { run: { ...run, phase: 'running', requestId, startedAt: this.now().getTime(), confirm: undefined }, dialog: undefined })
+    const longRun = this.options.longRuns?.begin({ kind: 'restore', connectionId: request.connectionId, server: state.server, refused: refusal => this.patch(id, { refusal }) })
+    let result: ApiResult<ActionExecuteResult>
+    try { result = await this.call(() => this.options.api.executeObjectAction(request)) } finally {
+      longRun?.dispose()
+      this.options.progress?.forget(requestId)
+    }
+    const current = this.get(id)
+    if (this.disposed || !current?.run || current.run.requestId !== requestId) return
+    const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
+    const value = result.ok ? result.value : undefined
+    const failure = lost ? error('CONNECTION_LOST', restoreServiceMessages.unknown)
+      : value ? value.error : error(!result.ok && result.code === 'CANCELLED' ? 'CANCELLED' : 'SQL_ERROR', result.ok ? 'The restore failed.' : result.error)
+    this.patch(id, {
+      refusal: undefined,
+      run: {
+        ...current.run, phase: outcomeOf(failure, lost), endedAt: this.now().getTime(), stopping: undefined, stopConfirm: undefined,
+        ...value ? { steps: value.steps } : {}, ...failure ? { error: failure } : {}, ...value?.restored ? { restored: value.restored } : {}
+      }
+    })
+    // The tree is reconciled once the run ends (owner decision 9), with the database selected when it is there.
+    if (current.folderNodeId !== undefined) {
+      try { this.options.explorer?.reconcile(current.folderNodeId, value?.restored ? { select: { type: 'object', object: { kind: 'database', name: request.target.name } } } : {}) } catch (failure) { onUnexpectedError(failure) }
+    }
+    if (!lost && this.live(id)) void this.readServer(id)
   }
 
   // --- Script ---------------------------------------------------------------------------------------------------------
@@ -275,18 +468,22 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   // --- Document provider ----------------------------------------------------------------------------------------------
 
   save(): Promise<boolean> { return Promise.resolve(false) }
-  canClose(): string | undefined { return undefined }
+  /** A tab whose restore runs stays open: closing it would leave the run without its Stop and its outcome. */
+  canClose(id: string): string | undefined { return this.isRunning(id) ? restoreServiceMessages.running : undefined }
   revision(): number { return 0 }
   focus(id: string): void { this.options.focus?.(id) }
   follows(id: string, server: string): boolean { const state = this.get(id); return !!state && state.server.trim().toLowerCase() === server.trim().toLowerCase() }
   closed(id: string): void {
-    this.cancel([...this.reads.get(id)?.values() ?? [], ...this.previews.has(id) ? [this.previews.get(id)!] : []])
+    const run = this.get(id)?.run
+    this.cancel([...this.reads.get(id)?.values() ?? [], ...this.previews.has(id) ? [this.previews.get(id)!] : [], ...run?.phase === 'running' && run.requestId ? [run.requestId] : []])
     this.reads.delete(id)
     this.previews.delete(id)
+    this.pending.delete(id)
     const timer = this.previewTimers.get(id)
     if (timer !== undefined) this.timers.clearTimeout(timer)
     this.previewTimers.delete(id)
     this.publish({ documents: Object.fromEntries(Object.entries(this.getSnapshot().documents).filter(([key]) => key !== id)) })
+    this.publishContext()
   }
   dispose(): void {
     if (this.disposed) return
@@ -296,8 +493,10 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.reads.clear()
     this.previews.clear()
     this.previewTimers.clear()
+    this.pending.clear()
     this.registration.dispose()
-    this.unsubscribe()
+    for (const unsubscribe of this.unsubscribe) unsubscribe()
+    this.contextStore.clear()
     this.clearListeners()
   }
 
@@ -308,7 +507,25 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     for (const key of Object.keys(patch)) if (next[key] === undefined) delete next[key]
     this.put(next)
   }
-  private put(state: RestoreState): void { this.publish({ documents: { ...this.getSnapshot().documents, [state.id]: state } }) }
+  private put(state: RestoreState): void {
+    const before = this.getSnapshot().documents[state.id]?.draft?.destination
+    this.publish({ documents: { ...this.getSnapshot().documents, [state.id]: state } })
+    // The tab names the destination, as SSMS's window title does, also when it opened from the Databases folder with none.
+    const destination = state.draft?.destination
+    if (destination !== undefined && destination !== before && this.options.documents.get(state.id)) this.options.documents.update?.(state.id, { name: restoreTabTitle(destination) })
+    this.publishContext()
+  }
+  private publishContext(): void {
+    if (this.disposed) return
+    const byDocument: Record<string, RestoreKeys> = {}
+    for (const state of Object.values(this.getSnapshot().documents)) byDocument[state.id] = { runnable: this.canRun(state.id), running: this.isRunning(state.id), refreshable: this.canRefresh(state.id) }
+    const current = this.contextStore.getSnapshot().byDocument
+    const same = Object.keys(byDocument).length === Object.keys(current).length && Object.entries(byDocument).every(([id, keys]) => {
+      const was = current[id]
+      return !!was && was.runnable === keys.runnable && was.running === keys.running && was.refreshable === keys.refreshable
+    })
+    if (!same) this.contextStore.set({ byDocument })
+  }
   private connectionOf(id: string): string | undefined { return this.options.documents.get(id)?.connectionId }
   private live(id: string): boolean {
     const connectionId = this.connectionOf(id)
@@ -317,10 +534,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }
   }
-  /** A server that disconnects: its reads and preview are cancelled and say so; Refresh reads again once it is back. */
+  /** A server that disconnects: its reads and preview are cancelled and say so, and a confirm bar is withdrawn; Refresh reads again once it is back. */
   private connectionsChanged(): void {
     for (const state of Object.values(this.getSnapshot().documents)) {
       if (this.live(state.id)) continue
+      if (state.run?.phase === 'confirm' || state.run?.phase === 'checking') this.dropConfirm(state.id)
       const slots = this.reads.get(state.id), preview = this.previews.get(state.id)
       const pending = [...slots?.values() ?? [], ...preview ? [preview] : []]
       if (pending.length === 0) continue
@@ -328,8 +546,9 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
       this.previews.delete(state.id)
       this.cancel(pending)
       const lost = error('CONNECTION_LOST', restoreServiceMessages.disconnected)
+      const current = this.get(state.id)!
       this.patch(state.id, {
-        error: lost, ...state.phase === 'loading' ? { phase: 'loadFailed' } : {}, ...state.sets === 'loading' ? { sets: 'failed' } : {}, ...state.files === 'loading' ? { files: 'failed' } : {},
+        error: lost, ...current.phase === 'loading' ? { phase: 'loadFailed' } : {}, ...current.sets === 'loading' ? { sets: 'failed' } : {}, ...current.files === 'loading' ? { files: 'failed' } : {},
         ...preview ? { script: { state: 'failed', error: { message: lost.message, code: lost.code } } } : {}
       })
     }

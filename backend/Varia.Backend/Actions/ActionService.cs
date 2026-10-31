@@ -241,7 +241,7 @@ internal sealed partial class ActionService : IDisposable
                 DatabaseAlter.Validate(catalog, args);
                 return target;
             case "restore":
-                return ValidateRestore(args, script);
+                return ValidateRestore(args);
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -326,6 +326,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, progress, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, progress, job),
+                "restore" => ExecuteRestoreJobAsync(connection, args, target, profile.Linux, progress, job),
                 _ => ExecuteJobAsync(connection, args, target, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -670,6 +671,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.DropRestoring => "Remove the partly restored database",
         _ => "Drop the object"
     };
 

@@ -10,7 +10,7 @@ import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type F
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
-import { restoreDescribeId, type RestoreModel, type RestoreSource } from './restore.ts'
+import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
 import { restoreRequestSchema, restoreSourceSchema, type RestoreRequest } from './restore-schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
@@ -46,8 +46,9 @@ export interface PropertiesRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
-/** actions.script also scripts a restore, which actions.execute runs from D1f (critic A17). */
+/** actions.script and actions.execute also take a restore, whose request has a shape of its own (restore-schema.ts). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest
 export type { RestoreRequest } from './restore-schema.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
@@ -161,6 +162,9 @@ export interface ActionStep {
   readonly compensates?: boolean
   readonly progress?: number
 }
+/** A restored database as the run left it: sys.databases' state and user_access, read after the last step (critic A12: the access
+ *  comes from the backup, not from the SINGLE_USER Varia set), or absent when no database has the name any more. */
+export interface RestoredDatabase { readonly state: number; readonly userAccess: number }
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
@@ -168,13 +172,15 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /** A restore's destination after the run. */
+  readonly restored?: RestoredDatabase
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', restore: 'restored' }
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
@@ -258,6 +264,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     }
   }
 }) satisfies z.ZodType<ActionRequest>
+/** actions.execute: an object action, or a restore (critic A17: it runs from D1f, with the menu items that open it). */
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema]) satisfies z.ZodType<ActionExecuteRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
@@ -269,15 +277,17 @@ export const actionStepSchema = z.object({
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
 const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
-/** actions.execute's answer, which main checks before the renderer sees it: one step per planned statement, the commit, and
- *  compensation and cleanup steps, at most statements + 8; bounded messages. */
+/** The most steps a reply lists: one per planned statement (a restore plans one per backup set), the commit, and compensation and cleanup steps. */
+export const actionStepLimit = Math.max(actionLimits.statements, restoreLimits.planSets) + 8
+/** actions.execute's answer, which main checks before the renderer sees it: at most actionStepLimit steps; bounded messages. */
 export const actionExecuteResultSchema = z.object({
-  steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+  steps: z.array(actionStepSchema).max(actionStepLimit), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(),
+  restored: z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255) }).strict().optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */
-const stepIndex = z.number().int().min(0).max(actionLimits.statements + 7)
+const stepIndex = z.number().int().min(0).max(actionStepLimit - 1)
 const percent = z.number().int().min(0).max(100)
 /** An actions.execute EVENT body (D1c): a long step's progress from SQL Server's STATS messages, droppable, the latest wins. Main
  *  drops the request's other EVENTs (the body is not one of these) without failing the request. */

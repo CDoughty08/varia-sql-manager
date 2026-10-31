@@ -503,6 +503,10 @@ explorer.context, for a database
       &File…
       C&lipboard
   ---
+  &Tasks >
+    &Restore >
+      &Database…
+  ---
   Copy N&ame
   ---
   Rena&me

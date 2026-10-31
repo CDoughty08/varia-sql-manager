@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (184)
+## Commands (189)
 
 ### File
 
@@ -142,6 +142,8 @@ keys it uses are listed below.
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Restore Database… | `explorer.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Restore Database… |
+| Restore Database… (not in the palette) | `explorer.tasks.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Tasks › Restore › Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
@@ -198,6 +200,14 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### Restore Database
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Restore | `restoreDatabase.run` | — | — | — | `activeDocumentIsRestore && restoreRunnable` | — |
+| Stop | `restoreDatabase.stop` | — | — | — | `activeDocumentIsRestore && restoreRunning` | — |
+| Refresh | `restoreDatabase.refresh` | — | — | — | `activeDocumentIsRestore && restoreRefreshable` | — |
 
 ### Integration Services
 
@@ -476,6 +486,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
+| `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -512,7 +523,9 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 
 #### Object Explorer context menu › Tasks › Restore
 
-Nothing is placed here yet, so the submenu stays hidden.
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_restore` | **D**atabase… | `explorer.tasks.restoreDatabase` | `explorerActionRestore != '' && explorerNode != 'folder' && explorerNode != 'background'` |
 
 #### Object Explorer context menu › Script … as
 
@@ -692,7 +705,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (101)
+## Context keys (106)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -734,6 +747,10 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
 | `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
 | `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsRestore` | boolean | state | The active document is Restore Database. |
+| `restoreRunnable` | boolean | state | The active Restore Database document can restore now: it has read the backups, its choices form a restore, nothing runs in it, and its server is connected. |
+| `restoreRunning` | boolean | state | The active Restore Database document is restoring (Stop cancels the running statement in SQL Server). |
+| `restoreRefreshable` | boolean | state | The active Restore Database document can read the server and the backups again: nothing runs in it and its server is connected. |
 | `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
 | `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |
@@ -783,6 +800,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionRestore` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

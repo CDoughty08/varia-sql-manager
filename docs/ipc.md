@@ -572,8 +572,13 @@ of the request too: 130 s around the backend's 120 s budget (`restoreLimits`), a
 their own gate, outside the object actions' read gates, so a read held past its budget by an unreachable share never delays
 another dialog's describe. `actions.script` with the `restore` action takes the plan (`restore: { sets, relocate, recovery,
 … }`, at most 1,024 sets and 1,000 moves), is written on no connection, and answers the script SMO's restore plan would
-write (at most 4,000,000 characters, checked as it is written); `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
-describes the planner and the limits.
+write (at most 4,000,000 characters, checked as it is written). `actions.execute` with `restore` (D1f) takes the same plan with
+`target: { kind: 'database', name }` and, over a database that exists, the `identity` the document read; it is a long action
+(the long gate, Stop, `action.progress` from `STATS`, the shutdown drain, a 30 s cleanup budget). Its preflight in the action's
+connection checks the identity, permission, the tail-log backup's conditions, the media's chain (`RestoreChain`), WITH REPLACE's
+case (`BACKUP_MISMATCH`) and Restore As paths other databases hold, before anything changes; the reply adds
+`restored: { state, userAccess }` (sys.databases, read once the steps are over) so the page names what a Stop or failure left.
+docs/object-actions.md describes the planner, the steps and the limits.
 
 ## Streams and credits
 

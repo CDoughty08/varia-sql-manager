@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
 import { actionLimits, actionServes, actionsCatalogJson, objectActions, objectActionSpecs } from '../src/shared/actions/catalog'
-import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepSchema } from '../src/shared/actions/schema'
+import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepLimit, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
 } from '../src/shared/actions/logins'
@@ -23,12 +23,14 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual([...objectActions])
+    // Managed Instance restores from URL only, which Restore Database does not offer.
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'restore'))
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(4)
     for (const row of json.actions) {
       expect(row.engines, row.action).toEqual([...objectActionSpecs[row.action as keyof typeof objectActionSpecs].engines])
-      expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
+      // A restore's cleanup drops a partly restored database, which a large one takes a while to do.
+      expect(row.cleanupMs, row.action).toBe(row.action === 'restore' ? 30_000 : actionLimits.cleanupMs)
     }
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
@@ -81,7 +83,7 @@ describe('action steps and secrets', () => {
     expect(resultSchemas['actions.execute']).toBe(actionExecuteResultSchema)
     expect(validateResult('actions.execute', answer)).toEqual(answer)
     expect(() => validateResult('actions.execute', { ...answer, steps: [{ status: 'done', message: 'Rename' }] })).toThrow()
-    expect(() => validateResult('actions.execute', { ...answer, steps: Array.from({ length: actionLimits.statements + 9 }, () => ({ status: 'done', title: 'x' })) })).toThrow()
+    expect(() => validateResult('actions.execute', { ...answer, steps: Array.from({ length: actionStepLimit + 1 }, () => ({ status: 'done', title: 'x' })) })).toThrow()
     expect(() => validateResult('actions.execute', { ...answer, error: { code: 'NOPE', message: 'x', retryable: false } })).toThrow()
   })
   it('never lets a secret cross on actions.script, and zeroes actions.execute\'s frames as a whole', () => {

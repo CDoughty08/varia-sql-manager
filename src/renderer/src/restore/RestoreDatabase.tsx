@@ -1,21 +1,29 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { isRestoreSystemDatabase, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery } from '../../../shared/actions/restore.ts'
 import type { ServerFilePurpose } from '../../../shared/actions/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import type { IconId } from '../../../shared/icons.ts'
+import type { StatusTone } from '../../../shared/theme/tones.ts'
+import { useActionProgress } from '../actions/ActionProgressService'
+import { useTicker } from '../core/useTicker'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import SubDialog from '../dialogs/SubDialog'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection } from '../kit/DocumentFrame'
+import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
 import InlineError from '../kit/InlineError'
 import PropertyField, { fieldAria } from '../kit/PropertyField'
 import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
+import StatusPill from '../kit/StatusPill'
+import StepList from '../kit/StepList'
+import { formatElapsed } from '../results/status'
 import {
   checkable, destinationNote, destinationOf, deviceDatabases, draftPlan, draftProblems, fileRows, restoreToText, setCells, setColumns, setManual, setReason, sourceDatabase, sourceSets,
   tailLogPossible, toggleSet, type RestoreDraft, type RestoreFacts
 } from './model'
-import type { RestoreService, RestoreState } from './RestoreService'
+import type { RestoreRun, RestoreService, RestoreState } from './RestoreService'
 import BackupTimeline from './BackupTimeline'
+import { outcomeTitle, overallPercent, restoredText, runNote, runSteps, sectionSummaries, stopQuestion, type RunOutcome } from './run'
 
 const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`
 
@@ -211,10 +219,87 @@ function SelectBackupDevices({ state, draft, service, browse }: Pick<SectionProp
   </SubDialog>
 }
 
+/** The confirm bar before a restore runs (owner decision 4): its lines, then Restore and Cancel; Cancel has focus and Escape answers it. */
+function RunConfirm({ state, lines, service }: { readonly state: RestoreState; readonly lines: readonly string[]; readonly service: RestoreService }) {
+  const cancel = useRef<HTMLButtonElement>(null)
+  // The safe answer has focus, so a stray Enter never overwrites a database.
+  useEffect(() => cancel.current?.focus(), [lines])
+  const textId = `restore-${state.id}-confirm`
+  return <div className="restore-confirm" role="alertdialog" aria-label="Restore Database" aria-describedby={textId}
+    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); service.cancelRun(state.id) } }}>
+    <Icon name="warning" />
+    <div id={textId} className="restore-confirm-text">{lines.map(line => <p key={line}>{line}</p>)}</div>
+    <button type="button" className="danger" onClick={() => void service.confirmRun(state.id)}>Restore</button>
+    <button type="button" ref={cancel} onClick={() => service.cancelRun(state.id)}>Cancel</button>
+  </div>
+}
+
+/** Stop over a database that existed asks first (critic A11c): Keep restoring has focus and Escape answers it. */
+function StopConfirm({ state, run, service }: { readonly state: RestoreState; readonly run: RestoreRun; readonly service: RestoreService }) {
+  const keep = useRef<HTMLButtonElement>(null)
+  useEffect(() => keep.current?.focus(), [])
+  const textId = `restore-${state.id}-stop`
+  return <div className="restore-confirm" role="alertdialog" aria-label="Stop the restore" aria-describedby={textId}
+    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); service.answerStop(state.id, false) } }}>
+    <Icon name="warning" />
+    <div id={textId} className="restore-confirm-text"><p>{stopQuestion(run.database, run.replace)}</p></div>
+    <button type="button" ref={keep} onClick={() => service.answerStop(state.id, false)}>Keep restoring</button>
+    <button type="button" className="danger" onClick={() => service.answerStop(state.id, true)}>Stop</button>
+  </div>
+}
+
+const outcomeTones: Readonly<Record<RunOutcome, StatusTone>> = { done: 'success', failed: 'critical', stopped: 'warning', unknown: 'warning' }
+const outcomeIcons: Readonly<Record<RunOutcome, IconId>> = { done: 'pass', failed: 'error', stopped: 'debug-stop', unknown: 'warning' }
+
 /**
- * Restore Database as a document (D1e): General, Files and Options as sections, the Select backup devices and Backup
- * Timeline sub-dialogs, and the Script drawer with the restore's script. OK and its Stop come with D1f; until then the
- * document says so and no menu item, command or palette entry opens it (critic A17).
+ * The Run panel at the top of the document once Restore runs (spec 9.1): the restore's title, elapsed time and overall
+ * percent, Stop's question, the steps with the running RESTORE's STATS bar, what a Stop or a failure leaves, and once it
+ * ends, the outcome with the database's state and Restore again (which keeps the choices).
+ */
+function RunPanel({ state, run, service }: { readonly state: RestoreState; readonly run: RestoreRun; readonly service: RestoreService }) {
+  const workbench = useWorkbench()
+  const running = run.phase === 'running'
+  const progress = useActionProgress(workbench.actionProgress, running ? run.requestId : undefined)
+  const now = useTicker(running)
+  const outcome = running ? undefined : run.phase as RunOutcome
+  const titleId = `restore-${state.id}-run`
+  const elapsed = run.startedAt === undefined ? 0 : (run.endedAt ?? now) - run.startedAt
+  const overall = overallPercent(run.planned, progress)
+  const steps = runSteps(run.planned, run.steps, progress, running)
+  const left = outcome ? restoredText(run.database, run.restored, run.existed) : undefined
+  return <section className="restore-run" aria-labelledby={titleId} data-run={run.phase}>
+    <div className="restore-run-head">
+      <Icon name={outcome ? outcomeIcons[outcome] : 'loading'} spin={!outcome} className={outcome ? `restore-run-${outcome}` : undefined} />
+      <h2 id={titleId} className="restore-run-title">{outcome ? outcomeTitle(outcome, run.database) : `${run.stopping ? 'Stopping' : 'Restoring'} ${displayText(run.database)}`}</h2>
+      <span className="restore-run-elapsed">{outcome ? 'Took' : 'Elapsed'} {formatElapsed(elapsed)}</span>
+      {running && <span className="restore-run-overall">
+        <span>about {overall} %</span>
+        <span className="step-list-progress" role="progressbar" aria-label={`Restoring ${run.database}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={overall} aria-valuetext={`About ${overall} percent`}>
+          <span className="step-list-fill" style={{ width: `${overall}%` }} />
+        </span>
+      </span>}
+    </div>
+    {running && run.stopConfirm && <StopConfirm state={state} run={run} service={service} />}
+    <StepList steps={steps} labelledBy={titleId} />
+    {outcome && run.error && <InlineError message={run.error.message} code={run.error.code} role="alert" context={`Restore Database on ${state.server}`} note={left}
+      actions={service.canRun(state.id) ? [{ label: 'Restore again', run: () => void service.run(state.id) }] : []} />}
+    {outcome === 'done' && <p className="restore-run-outcome" role="status"><Icon name="pass" />{left ?? `Restored ${displayText(run.database)}.`}</p>}
+    {running && <p className="document-status"><Icon name="info" />{run.stopping ? 'Stopping: SQL Server ends the running statement, then Varia undoes what this restore changed.' : runNote(run.database, run.existed)}</p>}
+  </section>
+}
+
+/** The header's state while the restore runs, with the overall percent. */
+function RunPill({ run }: { readonly run: RestoreRun }) {
+  const progress = useActionProgress(useWorkbench().actionProgress, run.requestId)
+  const overall = `about ${overallPercent(run.planned, progress)} %`
+  return <StatusPill tone="running" size="small" label={run.stopping ? 'Stopping' : `Restoring · ${overall}`} value={run.stopping ? undefined : overall} />
+}
+
+/**
+ * Restore Database as a document: General, Files and Options as sections, the Select backup devices and Backup Timeline
+ * sub-dialogs, and the Script drawer with the restore's script (D1e). Restore runs it (D1f): the confirm bar first when a
+ * fact calls for it, then the Run panel with the steps, Stop and the outcome; while it runs, the sections show their
+ * one-line summaries.
  */
 export default function RestoreDatabase({ documentId }: { documentId: string }) {
   const workbench = useWorkbench()
@@ -224,10 +309,14 @@ export default function RestoreDatabase({ documentId }: { documentId: string }) 
   if (!state) return <div className="restore-database" />
   const connectionId = workbench.documents.get(state.id)?.connectionId
   const browse: SectionProps['browse'] = (purpose, initialPath) => connectionId ? workbench.serverFiles.pick({ connectionId, purpose, ...initialPath ? { initialPath } : {} }) : Promise.resolve(undefined)
-  const { draft, facts } = state
+  const { draft, facts, run } = state
   const problems = draft ? draftProblems(draft, facts) : { general: [], files: [], options: [] }
+  const busy = run?.phase === 'running' || run?.phase === 'checking'
+  const summaries = busy && draft ? sectionSummaries(draft, facts) : undefined
   const content = (section: 'general' | 'files' | 'options') => {
     if (!draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the backups" /> : <p className="field-note">Nothing to show: the backups could not be read.</p>
+    // While it runs, the choices stay as they were sent: each section says them in a line, and the steps stay in view.
+    if (summaries) return <p className="restore-summary">{summaries[section]}</p>
     const props: SectionProps = { state, draft, facts, service: restore, problems: problems[section], browse }
     switch (section) {
       case 'general': return <GeneralSection {...props} />
@@ -235,16 +324,26 @@ export default function RestoreDatabase({ documentId }: { documentId: string }) 
       case 'options': return <OptionsSection {...props} />
     }
   }
-  const sections: FrameSection[] = restoreSections.map(section => ({ id: section.id, title: section.title, problem: problems[section.id].length > 0, content: content(section.id) }))
-  const loading = state.phase === 'loading' ? 'Reading the backups…' : state.sets === 'loading' ? 'Reading the backup sets…' : undefined
+  const sections: FrameSection[] = restoreSections.map(section => ({ id: section.id, title: section.title, problem: !summaries && problems[section.id].length > 0, content: content(section.id) }))
+  const loading = state.phase === 'loading' ? 'Reading the backups…' : state.sets === 'loading' ? 'Reading the backup sets…' : run?.phase === 'checking' ? 'Reading the server before the restore…' : undefined
   const source = draft ? sourceDatabase(draft, facts) : ''
+  const args = { tabId: state.id }
+  const verbs: Verb[] = run?.phase === 'running'
+    ? [{ command: 'restoreDatabase.stop', args, emphasis: 'danger' }]
+    : [{ command: 'restoreDatabase.refresh', args }, { command: 'restoreDatabase.run', args, emphasis: 'primary' }]
+  const outcome = run && run.phase !== 'running' && run.phase !== 'checking' && run.phase !== 'confirm' ? run.phase : undefined
+  const pill = run?.phase === 'running' ? <RunPill run={run} />
+    : outcome ? <StatusPill tone={outcomeTones[outcome]} size="small" label={{ done: 'Restored', failed: 'Failed', stopped: 'Stopped', unknown: 'Unknown' }[outcome]} /> : undefined
   const banner = <>
     {loading && <p className="document-status" role="status"><Icon name="loading" spin />{loading}</p>}
-    {state.error && <InlineError message={state.error.message} code={state.error.code} role="alert" context={`Restore Database on ${state.server}`} actions={[{ label: 'Refresh', run: () => restore.refresh(state.id) }]} />}
-    <p className="document-status"><Icon name="info" />{restoreMessages.runUnavailable}</p>
+    {state.error && <InlineError message={state.error.message} code={state.error.code} role="alert" context={`Restore Database on ${state.server}`} actions={restore.canRefresh(state.id) ? [{ label: 'Refresh', run: () => restore.refresh(state.id) }] : []} />}
+    {state.runNotice && <p className="document-status" role="status"><Icon name="warning" />{state.runNotice}</p>}
+    {state.refusal && <p className="document-status" role="alert"><Icon name="warning" />{state.refusal}</p>}
+    {run?.phase === 'confirm' && run.confirm && <RunConfirm state={state} lines={run.confirm} service={restore} />}
+    {run && run.phase !== 'checking' && run.phase !== 'confirm' && <RunPanel state={state} run={run} service={restore} />}
   </>
   return <><DocumentFrame id={`restore-${state.id}`} title={draft?.destination ? `Restore Database - ${draft.destination}` : 'Restore Database'} subtitle={source && source !== draft?.destination ? `from ${source}` : undefined}
-    crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]} banner={banner} sections={sections} frame={state.frame}
+    crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]} state={pill} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
     onFrame={frame => restore.setFrame(state.id, frame)} attributes={{ 'data-restore': state.id }}
     script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void restore.deliver(state.id, destination) }} />
     {state.dialog === 'devices' && draft && <SelectBackupDevices state={state} draft={draft} service={restore} browse={browse} />}

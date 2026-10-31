@@ -48,9 +48,9 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 18 && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("FILE_ACCESS") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+        check(Catalog.ErrorCodes.Count() == 21 && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("BACKUP_MISMATCH") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
-            "the catalogue lists the action error codes (restore's MEDIA and FILE_ACCESS not retryable) and the Delete Object and Database Properties dialogs");
+            "the catalogue lists the action error codes (restore's MEDIA, FILE_ACCESS and BACKUP_MISMATCH not retryable) and the Delete Object and Database Properties dialogs");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
@@ -103,7 +103,9 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [name]), new PlannedStatement(ActionTemplate.SetRestrictedUser, "master", [name]),
                 ActionSql.Detach(name, updateStatistics: true), new PlannedStatement(ActionTemplate.DisableLogin, "master", [name]),
                 new PlannedStatement(ActionTemplate.EnableLogin, "master", [name]), new PlannedStatement(ActionTemplate.DenyConnect, "master", [name]),
-                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name])
+                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name]),
+                // Restore Database's cleanup (D1f).
+                ActionSql.DropRestoring(name, 2_147_483_647)
             };
             foreach (var plan in plans)
             {
