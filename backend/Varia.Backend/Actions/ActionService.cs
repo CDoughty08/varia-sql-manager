@@ -45,6 +45,10 @@ internal sealed class ActionServiceOptions
     public int ReadTotal { get; init; } = 4;
     public int ExecutePerConnection { get; init; } = 1;
     public int ExecuteTotal { get; init; } = 2;
+    /// <summary>The long-job gate (the catalogue's long actions: restore, verify, backup): their DDL takes it instead of the execute
+    /// gate, so other actions on the connection stay available while one runs for hours (actionLimits.longPerConnection, longTotal).</summary>
+    public int LongPerConnection { get; init; } = 1;
+    public int LongTotal { get; init; } = 2;
     public int MaxRegistered { get; init; } = 128;
     public TimeSpan DescribeBudget { get; set; } = TimeSpan.FromSeconds(40);
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
@@ -52,6 +56,8 @@ internal sealed class ActionServiceOptions
     /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED; the
     /// action's cleanup budget (its compensation and cleanup steps) is added to it.</summary>
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>The least time between two action.progress EVENTs of one request (actionLimits.progressEventMs).</summary>
+    public TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(ActionsCatalog.Current.Limit("progressEventMs"));
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
@@ -78,8 +84,12 @@ internal sealed partial class ActionService : IDisposable
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> executeGates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> longGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim readTotal;
     private readonly SemaphoreSlim executeTotal;
+    private readonly SemaphoreSlim longTotal;
+    /// <summary>Running long jobs, each with how long a shutdown waits for it (StopWait: SQL Server ending its statement, then its cleanup).</summary>
+    private readonly ConcurrentDictionary<Task, TimeSpan> longJobs = new();
     private int activeJobs;
 
     public const string CloudMessage = "Object actions on Azure SQL Database are not supported yet.";
@@ -109,6 +119,7 @@ internal sealed partial class ActionService : IDisposable
         this.explorer = explorer ?? ExplorerCatalog.Current;
         readTotal = new SemaphoreSlim(Options.ReadTotal);
         executeTotal = new SemaphoreSlim(Options.ExecuteTotal);
+        longTotal = new SemaphoreSlim(Options.LongTotal);
         running = new RequestRegistry(Options.MaxRegistered, "object action");
     }
 
@@ -240,16 +251,18 @@ internal sealed partial class ActionService : IDisposable
             error => new ActionScriptResult(null, database, [], error));
     }
 
-    public Task<ActionExecuteResult> ExecuteAsync(ActionArgs args, CancellationToken token)
+    /// <param name="events">Queues a droppable EVENT on the request (action.progress), or null when nothing listens.</param>
+    public Task<ActionExecuteResult> ExecuteAsync(ActionArgs args, CancellationToken token, Action<object>? events = null)
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        var progress = new ActionProgress(events, Options.ProgressInterval);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
-                "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
-                "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
-                _ => ExecuteJobAsync(connection, args, target, band, job)
+                "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, progress, job),
+                "properties" => ExecutePropertiesJobAsync(connection, args, target, band, progress, job),
+                _ => ExecuteJobAsync(connection, args, target, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
     }
@@ -259,7 +272,8 @@ internal sealed partial class ActionService : IDisposable
     /// CANCELLED. Failures before any DDL, such as an engine the action does not run on or a Kerberos sign-in, are values.
     /// Stop on DDL (the request's own token) has already sent SQL Server an attention through the job's token; the reply then
     /// waits up to StopGrace plus the action's cleanup budget for the job, whose steps say what completed and what Varia
-    /// undid, and past it answers CANCELLED, an unknown outcome.</summary>
+    /// undid, and past it answers CANCELLED, an unknown outcome. A long action's DDL takes the long gate instead of the execute
+    /// gate, and a shutdown waits for its job (DrainLong), so its cleanup still runs when the backend is closed under it.</summary>
     private async Task<T> RunAsync<T>(string connectionId, string requestId, string action, bool read, TimeSpan? budget, CancellationToken token,
         Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed)
     {
@@ -275,8 +289,14 @@ internal sealed partial class ActionService : IDisposable
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var job = Task.Run(() => JobAsync(connectionId, read, profile, served.Band, work, failed, jobSource), CancellationToken.None);
+            var gate = read ? ActionGate.Read : catalog.IsLong(action) ? ActionGate.Long : ActionGate.Execute;
+            var job = Task.Run(() => JobAsync(connectionId, gate, profile, served.Band, work, failed, jobSource), CancellationToken.None);
             _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+            if (gate == ActionGate.Long)
+            {
+                longJobs[job] = StopWait(action);
+                _ = job.ContinueWith(done => longJobs.TryRemove(done, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            }
             try { return await job.WaitAsync(source.Token); }
             catch (OperationCanceledException) when (source.IsCancellationRequested && !token.IsCancellationRequested)
             {
@@ -294,19 +314,25 @@ internal sealed partial class ActionService : IDisposable
         finally { running.Unregister(requestId, entry); }
     }
 
-    private async Task<T> JobAsync<T>(string connectionId, bool read, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
+    private async Task<T> JobAsync<T>(string connectionId, ActionGate kind, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
         Func<ActionError, T> failed, CancellationTokenSource jobSource)
     {
         Interlocked.Increment(ref activeJobs);
         try
         {
             var token = jobSource.Token;
-            var gate = (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
-            var total = read ? readTotal : executeTotal;
-            if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy();
+            var read = kind == ActionGate.Read;
+            var (gates, perConnection, total) = kind switch
+            {
+                ActionGate.Read => (readGates, Options.ReadPerConnection, readTotal),
+                ActionGate.Long => (longGates, Options.LongPerConnection, longTotal),
+                _ => (executeGates, Options.ExecutePerConnection, executeTotal)
+            };
+            var gate = gates.GetOrAdd(connectionId, _ => new SemaphoreSlim(perConnection));
+            if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy(kind);
             try
             {
-                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy();
+                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy(kind);
                 try
                 {
                     await using var connection = host.Connection(connectionId);
@@ -332,7 +358,24 @@ internal sealed partial class ActionService : IDisposable
         }
     }
 
-    private static RequestException Busy() => new("BUSY", "Other object actions are running on this server. Retry after they finish.");
+    /// <summary>Which gates a request takes: describe and script the read gates, DDL the execute gates, a long action's DDL the long ones.</summary>
+    private enum ActionGate { Read, Execute, Long }
+
+    /// <summary>The gates are per Varia connection (critic A26): two connections to one server have a gate each.</summary>
+    private static RequestException Busy(ActionGate kind) => kind == ActionGate.Long
+        ? new("BUSY", "Another restore or backup is running on this connection. Retry after it finishes.")
+        : new("BUSY", "Other object actions are running on this connection. Retry after they finish.");
+
+    /// <summary>For a backend that is shutting down, after CancelAll: waits for every long job to end, each within its Stop wait
+    /// (StopGrace plus its cleanup budget), so a restore stopped by a reload, a quit or Restart SQL Backend still removes what it
+    /// created before the process exits. Main gives such a generation the longer grace (methodPolicies' drainMs). True when none is left.</summary>
+    public bool DrainLong()
+    {
+        var running = longJobs.ToArray();
+        if (running.Length == 0) return true;
+        try { return Task.WaitAll([.. running.Select(pair => pair.Key)], running.Max(pair => pair.Value)); }
+        catch (AggregateException) { return running.All(pair => pair.Key.IsCompleted); }
+    }
 
     // --- Preflight --------------------------------------------------------------------------------------------------------
 
@@ -559,7 +602,8 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Runs planned statements through runner v2 on the action's connection. Before the first main statement that needs
     /// a database to itself, the connection's own pools leave it (FreeDatabaseAsync), inside that step, so Stop reaches it.</summary>
-    private async Task<RunOutcome> RunPlannedAsync(SqlConnection connection, string connectionId, string action, IReadOnlyList<PlannedStatement> plan, string? inUseAdvice, CancellationToken token)
+    private async Task<RunOutcome> RunPlannedAsync(SqlConnection connection, string connectionId, string action, IReadOnlyList<PlannedStatement> plan, string? inUseAdvice, CancellationToken token,
+        ActionProgress? progress = null)
     {
         var freed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var steps = plan.Select(ActionSql.Checked).Select(statement => new RunStep(StepTitle(statement.Template), async context =>
@@ -568,7 +612,7 @@ internal sealed partial class ActionService : IDisposable
                 await FreeDatabaseAsync(connection, connectionId, statement.Names[0], context.Token);
             await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction);
         }, statement.Kind, statement.Undoes, statement.When)).ToList();
-        return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action));
+        return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action), progress: progress);
     }
 
     /// <summary>Frees a database of the backend's own sessions (critic A5): the server-scope pools of every connection to the server
@@ -624,6 +668,23 @@ internal sealed partial class ActionService : IDisposable
         }, error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
     }
 
+    /// <summary>The live checks' only way to run steps of their own (a scratch BACKUP with STATS) through the action path as a long
+    /// action's steps will run: the engine gate, the registry, the action's gates (the long gate for a long action), its connection
+    /// and prologue, Stop, runner v2 with progress, and the shutdown drain. Not reachable from the wire, which asks only for catalogue
+    /// actions and never carries SQL.</summary>
+    internal Task<ActionExecuteResult> ExecuteStepsAsync(string connectionId, string requestId, string action, Func<SqlConnection, IReadOnlyList<RunStep>> plan, Action<object>? events,
+        CancellationToken token)
+    {
+        var watch = Stopwatch.StartNew();
+        var progress = new ActionProgress(events, Options.ProgressInterval);
+        return RunAsync(connectionId, requestId, action, read: false, null, token, async (connection, profile, band, job) =>
+        {
+            var messages = CollectMessages(connection, progress);
+            var (steps, failure, _) = await RunStepsAsync(connection, plan(connection), null, job, CleanupBudget(action), progress: progress);
+            return new ActionExecuteResult(steps, messages.Collected(), watch.ElapsedMilliseconds, failure);
+        }, error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
+    }
+
     // --- Jobs -------------------------------------------------------------------------------------------------------------
 
     private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, ObjectRefDto target, int band, CancellationToken token)
@@ -653,32 +714,40 @@ internal sealed partial class ActionService : IDisposable
     internal static string ScriptText(IEnumerable<PlannedStatement> plan) =>
         string.Concat(plan.Where(statement => statement.Kind == StepKind.Main).Select(ActionSql.Checked).Select(ActionSql.ScriptText));
 
-    private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, ActionProgress progress, CancellationToken token)
     {
-        var messages = CollectMessages(connection);
+        var messages = CollectMessages(connection, progress);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, target);
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
-        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
+        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token,
+            progress);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
         if (plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
             host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
         return new(steps, messages.Collected(), 0, failure);
     }
 
-    /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>
-    private sealed class MessageLog(int max, int chars)
+    /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded. A long step's
+    /// progress messages (3211) go to the request's ActionProgress instead and never count toward the kept ones.</summary>
+    internal sealed class MessageLog(int max, int chars, ActionProgress? progress)
     {
         private readonly List<string> messages = [];
-        public void Add(SqlError item) { lock (messages) if (item.Class <= 10 && messages.Count < max) messages.Add(ScriptingErrors.Clip(item.Message, chars)); }
+        public void Add(SqlError item) => Add(item.Class, item.Number, item.Message);
+        internal void Add(byte severity, int number, string message)
+        {
+            if (severity > 10) return;
+            if (number == ActionProgress.StatsMessage) { progress?.Observe(number, message); return; }
+            lock (messages) if (messages.Count < max) messages.Add(ScriptingErrors.Clip(message, chars));
+        }
         public List<string> Collected() { lock (messages) return [.. messages]; }
     }
 
-    private MessageLog CollectMessages(SqlConnection connection)
+    internal MessageLog CollectMessages(SqlConnection connection, ActionProgress? progress = null)
     {
-        var log = new MessageLog((int)catalog.Limit("infoMessages"), (int)catalog.Limit("infoMessageChars"));
+        var log = new MessageLog((int)catalog.Limit("infoMessages"), (int)catalog.Limit("infoMessageChars"), progress);
         connection.InfoMessage += (_, e) => { foreach (SqlError item in e.Errors) log.Add(item); };
         return log;
     }
@@ -769,9 +838,9 @@ internal sealed partial class ActionService : IDisposable
         return new(text, "master", []);
     }
 
-    private async Task<ActionExecuteResult> ExecutePropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionExecuteResult> ExecutePropertiesJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, ActionProgress progress, CancellationToken token)
     {
-        var messages = CollectMessages(connection);
+        var messages = CollectMessages(connection, progress);
         // The backend's own idle pooled connections in the database must not hold it (SET options WITH NO_WAIT, COLLATE), nor
         // count as other connections in the preflight.
         var cleared = host.FreeDatabase(args.ConnectionId, target.Name!);
@@ -781,7 +850,7 @@ internal sealed partial class ActionService : IDisposable
         // changes that need the database to themselves (Broker Enabled, Containment type, COLLATE) are never asked about.
         var advice = args.CloseConnections != true && Exclusive(args.Changes!) ? ActionErrors.OpenConnectionsAdvice : ActionErrors.OtherConnectionsAdvice;
         var (steps, failure, _) = await RunStepsAsync(connection, [.. plan.Select(statement => new RunStep(statement.Title, context => RunAlterAsync(connection, statement, dryRun: false, context.Token)))],
-            advice, token, CleanupBudget(args.Action));
+            advice, token, CleanupBudget(args.Action), progress: progress);
         return new(steps, messages.Collected(), 0, failure);
     }
 
@@ -794,6 +863,14 @@ internal sealed partial class ActionService : IDisposable
         Add(command, "@p1", SqlDbType.NVarChar, 128, statement.Database);
         Add(command, "@p2", SqlDbType.NVarChar, 128, statement.Name);
         Add(command, "@n1", SqlDbType.BigInt, 0, statement.Number);
+        return await ReadAllAsync(command, token);
+    }
+
+    /// <summary>Runs an action's statement and reads every result set's values (text). Always a reader, never ExecuteNonQueryAsync:
+    /// SqlClient's async non-query path holds every info message until the statement ends (probed), which would hold a long step's
+    /// 3211 progress (ActionProgress) until it is done; the live progress check guards this.</summary>
+    internal static async Task<List<string?>> ReadAllAsync(SqlCommand command, CancellationToken token)
+    {
         var values = new List<string?>();
         await using var reader = await command.ExecuteReaderAsync(token);
         do
@@ -823,14 +900,7 @@ internal sealed partial class ActionService : IDisposable
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, statement.Database);
         for (var index = 0; index < statement.Names.Count; index++) Add(command, "@p" + (index + 1), SqlDbType.NVarChar, 128, statement.Names[index]);
-        var values = new List<string?>();
-        await using var reader = await command.ExecuteReaderAsync(token);
-        do
-        {
-            while (await reader.ReadAsync(token))
-                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
-        } while (await reader.NextResultAsync(token));
-        return values;
+        return await ReadAllAsync(command, token);
     }
 
     /// <summary>The live checks' only way to see what an executable batch would run: SQL Server builds the statement from the
@@ -848,6 +918,7 @@ internal sealed partial class ActionService : IDisposable
         running.Forget(connectionId);
         readGates.TryRemove(connectionId, out _);
         executeGates.TryRemove(connectionId, out _);
+        longGates.TryRemove(connectionId, out _);
     }
 
     public void CancelAll() => running.ForgetAll();
@@ -857,5 +928,6 @@ internal sealed partial class ActionService : IDisposable
         running.ForgetAll();
         readGates.Clear();
         executeGates.Clear();
+        longGates.Clear();
     }
 }

@@ -248,6 +248,18 @@ export const actionExecuteResultSchema = z.object({
   elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
+/** The index a step takes in the reply, or the percent a long step reports. */
+const stepIndex = z.number().int().min(0).max(actionLimits.statements + 7)
+const percent = z.number().int().min(0).max(100)
+/** An actions.execute EVENT body (D1c): a long step's progress from SQL Server's STATS messages, droppable, the latest wins. Main
+ *  drops the request's other EVENTs (the body is not one of these) without failing the request. */
+export const actionProgressEventSchema = z.object({ type: z.literal('action.progress'), step: stepIndex, percent }).strict()
+export type ActionProgressEvent = z.infer<typeof actionProgressEventSchema>
+/** What main pushes on `varia:actions-progress` to the window that sent the request, at most actionLimits.progressPerSecond a second
+ *  per request: the request's id, the step's index in its reply, and the percent. */
+export interface ActionProgress { readonly requestId: string; readonly step: number; readonly percent: number }
+export const actionProgressSchema = z.object({ requestId: z.uuid(), step: stepIndex, percent }).strict() satisfies z.ZodType<ActionProgress>
+
 export const actionCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(actionLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')
 }).strict() satisfies z.ZodType<ActionCancelRequest>

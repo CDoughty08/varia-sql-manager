@@ -256,6 +256,21 @@ try {
   await dialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(dialog).toHaveCount(0)
   await expect(await explorerRow(page, 'crash-server')).toBeVisible()
+  // A long action's progress (D1c): main checks the backend's action.progress EVENTs and pushes them to the window that sent the
+  // request, at most 4 a second (the first of each step at once), with only the request id, step and percent.
+  await expect.poll(async () => (await calls()).some(call => call.params?.connectionId)).toBe(true)
+  const connectionId = (await calls()).findLast(call => call.params?.connectionId).params.connectionId
+  const progress = await page.evaluate(async connectionId => {
+    const seen = []
+    const stop = window.varia.onActionProgress(value => seen.push(value))
+    const requestId = crypto.randomUUID()
+    const result = await window.varia.executeObjectAction({ action: 'delete', connectionId, requestId, target: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'Orders' }, closeConnections: false, deleteHistory: false })
+    await new Promise(resolve => setTimeout(resolve, 200))
+    stop()
+    return { error: result.ok ? undefined : result.error, seen, requestId }
+  }, connectionId)
+  expect(progress.error).toBeUndefined()
+  expect(progress.seen).toEqual([{ requestId: progress.requestId, step: 0, percent: 25 }, { requestId: progress.requestId, step: 1, percent: 40 }])
   await typeSql('SELECT 1;')
   // The script is running when the backend crashes.
   await writeFile(join(control, 'hold', 'query.execute'), '')

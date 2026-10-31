@@ -127,6 +127,7 @@ pages, limits, error codes, display formats, benchmarks).
   Explorer's status chips are `background` views (`ExplorerStatusService`, one per connected server and login, owned by
   the pane, sampling in master): at most 8 a window, in slots no other view wants, given up to views the user opens when
   the window's slots are taken or the backend refuses them `BUSY` on that server; they never reload the tree.
+  Job progress EVENTs (`results.export`, `actions.execute`) are droppable, per-request and not periodic data.
 - UI result caches are 256 windows and 16 Mi units; the worker cache is 64 MiB.
 - Bound every input and output: 4 MiB request and 16 MiB response bodies, 1M-character scripts, 256 pending requests
   per backend generation, a deadline per method (`methodPolicies`), credit for result streams (16 MiB per stream, 64 MiB
@@ -180,7 +181,11 @@ pages, limits, error codes, display formats, benchmarks).
   the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
   or the status bar's for a rename), whose reply waits for SQL Server and lists the steps completed; and never logging
   names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`. The test-only dry
-  run is an internal C# method, never a request field.
+  run is an internal C# method, never a request field. Action statements run through a reader (`ActionService.ReadAllAsync`),
+  never `ExecuteNonQuery`, whose info messages SqlClient holds until the statement ends; a long action (the catalogue's `long`)
+  takes the long gate (per Varia connection, like the others) and reports message 3211 as droppable `action.progress` EVENTs
+  that main relays only to the requesting window (`varia:actions-progress`), and a closing backend stops it and waits for
+  its cleanup (`DrainCommitted`; main's `drainMs`, `actionDrainMs`).
 - Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
   regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with
   `npx vitest run tests/table-designer-catalog.test.ts -u`. Designer DDL runs only through `actions.execute`'s `createTable`,

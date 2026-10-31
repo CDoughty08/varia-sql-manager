@@ -49,6 +49,10 @@ export interface ObjectActionSpec {
   /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
    *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
   readonly cleanupMs?: number
+  /** A long job (a restore, a verify, a backup): its DDL takes the long gate (`longPerConnection`, `longTotal`) instead of the
+   *  execute gate, so other actions on the connection stay available; it reports SQL Server's STATS progress as action.progress
+   *  EVENTs; and a closing generation waits for it to stop and clean up (`actionDrainMs`). */
+  readonly long?: boolean
 }
 /** Box editions and Managed Instance: Azure SQL Database reaches one database per connection and refuses USE, so its
  *  actions are a follow-up. */
@@ -398,11 +402,25 @@ export const actionLimits = {
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
-  cleanupMs: 10_000
+  cleanupMs: 10_000,
+  /** A long step's progress (SQL Server's 3211 STATS messages): EVENTs at most this often, pushed to the page at most this many a second. */
+  progressEventMs: 250, progressPerSecond: 4,
+  /** The long-job gate, per Varia connection and in all (critic A26): long actions take it instead of the execute gate. */
+  longPerConnection: 1, longTotal: 2,
+  /** What a closing generation's grace adds to a long action's own Stop wait (stopGraceMs plus its cleanup budget). */
+  drainMarginMs: 5_000
 } as const
 
 /** Whether an action runs on a server of this engine. */
 export const actionServes = (action: ObjectAction, engine: ServerEngine): boolean => objectActionSpecs[action].engines.includes(engine)
+
+/** How long main lets a closing generation run while this action executes (methodPolicies' drainMs): for a long action, the
+ *  backend's own wait for it (stopGraceMs, then its cleanup budget) plus a margin; 0 (main's usual grace) for the others. */
+export function actionDrainMs(action: string, specs: { readonly [A in ObjectAction]: Pick<ObjectActionSpec, 'long' | 'cleanupMs'> } = objectActionSpecs): number {
+  // actions.execute also carries the Table Designer's createTable, which is not a menu action and never long.
+  const spec = Object.hasOwn(specs, action) ? specs[action as ObjectAction] : undefined
+  return spec?.long ? actionLimits.stopGraceMs + (spec.cleanupMs ?? actionLimits.cleanupMs) + actionLimits.drainMarginMs : 0
+}
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */
 export const unknownOutcomeMessage = 'The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.'
@@ -434,7 +452,7 @@ export function actionsCatalogJson(): string {
     : [])
   const actionJson = (action: ObjectAction) => {
     const spec: ObjectActionSpec = objectActionSpecs[action]
-    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
+    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, long: spec.long }
   }
   return [
     '{',

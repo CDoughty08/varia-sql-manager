@@ -121,7 +121,8 @@ describe('IPC validation', () => {
       ['actions.describe', { ...ids, dialog: 'tableDesigner', target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
-    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true })
+    // A long action (D1c) also lets a closing backend finish its cleanup (drainMs; tests/action-progress.test.ts).
+    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true, drainMs: expect.any(Function) })
     expect(methodPolicies['actions.describe']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 45_000 })
     expect(methodPolicies['actions.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 30_000 })
     // Stop is main's own channel (varia:actions-cancel), not a backend method.

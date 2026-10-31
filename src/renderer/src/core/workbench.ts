@@ -49,6 +49,7 @@ import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
+import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
@@ -136,6 +137,8 @@ export interface Workbench extends Disposable {
   readonly scripting: ScriptingService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
+  /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
+  readonly actionProgress: ActionProgressService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
@@ -275,6 +278,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
+  const actionProgress = new ActionProgressService(api)
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }
@@ -320,6 +324,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settings,
     scripting,
     actions,
+    actionProgress,
     dialogs,
     ssisCatalog,
     longRuns,
@@ -347,6 +352,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
