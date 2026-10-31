@@ -778,7 +778,7 @@ function ssisExecute(params) {
   if (operation.status === 1) return error('NOT_STARTED', subject + ' was created but has not been started, so there is nothing to stop.')
   // Stopping for the next sample, which shows it; Canceled from the one after.
   Object.assign(operation, { status: 8, stoppedBy: 'FAKE\\smoke', stopSample: catalog.samples + 1 })
-  return { steps: [{ status: 'done' }], elapsedMs: 1 }
+  return { steps: [{ status: 'done', title: 'Stop the operation' }], elapsedMs: 1 }
 }
 function liveUpdate(id, params) {
   const live = [...lives.values()].find(item => item.subscriptionId === params.subscriptionId && item.grant && item.probes)
@@ -951,7 +951,7 @@ async function workbench(id, method, params, credit) {
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
-    case 'actions.execute': return respond(id, { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 })
+    case 'actions.execute': return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
     case 'ssis.describe': return ssisDescribe(id, params)

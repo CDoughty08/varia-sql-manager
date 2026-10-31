@@ -198,11 +198,15 @@ internal static class LiveSchedulerChecks
         check(LiveConnections.Pool("server", "SSISDB") == (null, " - Activity Monitor") && LiveConnections.Pool("ssisdb", "SSISDB") == ("SSISDB", " - Integration Services")
             && LiveConnections.Pool("ssisdb", "VariaScratch_x_ssis") == ("VariaScratch_x_ssis", " - Integration Services")
             && LiveConnections.Pool("server", "explorer", Profile(17, 3), "SSISDB") == ("master", " - Activity Monitor") && LiveConnections.Pool("server", "explorer", Profile(12, 8), "SSISDB") == ("master", " - Activity Monitor")
-            && LiveConnections.Pool("server", "explorer", Profile(12, 5), "SSISDB") == (null, " - Activity Monitor") && LiveConnections.Pool("server", "activity", Profile(17, 3), "SSISDB") == (null, " - Activity Monitor")
+            && LiveConnections.Pool("server", "explorer", Profile(12, 5), "SSISDB") == (null, " - Activity Monitor") && LiveConnections.Pool("server", "activity", Profile(17, 3), "SSISDB") == ("master", " - Activity Monitor")
+            && LiveConnections.Pool("server", "activity", Profile(12, 8), "SSISDB") == ("master", " - Activity Monitor") && LiveConnections.Pool("server", "activity", Profile(12, 5), "SSISDB") == (null, " - Activity Monitor")
+            && LiveConnections.Pool("server", "activity", Profile(17, 3) with { Contained = true }, "SSISDB") == (null, " - Activity Monitor")
+            && LiveConnections.Pool("server", "explorer", Profile(17, 3) with { Contained = true }, "SSISDB") == (null, " - Activity Monitor")
+            && LiveConnections.Pool("ssisdb", "ssis", Profile(17, 3), "SSISDB") == ("SSISDB", " - Integration Services") && !ServerProfile.Fallback("16.00.4135").ServerScopeInMaster
             && LiveConnections.Band(Profile(16, 3)) == 16 && LiveConnections.Band(Profile(12, 8)) == LiveSql.MaxBand && LiveConnections.Band(Profile(18, 3)) == LiveSql.MaxBand
             && LiveConnections.Band(Profile(12, 3)) == 12 && LiveConnections.ServerStatePermission(Profile(16, 2)) == "VIEW SERVER PERFORMANCE STATE"
             && LiveConnections.ServerStatePermission(Profile(15, 2)) == "VIEW SERVER STATE" && LiveConnections.ServerStatePermission(Profile(12, 8)) == "VIEW SERVER STATE",
-            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one, in the catalog's database (the checks' fake one too), Object Explorer's status in master on box servers and Managed Instance (not on Azure SQL Database); Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
+            "server probes use the \" - Activity Monitor\" pool and SSISDB the \" - Integration Services\" one, in the catalog's database (the checks' fake one too), Object Explorer's status and Activity Monitor in master on box servers and Managed Instance (not on Azure SQL Database, nor for a contained database user or an unchecked sign-in); Managed Instance runs the newest band; 2022 and later ask for VIEW SERVER PERFORMANCE STATE");
     }
 
     private static LiveRawSample Raw(long? ms, long? start, double?[] values, double?[]? bases = null) => new(ms, start, values, bases ?? new double?[values.Length]);

@@ -58,7 +58,7 @@ describe('object dialog frame', () => {
   })
   it('lists a run\'s steps with their state in words, and nothing before the run reports any', () => {
     expect(html(createElement(StepsPanel, { steps: [] }))).toBe('')
-    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', message: 'Close connections' }, { status: 'failed', message: 'Take database offline' }, { status: 'skipped', message: 'Restore access' }] }))
+    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline' }, { status: 'skipped', title: 'Restore access' }] }))
     expect(panel).toContain('<section class="object-dialog-steps" aria-labelledby="object-dialog-steps"><div class="object-dialog-caption" id="object-dialog-steps">Steps</div>')
     expect([...panel.matchAll(/data-status="(\w+)"/g)].map(match => match[1])).toEqual(['done', 'failed', 'skipped'])
     expect(panel).toContain('<span class="visually-hidden">Failed: </span>Take database offline')

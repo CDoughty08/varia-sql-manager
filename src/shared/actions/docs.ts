@@ -7,6 +7,8 @@ import {
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
+import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
+import { designerEngines } from '../designer/catalog.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
 const row = (cells: readonly string[]) => '| ' + cells.map(cell).join(' | ') + ' |'
@@ -39,7 +41,29 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   collations: 'Collations the Collation list offers',
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
-  statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms'
+  statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
+  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this'
+}
+const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
+const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
+  password: 'UTF-16 code units in a password',
+  databases: 'Databases New Login and Login Properties list',
+  languages: 'Languages the Default language list offers',
+  serverRoles: 'Server roles listed and chosen',
+  roles: 'Database roles listed and chosen per database',
+  schemas: 'Schemas listed per database',
+  mappings: 'Database user mappings per request',
+  credentials: 'Credentials mapped per request',
+  certificates: 'Certificates listed',
+  asymmetricKeys: 'Asymmetric keys listed',
+  permissions: 'Server permissions per request',
+  sidHex: 'Characters of a SID as hexadecimal text',
+  stepTitle: 'Characters in a step\'s title',
+  stepDetail: 'Characters in a step\'s detail',
+  ownedDatabases: 'Databases a login owns that the login preflight names',
+  mappedUsers: 'Mapped database users Delete Login lists',
+  scanDatabases: 'Databases the mapped-user scan reads',
+  serviceNames: 'Service accounts the service lookup reads'
 }
 
 // As src/shared/commands/menus.ts titles them (that module needs a bundler; this one loads in plain Node).
@@ -68,7 +92,7 @@ function narrowingDocs(): string[] {
       : 'No rule narrows a database\'s actions yet.',
     '',
     `An action can name the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
-    'the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.',
+    'the Runs on column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.',
     ''
   ]
 }
@@ -157,11 +181,15 @@ export function renderObjectActionsDocs(): string {
     '',
     '## Actions',
     '',
-    table(['Action', 'Menu title', 'Command', 'Kind', 'Menu', 'Group', 'Mnemonic', 'Windows and Linux', 'macOS', 'Servers', 'Context key'], objectActions.map(action => {
-      const spec: (typeof objectActionSpecs)[typeof action] & { readonly menuTitle?: string; readonly menu?: string; readonly engines?: readonly string[] } = objectActionSpecs[action]
+    table(['Action', 'Menu title', 'Command', 'Kind', 'Menu', 'Group', 'Mnemonic', 'Windows and Linux', 'macOS', 'Runs on', 'Context key'], objectActions.map(action => {
+      const spec: (typeof objectActionSpecs)[typeof action] & { readonly menuTitle?: string; readonly menu?: string } = objectActionSpecs[action]
       return [code(action), spec.menuTitle ?? spec.title, code(spec.command), spec.class + (spec.dialog ? ` (${code(spec.dialog)})` : ''), code(spec.menu ?? 'explorer.context'), `${code(spec.group)} ${spec.order}`, spec.mnemonic,
-        keys(action, false), keys(action, true), spec.engines?.join(', ') ?? 'All', code(actionContextKey(action))]
+        keys(action, false), keys(action, true), spec.engines.map(engine => engineNames[engine]).join(', '), code(actionContextKey(action))]
     })),
+    '',
+    '"Runs on" is each action\'s `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL',
+    'Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a',
+    `connection. The table designer's \`createTable\` runs on ${designerEngines.map(engine => engineNames[engine]).join(' and ')}.`,
     '',
     'Keys work while Object Explorer has focus and no text field does. Delete\'s access key is E: Disconnect has SSMS\'s D in',
     'Varia\'s one Object Explorer menu.',
@@ -219,6 +247,28 @@ export function renderObjectActionsDocs(): string {
     'Server has ended the statement, with each step done, cancelled or skipped, so the dialog or document says what completed',
     'before Stop.',
     '',
+    '### Steps, compensation and cleanup',
+    '',
+    'Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled or skipped), a title, SQL',
+    'Server\'s message for a failed one, and for some a detail (a name) or progress. The first failure stops the rest, which are',
+    'skipped. An action may also plan compensation steps, each undoing one earlier step once that step completed and a later one',
+    'failed or was stopped (restoring a database\'s user access after a failed rename, for example), and cleanup steps that run',
+    'after any failure or Stop (removing a partly restored database Varia created). They run on the same connection under a fresh',
+    'budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended. A',
+    'Stop\'s reply waits for SQL Server to end the statement and then for them, so it never reports an unknown outcome while',
+    'Varia\'s own cleanup runs. An action can instead run its steps in one transaction (the table designer\'s Save): a failure or',
+    'Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.',
+    '',
+    'Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and',
+    'before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection',
+    'to that server: for each connection whose own database it is (the Connect dialog\'s Database, or the login\'s default, read',
+    'at connect), Object Explorer\'s, scripting\'s, SSIS\'s and the live views\' server-scope connections open in master from then',
+    'on (unless the login is a contained database user, who cannot open master, or the connect could not read the server\'s',
+    'profile), the idle pooled connections in the database are closed, and for up to a second the backend waits for SQL Server',
+    'to end the sessions its pooled connections were given (with VIEW SERVER STATE; without it the action cannot see them).',
+    'Activity Monitor and Object Explorer\'s status sample in master on SQL Server and Managed Instance, for the same reason,',
+    'except for a contained database user or an unread profile. Query windows are the user\'s own and stay where they are.',
+    '',
     'Deleting a database runs SSMS\'s statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK',
     'IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history',
     '(`msdb.dbo.sp_delete_database_backuphistory`). SSMS deletes the history first, so a DROP that fails (for example, a',
@@ -226,6 +276,21 @@ export function renderObjectActionsDocs(): string {
     '',
     `If the backend stops while an action runs: "${unknownOutcomeMessage}"`,
     '',
+    '### Shared statements',
+    '',
+    'Later actions plan these statements. Each is built by SQL Server from constant text, linted, and checked against hostile',
+    'names by a live dry run:',
+    '',
+    table(['Step', 'As Script Action writes it'], [
+      ['Restore multi-user access', '`ALTER DATABASE [db] SET  MULTI_USER`'],
+      ['Restore restricted user access', '`ALTER DATABASE [db] SET  RESTRICTED_USER`'],
+      ['Detach the database', '`EXEC master.dbo.sp_detach_db @dbname = N\'db\', @skipchecks = \'false\'` (\'true\' when Update Statistics is cleared)'],
+      ['Disable the login, Enable the login', '`ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE`'],
+      ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
+      ['Drop the database user', '`DROP USER [user]`, in its database']
+    ]),
+    '',
+    ...loginDocs(),
     '## Errors',
     '',
     'Failures come back as values in the result. Retryable ones can succeed when tried again.',
@@ -237,6 +302,35 @@ export function renderObjectActionsDocs(): string {
     table(['Limit', 'Value', 'Meaning'], (Object.keys(limitNotes) as (keyof typeof actionLimits)[]).map(key => [code(key), actionLimits[key].toLocaleString('en-US'), limitNotes[key]])),
     ''
   ].join('\n')
+}
+
+const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
+const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
+/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
+function loginDocs(): string[] {
+  const types = Object.entries(loginTypeSubtypes)
+  return [
+    '## Logins',
+    '',
+    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
+    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
+    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
+    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
+    'another session is changing, and never a password hash, which no Varia statement may name.',
+    '',
+    '✓ allowed, ○ shown greyed and refused, – not offered.',
+    '',
+    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
+      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
+    '',
+    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
+    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
+    '',
+    '### Login limits',
+    '',
+    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
+    ''
+  ]
 }
 
 const notOnText = (def: DatabaseOptionDef) => def.notOn?.join(', ') ?? ''

@@ -3,6 +3,8 @@
 // the grid, the property grids, the palette and docs/table-designer.md read it, and the backend embeds
 // designerCatalogJson() as Designer/designer-catalog.json (a vitest file snapshot keeps that copy in sync), so C# holds
 // no type rules of its own. Erasable TypeScript (no enums), so Node's type stripping can load it too.
+import type { ServerEngine } from '../explorer/catalog.ts'
+
 /** How a type takes parameters: none, a length in bytes or characters (n for Unicode), precision and scale, a fractional
  *  seconds scale, or a vector's dimensions. */
 export type TypeParams = 'none' | 'length' | 'nlength' | 'precisionScale' | 'scale' | 'dimensions'
@@ -103,6 +105,8 @@ export const designerLimits = {
 /** The describe and request ids the designer adds to the object-action path; they live here, not in actions-catalog.json. */
 export const designerDescribeIds = ['tableDesigner'] as const
 export const designerRequestActions = ['createTable'] as const
+/** The servers Save and Script run on (critic A1), as an object action's `engines`. */
+export const designerEngines: readonly ServerEngine[] = ['box', 'managedInstance']
 
 // --- Properties --------------------------------------------------------------------------------------------------------
 
@@ -283,6 +287,7 @@ export function designerCatalogJson(): string {
     '{',
     `  "bounds": ${line(typeBounds)},`,
     `  "describes": ${line(designerDescribeIds)},`,
+    `  "engines": ${line(designerEngines)},`,
     `  "limits": ${line(designerLimits)},`,
     `  "requests": ${line(designerRequestActions)},`,
     `  "reservedKeywords": ${line(reservedKeywords)},`,

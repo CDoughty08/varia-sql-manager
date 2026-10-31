@@ -21,7 +21,7 @@ const setupOf = (changes: Partial<SsisCatalogSetup> = {}): ApiResult<SsisCatalog
   ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: true, backupFile: 'C:\\DTS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf', ...changes }, elapsedMs: 1 }
 })
 const titles = ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
-const created: ApiResult<SsisExecuteResult> = { ok: true, value: { steps: titles.map(message => ({ status: 'done', message })), elapsedMs: 1 } }
+const created: ApiResult<SsisExecuteResult> = { ok: true, value: { steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 } }
 const secret = "Pa'ss]--w0rd-marker"
 
 /** The service over fakes: the setup answers at once unless a test holds it, and Create waits for the test to answer. */
@@ -139,7 +139,7 @@ describe('CreateCatalogService', () => {
     const running = service.create(secret, secret)
     const message = 'Msg 15118: Password validation failed. Varia removed what Create Catalog had created, so the catalog does not exist.'
     execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'SQL_ERROR', message, retryable: true }, steps: [
-      { status: 'done', message: titles[1] }, { status: 'failed', message }, { status: 'skipped', message: titles[3] }, { status: 'skipped', message: titles[4] }, { status: 'done', message: 'Remove the incomplete catalog' }
+      { status: 'done', title: titles[1] }, { status: 'failed', title: titles[2], message }, { status: 'skipped', title: titles[3] }, { status: 'skipped', title: titles[4] }, { status: 'done', title: 'Remove the incomplete catalog', compensates: true }
     ] } })
     await running
     expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'SQL_ERROR', message } })
@@ -186,8 +186,8 @@ describe('CreateCatalogService', () => {
     service.stop()
     const message = 'Create Catalog was stopped at "Create the maintenance job"; SQL Server cancelled that statement. Removing what Create Catalog had created failed too (Lock request time out period exceeded.): delete the SSISDB database before you try again.'
     execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'CANCELLED', message, retryable: true }, steps: [
-      { status: 'done', message: titles[1] }, { status: 'done', message: titles[2] }, { status: 'done', message: titles[3] }, { status: 'cancelled', message: titles[4] },
-      { status: 'failed', message: 'Remove the incomplete catalog: Lock request time out period exceeded.' }
+      { status: 'done', title: titles[1] }, { status: 'done', title: titles[2] }, { status: 'done', title: titles[3] }, { status: 'cancelled', title: titles[4] },
+      { status: 'failed', title: 'Remove the incomplete catalog', message: 'Remove the incomplete catalog: Lock request time out period exceeded.', compensates: true }
     ] } })
     await running
     expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'CANCELLED', message } })
