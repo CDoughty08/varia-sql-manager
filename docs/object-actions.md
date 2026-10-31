@@ -19,6 +19,13 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
 connection. The table designer's `createTable` runs on SQL Server and Managed Instance.
 
+Actions that make an object open their dialog on a folder and name its owner as their target; no tree row offers them, so
+they have their own commands and no context key:
+
+| Action | Title | Dialog | Servers |
+| --- | --- | --- | --- |
+| `createLogin` | New Login | `newLogin` | SQL Server |
+
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
 Select Top 1000 Rows follows Tools › Options › SQL Server Object Explorer › Commands (Select Top <n> Rows).
@@ -66,6 +73,7 @@ the Servers column above says which. Menus read the server through `explorerServ
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
+| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), Status (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -310,6 +318,7 @@ names by a live dry run:
 | Disable the login, Enable the login | `ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE` |
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
+| Add to a server role (New Login) | `ALTER SERVER ROLE [role] ADD MEMBER [login]` |
 
 ## Logins
 
@@ -359,6 +368,50 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `scanDatabases` | 4,096 | Databases the mapped-user scan reads |
 | `serviceNames` | 4 | Service accounts the service lookup reads |
 
+### New Login
+
+Security › New › Login…, and New Login… on the Logins folder and on a login, open "Login - New", a modal dialog with the pages
+General, Server Roles, Status (User Mapping and Securables follow once their OK works). Its action is `createLogin`, on
+SQL Server (Managed Instance follows); its target is the server.
+
+- **General**: Login name; Windows authentication (DOMAIN\name) or SQL Server authentication (the default when the server
+  runs on Linux) with Password, Confirm password, Specify old password (greyed: Login Properties only), Enforce password
+  policy, Enforce password expiration and User must change password at next login, each greyed unless the one before it
+  is checked (SQL Server refuses MUST_CHANGE without CHECK_EXPIRATION, 15099, and CHECK_EXPIRATION without CHECK_POLICY,
+  15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server
+  takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.
+- **Server Roles**: every server role, public checked and greyed (every login is a member).
+- **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).
+
+The password fields are masked, never reach the dialog's snapshot, React state that is saved, AutoRecover, a toast or a log, and
+are cleared when the dialog closes, the server disconnects or OK succeeds. The password travels only in `actions.execute`, which is
+sensitive as a whole (its frames are zeroed on both sides once used); `actions.script` refuses one in main and in the backend.
+In SQL it is one nvarchar(128) parameter, read once inside a constant batch:
+`N' WITH PASSWORD=N''' + REPLACE(@password COLLATE Latin1_General_BIN2, N'''', N'''''') + N''''`; the binary collation keeps
+U+FF07 from being doubled too. A lint pins that form, and the backend replaces the password in any message it returns.
+
+Script Action never carries or writes the password: a SQL Server login's script is one batch in one `SET XACT_ABORT ON` transaction
+under the comment "/* Varia leaves passwords out of scripts. Replace <password> with the login's password, as an N'…' literal, before you run this script. */", with `PASSWORD=<password>` unquoted, so an unedited script fails to parse and runs
+nothing (no later statement can give a role to an existing login of that name). A Windows login's script is SSMS's, one statement
+per batch.
+
+OK runs SSMS's statements in SSMS's order, one by one: `CREATE LOGIN`, `DENY CONNECT SQL` (Deny), `ALTER LOGIN … DISABLE`
+(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction: on SQL Server 2025, a
+transaction holding a new login's DENY CONNECT SQL and DISABLE kept other SQL Server logins from signing in until it ended
+(6 to 11 seconds in each of three probes, while Windows sign-ins went through), so one statement waiting for a lock would lock
+users out (critic A24, owner decision 6). A failure or Stop leaves what completed, and the message ends "The login was created; the steps after it did not all complete."
+when the login exists. Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a
+login without ALTER ANY LOGIN (`PERMISSION_DENIED`). The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
+which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
+15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login.
+
+Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live
+check (`VARIA_TEST_SQL_XE=1`, set only for CI's disposable SQL Server container): it records `rpc_starting`, `rpc_completed`,
+`sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output
+parameters) in a scratch session while New Login creates a login and Create Catalog's master key batch runs, and fails if either
+password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Developers' servers never run it (owner
+decision 14). Its result is recorded here once CI has run it.
+
 ## Errors
 
 Failures come back as values in the result. Retryable ones can succeed when tried again.
@@ -380,6 +433,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `AUTH_KERBEROS` | Yes |
 | `AUTH_UNSUPPORTED` | Yes |
 | `AUTH_ENTRA` | Yes |
+| `PASSWORD_POLICY` | Yes |
 
 ## Limits
 

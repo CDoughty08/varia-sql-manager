@@ -468,6 +468,8 @@ export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: '
 /** An object dialog's page tabs, where the dialog is narrow ("Select a page" is then a tablist), and the page it shows. */
 export const objectDialogTabs = dialog => dialog.getByRole('tablist', { name: 'Select a page', exact: true }).getByRole('tab')
 export const objectDialogPage = dialog => dialog.locator(part.objectDialogPage)
+/** A masked password input by its label (New Login's Password and Confirm password): password inputs have no textbox role. */
+export const passwordField = (scope, label) => scope.locator('input[type="password"]').and(scope.getByLabel(label, { exact: true }))
 /**
  * For layout checks: puts a Steps panel of `count` done steps, marked up as StepsPanel draws one, above the dialog's page
  * (no modal dialog has steps yet), and returns a function that removes it. Remove it before the dialog renders again.

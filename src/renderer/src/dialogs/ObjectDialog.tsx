@@ -10,13 +10,15 @@ import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
 /** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
-  deleteObject: { general: DeleteObjectPage }
+  deleteObject: { general: DeleteObjectPage },
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, status: NewLoginStatusPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -196,6 +198,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         <div className="object-dialog-toolbar"><ScriptButton disabled={busy || !usable} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
+        {executing && open.refusal && <div className="object-dialog-message" role="alert"><Icon name="error" /><span>{open.refusal}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         {spec.steps && open.steps && <StepsPanel steps={open.steps} />}
         {mounted.map(({ page, shown }) => {

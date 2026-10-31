@@ -1,12 +1,12 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
-  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox, errorBanner,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, passwordField, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -569,6 +569,99 @@ try {
   await createDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
+
+  // 8. New Login (D2a): Security › New › Login… opens "Login - New" with SSMS's pages and defaults; the password fields are masked
+  // and keep what was typed across pages; Script (clipboard and a query window, so AutoRecover too) never carries the password,
+  // which goes only with OK; PASSWORD_POLICY keeps the dialog and its password; Stop answers Stopped with the steps; OK adds the
+  // login, and Logins shows and selects it. New Login… on the Logins folder opens the same dialog.
+  const loginDialog = () => page.getByRole('dialog', { name: 'Login - New', exact: true })
+  const typed = 'Typed-Z9q-' + Date.now().toString(36)
+  // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
+  await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
+  await expect(async () => {
+    if (await explorerMenu().count()) await closeMenu()
+    expect(await menuOf('server-a', 'Security')).toContain('New')
+  }).toPass()
+  await explorerMenu().getByRole('menuitem', { name: 'New', exact: true }).click(fast)
+  await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
+  await expect(loginDialog()).toBeVisible()
+  await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
+  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'Status'])
+  // A Windows server: Windows authentication, so the password fields are greyed until SQL Server authentication is chosen.
+  await expect(loginDialog().getByRole('radio', { name: 'Windows authentication', exact: true })).toBeChecked()
+  await expect(passwordField(loginDialog(), 'Password')).toBeDisabled()
+  await loginDialog().getByRole('radio', { name: 'SQL Server authentication', exact: true }).check()
+  await loginDialog().getByRole('textbox', { name: 'Login name', exact: true }).fill('app_reader')
+  await passwordField(loginDialog(), 'Password').fill(typed)
+  await passwordField(loginDialog(), 'Confirm password').fill(typed)
+  await expect(loginDialog().getByText('Passwords match.', { exact: true })).toBeVisible()
+  for (const name of ['Enforce password policy', 'Enforce password expiration', 'User must change password at next login']) await expect(loginDialog().getByRole('checkbox', { name, exact: true })).toBeChecked()
+  await loginDialog().getByRole('checkbox', { name: 'Enforce password policy', exact: true }).uncheck()
+  await expect(loginDialog().getByRole('checkbox', { name: 'Enforce password expiration', exact: true })).toBeDisabled()
+  await expect(loginDialog().getByRole('checkbox', { name: 'User must change password at next login', exact: true })).toBeDisabled()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-new-login-dark.png') })
+  await loginDialog().getByRole('button', { name: 'Status', exact: true }).click()
+  await expect(loginDialog().getByRole('radiogroup', { name: 'Permission to connect to database engine', exact: true }).getByRole('radio', { name: 'Grant', exact: true })).toBeChecked()
+  await expect(loginDialog().getByRole('radiogroup', { name: 'Login', exact: true }).getByRole('radio', { name: 'Enabled', exact: true })).toBeChecked()
+  await loginDialog().getByRole('button', { name: 'Server Roles', exact: true }).click()
+  const serverRoles = loginDialog().getByRole('group', { name: 'Server roles', exact: true })
+  await expect(serverRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeChecked()
+  await expect(serverRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeDisabled()
+  await serverRoles.getByRole('checkbox', { name: 'dbcreator', exact: true }).check()
+  await loginDialog().getByRole('button', { name: 'General', exact: true }).click()
+  expect(await passwordField(loginDialog(), 'Password').evaluate(input => [input.type, input.value.length])).toEqual(['password', typed.length])
+  await loginDialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await page.getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
+  await expect.poll(clipboard).toContain('PASSWORD=<password>')
+  expect(await clipboard()).not.toContain(typed)
+  const queries = await tabs().count()
+  await loginDialog().getByRole('button', { name: 'Script', exact: true }).click()
+  await expect(tabs()).toHaveCount(queries + 1)
+  await expect(loginDialog()).toBeVisible()
+  const loginScripts = (await stubCalls('actions.script')).filter(call => call.action === 'createLogin')
+  expect(loginScripts).toHaveLength(2)
+  expect(loginScripts.every(call => !Object.hasOwn(call, 'secrets')) && !JSON.stringify(loginScripts).includes(typed)).toBe(true)
+  expect(loginScripts[0]).toMatchObject({ login: { auth: 'sql', name: 'app_reader', checkPolicy: false, checkExpiration: false, mustChange: false }, serverRoles: ['dbcreator'] })
+  expect(await stubCalls('actions.execute').then(calls => calls.filter(call => call.action === 'createLogin'))).toEqual([])
+  // The server's password policy refuses "Weak": the dialog stays open, says why, and keeps the password typed.
+  for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill('Weak')
+  await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(loginDialog().getByRole('alert')).toContainText('Password validation failed.')
+  expect(await passwordField(loginDialog(), 'Password').inputValue()).toBe('Weak')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', secrets: { password: 'Weak' } })
+  // "Held" waits as on a lock: Stop takes Cancel's place, and its answer says Stopped and lists the steps.
+  for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill('Held')
+  await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(objectDialogProgress(loginDialog())).toHaveText('Executing')
+  await expect(loginDialog().getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+  await loginDialog().getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(objectDialogProgress(loginDialog())).toHaveText('Stopped')
+  await expect(loginDialog().getByRole('status').filter({ hasText: 'The action was stopped at "Create the login"' })).toBeVisible()
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(2)
+  // A password the policy takes: the dialog closes, and Logins lists the login and selects it.
+  for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill(typed)
+  await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(loginDialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true } })
+  await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
+  expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
+  await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
+  await expect(loginDialog()).toBeVisible()
+  await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('')
+  await loginDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(loginDialog()).toHaveCount(0)
+  // AutoRecover keeps the scripted window once it has unsaved changes (a script alone is not unsaved), and no copy holds the password.
+  await tabs().nth(queries).click()
+  await editorTextbox(page).focus()
+  await page.keyboard.insertText('-- kept\n')
+  await expect(unsavedMark(tabs().nth(queries))).toHaveCount(1)
+  await page.evaluate(() => window.__variaRecovery.flush())
+  const recovered = async folder => (await readdir(folder, { withFileTypes: true }).catch(() => [])).reduce(async (texts, entry) => [...await texts,
+    ...entry.isDirectory() ? await recovered(resolve(folder, entry.name)) : [await readFile(resolve(folder, entry.name), 'utf8')]], Promise.resolve([]))
+  const copies = await recovered(resolve(profile, 'AutoRecover'))
+  expect(copies.some(text => text.includes('PASSWORD=<password>'))).toBe(true)
+  expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
+  console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, keeps its masked password across pages, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY, Stops, and selects the new login.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

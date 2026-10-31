@@ -25,12 +25,16 @@ internal static class ActionErrors
         ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
         ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
-        // 1828 and 5170: a logical file name or a physical file is taken.
-        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170],
-        // 15007: the login is not valid.
-        ["NOT_FOUND"] = [15225, 15007],
-        // 5058: the option cannot be set in this database (SQL Server's own).
-        ["NOT_SUPPORTED"] = [5058],
+        // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login, 15023 a user.
+        ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
+        // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist.
+        ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401],
+        // 5058: the option cannot be set in this database (SQL Server's own). New Login (probed by D2): 15099 MUST_CHANGE without
+        // CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a SQL login, 15407 not DOMAIN\name,
+        // 37525 Microsoft Entra not set up on the server.
+        ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525],
+        // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough.
+        ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118],
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]

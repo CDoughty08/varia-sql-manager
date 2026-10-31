@@ -3,11 +3,11 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
+  createActionSpecs, createActions, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
-import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, saPrincipalId } from './logins.ts'
+import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, passwordScriptHeader, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -191,6 +191,11 @@ export function renderObjectActionsDocs(): string {
     'Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a',
     `connection. The table designer's \`createTable\` runs on ${designerEngines.map(engine => engineNames[engine]).join(' and ')}.`,
     '',
+    'Actions that make an object open their dialog on a folder and name its owner as their target; no tree row offers them, so',
+    'they have their own commands and no context key:',
+    '',
+    table(['Action', 'Title', 'Dialog', 'Servers'], createActions.map(action => [code(action), createActionSpecs[action].title, code(createActionSpecs[action].dialog), createActionSpecs[action].engines.map(engine => engineNames[engine]).join(', ')])),
+    '',
     'Keys work while Object Explorer has focus and no text field does. Delete\'s access key is E: Disconnect has SSMS\'s D in',
     'Varia\'s one Object Explorer menu.',
     'Select Top 1000 Rows follows Tools › Options › SQL Server Object Explorer › Commands (Select Top <n> Rows).',
@@ -287,7 +292,8 @@ export function renderObjectActionsDocs(): string {
       ['Detach the database', '`EXEC master.dbo.sp_detach_db @dbname = N\'db\', @skipchecks = \'false\'` (\'true\' when Update Statistics is cleared)'],
       ['Disable the login, Enable the login', '`ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE`'],
       ['Deny or Grant permission to connect', '`DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]`'],
-      ['Drop the database user', '`DROP USER [user]`, in its database']
+      ['Drop the database user', '`DROP USER [user]`, in its database'],
+      ['Add to a server role (New Login)', '`ALTER SERVER ROLE [role] ADD MEMBER [login]`']
     ]),
     '',
     ...loginDocs(),
@@ -329,6 +335,58 @@ function loginDocs(): string[] {
     '### Login limits',
     '',
     table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
+    '',
+    ...newLoginDocs()
+  ]
+}
+
+/** New Login (D2a): where it opens, its pages, the password path, its Script and how it runs. */
+function newLoginDocs(): string[] {
+  const spec = dialogSpecs.newLogin
+  return [
+    '### New Login',
+    '',
+    `Security › New › Login…, and New Login… on the Logins folder and on a login, open "${spec.title}", a modal dialog with the pages`,
+    `${spec.pages.map(page => page.title).join(', ')} (User Mapping and Securables follow once their OK works). Its action is \`createLogin\`, on`,
+    `${createActionSpecs.createLogin.engines.map(engine => engineNames[engine]).join(', ')} (Managed Instance follows); its target is the server.`,
+    '',
+    '- **General**: Login name; Windows authentication (DOMAIN\\name) or SQL Server authentication (the default when the server',
+    '  runs on Linux) with Password, Confirm password, Specify old password (greyed: Login Properties only), Enforce password',
+    '  policy, Enforce password expiration and User must change password at next login, each greyed unless the one before it',
+    '  is checked (SQL Server refuses MUST_CHANGE without CHECK_EXPIRATION, 15099, and CHECK_EXPIRATION without CHECK_POLICY,',
+    '  15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server',
+    `  takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.`,
+    '- **Server Roles**: every server role, public checked and greyed (every login is a member).',
+    '- **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).',
+    '',
+    'The password fields are masked, never reach the dialog\'s snapshot, React state that is saved, AutoRecover, a toast or a log, and',
+    'are cleared when the dialog closes, the server disconnects or OK succeeds. The password travels only in `actions.execute`, which is',
+    'sensitive as a whole (its frames are zeroed on both sides once used); `actions.script` refuses one in main and in the backend.',
+    `In SQL it is one nvarchar(${loginLimits.password}) parameter, read once inside a constant batch:`,
+    '`N\' WITH PASSWORD=N\'\'\' + REPLACE(@password COLLATE Latin1_General_BIN2, N\'\'\'\', N\'\'\'\'\'\') + N\'\'\'\'`; the binary collation keeps',
+    'U+FF07 from being doubled too. A lint pins that form, and the backend replaces the password in any message it returns.',
+    '',
+    'Script Action never carries or writes the password: a SQL Server login\'s script is one batch in one `SET XACT_ABORT ON` transaction',
+    `under the comment "${passwordScriptHeader}", with \`PASSWORD=<password>\` unquoted, so an unedited script fails to parse and runs`,
+    'nothing (no later statement can give a role to an existing login of that name). A Windows login\'s script is SSMS\'s, one statement',
+    'per batch.',
+    '',
+    'OK runs SSMS\'s statements in SSMS\'s order, one by one: `CREATE LOGIN`, `DENY CONNECT SQL` (Deny), `ALTER LOGIN … DISABLE`',
+    '(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction: on SQL Server 2025, a',
+    'transaction holding a new login\'s DENY CONNECT SQL and DISABLE kept other SQL Server logins from signing in until it ended',
+    '(6 to 11 seconds in each of three probes, while Windows sign-ins went through), so one statement waiting for a lock would lock',
+    `users out (critic A24, owner decision 6). A failure or Stop leaves what completed, and the message ends "${'The login was created; the steps after it did not all complete.'}"`,
+    'when the login exists. Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a',
+    'login without ALTER ANY LOGIN (`PERMISSION_DENIED`). The server\'s password policy answers `PASSWORD_POLICY` (15114 to 15118),',
+    'which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,',
+    '15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login.',
+    '',
+    'Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live',
+    'check (`VARIA_TEST_SQL_XE=1`, set only for CI\'s disposable SQL Server container): it records `rpc_starting`, `rpc_completed`,',
+    '`sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output',
+    'parameters) in a scratch session while New Login creates a login and Create Catalog\'s master key batch runs, and fails if either',
+    'password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Developers\' servers never run it (owner',
+    'decision 14). Its result is recorded here once CI has run it.',
     ''
   ]
 }

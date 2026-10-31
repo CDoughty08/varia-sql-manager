@@ -14,6 +14,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
  * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
+ * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master and AppData, two
+ * languages, three server roles); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at
+ * "Create the login", "Held" waits until its Stop arrives, and anything else adds the login.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -23,16 +26,20 @@ export const dependentsMessage = "Could not drop object 'dbo.Lines' because it i
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
+export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], logins: ['sa'], blocked: new Map(), catalog: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
   const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+  const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
+  const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -42,7 +49,8 @@ export function installActionsStub({ ipcMain }, { statics }) {
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
     storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })],
-    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : []
+    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : [],
+    logins: () => stub.logins.map(name => object({ kind: 'login', name }, name, 'svg:login', { hasChildren: false, subtype: 'sql' }))
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -116,9 +124,20 @@ export function installActionsStub({ ipcMain }, { statics }) {
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
+  /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. */
+  function createLogin({ login, secrets, serverRoles, requestId }) {
+    const titles = ['Create the login', ...serverRoles.map(() => 'Add to a server role')]
+    if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', title: titles[0], message: passwordPolicyMessage }, ...titles.slice(1).map(title => ({ status: 'skipped', title }))], messages: [], elapsedMs: 1,
+      error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
+    if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: titles[0] }, ...titles.slice(1).map(title => ({ status: 'skipped', title }))], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the login"; SQL Server cancelled that statement.', retryable: true } }))))
+    stub.logins = [...stub.logins, login.name].sort()
+    return ok({ steps: titles.map((title, index) => ({ status: 'done', title, ...index ? { detail: serverRoles[index - 1] } : {} })), messages: [], elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
     if (params.action === 'createTable') return createTable(params)
+    if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -151,12 +170,17 @@ export function installActionsStub({ ipcMain }, { statics }) {
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
+            databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+            languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
+            serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
           default: return describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'createLogin': return ok({ text: newLoginScript(params.login.name), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

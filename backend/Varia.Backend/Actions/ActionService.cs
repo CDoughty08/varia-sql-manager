@@ -150,10 +150,12 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        // New Login opens on the server: its action makes a login rather than acting on a row.
+        if (args.Dialog == "newLogin") return ServerTarget(args.Target);
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
-    /// <summary>The actions whose actions.execute may carry passwords (New Login and Login Properties, later PRs); none is in the switch yet.</summary>
+    /// <summary>The actions whose actions.execute may carry passwords: New Login, and Login Properties (D2c).</summary>
     private static readonly HashSet<string> SecretActions = new(["createLogin", "loginProperties"], StringComparer.Ordinal);
 
     /// <summary>A password of at most loginLimits.password UTF-16 units, without U+0000 or an unpaired surrogate, here for every
@@ -172,6 +174,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
         switch (args.Action)
         {
             case "rename":
@@ -196,6 +199,8 @@ internal sealed partial class ActionService : IDisposable
                 var database = DatabaseTarget(args.Target);
                 TableDesignValidator.Validate(designer, args.Design);
                 return database;
+            case "createLogin":
+                return ValidateCreateLogin(args, script);
             default:
                 throw Invalid("action.");
         }
@@ -220,6 +225,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -228,6 +234,7 @@ internal sealed partial class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
+        if (args.Action == "createLogin") return Task.FromResult(ScriptNewLogin(args));
         // A new table's script runs in its database; a database's or a server object's action in master.
         var database = args.Action == "createTable" ? target.Name! : ScriptDatabase(target);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: true, Options.ScriptBudget, token,
@@ -249,6 +256,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -550,6 +558,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.AddServerRoleMember => "Add to a server role",
         _ => "Drop the object"
     };
 
