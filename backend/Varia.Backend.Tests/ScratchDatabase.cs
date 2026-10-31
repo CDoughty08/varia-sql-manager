@@ -73,6 +73,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string Seam => Name + "_seam";
     /// <summary>The name the seam checks' rename collides with (created on demand, with <see cref="Seam"/>).</summary>
     public string SeamTaken => Name + "_seamt";
+    /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
+    public string Files => Name + "_files";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -83,8 +85,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks'.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
+    // _files is the server file picker's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -352,6 +355,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         await CreateMarkedAsync(SeamTaken);
         return await CreateMarkedAsync(Seam);
     }
+
+    /// <summary>Creates the empty, marked server file picker database.</summary>
+    public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
 
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
