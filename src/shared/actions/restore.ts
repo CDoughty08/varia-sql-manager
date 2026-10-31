@@ -1,0 +1,262 @@
+// Restore Database (D1e): its describe id, request action, limits, labels and messages, and the shapes of what the
+// describe answers. The backend embeds restoreCatalog() in actions-catalog.json, so its limits and refusals are these.
+// `restore` is not in objectActions: no menu item, command or palette entry reaches it until its OK runs (critic A17);
+// D1e's document opens only through the test hook. Erasable TypeScript, so Node's type stripping can load it too.
+import type { ServerEngine } from '../explorer/catalog.ts'
+import type { ServerPathSeparator } from './files.ts'
+
+/** actions.describe's id for the document; its `restore` member says what to read. */
+export const restoreDescribeId = 'restoreDatabase' as const
+/** actions.script's action (actions.execute takes it from D1f). */
+export const restoreRequestActions = ['restore'] as const
+/** RESTORE FROM DISK runs only on SQL Server itself: Managed Instance restores from URL only, and Azure SQL Database has no RESTORE (critic A1). */
+export const restoreEngines: readonly ServerEngine[] = ['box']
+/** SQL Server's own databases. Restoring one needs single-user mode or a stopped Agent, so wave 5 refuses them (critic A19). */
+export const restoreSystemDatabases = ['master', 'model', 'msdb', 'tempdb'] as const
+
+export const restoreLimits = {
+  /** The backend's budget for one describe: LABELONLY and HEADERONLY on a large striped set or a slow share. */
+  mediaReadMs: 120_000,
+  /** Main's deadline for a restore describe: the budget and time to answer (critic A2). */
+  describeDeadlineMs: 130_000,
+  /** Learn: up to 64 devices that belong to one media set. */
+  backupDevices: 64,
+  /** Databases msdb's history lists (more set `historyTruncated`). */
+  historyDatabases: 1_024,
+  /** The newest backup sets one database's history, or the media, lists. */
+  historySets: 1_024,
+  /** Sets one restore runs; a longer plan is scripted in pieces instead. */
+  planSets: 256,
+  /** 64 devices and 2 × 1000 MOVE parameters stay under SQL Server's 2,100 parameters. */
+  restoreMoves: 1_000,
+  /** Destination names (sys.databases minus master and tempdb) and other databases' files, for Restore As collisions. */
+  destinations: 4_096,
+  serverFiles: 8_192,
+  /** backupset.name and user_name are nvarchar(128). */
+  setName: 128,
+  /** A set id: a backup_set_uuid (history), <media set>:<position> (devices), or tail. */
+  setId: 36,
+  /** LSNs are numeric(25, 0), sent as decimal text. */
+  lsnDigits: 25,
+  /** A backup set's position in its media set (RESTORE … WITH FILE). */
+  position: 32_767,
+  /** SMO's restore plan writes STATS = 5, as SSMS asks. */
+  stats: 5
+} as const
+
+/** What the document says where SSMS has no words of its own, and the refusals main and the backend share. */
+export const restoreMessages = {
+  systemDatabase: 'Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.',
+  /** Prompt before restoring each backup splits one restore into requests (critic A22), and Verify Backup Media runs with D1f. */
+  notYetAvailable: 'Not yet available',
+  /** OK while the run is still to come (critic A17: the document opens only through the test hook until then). */
+  runUnavailable: 'Restoring runs in a later update. Script shows what it will run.',
+  invalidPlan: 'The selected backup sets do not form a valid restore plan.',
+  noFullBackup: 'No full backup precedes the point to restore to.',
+  afterLastBackup: 'The point to restore to is after the last log backup: take a tail-log backup to restore to it.',
+  noHistory: 'msdb has no backup history for this database. Choose Device to restore from backup files.',
+  noSets: 'The backup media hold no backup sets.',
+  notDisk: 'This backup set is not on a disk file; Varia restores from disk files only.'
+} as const
+
+/** A backup set's kind, from msdb's type letter or HEADERONLY's BackupType. Only full, differential and log sets are planned. */
+export const backupSetTypes = ['full', 'differential', 'log', 'file', 'fileDifferential', 'partial', 'partialDifferential'] as const
+export type BackupSetType = typeof backupSetTypes[number]
+/** SSMS's Component and Type columns (recalled). */
+export const backupSetTypeSpecs: { readonly [T in BackupSetType]: { readonly component: string; readonly type: string } } = {
+  full: { component: 'Database', type: 'Full' },
+  differential: { component: 'Database', type: 'Differential' },
+  log: { component: 'Database', type: 'Transaction Log' },
+  file: { component: 'File', type: 'Full' },
+  fileDifferential: { component: 'File', type: 'Differential' },
+  partial: { component: 'Partial', type: 'Full' },
+  partialDifferential: { component: 'Partial', type: 'Differential' }
+}
+export const plannedSetTypes = ['full', 'differential', 'log'] as const
+export type PlannedSetType = typeof plannedSetTypes[number]
+
+/** SSMS's Recovery state choices (Options page). */
+export const restoreRecoveryStates = ['recovery', 'norecovery', 'standby'] as const
+export type RestoreRecovery = typeof restoreRecoveryStates[number]
+export const restoreRecoveryLabels: { readonly [R in RestoreRecovery]: string } = {
+  recovery: 'RESTORE WITH RECOVERY', norecovery: 'RESTORE WITH NORECOVERY', standby: 'RESTORE WITH STANDBY'
+}
+
+/** The Backup Timeline's Timeline Interval (recalled), each with the span the timeline shows. */
+export const timelineIntervals = ['hour', 'sixHours', 'day', 'week'] as const
+export type TimelineInterval = typeof timelineIntervals[number]
+export const timelineIntervalSpecs: { readonly [I in TimelineInterval]: { readonly label: string; readonly ms: number } } = {
+  hour: { label: 'Hour', ms: 3_600_000 }, sixHours: { label: 'Six Hours', ms: 21_600_000 }, day: { label: 'Day', ms: 86_400_000 }, week: { label: 'Week', ms: 604_800_000 }
+}
+
+/** The document's sections, SSMS's pages. */
+export const restoreSections = [{ id: 'general', title: 'General' }, { id: 'files', title: 'Files' }, { id: 'options', title: 'Options' }] as const
+export type RestoreSectionId = typeof restoreSections[number]['id']
+
+// --- Describe -----------------------------------------------------------------------------------------------------------
+
+/**
+ * What one restore describe reads: msdb's history (the databases it has backed up, and one database's sets), the headers
+ * of backup files on the server (LABELONLY per device, HEADERONLY per media set), or the files of one backup set
+ * (msdb's backupfile for a history set, FILELISTONLY for one on the media).
+ */
+export type RestoreSource =
+  | { readonly kind: 'history'; readonly database?: string }
+  | { readonly kind: 'devices'; readonly devices: readonly string[] }
+  | { readonly kind: 'historyFiles'; readonly setId: string }
+  | { readonly kind: 'mediaFiles'; readonly devices: readonly string[]; readonly file: number }
+export const restoreSourceKinds = ['history', 'devices', 'historyFiles', 'mediaFiles'] as const
+
+/** One backup set as the history or the media describe it. Dates are the server's local time (yyyy-MM-ddTHH:mm:ss); LSNs are decimal text. */
+export interface BackupSetRow {
+  /** backup_set_uuid for a history set, <media set>:<position> for one read from the media. */
+  readonly id: string
+  readonly name: string
+  readonly type: BackupSetType
+  readonly server: string
+  readonly database: string
+  readonly position: number
+  readonly firstLsn: string
+  readonly lastLsn: string
+  readonly checkpointLsn: string
+  /** The full backup a differential or log is based on ('0' for none). */
+  readonly databaseBackupLsn: string
+  readonly start: string
+  readonly finish: string
+  readonly sizeBytes: number
+  readonly userName: string
+  readonly expiration?: string
+  readonly copyOnly: boolean
+  readonly damaged: boolean
+  readonly recoveryModel?: string
+  readonly firstForkGuid?: string
+  readonly forkGuid?: string
+  /** The media set's disk files, in family order. */
+  readonly devices: readonly string[]
+  /** Why the set cannot be restored as it is: a striped set with families missing, or one that is not on disk. */
+  readonly problem?: string
+}
+export type BackupFileType = 'data' | 'log' | 'filestream' | 'fulltext' | 'other'
+/** One file of a backup set (FILELISTONLY, or msdb's backupfile). */
+export interface BackupFileRow {
+  readonly logical: string
+  readonly physical: string
+  readonly type: BackupFileType
+  readonly filegroup?: string
+  readonly sizeBytes: number
+  readonly fileId: number
+}
+/** A database a restore can overwrite: sys.databases minus master and tempdb. */
+export interface RestoreDestination {
+  readonly name: string
+  readonly id: number
+  /** create_date as yyyy-MM-ddTHH:mm:ss.fff (DatabaseIdentity). */
+  readonly created: string
+  /** state_desc: ONLINE, RESTORING, OFFLINE… */
+  readonly state: string
+  /** FULL, BULK_LOGGED or SIMPLE. */
+  readonly recoveryModel: string
+  /** Sessions in it; absent without VIEW SERVER STATE. */
+  readonly sessions?: number
+}
+export interface RestoreServerFacts {
+  readonly separator: ServerPathSeparator
+  readonly dataPath?: string
+  readonly logPath?: string
+  readonly backupPath?: string
+  /** CREATE ANY DATABASE, sysadmin or dbcreator: advisory, the run re-checks. */
+  readonly canRestore: boolean
+  readonly destinations: readonly RestoreDestination[]
+  readonly destinationsTruncated: boolean
+  /** Other databases' files (sys.master_files), so two databases never get one Restore As path. */
+  readonly files: readonly { readonly database: string; readonly path: string }[]
+  readonly filesTruncated: boolean
+}
+/** A restore describe's answer: `server` with history and devices; the databases with history; the sets; one set's files. */
+export interface RestoreModel {
+  readonly server?: RestoreServerFacts
+  readonly historyDatabases?: readonly string[]
+  readonly historyTruncated?: boolean
+  readonly sets?: readonly BackupSetRow[]
+  readonly setsTruncated?: boolean
+  readonly files?: readonly BackupFileRow[]
+  readonly filesTruncated?: boolean
+}
+
+// --- Request ------------------------------------------------------------------------------------------------------------
+
+/** One set of the plan: its media set's disk files and its position there. `name` titles its step. */
+export interface RestorePlanSet {
+  readonly id: string
+  readonly devices: readonly string[]
+  readonly file: number
+  readonly type: PlannedSetType
+  readonly name?: string
+}
+export interface RestoreMove { readonly logical: string; readonly physical: string }
+/** What a restore does: the sets in order, where the files go, and the options SSMS's pages set. */
+export interface RestoreOptions {
+  readonly sets: readonly RestorePlanSet[]
+  /** STOPAT on the last log, the server's local time. */
+  readonly stopAt?: string
+  readonly relocate: readonly RestoreMove[]
+  readonly replace: boolean
+  readonly keepReplication: boolean
+  readonly restrictedUser: boolean
+  readonly recovery: RestoreRecovery
+  readonly standbyFile?: string
+  /** Back up the tail of the destination's log first, leaving it RESTORING when `noRecovery`. */
+  readonly tailLog?: { readonly file: string; readonly noRecovery: boolean }
+  /** SET SINGLE_USER WITH ROLLBACK IMMEDIATE first, on a destination that exists (`identity`). */
+  readonly closeConnections: boolean
+}
+
+/** Why a destination name cannot be restored to in wave 5, or undefined. */
+export const restoreTargetProblem = (name: string): string | undefined =>
+  (restoreSystemDatabases as readonly string[]).includes(name) ? restoreMessages.systemDatabase : undefined
+
+/** The id form of a set: a history set's uuid, <media set>:<position> from the media, or the tail-log backup the plan adds. */
+export const restoreSetIdPattern = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]?:[1-9][0-9]{0,4}|tail)$/
+/** STOPAT's text: the server's local date and time to the second, as SMO writes it. */
+export const restoreTimePattern = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$/
+
+// --- Default names ------------------------------------------------------------------------------------------------------
+
+const two = (value: number) => String(value).padStart(2, '0')
+/** SSMS's stamp in default file names: yyyy-MM-dd_HH-mm-ss, local time. */
+export const fileStamp = (at: Date): string => `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}_${two(at.getHours())}-${two(at.getMinutes())}-${two(at.getSeconds())}`
+/** Characters no file name on the server's platform may hold, which a database name can (SSMS's defaults keep the name; recalled). */
+const unsafe = (separator: ServerPathSeparator) => separator === '\\' ? /[\\/:*?"<>|\u0000-\u001f]/g : /[/\u0000]/g
+export const fileNamePart = (name: string, separator: ServerPathSeparator): string => name.replace(unsafe(separator), '_')
+const inFolder = (folder: string | undefined, separator: ServerPathSeparator, name: string) =>
+  folder ? (folder.endsWith(separator) ? folder : folder + separator) + name : ''
+/** The tail-log backup's default file: <backup folder><db>_LogBackup_<stamp>.bak (SSMS's, recalled). */
+export const tailLogFile = (folder: string | undefined, separator: ServerPathSeparator, database: string, at: Date): string =>
+  inFolder(folder, separator, `${fileNamePart(database, separator)}_LogBackup_${fileStamp(at)}.bak`)
+/** STANDBY's default undo file: <backup folder><db>_RollbackUndo_<stamp>.bak (recalled). */
+export const standbyFile = (folder: string | undefined, separator: ServerPathSeparator, database: string, at: Date): string =>
+  inFolder(folder, separator, `${fileNamePart(database, separator)}_RollbackUndo_${fileStamp(at)}.bak`)
+/** The name of a path's file, after its last separator (either kind: a backup taken on Windows names a Windows path). */
+export const pathFileName = (path: string): string => path.slice(Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/')) + 1)
+/**
+ * Where a file goes by default (Files page): its original path when restoring over the database it came from; otherwise
+ * the default data or log folder and the destination's name with the original's suffix, as SSMS 2014 and later do
+ * (recalled: AppData.mdf restored as Sales becomes Sales.mdf, AppData_log.ldf becomes Sales_log.ldf).
+ */
+export function restoreAsPath(file: BackupFileRow, source: string, destination: string, folder: string | undefined, separator: ServerPathSeparator): string {
+  if (destination === source || !folder) return file.physical
+  const name = pathFileName(file.physical)
+  const renamed = name.startsWith(source) ? destination + name.slice(source.length) : `${destination}_${name}`
+  return inFolder(folder, separator, fileNamePart(renamed, separator))
+}
+
+// --- Backend copy -------------------------------------------------------------------------------------------------------
+
+/** The restore block of actions-catalog.json: ids, engines, limits, the system databases and the messages C# answers with. */
+export function restoreCatalog() {
+  return {
+    describe: restoreDescribeId, requests: restoreRequestActions, engines: restoreEngines, limits: restoreLimits, systemDatabases: restoreSystemDatabases,
+    sourceKinds: restoreSourceKinds, recoveryStates: restoreRecoveryStates,
+    messages: { systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets }
+  }
+}

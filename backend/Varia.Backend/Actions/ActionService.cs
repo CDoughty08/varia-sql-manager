@@ -50,6 +50,8 @@ internal sealed class ActionServiceOptions
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
     /// <summary>The server file picker's budget for one listing (actionLimits.browseMs).</summary>
     public TimeSpan BrowseBudget { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>Restore Database's describe: reading backup media headers on a large striped set or a slow share (restoreLimits.mediaReadMs).</summary>
+    public TimeSpan RestoreDescribeBudget { get; set; } = TimeSpan.FromSeconds(120);
     /// <summary>The picker's listings run one at a time per connection under a gate of their own, outside the read gates: SQL
     /// Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a listing
     /// past its budget still holds its gate, and must not hold one that Database Properties or Delete Object waits for.</summary>
@@ -101,7 +103,8 @@ internal sealed partial class ActionService : IDisposable
     };
 
     /// <summary>Whether an action (a catalogue action, or the designer's createTable) runs on a server of this engine.</summary>
-    private bool Serves(string action, string engine) => designer.Requests.Contains(action) ? designer.Engines.Contains(engine) : catalog.Serves(action, engine);
+    private bool Serves(string action, string engine) => designer.Requests.Contains(action) ? designer.Engines.Contains(engine)
+        : catalog.Restore.Requests.Contains(action) ? catalog.Restore.Engines.Contains(engine) : catalog.Serves(action, engine);
 
     /// <summary>How long a Stop's reply waits for the job: SQL Server ending the statement, then the action's own cleanup.</summary>
     private TimeSpan StopWait(string action) => Options.StopGrace + CleanupBudget(action);
@@ -161,6 +164,8 @@ internal sealed partial class ActionService : IDisposable
     {
         Ids(args.ConnectionId, args.RequestId);
         if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        if ((args.Dialog == catalog.Restore.Describe) != (args.Restore is not null)) throw Invalid("restore.");
+        if (args.Restore is not null) return ValidateRestoreSource(args);
         if (args.Files is { } files)
         {
             if (!catalog.ServerFilePurposes.ContainsKey(files.Purpose ?? "")) throw Invalid("purpose.");
@@ -196,6 +201,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
         switch (args.Action)
         {
             case "rename":
@@ -215,6 +221,8 @@ internal sealed partial class ActionService : IDisposable
                 var target = Target(args.Target, "properties");
                 DatabaseAlter.Validate(catalog, args);
                 return target;
+            case "restore":
+                return ValidateRestore(args, script);
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -252,6 +260,7 @@ internal sealed partial class ActionService : IDisposable
                 },
                 error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
         }
+        if (args.Restore is not null) return DescribeRestoreAsync(args, token);
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -271,6 +280,7 @@ internal sealed partial class ActionService : IDisposable
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: true, Options.ScriptBudget, token,
             (connection, profile, band, job) => args.Action switch
             {
+                "restore" => ScriptRestoreJobAsync(args, target),
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)

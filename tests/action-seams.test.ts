@@ -25,7 +25,7 @@ describe('server engines', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
     expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual([...objectActions])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
-    expect(json.version).toBe(3)
+    expect(json.version).toBe(4)
     for (const row of json.actions) {
       expect(row.engines, row.action).toEqual([...objectActionSpecs[row.action as keyof typeof objectActionSpecs].engines])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)

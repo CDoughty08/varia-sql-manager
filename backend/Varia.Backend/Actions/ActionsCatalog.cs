@@ -13,6 +13,13 @@ internal sealed record OptionSqlJson(string Kind, string? Keyword = null, bool? 
     string? Name = null, bool? Secondary = null);
 internal sealed record RangeJson(long Min, long Max);
 /// <summary>A database option or scoped configuration as the catalogue resolves it for C#.</summary>
+/// <summary>The restore block of actions-catalog.json (src/shared/actions/restore.ts restoreCatalog()).</summary>
+internal sealed record RestoreCatalogJson(string Describe, List<string> Requests, List<string> Engines, Dictionary<string, long> Limits, List<string> SystemDatabases, List<string> SourceKinds,
+    List<string> RecoveryStates, Dictionary<string, string> Messages)
+{
+    public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore limit " + key);
+    public string Message(string key) => Messages.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore message " + key);
+}
 internal sealed record OptionJson(string Key, string Label, string Control, bool Settable, int SmoOrder, List<string>? Tokens = null, RangeJson? Range = null, int? Since = null, List<string>? NotOn = null,
     bool? Exclusive = null, OptionSqlJson? Sql = null, bool? RefusedReadOnly = null);
 
@@ -22,7 +29,7 @@ internal sealed record OptionJson(string Key, string Label, string Control, bool
 /// about which objects an action may touch or how an option is written.</summary>
 internal sealed class ActionsCatalog
 {
-    public const int Version = 3;
+    public const int Version = 4;
 
     private static readonly Lazy<ActionsCatalog> Embedded = new(() =>
     {
@@ -37,7 +44,7 @@ internal sealed class ActionsCatalog
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
     private sealed record ServerFilesJson(string Purpose, List<string> Extensions);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
+        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, RestoreCatalogJson Restore, List<RowJson> Rows, List<OptionJson> ScopedConfigurations, List<ServerFilesJson> ServerFiles);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
@@ -53,6 +60,7 @@ internal sealed class ActionsCatalog
         Actions = [.. json.Actions.Select(row => row.Action)];
         actions = json.Actions.ToDictionary(row => row.Action, StringComparer.Ordinal);
         Logins = new LoginRules(json.Logins);
+        Restore = json.Restore;
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
         Dialogs = json.Dialogs.ToDictionary(row => row.Dialog, row => (IReadOnlyList<string>)row.Pages, StringComparer.Ordinal);
         dialogActions = json.Dialogs.ToDictionary(row => row.Dialog, row => row.Action, StringComparer.Ordinal);
@@ -84,6 +92,8 @@ internal sealed class ActionsCatalog
     public IReadOnlyList<string> OwnerNotOn { get; }
     /// <summary>Login subtypes, protected-principal rules and login limits (src/shared/actions/logins.ts).</summary>
     public LoginRules Logins { get; }
+    /// <summary>Restore Database's describe id, request action, engines, limits, system databases and messages (src/shared/actions/restore.ts).</summary>
+    public RestoreCatalogJson Restore { get; }
 
     /// <summary>Whether the action runs on a server of this engine (ExplorerProfile.ServerEngine).</summary>
     public bool Serves(string action, string engine) => actions.TryGetValue(action, out var row) ? row.Engines.Contains(engine) : throw new InvalidOperationException("Unknown object action " + action);

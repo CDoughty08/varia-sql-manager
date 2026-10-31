@@ -45,6 +45,8 @@ const signIn = (params: { authentication: string }) => params.authentication ===
 export const createCatalogDrainMs = 130_000
 /** One server file picker listing: the backend's own 10 s budget (actionLimits.browseMs) plus room for its answer. */
 export const serverFilesDeadlineMs = 15_000
+/** A Restore Database describe: the backend's own 120 s budget for reading backup media (restoreLimits.mediaReadMs) plus room for its answer (critic A2). */
+export const restoreDescribeDeadlineMs = 130_000
 
 export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } = {
   'system.health': control,
@@ -79,10 +81,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
   // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it. Database Properties uses the same three
   // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes. The
-  // server file picker's listing (describe 'serverFiles') answers its own 10 s budget the same way, inside 15 s.
+  // server file picker's listing (describe 'serverFiles') answers its own 10 s budget the same way, inside 15 s, and
+  // Restore Database's reads of msdb and backup media (describe 'restoreDatabase') their own 120 s budget, inside 130 s.
   // actions.execute is sensitive as a whole (critic A3): New Login and Login Properties carry passwords in it, and a
   // per-request flag would leave the frame unzeroed the day an action forgets to set it.
-  'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.dialog === 'serverFiles' ? serverFilesDeadlineMs : 45_000 },
+  'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.dialog === 'serverFiles' ? serverFilesDeadlineMs : params.dialog === 'restoreDatabase' ? restoreDescribeDeadlineMs : 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).

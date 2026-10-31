@@ -61,6 +61,7 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -151,6 +152,8 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** Restore Database documents (D1e: read and Script; opened only by the test hook until D1f's OK restores). */
+  readonly restore: RestoreService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
@@ -233,6 +236,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
+  const restore = new RestoreService({
+    api, documents, files, connections, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
@@ -331,6 +338,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     designers,
     ssisProperties,
     properties,
+    restore,
     activity,
     operations,
     theme,
@@ -366,6 +374,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
+      restore.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()

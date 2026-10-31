@@ -1,0 +1,308 @@
+{
+  "source": "SMO DatabaseRestorePlanner over a live history (RestoreLiveChecks); names, servers, users and paths replaced, times moved by whole days to 2026-01-01",
+  "history": [
+    {
+      "id": "135ea7a4-290c-4c92-bbb5-31d02b7f56d4",
+      "name": "log3",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000192000001",
+      "lastLsn": "71000000204000001",
+      "checkpointLsn": "71000000200800001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:40",
+      "finish": "2026-01-01T21:37:40",
+      "sizeBytes": 81920,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log3.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "e69d8ee3-c1f0-409c-b1a3-b27516736805",
+      "name": "diff",
+      "type": "differential",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000200800001",
+      "lastLsn": "71000000203200001",
+      "checkpointLsn": "71000000200800001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:38",
+      "finish": "2026-01-01T21:37:38",
+      "sizeBytes": 1138688,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_diff.bak"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "0075d135-5381-4747-8e13-85f16bdca326",
+      "name": "log2",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 2,
+      "firstLsn": "71000000187200001",
+      "lastLsn": "71000000192000001",
+      "checkpointLsn": "71000000188000002",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:36",
+      "finish": "2026-01-01T21:37:36",
+      "sizeBytes": 77824,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "25dbf40b-7fac-47c4-8bf2-3bed1ec7ce7d",
+      "name": "log1",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000179200001",
+      "lastLsn": "71000000187200001",
+      "checkpointLsn": "71000000179200001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:33",
+      "finish": "2026-01-01T21:37:33",
+      "sizeBytes": 81920,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "8f75eaa3-1a1d-42d3-88d2-0a75acfcc2df",
+      "name": "full",
+      "type": "full",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000179200001",
+      "lastLsn": "71000000181600001",
+      "checkpointLsn": "71000000179200001",
+      "databaseBackupLsn": "0",
+      "start": "2026-01-01T21:37:33",
+      "finish": "2026-01-01T21:37:33",
+      "sizeBytes": 4436992,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_full1.bak",
+        "C:\\Backup\\Sales_full2.bak"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    }
+  ],
+  "media": [
+    {
+      "id": "1:1",
+      "name": "log1",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000179200001",
+      "lastLsn": "71000000187200001",
+      "checkpointLsn": "71000000179200001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:33",
+      "finish": "2026-01-01T21:37:33",
+      "sizeBytes": 81920,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "1:2",
+      "name": "log2",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 2,
+      "firstLsn": "71000000187200001",
+      "lastLsn": "71000000192000001",
+      "checkpointLsn": "71000000188000002",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:36",
+      "finish": "2026-01-01T21:37:36",
+      "sizeBytes": 77824,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "2:1",
+      "name": "full",
+      "type": "full",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000179200001",
+      "lastLsn": "71000000181600001",
+      "checkpointLsn": "71000000179200001",
+      "databaseBackupLsn": "0",
+      "start": "2026-01-01T21:37:33",
+      "finish": "2026-01-01T21:37:33",
+      "sizeBytes": 4436992,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_full1.bak",
+        "C:\\Backup\\Sales_full2.bak"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "3:1",
+      "name": "diff",
+      "type": "differential",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000200800001",
+      "lastLsn": "71000000203200001",
+      "checkpointLsn": "71000000200800001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:38",
+      "finish": "2026-01-01T21:37:38",
+      "sizeBytes": 1138688,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_diff.bak"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    },
+    {
+      "id": "4:1",
+      "name": "log3",
+      "type": "log",
+      "server": "SQLHOST",
+      "database": "Sales",
+      "position": 1,
+      "firstLsn": "71000000192000001",
+      "lastLsn": "71000000204000001",
+      "checkpointLsn": "71000000200800001",
+      "databaseBackupLsn": "71000000179200001",
+      "start": "2026-01-01T21:37:40",
+      "finish": "2026-01-01T21:37:40",
+      "sizeBytes": 81920,
+      "userName": "CONTOSO\\dba",
+      "copyOnly": false,
+      "damaged": false,
+      "devices": [
+        "C:\\Backup\\Sales_log3.trn"
+      ],
+      "recoveryModel": "FULL",
+      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
+      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+    }
+  ],
+  "plans": [
+    {
+      "goal": "last backup",
+      "stopAt": null,
+      "names": [
+        "full",
+        "diff",
+        "log3"
+      ],
+      "varia": [
+        "full",
+        "diff",
+        "log3"
+      ]
+    },
+    {
+      "goal": "between log1 and log2",
+      "stopAt": "2026-01-01T21:37:34",
+      "names": [
+        "full",
+        "log1",
+        "log2"
+      ],
+      "varia": [
+        "full",
+        "log1",
+        "log2"
+      ]
+    },
+    {
+      "goal": "between log2 and the differential",
+      "stopAt": "2026-01-01T21:37:37",
+      "names": [
+        "full",
+        "diff",
+        "log3"
+      ],
+      "varia": [
+        "full",
+        "log1",
+        "log2",
+        "log3"
+      ]
+    },
+    {
+      "goal": "between the differential and log3",
+      "stopAt": "2026-01-01T21:37:39",
+      "names": [
+        "full",
+        "diff",
+        "log3"
+      ],
+      "varia": [
+        "full",
+        "diff",
+        "log3"
+      ]
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
  * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
  * type filter aside, and under C:\Legacy\ answers legacyEmpty.
+ * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -45,6 +46,7 @@ export const caution = 'Caution: Changing any part of an object name could break
 export const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+export const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
@@ -56,7 +58,8 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
-  const ok = value => ({ ok: true, value })
+  const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+  const ok =value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
@@ -108,6 +111,28 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }] : []
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
       ...(target.kind === 'database' ? { isSnapshot: false } : {}) }, elapsedMs: 1 })
+  }
+  /** Restore Database's reads (D1e): AppData's history (a full, a differential and a log backup in the default backup
+   *  folder, all on 2026-10-29), its files, and the server's facts; master is a destination too, and greyed. */
+  function restore({ restore: source }) {
+    const data = serverFiles.roots.find(root => root.defaults?.includes('data')).path, backup = serverFiles.backupFolder
+    const set = (id, name, type, position, firstLsn, lastLsn, checkpointLsn, databaseBackupLsn, finish, device) => ({ id, name, type, server: 'server-a', database: 'AppData', position, firstLsn, lastLsn,
+      checkpointLsn, databaseBackupLsn, start: '2026-10-29T' + finish, finish: '2026-10-29T' + finish, sizeBytes: 4 * 1024 * 1024, userName: 'sa', copyOnly: false, damaged: false, devices: [backup + device] })
+    const sets = [
+      set('00000000-0000-4000-8000-0000000000a3', 'AppData-Log', 'log', 1, '2000', '5000', '3000', '1000', '13:00:00', 'AppData_log.trn'),
+      set('00000000-0000-4000-8000-0000000000a2', 'AppData-Differential', 'differential', 2, '3000', '4000', '3000', '1000', '12:00:00', 'AppData.bak'),
+      set('00000000-0000-4000-8000-0000000000a1', 'AppData-Full', 'full', 1, '1000', '2000', '1000', '0', '08:00:00', 'AppData.bak')
+    ]
+    const server = { separator: '\\',dataPath: data, logPath: data, backupPath: backup, canRestore: true, destinationsTruncated: false, filesTruncated: false,
+      destinations: [{ name: 'AppData', id: 5, created: '2026-10-01T09:00:00.000', state: 'ONLINE', recoveryModel: 'FULL', sessions: 1 }, { name: 'master', id: 1, created: '2003-04-08T09:13:36.390', state: 'ONLINE', recoveryModel: 'SIMPLE' }],
+      files: [{ database: 'AppData', path: data + 'AppData.mdf' }, { database: 'AppData', path: data + 'AppData_log.ldf' }] }
+    const files = [{ logical: 'AppData', physical: data + 'AppData.mdf', type: 'data', filegroup: 'PRIMARY', sizeBytes: 8 * 1024 * 1024, fileId: 1 },
+      { logical: 'AppData_log', physical: data + 'AppData_log.ldf', type: 'log', sizeBytes: 8 * 1024 * 1024, fileId: 2 }]
+    switch (source.kind) {
+      case 'history': return ok({ restore: { server, historyDatabases: ['AppData', 'master'], ...source.database === 'AppData' ? { sets, setsTruncated: false } : source.database ? { sets: [], setsTruncated: false } : { historyTruncated: false } }, elapsedMs: 1 })
+      case 'historyFiles': case 'mediaFiles': return ok({ restore: { files, filesTruncated: false }, elapsedMs: 1 })
+      default: return ok({ restore: { server, sets: [], setsTruncated: false }, elapsedMs: 1 })
+    }
   }
   /** The table designer's Save: NAME_IN_USE for "Taken", a wait until Stop for "Held", otherwise a new table under Tables.
    *  Its steps are the backend's (DesignerSql.Statements and the commit): the key's only for a keyed design. */
@@ -199,12 +224,14 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
           case 'serverFiles': return listServerFiles(params)
+          case 'restoreDatabase': return restore(params)
           default: return describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

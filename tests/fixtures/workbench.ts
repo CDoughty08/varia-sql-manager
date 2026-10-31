@@ -55,6 +55,7 @@ import { TableDesignerService } from '../../src/renderer/src/designer/TableDesig
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { RestoreService } from '../../src/renderer/src/restore/RestoreService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
@@ -314,6 +315,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const restore = new RestoreService({ api, documents, files, connections, focusEditor, now: () => new Date(2026, 9, 30, 12, 0, 0), ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -401,6 +403,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    restore,
     notifications,
     activity,
     operations
@@ -460,6 +463,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    restore.dispose()
     operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -494,6 +498,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    restore,
     activity,
     liveViews,
     operations,

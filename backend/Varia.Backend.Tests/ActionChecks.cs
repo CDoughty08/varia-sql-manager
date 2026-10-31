@@ -37,7 +37,7 @@ internal static class ActionChecks
     {
         var rows = Catalog.Rows.ToList();
         check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
-            "the embedded actions catalogue loads at version 3 and every row names an Object Explorer kind and subtype");
+            "the embedded actions catalogue loads and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
@@ -48,9 +48,9 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 16 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+        check(Catalog.ErrorCodes.Count() == 18 && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("FILE_ACCESS") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
-            "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
+            "the catalogue lists the action error codes (restore's MEDIA and FILE_ACCESS not retryable) and the Delete Object and Database Properties dialogs");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)

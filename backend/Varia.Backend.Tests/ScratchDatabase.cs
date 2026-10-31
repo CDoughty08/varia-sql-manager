@@ -20,6 +20,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private readonly List<string> created = [];
     private bool loginCreated;
     private Backup? restoringBackup;
+    private readonly List<string> restoreFiles = [];
+    private (string Folder, int Major)? restoreTarget;
 
     private ScratchDatabase(Func<string, string, Task<SqlRun>> run, string suffix)
     {
@@ -75,6 +77,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
     public string Files => Name + "_files";
+    /// <summary>Restore Database's source (D1e): FULL recovery, its backups in real files in the backup folder (<see cref="RestoreFile"/>),
+    /// which disposal deletes before its backup history.</summary>
+    public string RestoreSource => Name + "_rst";
+    /// <summary>Where the Restore Database checks restore a plan of <see cref="RestoreSource"/>'s backups (adopted when used).</summary>
+    public string RestoreTarget => Name + "_rstr";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -85,9 +92,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', and _files the server file picker's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, and _rst Restore Database's source and _rstr where its plans are restored.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr)?$")]
     private static partial Regex Pattern();
+    [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
+    private static partial Regex PartPattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}_job$")]
@@ -157,7 +166,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         foreach (var group in (backups.Sets.Count == 0 ? [] : backups.Sets[0]).Where(row => row[0] is { } name && Pattern().IsMatch(name)).GroupBy(row => row[0]!, StringComparer.Ordinal))
         {
             foreach (var row in group)
-                if (row[1] is { } device && device != NullDevice && device == Backup.FileIn(row[2] ?? "", group.Key)
+                if (row[1] is { } device && device != NullDevice && Backup.Stale(device, row[2] ?? "", group.Key)
                     && (await run(Backup.DeleteSql(device, int.Parse(row[3]!, CultureInfo.InvariantCulture)), "master")).Status != "completed")
                     log("Could not delete a stale scratch backup file of " + group.Key);
             await run(HistorySql(group.Key), "msdb");
@@ -200,6 +209,30 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
         /// <summary>A scratch database's backup file in a Linux folder.</summary>
         internal static string FileIn(string folder, string database) => folder.TrimEnd('/') + "/" + database + ".bak";
+
+        /// <summary>One of Restore Database's source backups (<see cref="RestoreSource"/>): &lt;folder&gt;&lt;database&gt;_&lt;part&gt;, the part a few
+        /// lower-case letters or digits then .bak or .trn, joined with the folder's own separator.</summary>
+        internal static string PartIn(string folder, string database, string part)
+        {
+            if (!Pattern().IsMatch(database) || database.Contains('.', StringComparison.Ordinal) || database.Contains(']', StringComparison.Ordinal) || !PartPattern().IsMatch(part))
+                throw new InvalidOperationException("Scratch setup failed: only a scratch database's backup gets a file name.");
+            var linux = folder.StartsWith('/');
+            if (!linux && !(folder.Length >= 3 && folder[1] == ':' && folder[2] == '\\') && !folder.StartsWith(@"\\", StringComparison.Ordinal))
+                throw new InvalidOperationException("Scratch setup failed: the server reported no absolute backup folder.");
+            var separator = linux ? '/' : '\\';
+            return folder.TrimEnd(separator) + separator + database + "_" + part;
+        }
+
+        /// <summary>Whether the stale sweep may delete a device a scratch database's history names: the one file <see cref="For"/> names
+        /// on Linux, or one <see cref="PartIn"/> names in the backup folder on either platform; nothing else, whatever the history says.</summary>
+        internal static bool Stale(string device, string folder, string database)
+        {
+            if (device == FileIn(folder, database)) return true;
+            var name = device[(device.LastIndexOfAny(['/', '\\']) + 1)..];
+            if (!name.StartsWith(database + "_", StringComparison.Ordinal)) return false;
+            try { return device == PartIn(folder, database, name[(database.Length + 1)..]); }
+            catch (InvalidOperationException) { return false; }
+        }
 
         /// <summary>The target on a server of this platform, folder and version. Only a sweepable scratch name of letters, digits
         /// and underscores names a file.</summary>
@@ -417,6 +450,26 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return name;
     }
 
+    /// <summary>Creates the marked Restore Database source in FULL recovery and returns the folder its backups go to: the default
+    /// backup folder (the data folder on 2017, which has none).</summary>
+    public async Task<string> CreateRestoreSourceAsync()
+    {
+        await CreateMarkedAsync(RestoreSource);
+        await Exec("ALTER DATABASE " + Bracket(RestoreSource) + " SET RECOVERY FULL;");
+        var row = (await Exec(Backup.FactsSql)).Sets[0][0];
+        restoreTarget = (row[1] ?? throw new InvalidOperationException("Scratch setup failed: the server reported no backup folder."), int.Parse(row[2]!, CultureInfo.InvariantCulture));
+        return row[1]!;
+    }
+
+    /// <summary>A file for one of <see cref="RestoreSource"/>'s backups (<see cref="Backup.PartIn"/>), which disposal deletes.</summary>
+    public string RestoreFile(string part)
+    {
+        var (folder, _) = restoreTarget ?? throw new InvalidOperationException("Create the restore source first.");
+        var file = Backup.PartIn(folder, RestoreSource, part);
+        if (!restoreFiles.Contains(file)) restoreFiles.Add(file);
+        return file;
+    }
+
     /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
     public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
 
@@ -426,6 +479,13 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         foreach (var name in created) await Drop(run, name, name != Offline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
+        // Restore Database's source files go, then its history; a file left behind keeps the history for the stale sweep.
+        if (restoreTarget is { } target)
+        {
+            var deleted = true;
+            foreach (var file in restoreFiles) deleted &= (await run(Backup.DeleteSql(file, target.Major), "master")).Status == "completed";
+            if (deleted) await run(HistorySql(RestoreSource), "msdb");
+        }
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");
     }
 }

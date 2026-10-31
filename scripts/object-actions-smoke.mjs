@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, restoreScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
-  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
+  renameBox, scriptActions, scriptDrawer, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -691,6 +691,51 @@ try {
   await expect(folderPicker()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
+
+  // 5b. Restore Database (D1e), which only its test hook opens until its OK restores (critic A17): AppData's history plans
+  // the full, differential and log backups; master is greyed with the reason; the Backup Timeline's slider moves by keys;
+  // Script previews the plan; Prompt before restoring each backup is greyed (critic A22).
+  const restoreFrame = name => documentFrame(page, 'Restore Database - ' + name)
+  const restoreSection = (title, name = 'AppData') => frameSection(restoreFrame(name), title)
+  expect(await page.evaluate(() => window.__variaRestore.open('AppData'))).toEqual(expect.any(String))
+  await expect(documentTab(page, 'Restore Database - AppData')).toBeVisible()
+  const restoreTo = restoreSection('General').getByRole('textbox', { name: 'Restore to:', exact: true })
+  await expect(restoreTo).toHaveText('The last backup taken (2026-10-29 13:00:00)')
+  await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
+  const restoreSource = restoreSection('General').getByRole('combobox', { name: 'Database:', exact: true }).first()
+  await expect(restoreSource).toHaveValue('AppData')
+  await expect(restoreSource.getByRole('option', { name: 'master', exact: true })).toBeDisabled()
+  await expect(restoreSection('General').getByRole('button', { name: 'Verify Backup Media', exact: true })).toBeDisabled()
+  await expect(restoreSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toBeDisabled()
+  await expect(restoreSection('Options').getByRole('checkbox', { name: 'Take tail-log backup before restore', exact: true })).toBeChecked()
+  await restoreSection('General').getByRole('button', { name: 'Timeline…', exact: true }).click()
+  const timeline = page.getByRole('dialog', { name: 'Backup Timeline', exact: true })
+  await timeline.getByLabel('Timeline Interval:', { exact: true }).selectOption({ label: 'Hour' })
+  const slider = timeline.getByRole('slider', { name: 'Point in time', exact: true })
+  await slider.focus()
+  await slider.press('Home')
+  await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:00:00')
+  await expect(timeline.getByRole('radio', { name: 'Specific date and time', exact: true })).toBeChecked()
+  await slider.press('ArrowRight')
+  await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:01:00')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-timeline.png') })
+  await timeline.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(timeline).toHaveCount(0)
+  await expect(restoreTo).toHaveText('2026-10-29 12:01:00')
+  await scriptToggle(restoreFrame('AppData')).click()
+  await expect(drawerText(restoreFrame('AppData'))).toHaveValue(restoreScript.replaceAll('\r\n', '\n'))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'restore', target: { kind: 'database', name: 'AppData' }, identity: { id: 5 },
+    restore: { stopAt: '2026-10-29T12:01:00', recovery: 'recovery', tailLog: { noRecovery: true }, sets: [{ type: 'full', file: 1 }, { type: 'differential', file: 2 }, { type: 'log', file: 1 }] } })
+  // Restoring over master is refused with the reason, and nothing more is scripted for it.
+  const scripted = (await stubCalls('actions.script')).length
+  await restoreSection('General').getByRole('combobox', { name: 'Database:', exact: true }).last().fill('master')
+  await expect(restoreSection('General', 'master').getByText('Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.').first()).toBeVisible()
+  await expect(scriptDrawer(restoreFrame('master')).getByText('Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.', { exact: true })).toBeVisible()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-dark.png') })
+  expect((await stubCalls('actions.script')).length).toBe(scripted)
+  await closeDocumentButton(page, 'Restore Database - AppData').click()
+  await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
+  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, greys master and Prompt with their reasons, moves the Backup Timeline\'s point by keys, and scripts the plan.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

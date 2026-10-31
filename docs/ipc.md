@@ -230,7 +230,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
-| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`). The server file picker (`dialog: 'serverFiles'`): 15 s around the backend's 10 s budget per listing |
+| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`). The server file picker (`dialog: 'serverFiles'`): 15 s around the backend's 10 s budget per listing. Restore Database (`dialog: 'restoreDatabase'`): 130 s around the backend's 120 s budget for reading backup media |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
@@ -328,7 +328,7 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker and backup files), `FILE_ACCESS` (a backup file SQL Server's service account may not read), `MEDIA` (backup media a restore cannot use), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
 failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
@@ -540,6 +540,17 @@ until then, and the picker runs one listing at a time and cancels those it no lo
 another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
 connection opens.
 docs/object-actions.md lists the statements by version.
+
+Restore Database reads through `actions.describe` as well, with no new method: `{ connectionId, requestId, dialog:
+'restoreDatabase', target: { kind: 'server' }, restore: { kind: 'history', database? } | { kind: 'devices', devices } |
+{ kind: 'historyFiles', setId } | { kind: 'mediaFiles', devices, file } }` (`restore` only with that dialog; 1 – 64 devices,
+each a server path as above). It answers `{ restore: { server?, historyDatabases?, sets?, files?, …Truncated }, elapsedMs }`:
+msdb's history, `RESTORE LABELONLY` and `HEADERONLY` on the files, or one set's files (msdb's `backupfile` or
+`RESTORE FILELISTONLY`). Reading media can take long on a large striped set or a slow share, so its deadline is a function
+of the request too: 130 s around the backend's 120 s budget (`restoreLimits`). `actions.script` with the `restore` action
+takes the plan (`restore: { sets, relocate, recovery, … }`, at most 256 sets and 1,000 moves) and answers the script SMO's
+restore plan would write; `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
+describes the planner and the limits.
 
 ## Streams and credits
 
@@ -1674,6 +1685,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
 | Server file picker | paths 1 – 260 UTF-16 code units, no U+0000 – U+001F or `*?"<>|`, absolute; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
+| Restore Database | 1 – 64 backup files, each a server path as above; ≤ 1,024 databases and 1,024 sets a history or media read (`…Truncated`); ≤ 256 sets and 1,000 moves a restore; set names ≤ 128, ids ≤ 36 characters, LSNs ≤ 25 digits, positions 1 – 32,767; 120 s a read (130 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
 | SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, no lone surrogate, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project and caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window of at most 10,000 rows, at most 20,000 (2 × limit) read a sample and as many open ones with a baseline, at most 256 open ids read again a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |

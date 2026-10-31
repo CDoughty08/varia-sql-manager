@@ -187,8 +187,32 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// what the table designer needs of a database (tableDesigner), or the server's folders (serverFiles, the server as Target, with Files).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null);
+/// what the table designer needs of a database (tableDesigner), the server's folders (serverFiles, the server as Target, with Files),
+/// or what Restore Database restores from (restoreDatabase, the server as Target, with Restore).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, RestoreSourceDto? Restore = null);
+/// <summary>Restore Database's describe (src/shared/actions/restore.ts RestoreSource): Kind history (Database, optional), devices
+/// (Devices, 1–64 server paths), historyFiles (SetId, a backup_set_uuid) or mediaFiles (Devices and File, the set's position).</summary>
+internal sealed record RestoreSourceDto(string Kind, string? Database = null, List<string>? Devices = null, string? SetId = null, int? File = null);
+/// <summary>One backup set (restore.ts BackupSetRow): Type full, differential, log, file, fileDifferential, partial or partialDifferential;
+/// LSNs as decimal text; dates as the server's local yyyy-MM-ddTHH:mm:ss; Devices the media set's disk files in family order.</summary>
+internal sealed record BackupSetDto(string Id, string Name, string Type, string Server, string Database, int Position, string FirstLsn, string LastLsn, string CheckpointLsn,
+    string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
+    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null);
+/// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
+internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null);
+internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null);
+internal sealed record RestoreServerFileDto(string Database, string Path);
+internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
+    string? DataPath = null, string? LogPath = null, string? BackupPath = null);
+internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<string>? HistoryDatabases = null, bool? HistoryTruncated = null, List<BackupSetDto>? Sets = null,
+    bool? SetsTruncated = null, List<BackupFileDto>? Files = null, bool? FilesTruncated = null);
+/// <summary>A restore (restore.ts RestoreOptions): the sets in order, the moves, and the options SSMS's pages set. Recovery is
+/// recovery, norecovery or standby (with StandbyFile); StopAt the server's local yyyy-MM-ddTHH:mm:ss on the last log.</summary>
+internal sealed record RestoreOptionsDto(List<RestorePlanSetDto> Sets, List<RestoreMoveDto> Relocate, bool Replace, bool KeepReplication, bool RestrictedUser, string Recovery,
+    bool CloseConnections, string? StopAt = null, string? StandbyFile = null, RestoreTailLogDto? TailLog = null);
+internal sealed record RestorePlanSetDto(string Id, List<string> Devices, int File, string Type, string? Name = null);
+internal sealed record RestoreMoveDto(string Logical, string Physical);
+internal sealed record RestoreTailLogDto(string File, bool NoRecovery);
 /// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
 /// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
 /// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
@@ -202,9 +226,10 @@ internal sealed record ServerFileEntryDto(string Name, bool Directory, long? Siz
 /// SQL Server 2016 will not tell a login outside sysadmin).</summary>
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, createTable (Target the database) Design, restore (Target the destination database) Restore and
+/// Identity; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -240,7 +265,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null);
+    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

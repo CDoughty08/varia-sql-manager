@@ -10,14 +10,18 @@ import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type F
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
+import { restoreDescribeId, type RestoreModel, type RestoreSource } from './restore.ts'
+import { restoreRequestSchema, restoreSourceSchema, type RestoreRequest } from './restore-schema.ts'
 
-/** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), or the
- *  server's folders for the server file picker. */
-export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId] as const
+/** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
+ *  server's folders for the server file picker, or what Restore Database restores from (src/shared/actions/restore.ts). */
+export const describeIds = [...dialogIds, ...designerDescribeIds, serverFilesDescribeId, restoreDescribeId] as const
 export type DescribeId = typeof describeIds[number]
 
-/** `files` only with `serverFiles`, whose target is the server. */
-export interface ActionDescribeRequest { readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest }
+/** `files` only with `serverFiles` and `restore` only with `restoreDatabase`, whose target is the server. */
+export interface ActionDescribeRequest {
+  readonly connectionId: string; readonly requestId: string; readonly dialog: DescribeId; readonly target: ObjectRef; readonly files?: ServerFilesRequest; readonly restore?: RestoreSource
+}
 export interface RenameRequest { readonly action: 'rename'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly newName: string }
 /** `closeConnections` (SET SINGLE_USER WITH ROLLBACK IMMEDIATE first) and `deleteHistory` apply to databases only. */
 export interface DeleteRequest {
@@ -42,6 +46,9 @@ export interface PropertiesRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
+/** actions.script also scripts a restore, which actions.execute runs from D1f (critic A17). */
+export type ActionScriptRequest = ActionRequest | RestoreRequest
+export type { RestoreRequest } from './restore-schema.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -129,6 +136,7 @@ export interface DatabasePropertiesModel {
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
   readonly serverFiles?: ServerFilesListing
+  readonly restore?: RestoreModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -185,12 +193,18 @@ export const serverFilesRequestSchema = z.object({ purpose: z.enum(serverFilePur
   .refine(files => !(files.purpose === 'folder' && files.allFiles), 'A folder picker lists folders only.')
   .refine(files => !(files.exists && (files.path === undefined || files.allFiles !== undefined)), 'A check names one path, with no type filter.') satisfies z.ZodType<ServerFilesRequest>
 
-export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional() }).strict()
+export const actionDescribeSchema = z.object({
+  connectionId: z.uuid(), requestId: z.uuid(), dialog: z.enum(describeIds), target: objectRefSchema, files: serverFilesRequestSchema.optional(), restore: restoreSourceSchema.optional()
+}).strict()
   .superRefine((request, context) => {
     if ((request.dialog === serverFilesDescribeId) !== (request.files !== undefined)) issue(context, 'files', 'Only the server file picker lists files, and it needs what to list.')
+    if ((request.dialog === restoreDescribeId) !== (request.restore !== undefined)) issue(context, 'restore', 'Only Restore Database reads backups, and it needs what to read.')
     switch (request.dialog) {
       case serverFilesDescribeId:
         if (request.target.kind !== 'server') issue(context, 'target', 'The server file picker lists folders on the server.')
+        break
+      case restoreDescribeId:
+        if (request.target.kind !== 'server') issue(context, 'target', 'Restore Database reads backups on the server.')
         break
       // A new table goes in any database, SQL Server's own included, as in SSMS.
       case 'tableDesigner':
@@ -247,7 +261,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
-  .pipe(actionRequestSchema)
+  .pipe(z.union([actionRequestSchema, restoreRequestSchema]))
 
 /** The bounds of a step (C#: ActionSteps.Bound clips to them). */
 export const actionStepSchema = z.object({
