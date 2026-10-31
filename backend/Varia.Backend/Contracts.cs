@@ -190,9 +190,9 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// or what the table designer needs of a database (tableDesigner).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, takeOffline DropConnections, createTable (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, bool? DropConnections = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -227,8 +227,15 @@ internal sealed record DatabaseServerFactsDto(int Level, bool Sysadmin, int File
 internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Dictionary<string, string> Options, Dictionary<string, string> Scoped, List<int> CompatibilityLevels,
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
+/// <summary>A session in a database as Take Database Offline lists it (VIEW SERVER STATE): names clipped to the catalogue's sessionText.</summary>
+internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? Program, string? Host, int OpenTransactions);
+/// <summary>Take Database Offline's and Bring Database Online's row (src/shared/actions/schema.ts DatabaseStateModel): the database read,
+/// its sys.databases state, user_access, is_read_only and is_in_standby, and the sessions in it without the backend's own pooled
+/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.</summary>
+internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
+    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null);
+    TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

@@ -35,14 +35,19 @@ internal sealed class ActionsCatalog
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
     private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
-    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
-        Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
+    /// <summary>A database rule (src/shared/actions/catalog.ts DatabaseActionRule): states and access by name, as databaseStates names them.</summary>
+    private sealed record DatabaseRuleJson(string Action, string Reason, List<string>? States = null, List<string>? Access = null, bool? ReadOnly = null, bool? Hide = null);
+    private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DatabaseRuleJson> DatabaseRules,
+        Dictionary<string, string> DatabaseStates, List<DialogJson> Dialogs, List<ErrorJson> Errors, Dictionary<string, long> Limits, LoginRulesJson Logins, List<string> OwnerNotOn, List<RowJson> Rows,
+        List<OptionJson> ScopedConfigurations);
 
     private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> dialogActions;
     private readonly HashSet<string> systemActions;
     private readonly Dictionary<string, ActionJson> actions;
+    private readonly List<DatabaseRuleJson> databaseRules;
+    private readonly Dictionary<int, string> databaseStates;
 
     private ActionsCatalog(CatalogJson json)
     {
@@ -60,6 +65,8 @@ internal sealed class ActionsCatalog
         ScopedConfigurations = json.ScopedConfigurations.ToDictionary(row => row.Key, StringComparer.Ordinal);
         CompatibilityLevels = json.CompatibilityLevels;
         OwnerNotOn = json.OwnerNotOn;
+        databaseRules = json.DatabaseRules;
+        databaseStates = json.DatabaseStates.ToDictionary(pair => int.Parse(pair.Key, System.Globalization.CultureInfo.InvariantCulture), pair => pair.Value);
     }
 
     public static ActionsCatalog Current => Embedded.Value;
@@ -107,6 +114,22 @@ internal sealed class ActionsCatalog
     /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status: the preflights
     /// that derive a status (a disabled login) arrive with the actions that need them.</summary>
     public bool Allows(string kind, string subtype, string action) => (Row(kind, subtype) ?? Row(kind, "")) is { } row && row.Enabled.Contains(action);
+
+    /// <summary>sys.databases.state by the catalogue's name ('other' for a value it does not know).</summary>
+    public string DatabaseStateOf(int state) => databaseStates.TryGetValue(state, out var name) ? name : "other";
+
+    /// <summary>sys.databases.user_access by name.</summary>
+    public static string DatabaseAccessOf(int userAccess) => userAccess == 1 ? "single" : userAccess == 2 ? "restricted" : "multi";
+
+    /// <summary>Why the database rules grey or hide an action for a database in this runtime state (the first rule that applies,
+    /// as the menu derives it in databaseActionState), or null when none does.</summary>
+    public string? DatabaseRefusal(string action, int state, int userAccess, bool readOnly, bool standby)
+    {
+        var stateName = DatabaseStateOf(state);
+        var access = DatabaseAccessOf(userAccess);
+        return databaseRules.FirstOrDefault(rule => rule.Action == action
+            && (rule.States?.Contains(stateName) == true || rule.Access?.Contains(access) == true || rule.ReadOnly == true && (readOnly || standby)))?.Reason;
+    }
 
     public bool Retryable(string code) => errors.TryGetValue(code, out var retryable) ? retryable : throw new InvalidOperationException("Unknown object action error " + code);
 

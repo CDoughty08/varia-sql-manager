@@ -108,6 +108,22 @@ describe('IPC validation', () => {
       ['actions.describe', { ...describe, extra: 1 }], ['actions.execute', { ...properties, changes: {} }], ['actions.execute', { ...properties, changes: { options: { autoClose: 'yes' } } }],
       ['actions.execute', { ...properties, closeConnections: true }], ['actions.script', { ...properties, target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
+    // Take Offline and Bring Online (D3a): a user database, Drop All Active Connections only for Take Offline, and the identity the describe wrote.
+    const database = { kind: 'database', name: "q]'); --" }, identity = { id: 7, created: '2026-01-02T03:04:05.678' }
+    const takeOffline = { action: 'takeOffline', ...ids, target: database, dropConnections: false, identity }, bringOnline = { action: 'bringOnline', ...ids, target: database }
+    expect(validateRequest('actions.execute', takeOffline)).toEqual(takeOffline)
+    expect(validateRequest('actions.script', { ...takeOffline, dropConnections: true })).toMatchObject({ dropConnections: true })
+    expect(validateRequest('actions.execute', bringOnline)).toEqual(bringOnline)
+    for (const dialog of ['takeOffline', 'bringOnline']) expect(validateRequest('actions.describe', { ...ids, dialog, target: database })).toMatchObject({ dialog })
+    for (const [method, value] of [
+      ['actions.execute', { ...takeOffline, dropConnections: undefined }], ['actions.execute', { ...takeOffline, target: { kind: 'database', name: 'master' } }],
+      ['actions.execute', { ...takeOffline, target }], ['actions.execute', { ...takeOffline, newName: 'x' }], ['actions.execute', { ...takeOffline, closeConnections: true }],
+      ['actions.execute', { ...bringOnline, dropConnections: true }], ['actions.execute', { ...bringOnline, target: { kind: 'database', name: 'tempdb' } }],
+      ['actions.execute', { ...takeOffline, identity: { ...identity, id: 0 } }], ['actions.execute', { ...bringOnline, identity: { ...identity, created: '2026-01-02T03:04:05' } }],
+      ['actions.execute', { ...bringOnline, identity: { ...identity, created: identity.created + '\n' } }], ['actions.execute', { ...remove, dropConnections: true }],
+      ['actions.execute', { ...rename, dropConnections: false }], ['actions.execute', { ...properties, dropConnections: false }],
+      ['actions.describe', { ...ids, dialog: 'takeOffline', target }], ['actions.describe', { ...ids, dialog: 'bringOnline', target: { kind: 'database', name: 'msdb' } }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // The table designer: describe and createTable take a database, SQL Server's own included; main refuses malformed designs.
     const design = { schema: 'dbo', name: "q]'); DROP TABLE x; --", columns: [{ name: 'Id', type: { system: 'int' }, allowNulls: false, identity: { seed: '1', increment: '1' } }], primaryKey: [0] }
     const createTable = { action: 'createTable', ...ids, target: { kind: 'database', name: 'master' }, design }

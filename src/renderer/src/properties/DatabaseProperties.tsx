@@ -15,7 +15,7 @@ import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
 import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, switchStates } from './fields'
-import type { DatabasePropertiesService, PropertiesState } from './DatabasePropertiesService'
+import { propertiesMessages, type DatabasePropertiesService, type PropertiesState } from './DatabasePropertiesService'
 
 /** The DOM id prefix of a document's fields, so two open documents never share one. */
 const fieldId = (documentId: string, key: string) => `properties-${documentId}-${key}`
@@ -216,6 +216,7 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
       actions={recovery} />}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.readOnlyReason && <p className="document-status"><Icon name="lock" />{model.readOnlyReason}</p>}
+    {model && !model.readOnlyReason && state.offline && <p className="document-status"><Icon name="lock" />{propertiesMessages.offline}</p>}
     {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><Icon name="lock" />{greyNotes.readOnlyDatabase}</p>}
   </>
   return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}

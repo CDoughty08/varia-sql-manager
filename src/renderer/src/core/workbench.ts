@@ -194,6 +194,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
+  // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
+  const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
@@ -211,7 +213,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const dialogs = new ObjectDialogService({
+    api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // Database Properties documents of a database a dialog took offline or brought online follow it.
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline)
+  })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -353,6 +359,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerRuntime.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultClient.dispose()

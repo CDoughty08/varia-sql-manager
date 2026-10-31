@@ -3,7 +3,8 @@ import type { Workbench } from '../core/workbench'
 import { explorerNodeOf, type ExplorerMenuNode } from '../menus/targets'
 
 /**
- * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete and Properties, and
+ * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, and
+ * Tasks › Take Offline and Bring Online, and
  * Integration Services Catalogs › Create Catalog… (S9a). Each acts
  * on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a live server. The
  * Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) come from the same catalogue.
@@ -42,6 +43,15 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         // The menu returned focus to the tree; the document's section list mounts on a later frame.
         documents.focusActive()
       }
+    }),
+    // Tasks › Take Offline and Bring Online (D3a): small modal dialogs; Bring Online runs as it opens.
+    commands.register('explorer.takeOffline', {
+      when: args => actions.canRun('takeOffline', nodeOf(args)) && !dialogs.current,
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('takeOffline', node) }
+    }),
+    commands.register('explorer.bringOnline', {
+      when: args => actions.canRun('bringOnline', nodeOf(args)) && !dialogs.current,
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('bringOnline', node) }
     }),
     commands.register('explorer.createCatalog', {
       when: args => catalogs(nodeOf(args)) && !dialogs.current && !ssisCatalog.current,

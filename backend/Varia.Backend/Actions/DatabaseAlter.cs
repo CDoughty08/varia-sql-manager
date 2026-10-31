@@ -44,6 +44,9 @@ internal static partial class DatabaseAlter
     [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\z")]
     private static partial Regex IdentityCreated();
 
+    /// <summary>Whether a request's identity is one a describe wrote: a database_id and create_date as DatabaseProperties.Iso writes it.</summary>
+    internal static bool IdentityValid(DatabaseIdentityDto identity) => identity.Id >= 1 && identity.Created is not null && IdentityCreated().IsMatch(identity.Created);
+
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>
     public static OptionJson? Option(ActionsCatalog catalog, string key) =>
         catalog.DatabaseOptions.TryGetValue(key, out var option) ? option : catalog.ScopedConfigurations.GetValueOrDefault(key);
@@ -61,10 +64,10 @@ internal static partial class DatabaseAlter
     /// SSMS closes connections for. Messages never echo values.</summary>
     public static void Validate(ActionsCatalog catalog, ActionArgs args)
     {
-        if (args.NewName is not null || args.DeleteHistory is not null) throw Invalid("properties takes no new name or delete options.");
+        if (args.NewName is not null || args.DeleteHistory is not null || args.DropConnections is not null) throw Invalid("properties takes no new name or delete options.");
         if (args.CloseConnections is not { } close || args.Changes is not { } changes) throw Invalid("closeConnections and changes are required.");
         if (args.Target.Kind != "database") throw Invalid("only a database has properties.");
-        if (args.Identity is { } identity && (identity.Id < 1 || identity.Created is null || !IdentityCreated().IsMatch(identity.Created))) throw Invalid("identity.");
+        if (args.Identity is { } identity && !IdentityValid(identity)) throw Invalid("identity.");
         if (changes.Owner is not null && !ExplorerRefs.Ident(changes.Owner)) throw Invalid("owner.");
         void Check(Dictionary<string, string>? values, IReadOnlyDictionary<string, OptionJson> options, string what)
         {

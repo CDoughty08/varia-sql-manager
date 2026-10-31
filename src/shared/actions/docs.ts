@@ -42,7 +42,9 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
   statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
-  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this'
+  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
+  sessions: 'Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so',
+  sessionText: 'Characters of each login, program and host name in that list'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -149,6 +151,40 @@ function longRunDocs(): string[] {
   ]
 }
 
+/** Tasks › Take Offline and Bring Online (D3a). */
+function databaseStateDocs(): string[] {
+  return [
+    '### Take Offline and Bring Online',
+    '',
+    'Tasks › Take Offline opens Take Database Offline - <name>: a grid of Database Name, Drop All Active Connections',
+    '(cleared), Status and Message, as SSMS 18 and later lay it out (recalled). The Message counts the sessions in the',
+    'database and those with an open transaction; a disclosure lists them (session id, login, program, host and open',
+    `transactions, at most ${actionLimits.sessions}, with VIEW SERVER STATE), and the page names Varia's own query windows on the database`,
+    'whose session holds an open transaction, which Drop All Active Connections rolls back (A7). The counts leave out the',
+    'backend\'s own pooled connections, which the action closes itself. Without VIEW SERVER STATE the Message says the sessions',
+    'are unknown, and OK runs.',
+    '',
+    '`SET OFFLINE` without a termination clause waits for every other session to leave, so while sessions are connected and',
+    'the box is cleared the Status is Not ready and OK is disabled, with the reason beside it; Check Again counts them again.',
+    'Checked, OK runs `SET OFFLINE WITH ROLLBACK IMMEDIATE` (about 3 s even on an idle database, probed). Either way the run',
+    'can wait for locks, so Stop cancels it in SQL Server and the database stays online. A success keeps the dialog open on',
+    'its steps with Close focused, as SSMS\'s progress dialog does.',
+    '',
+    'Tasks › Bring Online opens Bring Database Online - <name> and runs `SET ONLINE` at once, with nothing to confirm; Stop',
+    'cancels a recovery that waits. The menu offers it on any state SQL Server lets `SET ONLINE` act on (offline, recovery',
+    'pending, suspect, emergency) and greys it while the database is online, restoring, recovering or copying. A database left',
+    'SINGLE_USER (or RESTRICTED_USER) while it was offline comes back so, and the reply says so in a message.',
+    '',
+    'Both are offered on box SQL Server only (Managed Instance cannot set OFFLINE or ONLINE), greyed on SQL Server\'s own',
+    'databases and absent on a snapshot. The backend re-derives the state rules above from `sys.databases` before it runs',
+    'anything, refuses a database whose identity changed since the dialog read it, and needs ALTER on the database (for one that',
+    'is not online, ALTER ANY DATABASE or ownership; SQL Server\'s 5011 is PERMISSION_DENIED too). After either, the Databases folder is',
+    'listed again ("(Offline)" in the sublabel), and the database\'s Database Properties documents on that connection read',
+    'it again, or, while they hold changes, keep them with Apply disabled until it is online.',
+    ''
+  ]
+}
+
 /** One line per kind and run of subtypes that act alike. */
 function kindRows(): string[][] {
   return nodeKinds.flatMap(kind => {
@@ -175,7 +211,8 @@ export function renderObjectActionsDocs(): string {
     '',
     '<!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->',
     '',
-    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete and Properties. Which kinds and subtypes offer each is',
+    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, and a database\'s Tasks › Take Offline',
+    'and Bring Online. Which kinds and subtypes offer each is',
     'data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`',
     'and re-derives the subtype in the action\'s own connection before any DDL runs.',
     '',
@@ -230,6 +267,7 @@ export function renderObjectActionsDocs(): string {
     'greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only',
     'confirmation.',
     '',
+    ...databaseStateDocs(),
     'The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with',
     '`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and',
     '[docs/table-designer.md](table-designer.md) describes them.',
@@ -259,7 +297,7 @@ export function renderObjectActionsDocs(): string {
     'Varia\'s own cleanup runs. An action can instead run its steps in one transaction (the table designer\'s Save): a failure or',
     'Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.',
     '',
-    'Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and',
+    'Before the first statement that needs a database to itself (setting single-user, taking it offline, renaming, dropping or detaching it), and',
     'before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection',
     'to that server: for each connection whose own database it is (the Connect dialog\'s Database, or the login\'s default, read',
     'at connect), Object Explorer\'s, scripting\'s, SSIS\'s and the live views\' server-scope connections open in master from then',
@@ -278,10 +316,13 @@ export function renderObjectActionsDocs(): string {
     '',
     '### Shared statements',
     '',
-    'Later actions plan these statements. Each is built by SQL Server from constant text, linted, and checked against hostile',
+    'Take Offline and Bring Online plan the first three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile',
     'names by a live dry run:',
     '',
     table(['Step', 'As Script Action writes it'], [
+      ['Take database offline', '`ALTER DATABASE [db] SET  OFFLINE`'],
+      ['Close connections and take database offline', '`ALTER DATABASE [db] SET  OFFLINE WITH ROLLBACK IMMEDIATE`'],
+      ['Bring database online', '`ALTER DATABASE [db] SET  ONLINE`'],
       ['Restore multi-user access', '`ALTER DATABASE [db] SET  MULTI_USER`'],
       ['Restore restricted user access', '`ALTER DATABASE [db] SET  RESTRICTED_USER`'],
       ['Detach the database', '`EXEC master.dbo.sp_detach_db @dbname = N\'db\', @skipchecks = \'false\'` (\'true\' when Update Statistics is cleared)'],

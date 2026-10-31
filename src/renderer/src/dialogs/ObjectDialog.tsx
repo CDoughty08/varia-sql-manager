@@ -9,6 +9,7 @@ import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
+import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
@@ -16,11 +17,13 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 /** Each modal dialog's pages, by page id (the definitions in definitions.ts hold the behaviour). Database Properties is a
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
-  deleteObject: { general: DeleteObjectPage }
+  deleteObject: { general: DeleteObjectPage },
+  takeOffline: { general: DatabaseStatePage },
+  bringOnline: { general: DatabaseStatePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
-  loading: 'Loading', ready: 'Ready', confirming: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
+  loading: 'Loading', ready: 'Ready', confirming: 'Ready', loadFailed: 'Error', scripting: 'Scripting', executing: 'Executing', succeeded: 'Success', failed: 'Error', stopped: 'Stopped', disconnected: 'Error'
 }
 
 /** The Script split button: the main part scripts to a new query window; the arrow lists the three destinations. */
@@ -60,8 +63,9 @@ function ScriptButton({ disabled, onScript }: { disabled: boolean; onScript(dest
 /**
  * SSMS's object dialog frame: "Select a page" with the Connection and Progress boxes on the left (a row of tabs above
  * them in a dialog under 720 px), the Script button and a message bar above the page, the run's steps when the dialog's
- * spec asks for them, and OK and Cancel (Stop while it runs) below. Escape cancels; Enter is OK except on buttons and
- * lists. Closing returns focus to the tree row it was opened for.
+ * spec asks for them, and OK and Cancel (Stop while it runs) below, with why OK cannot run yet beside them. A dialog that stays
+ * open after its run (Take Offline, Bring Online) then shows only Close, focused. Escape cancels; Enter is OK except on
+ * buttons and lists. Closing returns focus to the tree row it was opened for.
  */
 export default function ObjectDialog() {
   const { dialogs, explorer } = useWorkbench()
@@ -148,6 +152,10 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const spec = dialogSpecs[open.dialog]
   const components: Partial<Record<PageId, ComponentType<PageProps>>> = dialogPages[open.dialog]
   const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
+  const succeeded = open.phase === 'succeeded', blocked = dialogs.blockedReason(open)
+  const closeButton = useRef<HTMLButtonElement>(null)
+  // A run that succeeded leaves Close as the one button, focused, as SSMS's progress dialogs do.
+  useEffect(() => { if (succeeded) closeButton.current?.focus() }, [succeeded])
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   const tabs = useMediaQuery(narrowFrameQuery)
@@ -206,9 +214,12 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
       </div>
     </div>
     <div className="connection-footer">
-      <span />
-      <button className="primary" type="submit" disabled={busy || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
-      {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
+      <span className="object-dialog-footer-note" id="object-dialog-blocked">{!busy && blocked}</span>
+      {succeeded
+        ? <button ref={closeButton} className="primary" type="button" onClick={close}>Close</button>
+        : <><button className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
+          disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+          {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}</>}
     </div>
   </form></div>
 }

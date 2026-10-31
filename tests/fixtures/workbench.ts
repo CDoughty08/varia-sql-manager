@@ -308,7 +308,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  // As the workbench wires it: Database Properties documents follow a database a dialog took offline or brought online.
+  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor, databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline) })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })

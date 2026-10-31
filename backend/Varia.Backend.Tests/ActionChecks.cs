@@ -49,8 +49,18 @@ internal static class ActionChecks
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
         check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
-            "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "takeOffline", "bringOnline"]) && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline",
+            "the catalogue lists the action error codes and the Delete Object, Database Properties, Take Offline and Bring Online dialogs");
+        // The database rules are the menu's (databaseActionState, tests/object-actions-catalog.test.ts): the preflight refuses what the menu greys.
+        check(Catalog.DatabaseStateOf(0) == "online" && Catalog.DatabaseStateOf(6) == "offline" && Catalog.DatabaseStateOf(10) == "offlineSecondary" && Catalog.DatabaseStateOf(42) == "other"
+            && Catalog.DatabaseRefusal("takeOffline", 0, 0, false, false) is null && Catalog.DatabaseRefusal("takeOffline", 6, 0, false, false) == "The database is offline."
+            && Catalog.DatabaseRefusal("takeOffline", 1, 0, false, false) == "A database that is restoring or recovering cannot be taken offline."
+            && Catalog.DatabaseRefusal("takeOffline", 10, 0, false, false) is not null && Catalog.DatabaseRefusal("takeOffline", 0, 1, true, true) is null
+            && Catalog.DatabaseRefusal("bringOnline", 0, 0, false, false) == "The database is online." && Catalog.DatabaseRefusal("bringOnline", 6, 1, true, false) is null
+            && Catalog.DatabaseRefusal("bringOnline", 2, 0, false, false) == "A database that is restoring or recovering cannot be brought online."
+            && new[] { 3, 4, 5, 10, 42 }.All(state => Catalog.DatabaseRefusal("bringOnline", state, 0, false, false) is null) && Catalog.DatabaseRefusal("rename", 6, 0, false, false) is null
+            && Catalog.Allows("database", "", "takeOffline") && !Catalog.Allows("database", "system", "takeOffline") && !Catalog.Allows("database", "snapshot", "bringOnline"),
+            "Take Offline and Bring Online are refused in the states the menu greys them in, with its reasons, and never on a snapshot or SQL Server's own databases");
         // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
         // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
         using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
@@ -71,7 +81,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 6 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -103,7 +113,10 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.SetMultiUser, "master", [name]), new PlannedStatement(ActionTemplate.SetRestrictedUser, "master", [name]),
                 ActionSql.Detach(name, updateStatistics: true), new PlannedStatement(ActionTemplate.DisableLogin, "master", [name]),
                 new PlannedStatement(ActionTemplate.EnableLogin, "master", [name]), new PlannedStatement(ActionTemplate.DenyConnect, "master", [name]),
-                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name])
+                new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name]),
+                // Take Offline and Bring Online.
+                new PlannedStatement(ActionTemplate.SetOffline, "master", [name]), new PlannedStatement(ActionTemplate.SetOfflineRollback, "master", [name]),
+                new PlannedStatement(ActionTemplate.SetOnline, "master", [name])
             };
             foreach (var plan in plans)
             {
@@ -141,7 +154,19 @@ internal static class ActionChecks
         check(ActionService.Plan(Rename(view, "W"), view).Single() is { Template: ActionTemplate.RenameObject, Database: "AppData" } renamed && renamed.Names.SequenceEqual(["dbo", "V", "W"])
             && ActionService.Plan(Rename(database, "B"), database).Single() is { Template: ActionTemplate.RenameDatabase, Database: "master" }
             && ActionService.Plan(Delete(view), view).Single().Template == ActionTemplate.DropView, "rename and delete plans name the statement, its database and its names");
+        // SMO's capture of SSMS's Take Offline (with and without Drop All Active Connections) and Bring Online, two spaces included.
+        string Script(ActionArgs args) => ActionService.ScriptText(ActionService.Plan(args, database));
+        string Use(string statement) => "USE [master]" + NL + "GO" + NL + statement + NL + "GO" + NL;
+        check(Script(TakeOffline(database, drop: false)) == Use("ALTER DATABASE [AppData] SET  OFFLINE") && Script(TakeOffline(database, drop: true)) == Use("ALTER DATABASE [AppData] SET  OFFLINE WITH ROLLBACK IMMEDIATE")
+            && Script(BringOnline(database)) == Use("ALTER DATABASE [AppData] SET  ONLINE") && ActionService.Plan(BringOnline(database), database).Single().Database == "master",
+            "Take Offline and Bring Online script SSMS's ALTER DATABASE in master: SET OFFLINE, with ROLLBACK IMMEDIATE only when connections are dropped, and SET ONLINE");
+        check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" && ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
+            && ActionService.StepTitle(ActionTemplate.SetOnline) == "Bring database online", "the state steps have their own titles");
     }
+
+    private static ActionArgs TakeOffline(ObjectRefDto target, bool? drop, DatabaseIdentityDto? identity = null) =>
+        new("takeOffline", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, Identity: identity, DropConnections: drop);
+    private static ActionArgs BringOnline(ObjectRefDto target, DatabaseIdentityDto? identity = null) => new("bringOnline", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, Identity: identity);
 
     private static SqlException Sql(int number, byte level = 16, string message = "failed") => ConnectionFailureChecks.Sql(number, 1, level, "server", message);
 
@@ -153,7 +178,9 @@ internal static class ActionChecks
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
             [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
             // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
-            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED",
+            // Take Offline and Bring Online (D3a).
+            [5011] = "PERMISSION_DENIED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
@@ -169,6 +196,7 @@ internal static class ActionChecks
     {
         using var service = new ActionService(new FakeHost());
         var table = new ObjectRefDto("table", "AppData", "dbo", "Orders");
+        var appData = new ObjectRefDto("database", Name: "AppData");
         string Refused(ActionArgs args)
         {
             try { service.Validate(args); return "accepted"; }
@@ -182,12 +210,27 @@ internal static class ActionChecks
             ("empty name", Rename(table, "")), ("the same name", Rename(table, "Orders")), ("delete flags on a rename", Rename(table, "x") with { CloseConnections = false }),
             ("a new name on a delete", Delete(table) with { NewName = "x" }), ("delete flags missing", Delete(table) with { DeleteHistory = null }),
             ("delete flags on a table", Delete(table, close: true)), ("a system database", Rename(new ObjectRefDto("database", Name: "master"), "x")),
-            ("a system schema", Delete(new ObjectRefDto("view", "AppData", "sys", "objects"))), ("an aggregate's delete is offered by no row", Delete(new ObjectRefDto("synonym", "AppData", "dbo", "s")))
+            ("a system schema", Delete(new ObjectRefDto("view", "AppData", "sys", "objects"))), ("an aggregate's delete is offered by no row", Delete(new ObjectRefDto("synonym", "AppData", "dbo", "s"))),
+            // Take Offline and Bring Online (takeOfflineSchema, bringOnlineSchema).
+            ("take offline without dropConnections", TakeOffline(appData, null)), ("take offline of a table", TakeOffline(table, false)),
+            ("take offline of master", TakeOffline(new ObjectRefDto("database", Name: "master"), false)), ("take offline of tempdb", BringOnline(new ObjectRefDto("database", Name: "tempdb"))),
+            ("bring online with dropConnections", BringOnline(appData) with { DropConnections = true }), ("take offline with a new name", TakeOffline(appData, false) with { NewName = "x" }),
+            ("take offline with delete flags", TakeOffline(appData, true) with { CloseConnections = true }), ("bring online with changes", BringOnline(appData) with { Changes = new() }),
+            ("an identity of id 0", TakeOffline(appData, false, new(0, "2026-01-02T03:04:05.678"))), ("an identity without milliseconds", BringOnline(appData, new(5, "2026-01-02T03:04:05"))),
+            ("an identity with a line break", BringOnline(appData, new(5, "2026-01-02T03:04:05.678\n"))), ("dropConnections on a rename", Rename(table, "x") with { DropConnections = false }),
+            ("dropConnections on a delete", Delete(table) with { DropConnections = true }),
+            ("dropConnections on properties", new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), appData, CloseConnections: false,
+                Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }), DropConnections: false))
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses: " + string.Join(", ", accepted));
         check(Refused(Rename(table, " ")) == "accepted" && Refused(Rename(table, Long("q]'); --"))) == "accepted" && Refused(Rename(table, "orders")) == "accepted"
             && Refused(Delete(new ObjectRefDto("database", Name: "AppData"), close: true, history: true)) == "accepted", "hostile, single-space and case-changed names are accepted verbatim");
+        var hostile = new ObjectRefDto("database", Name: Long("q]'); --"));
+        check(Refused(TakeOffline(hostile, false)) == "accepted" && Refused(TakeOffline(appData, true, new(5, "2026-01-02T03:04:05.678"))) == "accepted"
+            && Refused(BringOnline(hostile)) == "accepted" && Refused(BringOnline(appData, new(int.MaxValue, "2026-01-02T03:04:05.678"))) == "accepted"
+            && Refused(new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), appData, CloseConnections: false, Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }))) == "accepted",
+            "Take Offline (with dropConnections) and Bring Online accept a user database's name verbatim and the identity a describe wrote");
         string DescribeRefused(ActionDescribeArgs args)
         {
             try { service.Validate(args); return "accepted"; }
@@ -195,7 +238,12 @@ internal static class ActionChecks
         }
         check(DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "databaseProperties", table)) == "INVALID_PARAMS"
             && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted", "describe refuses unknown dialogs and kinds the dialog does not serve");
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "takeOffline", appData)) == "accepted"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "bringOnline", appData)) == "accepted"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "takeOffline", table)) == "INVALID_PARAMS"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "bringOnline", new ObjectRefDto("database", Name: "msdb"))) == "INVALID_PARAMS",
+            "describe refuses unknown dialogs and kinds the dialog does not serve, SQL Server's own databases for Take Offline and Bring Online");
         var sql = new SqlService();
         check(sql.LaneOf("actions.execute") == RequestLane.Actions && sql.LaneOf("actions.describe") == RequestLane.Metadata && sql.LaneOf("actions.script") == RequestLane.Metadata
             && new[] { "actions.describe", "actions.script", "actions.execute" }.All(SqlService.MethodNames.Contains), "DDL runs on the actions lane, never holding a metadata slot; HELLO lists the three methods");

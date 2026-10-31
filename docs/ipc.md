@@ -484,6 +484,22 @@ metadata lane. A script is at most 1,000,000 characters (`scriptChars`, main's q
 main's message box on its own channel, `varia:confirm-open-connections` (no payload, trusted senders only), answering
 `true` only for Yes.
 
+**Take Offline and Bring Online** (D3a) use the same three methods too, with no new method. `actions.describe { connectionId,
+requestId, dialog: 'takeOffline' | 'bringOnline', target: { kind: 'database', name } }` (a user database) answers `{ databaseState:
+{ name, identity: { id, created }, state, userAccess, readOnly, standby, sessions?, withTransaction?, sessionList: [{ sessionId,
+login?, program?, host?, openTransactions }] (≤ 8, names clipped to 128), sessionsTruncated, warnings }, elapsedMs }`, read in
+master: the counts leave out the backend's own pooled sessions (which execute frees before SET OFFLINE) and are absent without
+VIEW SERVER STATE. It answers an `error` value instead where the action cannot run: `NOT_SUPPORTED` with the menu's reason in a
+state the catalogue's database rules grey it in (docs/object-actions.md), or for a snapshot; `PERMISSION_DENIED` without ALTER
+on the database (for one that is not online, where `HAS_PERMS_BY_NAME` answers 0 even to sysadmin, ALTER ANY DATABASE or
+ownership). `actions.script` and `actions.execute` take `{ action: 'takeOffline', connectionId, requestId, target,
+dropConnections, identity? }` or `{ action: 'bringOnline', connectionId, requestId, target, identity? }` (`identity` as for
+Database Properties; `dropConnections` is Drop All Active Connections, `WITH ROLLBACK IMMEDIATE`, and only Take Offline takes it).
+Execute repeats the describe's refusals and runs one step, `Take database offline`, `Close connections and take database
+offline` or `Bring database online`; without `dropConnections`, SET OFFLINE waits for other sessions until Stop. Bring Online
+adds a message when the database is still SINGLE_USER or RESTRICTED_USER. SQL Server's error 5011 (no ALTER on the database)
+answers `PERMISSION_DENIED`.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same

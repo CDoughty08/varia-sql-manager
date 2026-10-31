@@ -13,8 +13,11 @@ import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService
 import type { LiveConnection } from '../services/connections'
 import { definitionOf, type DialogDraft, type DialogModel } from './definitions'
 
-/** loading → ready, or loadFailed; OK → (confirming →) executing → closed, or failed (or stopped); a lost server → disconnected. */
-export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'failed' | 'stopped' | 'disconnected'
+/**
+ * loading → ready, or loadFailed; OK → (confirming →) executing → closed (`succeeded` for a dialog that stays open on its
+ * steps), or failed (or stopped); a lost server → disconnected. Check Again reads the object again (`loading` with the model kept).
+ */
+export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'succeeded' | 'failed' | 'stopped' | 'disconnected'
 export interface OpenObjectDialog {
   /** Changes with every dialog, so the frame remounts. */
   readonly id: number
@@ -47,6 +50,8 @@ export interface ObjectDialogServiceOptions {
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
+  /** A database a dialog took offline or brought online (DatabasePropertiesService follows it). */
+  readonly databaseState?: (connectionId: string, database: string, offline: boolean) => void
   readonly newId?: () => string
 }
 
@@ -102,7 +107,18 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
   updateDraft(patch: Partial<DialogDraft>): void {
     const open = this.current
-    if (open?.draft && open.phase !== 'executing' && open.phase !== 'disconnected') this.update(open, { draft: { ...open.draft, ...patch } })
+    if (open?.draft && open.phase !== 'executing' && open.phase !== 'disconnected' && open.phase !== 'succeeded') this.update(open, { draft: { ...open.draft, ...patch } as DialogDraft })
+  }
+  /** Why OK cannot run now with the dialog's draft (its definition's `blocked`), for the footer. */
+  blockedReason(open: OpenObjectDialog | undefined = this.current): string | undefined {
+    return open?.model && open.draft && open.phase !== 'succeeded' ? definitionOf(open.dialog).blocked?.(open.model, open.draft) : undefined
+  }
+  /** Check Again: reads the object again, keeping the draft, as SSMS counts connections when its dialog opens. */
+  reload(): void {
+    const open = this.current
+    if (!open || !open.model || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
+    this.update(open, { phase: 'loading', error: undefined, notice: undefined })
+    void this.describe(open)
   }
 
   /** The Script button: the action's script to `destination`; the dialog stays open. */
@@ -129,8 +145,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   async ok(): Promise<void> {
     const open = this.current
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
-    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
+    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    if (this.blockedReason(open)) return
     let built = definition.request(open.target, open.model, open.draft)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
@@ -150,8 +167,14 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!this.end(open, requestId)) return
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
-      this.publish({})
-      try { definition.afterSuccess({ refreshListing: () => this.refreshListing(open) }) } catch (failure) { onUnexpectedError(failure) }
+      // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
+      if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
+      else this.publish({})
+      const effects = {
+        refreshListing: () => this.refreshListing(open),
+        databaseState: (offline: boolean) => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) }
+      }
+      try { definition.afterSuccess(effects) } catch (failure) { onUnexpectedError(failure) }
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
@@ -195,6 +218,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
 
   private async describe(open: OpenObjectDialog): Promise<void> {
+    // `open` is the dialog as it was when the read began: with a model only for Check Again.
     const requestId = this.begin(open)
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     if (!this.end(open, requestId)) return
@@ -202,7 +226,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
-    this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
+    // Check Again keeps what the user chose.
+    this.update(open, { phase: 'ready', model, draft: open.draft ?? definition.initialDraft(model, open.target) })
+    if (definition.runOnOpen && !open.model) await this.ok()
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

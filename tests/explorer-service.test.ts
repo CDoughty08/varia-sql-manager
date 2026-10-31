@@ -1465,6 +1465,32 @@ describe('ExplorerService: selection, targets and context', () => {
     expect(f.explorer.menuNode(f.find('server-b.example'))).toMatchObject({ engine: 'cloud', linux: false })
     expect(f.explorer.menuNode(f.find('server-c.example'))).toMatchObject({ engine: 'box', linux: false })
   })
+  it('narrows a database\'s Tasks by a live status sample newer than its listing', async () => {
+    const f = fixture()
+    f.connect('server-a')
+    await settle()
+    await f.open('Databases')
+    const appData = f.find('AppData')
+    // A live sample newer than the listing overlays it (D3a): Take Offline greys at once when the status probe sees the
+    // database offline, and an older sample changes nothing. Its signal updates the context keys; disposing drops it.
+    f.explorer.select(appData)
+    const listedAt = f.wall.now
+    let sample: { at: number, row: { name: string, state: number, userAccess: number, readOnly: boolean, standby: boolean } | undefined, complete: boolean } | undefined
+    const listeners = new Set<() => void>()
+    const status = f.explorer.useStatus({ databaseRuntime: (connectionId, database) => connectionId === cid('server-a') && database === 'AppData' ? sample : undefined, subscribe: listener => { listeners.add(listener); return () => listeners.delete(listener) } })
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'enabled' })
+    sample = { at: listedAt + 1, row: { name: 'AppData', state: 6, userAccess: 0, readOnly: false, standby: false }, complete: true }
+    listeners.forEach(listener => listener())
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'disabled', explorerActionBringOnline: 'enabled' })
+    expect(f.explorer.target()).toMatchObject({ database: { state: 6 } })
+    expect(f.explorer.menuNode(appData)).toMatchObject({ database: { state: 6 } })
+    sample = { at: listedAt + 2, row: undefined, complete: true }
+    listeners.forEach(listener => listener())
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'disabled' })
+    status.dispose()
+    expect(listeners.size).toBe(0)
+    expect(f.explorer.context.getSnapshot()).toMatchObject({ explorerActionTakeOffline: 'enabled', explorerActionBringOnline: 'enabled' })
+  })
   it('gives quoted insert text, a fully loaded Columns folder\'s list, and a server\'s name to copy', async () => {
     const f = fixture()
     f.connect()

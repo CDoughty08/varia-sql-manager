@@ -90,3 +90,22 @@ describe('StepList', () => {
     expect(Object.keys(stepIcons).sort()).toEqual(Object.keys(stepWords).sort())
   })
 })
+
+describe('Take Database Offline and Bring Database Online page', () => {
+  it('says who is in the database, how many have open transactions, and when it cannot know', async () => {
+    const { sessionsMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    expect(sessionsMessage({ sessions: undefined, withTransaction: undefined })).toBe('Sessions unknown (needs VIEW SERVER STATE).')
+    expect(sessionsMessage({ sessions: 0, withTransaction: 0 })).toBe('No active connections.')
+    expect(sessionsMessage({ sessions: 1, withTransaction: 0 })).toBe('1 active connection')
+    expect(sessionsMessage({ sessions: 1200, withTransaction: 1 })).toBe('1,200 active connections (1 with an open transaction)')
+    expect(sessionsMessage({ sessions: 3, withTransaction: 2 })).toBe('3 active connections (2 with open transactions)')
+  })
+  it('shows SSMS\'s Ready and Not ready before OK, then the run\'s outcome', async () => {
+    const { databaseStateStatus } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    const at = (phase: Parameters<typeof databaseStateStatus>[0]['phase'], blocked = false, model?: object) => databaseStateStatus({ phase, model: model as never }, blocked).label
+    expect([at('ready'), at('ready', true), at('loading'), at('loading', false, {}), at('executing'), at('succeeded'), at('failed'), at('loadFailed'), at('stopped')])
+      .toEqual(['Ready', 'Not ready', 'Loading', 'Checking', 'In progress', 'Success', 'Error', 'Error', 'Stopped'])
+    expect(databaseStateStatus({ phase: 'succeeded', model: undefined }, false).tone).toBe('success')
+    expect(databaseStateStatus({ phase: 'ready', model: undefined }, true).tone).toBe('warning')
+  })
+})

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, propertiesScript, scriptText, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
@@ -99,11 +99,12 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Rename', 'Delete'])
+  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' Take Offline and Bring Online are greyed.
+  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  // Tasks holds only Take Offline and Bring Online so far, both greyed there, so the submenu is greyed too.
+  expect(await disabled()).toEqual(['Tasks', 'Rename', 'Delete'])
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
@@ -569,6 +570,77 @@ try {
   await createDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
+
+  // 8. Tasks › Take Offline and Bring Online (D3a). The submenu greys by the listing's state; Take Database Offline lists the
+  // sessions in the database (one in a transaction, which Drop All Active Connections rolls back) and keeps OK disabled, saying
+  // why, until the box is checked or Check Again finds none; Script Action shows SET OFFLINE; Success leaves Close, focused, and
+  // Databases lists it "(Offline)". A SET OFFLINE that waits on a session says so and Stops; Bring Online runs as it opens.
+  const offlineDialog = () => page.getByRole('dialog', { name: 'Take Database Offline - AppData', exact: true })
+  const onlineDialog = () => page.getByRole('dialog', { name: 'Bring Database Online - AppData', exact: true })
+  const databaseRow = dialog => dialog.getByRole('grid', { name: 'Databases', exact: true }).locator('tbody td')
+  const dropBox = () => offlineDialog().getByLabel('Drop All Active Connections', { exact: true })
+  const okButton = dialog => dialog.getByRole('button', { name: 'OK', exact: true })
+  /** Tasks › an item on AppData; Databases may be reloading, so the press repeats until the row's menu opens. */
+  const task = async (name, states) => {
+    await expect(async () => {
+      if (await openMenus().count()) await closeMenu()
+      await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
+      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+      await explorerMenu().getByRole('menuitem', { name: 'Tasks', exact: true }).click(fast)
+      await expect(menuNamed('Tasks')).toBeVisible({ timeout: 1000 })
+    }).toPass()
+    expect(await menuItemNames(menuNamed('Tasks'), { disabled: true }), 'greyed Tasks items').toEqual(states)
+    await menuNamed('Tasks').getByRole('menuitem', { name, exact: true }).click(fast)
+  }
+  await task('Take Offline', ['Bring Online'])
+  await expect(offlineDialog()).toBeVisible()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Ready')
+  await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Not ready', '2 active connections (1 with an open transaction)'])
+  await expect(offlineDialog().getByRole('grid', { name: 'Sessions', exact: true }).locator('tbody tr')).toHaveText(stubSessions.map(session => [session.sessionId, session.login, session.program, session.host, session.openTransactions].join('')))
+  await expect(offlineDialog().getByRole('note').first()).toHaveText('Drop All Active Connections rolls back the open transaction of 1 session.')
+  await expect(okButton(offlineDialog())).toBeDisabled()
+  await expect(okButton(offlineDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop All Active Connections, or Check Again once they leave.')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-dark.png') })
+  // Script Action shows the statement OK would run, with ROLLBACK IMMEDIATE only once the box is checked.
+  await dropBox().check()
+  await expect(okButton(offlineDialog())).toBeEnabled()
+  await expect(databaseRow(offlineDialog()).nth(2)).toHaveText('Ready')
+  await offlineDialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await offlineDialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
+  await expect.poll(clipboard).toBe(offlineScript(true))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'takeOffline', target: { kind: 'database', name: 'AppData' }, dropConnections: true })
+  // Check Again: the sessions left meanwhile, so OK runs without dropping anyone; one that joined since holds SET OFFLINE,
+  // which the row says once it has waited a moment, and Stop leaves the database online.
+  await dropBox().uncheck()
+  await application.evaluate(() => { globalThis.variaStub.sessions = []; globalThis.variaStub.holding = true })
+  await offlineDialog().getByRole('button', { name: 'Check Again', exact: true }).click()
+  await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Ready', 'No active connections.'])
+  await expect(dropBox()).toBeDisabled()
+  await okButton(offlineDialog()).click()
+  await expect(databaseRow(offlineDialog()).nth(3)).toHaveText('Waiting for other connections to leave the database. Stop to give up.')
+  await offlineDialog().getByRole('button', { name: 'Stop', exact: true }).click()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Stopped')
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'takeOffline', dropConnections: false, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  // OK again once nothing holds it: Success, the steps, and Close as the one button, focused.
+  await application.evaluate(() => { globalThis.variaStub.holding = false })
+  await okButton(offlineDialog()).click()
+  await expect(objectDialogProgress(offlineDialog())).toHaveText('Success')
+  await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Success', 'The database is offline.'])
+  await expect(okButton(offlineDialog())).toHaveCount(0)
+  await expect(offlineDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-success-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(offlineDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(1)
+  // Offline: Take Offline greys and Bring Online runs as soon as its dialog has read the database.
+  await task('Bring Online', ['Take Offline'])
+  await expect(objectDialogProgress(onlineDialog())).toHaveText('Success')
+  await expect(databaseRow(onlineDialog())).toHaveText(['AppData', 'Success', 'The database is online.'])
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'bringOnline', target: { kind: 'database', name: 'AppData' } })
+  await onlineDialog().getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(onlineDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
+  console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
