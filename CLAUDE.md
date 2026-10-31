@@ -173,7 +173,8 @@ pages, limits, error codes, display formats, benchmarks).
   only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`
   and `Designer/DesignerSql`, all checked by `ActionSql.LintExecutable` (its template form for `ActionSql`, its builder
-  forms for the others), where names, the database a batch runs in included, go in as parameters through server-side
+  forms for the others), and, for logins, `Actions/LoginSql`, checked by its own `LoginSql.LintExecutable`, which `ActionSql.Lint`
+  chains (the password only as `@password` behind a NULL guard, through a binary-collation REPLACE, never in a literal), where names, the database a batch runs in included, go in as parameters through server-side
   `QUOTENAME`, numbers only through `CONVERT` of range-checked parameters, keywords only from the embedded catalogue, and
   collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
   for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in

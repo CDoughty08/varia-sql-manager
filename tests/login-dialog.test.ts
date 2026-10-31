@@ -4,12 +4,12 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { newLoginMessages, type NewLoginModel } from '../src/shared/actions/logins'
+import { loginLimits, newLoginMessages, type NewLoginModel } from '../src/shared/actions/logins'
 import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult } from '../src/shared/actions/schema'
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { newLoginDefinition } from '../src/renderer/src/dialogs/definitions'
-import { emptySecrets, initialNewLoginDraft, newLoginEnabled, newLoginRequest, newLoginTarget, type NewLoginDraft, type SecretState } from '../src/renderer/src/dialogs/new-login'
+import { emptySecrets, initialNewLoginDraft, newLoginEnabled, newLoginHints, newLoginRequest, newLoginTarget, passwordFieldLength, type NewLoginDraft, type SecretState } from '../src/renderer/src/dialogs/new-login'
 import { ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
@@ -27,7 +27,7 @@ const model = (changes: Partial<NewLoginModel['server']> = {}): NewLoginModel =>
   serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false
 })
 const sqlDraft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
-const set: SecretState = { password: 'set', matches: true, wellFormed: true }
+const set: SecretState = { password: 'set', matches: true, wellFormed: true, tooLong: false }
 const folder = (folderId: 'logins' | 'serverSecurity' | 'tables', engine: 'box' | 'cloud' | 'managedInstance' = 'box', id = 5): ExplorerMenuNode => ({
   id, connectionId: 'server-a', ref: { type: 'folder', owner: folderId === 'tables' ? { kind: 'database', name: 'AppData' } : server, folder: folderId }, kind: 'folder', folder: folderId, label: folderId, lost: false, engine
 })
@@ -68,7 +68,16 @@ describe('New Login draft and request', () => {
     // A blank password under the policy is the server's to refuse.
     expect(problem(sqlDraft(), { ...set, password: 'empty' })).toBeUndefined()
     // A Windows login ignores the password fields.
-    expect(problem({ ...initialNewLoginDraft(model()), name: 'D\\a' }, { password: 'set', matches: false, wellFormed: false })).toBeUndefined()
+    expect(problem({ ...initialNewLoginDraft(model()), name: 'D\\a' }, { password: 'set', matches: false, wellFormed: false, tooLong: true })).toBeUndefined()
+    // A password longer than SQL Server takes is refused, not cut short: the field allows one character more to show it.
+    expect(problem(sqlDraft(), { ...set, tooLong: true })).toBe(newLoginMessages.tooLong)
+    expect(newLoginMessages.tooLong).toContain(String(loginLimits.password))
+    expect(passwordFieldLength).toBe(loginLimits.password + 1)
+  })
+  it('notes the server\'s password policy only while it is checked', () => {
+    expect(newLoginHints(sqlDraft())).toEqual([newLoginMessages.policyServer, newLoginMessages.passwordScript])
+    expect(newLoginHints(sqlDraft({ checkPolicy: false }))).toEqual([newLoginMessages.passwordScript])
+    expect(newLoginHints(initialNewLoginDraft(model()))).toEqual([])
   })
   it('opens on a SQL Server\'s Security or Logins folder or a login, with the server as its target', () => {
     expect(newLoginTarget(folder('logins'))).toEqual(server)
@@ -126,15 +135,17 @@ describe('New Login in the object dialog service', () => {
     const seen: string[] = []
     dialogs.subscribe(() => seen.push(JSON.stringify(dialogs.getSnapshot())))
     dialogs.setSecret('password', secret)
-    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: false, wellFormed: true })
+    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: false, wellFormed: true, tooLong: false })
     dialogs.setSecret('confirm', secret)
-    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: true })
+    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: true, tooLong: false })
     dialogs.setPage('status')
     dialogs.setPage('general')
-    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: true })
+    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: true, tooLong: false })
     dialogs.setSecret('confirm', secret + '\uD800')
     dialogs.setSecret('password', secret + '\uD800')
-    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: false })
+    expect(dialogs.current?.secretState).toEqual({ password: 'set', matches: true, wellFormed: false, tooLong: false })
+    dialogs.setSecret('password', 'x'.repeat(loginLimits.password + 1))
+    expect(dialogs.current?.secretState).toMatchObject({ tooLong: true })
     expect(seen.length).toBeGreaterThan(0)
     for (const snapshot of [...seen, JSON.stringify(dialogs.getSnapshot())]) expect(snapshot).not.toContain('S3cret!')
   })
@@ -193,25 +204,80 @@ describe('New Login in the object dialog service', () => {
     await dialogs.ok()
     expect(api.executeObjectAction.mock.calls[1][0]).toMatchObject({ secrets: { password: 'Weak' } })
   })
-  it('clears the slot on close and on disconnect', async () => {
+  it('empties the slot when the dialog closes, OK succeeds, the server disconnects and the service is disposed', async () => {
     const { dialogs, api, connections, open, settle } = setup()
     await open()
     dialogs.setSecret('password', secret)
     dialogs.setSecret('confirm', secret)
+    expect(dialogs.holdsSecrets).toBe(true)
     dialogs.close()
+    expect(dialogs.holdsSecrets).toBe(false)
     await open()
     expect(dialogs.current?.secretState).toEqual(emptySecrets)
+    dialogs.setSecret('password', secret)
+    dialogs.setSecret('confirm', secret)
     api.executeObjectAction.mockResolvedValue({ ok: true, value: { steps: [], messages: [], elapsedMs: 1 } })
     await dialogs.ok()
-    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ secrets: { password: '' } })
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ secrets: { password: secret } })
+    expect(dialogs.current).toBeUndefined()
+    expect(dialogs.holdsSecrets).toBe(false)
     await open()
     dialogs.setSecret('password', secret)
     connections.remove('server-a')
     await settle()
     expect(dialogs.current?.phase).toBe('disconnected')
+    expect(dialogs.holdsSecrets).toBe(false)
+    // A disconnected dialog takes no more typing.
     dialogs.setSecret('confirm', secret)
-    expect(dialogs.current?.secretState?.password).toBe('set')
+    expect(dialogs.holdsSecrets).toBe(false)
     dialogs.close()
+    connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
+    await open()
+    dialogs.setSecret('password', secret)
+    dialogs.dispose()
+    expect(dialogs.holdsSecrets).toBe(false)
+  })
+  it('takes down a problem OK showed once an edit resolves it, and keeps the server\'s errors until the next OK', async () => {
+    const { dialogs, api, execute, settle, open } = setup()
+    await open()
+    dialogs.setSecret('password', secret)
+    dialogs.setSecret('confirm', secret + 'x')
+    await dialogs.ok()
+    expect(dialogs.current?.error?.message).toBe(newLoginMessages.mismatch)
+    // An edit that leaves the problem keeps it.
+    dialogs.updateDraft({ defaultLanguage: 'Deutsch' })
+    expect(dialogs.current?.error?.message).toBe(newLoginMessages.mismatch)
+    dialogs.setSecret('confirm', secret)
+    expect(dialogs.current?.error).toBeUndefined()
+    dialogs.updateDraft({ name: '' })
+    expect(dialogs.current?.error).toBeUndefined()
+    await dialogs.ok()
+    expect(dialogs.current?.error?.message).toBe(newLoginMessages.nameRequired)
+    dialogs.updateDraft({ name: 'app' })
+    expect(dialogs.current?.error).toBeUndefined()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    const ok = dialogs.ok()
+    await settle()
+    execute.resolve({ ok: true, value: { steps: [{ status: 'failed', title: 'Create the login' }], messages: [], elapsedMs: 1, error: { code: 'PASSWORD_POLICY', message: 'Password validation failed.', retryable: true } } })
+    await ok
+    dialogs.setSecret('confirm', secret + 'y')
+    dialogs.setSecret('confirm', secret)
+    expect(dialogs.current?.error?.code).toBe('PASSWORD_POLICY')
+  })
+  it('reloads Logins and selects the login when a failure or Stop left it created', async () => {
+    const { dialogs, execute, explorer, settle, open } = setup()
+    await open()
+    dialogs.setSecret('password', secret)
+    dialogs.setSecret('confirm', secret)
+    const ok = dialogs.ok()
+    await settle()
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Create the login' }, { status: 'done', title: 'Commit' }, { status: 'failed', title: 'Add to a server role', detail: 'gone' }], messages: [], elapsedMs: 1,
+      error: { code: 'NOT_FOUND', message: 'The login was created with the status chosen, but not every server role was added.', retryable: true } } })
+    await ok
+    expect(dialogs.current?.phase).toBe('failed')
+    expect(explorer.listingFolderOf).not.toHaveBeenCalled()
+    expect(explorer.folderNode).toHaveBeenCalledWith('server-a', server, 'logins')
+    expect(explorer.reconcile).toHaveBeenCalledWith(5, { select: { type: 'object', object: { kind: 'login', name: 'app' } } })
   })
   it('shows a refused window close in the dialog while OK runs, and Stop cancels it', async () => {
     const { dialogs, api, settle, open, longRuns } = setup()

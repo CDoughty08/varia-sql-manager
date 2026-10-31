@@ -590,11 +590,38 @@ try {
   // A Windows server: Windows authentication, so the password fields are greyed until SQL Server authentication is chosen.
   await expect(loginDialog().getByRole('radio', { name: 'Windows authentication', exact: true })).toBeChecked()
   await expect(passwordField(loginDialog(), 'Password')).toBeDisabled()
+  // Their labels grey with them, as the option checkboxes' do.
+  const labelColor = locator => locator.evaluate(input => getComputedStyle(input.labels[0]).color)
+  expect(await labelColor(passwordField(loginDialog(), 'Password')), 'a disabled password row\'s label is dimmed').not.toBe(await labelColor(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })))
   await loginDialog().getByRole('radio', { name: 'SQL Server authentication', exact: true }).check()
+  await expect(loginDialog().getByLabel('Password', { exact: true }), 'only the Password field is named Password').toHaveCount(1)
   await loginDialog().getByRole('textbox', { name: 'Login name', exact: true }).fill('app_reader')
   await passwordField(loginDialog(), 'Password').fill(typed)
   await passwordField(loginDialog(), 'Confirm password').fill(typed)
   await expect(loginDialog().getByText('Passwords match.', { exact: true })).toBeVisible()
+  // The narrow frame (1024 × 768 at 150 %): General, taller than the dialog, scrolls inside it above OK, and the password
+  // fields line up with Login name.
+  await resizeWindow(application, page, 1024, 768)
+  await zoom(1.5)
+  await expect(objectDialogTabs(loginDialog())).toHaveCount(3)
+  const loginPage = objectDialogPage(loginDialog())
+  const loginOk = loginDialog().getByRole('button', { name: 'OK', exact: true })
+  const narrowLogin = async () => {
+    const boxes = await Promise.all([loginPage, loginOk, loginDialog().getByRole('textbox', { name: 'Login name', exact: true }), passwordField(loginDialog(), 'Password')].map(locator => locator.boundingBox()))
+    if (boxes.some(box => !box)) return 'not laid out'
+    const [shown, ok, name, secret] = boxes
+    return { above: shown.y + shown.height <= ok.y + 1, scrolls: await loginPage.evaluate(element => element.scrollHeight > element.clientHeight), aligned: Math.abs(name.x - secret.x) <= 1 }
+  }
+  await expect.poll(narrowLogin, 'the narrow frame: General ends above OK and scrolls, and Password lines up with Login name').toEqual({ above: true, scrolls: true, aligned: true })
+  const language = loginDialog().getByRole('combobox', { name: 'Default language', exact: true })
+  await language.scrollIntoViewIfNeeded()
+  await expect(language).toBeInViewport()
+  const [languageBox, loginOkBox] = await Promise.all([language.boundingBox(), loginOk.boundingBox()])
+  expect(languageBox.y + languageBox.height, 'Default language scrolls into view above OK').toBeLessThanOrEqual(loginOkBox.y)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-new-login-narrow-dark.png') })
+  await zoom(zoomBefore)
+  await resizeWindow(application, page, ...sizeBefore)
+  await expect(objectDialogTabs(loginDialog())).toHaveCount(0)
   for (const name of ['Enforce password policy', 'Enforce password expiration', 'User must change password at next login']) await expect(loginDialog().getByRole('checkbox', { name, exact: true })).toBeChecked()
   await loginDialog().getByRole('checkbox', { name: 'Enforce password policy', exact: true }).uncheck()
   await expect(loginDialog().getByRole('checkbox', { name: 'Enforce password expiration', exact: true })).toBeDisabled()
@@ -648,7 +675,15 @@ try {
   await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
   await expect(loginDialog()).toBeVisible()
   await expect(loginDialog().getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('')
-  await loginDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  // Enter in Confirm password is OK; when the policy refuses the password, focus returns to Password (running disabled the
+  // field it was in), so Escape still cancels.
+  await loginDialog().getByRole('radio', { name: 'SQL Server authentication', exact: true }).check()
+  await loginDialog().getByRole('textbox', { name: 'Login name', exact: true }).fill('app_writer')
+  for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill('Weak')
+  await passwordField(loginDialog(), 'Confirm password').press('Enter')
+  await expect(loginDialog().getByRole('alert')).toContainText('Password validation failed.')
+  await expect(passwordField(loginDialog(), 'Password')).toBeFocused()
+  await page.keyboard.press('Escape')
   await expect(loginDialog()).toHaveCount(0)
   // AutoRecover keeps the scripted window once it has unsaved changes (a script alone is not unsaved), and no copy holds the password.
   await tabs().nth(queries).click()
@@ -661,7 +696,7 @@ try {
   const copies = await recovered(resolve(profile, 'AutoRecover'))
   expect(copies.some(text => text.includes('PASSWORD=<password>'))).toBe(true)
   expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
-  console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, keeps its masked password across pages, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY, Stops, and selects the new login.')
+  console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

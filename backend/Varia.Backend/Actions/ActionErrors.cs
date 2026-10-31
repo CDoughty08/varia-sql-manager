@@ -51,12 +51,14 @@ internal static class ActionErrors
     }
 
     /// <summary>A failure as a value: SQL Server's message, with advice where one helps. <paramref name="ddl"/>: the
-    /// connection broke while DDL may have run; <paramref name="inUseAdvice"/>: what to do when other connections use the database.</summary>
-    public static ActionError FromSql(ActionsCatalog catalog, SqlException error, SqlConnection? connection, bool ddl, string? inUseAdvice)
+    /// connection broke while DDL may have run; <paramref name="inUseAdvice"/>: what to do when other connections use the database;
+    /// <paramref name="serverText"/>: applied to SQL Server's own text only (New Login's scrubber).</summary>
+    public static ActionError FromSql(ActionsCatalog catalog, SqlException error, SqlConnection? connection, bool ddl, string? inUseAdvice, Func<string, string>? serverText = null)
     {
         var code = CodeOf(error, connection);
         var text = string.Join(" ", error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(item => item.Message).Distinct());
         if (text.Length == 0) text = error.Message;
+        if (serverText is not null) text = serverText(text);
         var message = code switch
         {
             "CONNECTION_LOST" => ddl ? "The connection to the server was lost while the action ran, so whether it completed is unknown. Refresh Object Explorer to check." : "The connection to the server was lost. Try again.",

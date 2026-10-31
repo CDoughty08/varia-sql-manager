@@ -1,5 +1,6 @@
 import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
+import { loginLimits } from '../../../shared/actions/logins.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
@@ -92,6 +93,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   /** The open dialog's password fields (New Login's Password and Confirm password): never published, cleared when the dialog
    *  closes, opens anew, succeeds or loses its server, and on dispose. Only ok() reads them. */
   private readonly secrets = new Map<SecretField, string>()
+  /** The error showProblem put up, so an edit that resolves it can take it down. */
+  private problem?: ActionError
 
   constructor(private readonly options: ObjectDialogServiceOptions) {
     super({})
@@ -126,6 +129,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   updateDraft(patch: Partial<DialogDraft>): void {
     const open = this.current
     if (open?.draft && open.phase !== 'executing' && open.phase !== 'disconnected') this.update(open, { draft: { ...open.draft, ...patch } })
+    this.recheckProblem()
   }
   /** A password field changed: its value goes to the secret slot, and the snapshot learns only whether it is empty, matches its
    *  confirmation and is well formed. Ignored while OK runs, after the server is lost, or in a dialog without password fields. */
@@ -135,10 +139,15 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (value) this.secrets.set(field, value)
     else this.secrets.delete(field)
     const password = this.secrets.get('password') ?? ''
-    const secretState: SecretState = { password: password ? 'set' : 'empty', matches: password === (this.secrets.get('confirm') ?? ''), wellFormed: wellFormed(password) }
+    const secretState: SecretState = {
+      password: password ? 'set' : 'empty', matches: password === (this.secrets.get('confirm') ?? ''), wellFormed: wellFormed(password), tooLong: password.length > loginLimits.password
+    }
     const current = open.secretState
-    if (current.password !== secretState.password || current.matches !== secretState.matches || current.wellFormed !== secretState.wellFormed) this.update(open, { secretState })
+    if (current.password !== secretState.password || current.matches !== secretState.matches || current.wellFormed !== secretState.wellFormed || current.tooLong !== secretState.tooLong) this.update(open, { secretState })
+    this.recheckProblem()
   }
+  /** For tests: whether the secret slot holds a value, which only an open dialog's password fields put there. */
+  get holdsSecrets(): boolean { return this.secrets.size > 0 }
 
   /** The Script button: the action's script to `destination`; the dialog stays open. */
   async script(destination: ScriptDestination): Promise<void> {
@@ -148,7 +157,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     // As SSMS says when nothing changed in a properties dialog.
     if (!built) { this.update(open, { error: undefined, notice: noScriptNotice }); return }
-    if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
+    if ('problem' in built) { this.showProblem(open, built.problem); return }
     const requestId = this.begin(open)
     this.update(open, { phase: 'scripting', error: undefined, notice: undefined })
     const result = await this.call(() => this.options.api.scriptObjectAction({ ...built, connectionId: open.connectionId, requestId } as ActionRequest))
@@ -169,7 +178,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
-    if ('problem' in built) { this.update(open, { error: error('NOT_SUPPORTED', built.problem) }); return }
+    if ('problem' in built) { this.showProblem(open, built.problem); return }
     const confirmation = definition.confirm?.(open.model, built)
     if (confirmation) {
       // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
@@ -200,8 +209,11 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
-    // stopped), so the listing shows what is there now.
-    if (value?.steps.some(step => step.status === 'done')) this.refreshListing(open)
+    // stopped), so the listing shows what is there now; a dialog that creates an object shows it where it is listed.
+    if (value?.steps.some(step => step.status === 'done')) {
+      const effects = { refreshListing: () => this.refreshListing(open), reveal: (folder: FolderId, object: ObjectRef) => this.reveal(open, folder, object) }
+      try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
+    }
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
@@ -271,6 +283,21 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const next = { ...current, ...patch } as OpenObjectDialog & Record<string, unknown>
     for (const key of Object.keys(patch)) if (next[key] === undefined) delete next[key]
     this.publish({ open: next })
+  }
+  /** A problem OK or Script found in the draft: shown until an edit resolves it (recheckProblem) or the next OK or Script. */
+  private showProblem(open: OpenObjectDialog, message: string): void {
+    const shown = error('NOT_SUPPORTED', message)
+    this.problem = shown
+    this.update(open, { error: shown })
+  }
+  /** After an edit: a problem the draft showed goes once the draft no longer has it (a server's error stays until the next OK). */
+  private recheckProblem(): void {
+    const open = this.current
+    if (!open?.error || open.error !== this.problem || !open.model || !open.draft) return
+    const built = definitionOf(open.dialog).request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
+    if (built && 'problem' in built && built.problem === open.error.message) return
+    this.problem = undefined
+    this.update(open, { error: undefined })
   }
   private refreshListing(open: OpenObjectDialog): void {
     const folder = this.options.explorer.listingFolderOf(open.nodeId)

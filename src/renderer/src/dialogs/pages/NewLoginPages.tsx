@@ -1,10 +1,10 @@
 import { actionLimits } from '../../../../shared/actions/catalog.ts'
-import { loginLimits, newLoginMessages, publicRole, type NewLoginModel } from '../../../../shared/actions/logins.ts'
+import { newLoginMessages, publicRole, type NewLoginModel } from '../../../../shared/actions/logins.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import Icon from '../../Icon'
 import PasswordField from '../../kit/PasswordField'
-import { newLoginEnabled, type NewLoginDraft } from '../new-login'
+import { newLoginEnabled, newLoginHints, passwordFieldLength, type NewLoginDraft } from '../new-login'
 import type { PageProps } from '../ObjectDialog'
 
 function useLogin(open: PageProps['open']) {
@@ -21,7 +21,7 @@ export function NewLoginGeneralPage({ open, editable }: PageProps) {
   const { dialogs } = useWorkbench()
   const { model, draft } = useLogin(open)
   if (!model || !draft) return <p className="field-note" role="status">{open.phase === 'loading' ? 'Loading…' : ''}</p>
-  const enabled = newLoginEnabled(draft), sql = draft.auth === 'sql', secrets = open.secretState
+  const enabled = newLoginEnabled(draft), sql = draft.auth === 'sql', secrets = open.secretState, hints = newLoginHints(draft)
   const matched = sql && secrets?.password === 'set' && secrets.matches
   return <div className="new-login-page">
     <fieldset className="property-grid new-login-fields" disabled={!editable}>
@@ -33,9 +33,9 @@ export function NewLoginGeneralPage({ open, editable }: PageProps) {
       </div>
       <div className="new-login-sql">
         <div className="property-row"><label htmlFor="new-login-password">Password</label>
-          <PasswordField id="new-login-password" maxLength={loginLimits.password} disabled={!enabled.password} onValue={value => dialogs.setSecret('password', value)} /></div>
+          <PasswordField id="new-login-password" maxLength={passwordFieldLength} disabled={!enabled.password} onValue={value => dialogs.setSecret('password', value)} /></div>
         <div className="property-row"><label htmlFor="new-login-confirm">Confirm password</label>
-          <PasswordField id="new-login-confirm" maxLength={loginLimits.password} disabled={!enabled.password} aria-describedby={matched ? 'new-login-match' : undefined}
+          <PasswordField id="new-login-confirm" maxLength={passwordFieldLength} disabled={!enabled.password} aria-describedby={matched ? 'new-login-match' : undefined}
             onValue={value => dialogs.setSecret('confirm', value)} /></div>
         {matched && <p className="field-note new-login-match" id="new-login-match"><Icon name="pass" />{newLoginMessages.passwordsMatch}</p>}
         <div className="property-row"><label className="checkbox-label"><input type="checkbox" checked={false} disabled />Specify old password</label>
@@ -46,9 +46,8 @@ export function NewLoginGeneralPage({ open, editable }: PageProps) {
           onChange={event => dialogs.updateDraft({ checkExpiration: event.target.checked })} />Enforce password expiration</label>
         <label className="checkbox-label"><input type="checkbox" checked={enabled.mustChange && draft.mustChange} disabled={!enabled.mustChange}
           onChange={event => dialogs.updateDraft({ mustChange: event.target.checked })} />User must change password at next login</label>
-        {sql && <ul className="new-login-hints" aria-label="Password">
-          <li><Icon name="workspace-trusted" /><span>{newLoginMessages.policyServer}</span></li>
-          <li><Icon name="lock" /><span>{newLoginMessages.passwordScript}</span></li>
+        {hints.length > 0 && <ul className="new-login-hints" aria-label="Password notes">
+          {hints.map(hint => <li key={hint}><Icon name={hint === newLoginMessages.policyServer ? 'workspace-trusted' : 'lock'} /><span>{hint}</span></li>)}
         </ul>}
       </div>
       <div className="property-row"><label htmlFor="new-login-database">Default database</label>

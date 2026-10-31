@@ -47,10 +47,10 @@ export function installActionsStub({ ipcMain }, { statics }) {
     databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
-    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
-    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'symbol-method', { subtype: 'sql' })],
-    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'svg:database')] : [],
-    logins: () => stub.logins.map(name => object({ kind: 'login', name }, name, 'svg:login', { hasChildren: false, subtype: 'sql' }))
+    views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
+    storedProcedures: owner => [object({ kind: 'procedure', database: owner.name, schema: 'dbo', name: 'ShipOrder' }, 'dbo.ShipOrder', 'procedure', { subtype: 'sql' })],
+    integrationServicesCatalogs: () => stub.catalog ? [object({ kind: 'ssisCatalog', name: 'SSISDB' }, 'SSISDB', 'database')] : [],
+    logins: () => stub.logins.map(name => object({ kind: 'login', name }, name, 'login', { hasChildren: false, subtype: 'sql' }))
   }
   function children({ node }) {
     if (node.type === 'object') {
@@ -124,15 +124,18 @@ export function installActionsStub({ ipcMain }, { statics }) {
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
-  /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. */
-  function createLogin({ login, secrets, serverRoles, requestId }) {
-    const titles = ['Create the login', ...serverRoles.map(() => 'Add to a server role')]
-    if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', title: titles[0], message: passwordPolicyMessage }, ...titles.slice(1).map(title => ({ status: 'skipped', title }))], messages: [], elapsedMs: 1,
+  /** New Login: "Weak" answers PASSWORD_POLICY, "Held" waits for Stop, anything else adds the login to Logins. The steps are
+   * the backend's, in SSMS's order: CREATE LOGIN, then Deny and Disable as Status chose, then each server role. */
+  function createLogin({ login, secrets, serverRoles, status, requestId }) {
+    const steps = [{ title: 'Create the login' }, ...status?.connect === 'deny' ? [{ title: 'Deny permission to connect' }] : [], ...status?.enabled === false ? [{ title: 'Disable the login' }] : [],
+      ...serverRoles.map(detail => ({ title: 'Add to a server role', detail }))]
+    const after = steps.slice(1).map(step => ({ status: 'skipped', ...step }))
+    if (secrets?.password === 'Weak') return ok({ steps: [{ status: 'failed', ...steps[0], message: passwordPolicyMessage }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'PASSWORD_POLICY', message: passwordPolicyMessage, retryable: true } })
-    if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: titles[0] }, ...titles.slice(1).map(title => ({ status: 'skipped', title }))], messages: [], elapsedMs: 1,
+    if (secrets?.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', ...steps[0] }, ...after], messages: [], elapsedMs: 1,
       error: { code: 'CANCELLED', message: 'The action was stopped at "Create the login"; SQL Server cancelled that statement.', retryable: true } }))))
     stub.logins = [...stub.logins, login.name].sort()
-    return ok({ steps: titles.map((title, index) => ({ status: 'done', title, ...index ? { detail: serverRoles[index - 1] } : {} })), messages: [], elapsedMs: 1 })
+    return ok({ steps: steps.map(step => ({ status: 'done', ...step })), messages: [], elapsedMs: 1 })
   }
   function execute(params) {
     const { target } = params

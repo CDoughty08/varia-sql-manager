@@ -37,11 +37,12 @@ internal sealed partial class ActionService
     /// 'skipped'; Stop cancels the running statement, and earlier steps stay 'done'. In transaction mode the main steps run in one
     /// transaction followed by <paramref name="commitTitle"/>'s commit (which Stop no longer reaches), and a failure or Stop
     /// rolls it back (within StopGrace, else closing the unpooled connection ends the session, which rolls it back);
-    /// <paramref name="rolledBack"/> then joins the failure's message. After a failure or Stop, the compensation and cleanup
+    /// <paramref name="rolledBack"/> then joins the failure's message. <paramref name="serverText"/> rewrites the text of SQL Server's errors
+    /// (New Login removes its password from it), never the runner's or ActionErrors' own sentences. After a failure or Stop, the compensation and cleanup
     /// steps that are due run in order under a fresh token bounded by <paramref name="cleanupBudget"/>, so a Stop's reply (which
     /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates.</summary>
     internal async Task<RunOutcome> RunStepsAsync(SqlConnection connection, IReadOnlyList<RunStep> plan, string? inUseAdvice, CancellationToken token, TimeSpan cleanupBudget,
-        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null)
+        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, Func<string, string>? serverText = null)
     {
         var mains = plan.Where(step => step.Kind == StepKind.Main).ToList();
         var after = plan.Where(step => step.Kind != StepKind.Main).ToList();
@@ -88,7 +89,7 @@ internal sealed partial class ActionService
                 }
                 catch (SqlException sql)
                 {
-                    var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice);
+                    var value = ActionErrors.FromSql(catalog, sql, connection, ddl: true, inUseAdvice, serverText);
                     Add("failed", step, value.Message);
                     var done = Done();
                     failure = done.Count == 0 ? value : value with { Message = ScriptingErrors.Clip(value.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
@@ -134,7 +135,7 @@ internal sealed partial class ActionService
             }
             catch (SqlException sql)
             {
-                Add("failed", step, ActionErrors.FromSql(catalog, sql, connection, ddl: true, null).Message);
+                Add("failed", step, ActionErrors.FromSql(catalog, sql, connection, ddl: true, null, serverText).Message);
                 outcomes.Add("\"" + step.Title + "\" failed");
             }
             // The failure or Stop broke the connection (a severe error closes it): the step could not run.

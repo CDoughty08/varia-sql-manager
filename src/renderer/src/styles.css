@@ -809,7 +809,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* Monaco's codicon-modifiers.css spins .codicon-loading and .codicon-modifier-spin (the query status bar, the tree's
    Loading rows) with selectors up to two classes long; these outrank them (tests/theme-metrics.test.ts compares them). */
 @media (prefers-reduced-motion: reduce) { :root .codicon.codicon-loading, :root .codicon.codicon-modifier-spin, :root .codicon-tree-item-loading::before { animation: none; } }
-.object-dialog-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+/* min-height: 0 lets a tall page scroll inside the column instead of pushing past the footer (the narrow frame stacks it). */
+.object-dialog-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .object-dialog-toolbar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
 .object-dialog-script { position: relative; display: inline-flex; }
 .object-dialog-script > button { display: inline-flex; align-items: center; gap: 5px; border-color: var(--varia-button-border); }
@@ -839,6 +840,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .new-login-sql { display: flex; flex-direction: column; gap: 6px; padding-left: 20px; }
 .new-login-sql > .checkbox-label, .new-login-sql > .field-note, .new-login-hints { margin-left: 168px; }
 .new-login-sql .property-row { grid-template-columns: 156px minmax(0, 1fr); }
+/* A greyed field's label greys with it, as the option checkboxes do. */
+.new-login-page .property-row:has(input:disabled) > label:not(.checkbox-label) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .new-login-page .property-row:has(input:disabled) > label:not(.checkbox-label) { color: GrayText; } }
 .password-field { width: 100%; min-width: 0; height: 28px; }
 .new-login-match { display: flex; align-items: center; gap: 4px; color: var(--varia-successForeground); }
 .new-login-hints { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; margin-bottom: 0; padding: 6px 8px; list-style: none; border: 1px solid var(--varia-dialog-separatorBackground); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
@@ -849,6 +853,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .new-login-caption { font-size: var(--varia-size-xs); color: var(--varia-settings-headerForeground); }
 .object-dialog.narrow .new-login-auth, .object-dialog.narrow .new-login-sql > .checkbox-label, .object-dialog.narrow .new-login-sql > .field-note, .object-dialog.narrow .new-login-hints { padding-left: 0; margin-left: 0; }
 .object-dialog.narrow .new-login-sql { padding-left: 0; }
+/* Without the indent, the password rows take the page's label column, so every input starts at the same x. */
+.object-dialog.narrow .new-login-sql .property-row { grid-template-columns: 176px minmax(0, 1fr); }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
 .create-catalog-dialog .checkbox-label { display: flex; align-items: center; gap: 8px; }

@@ -209,6 +209,7 @@ export const newLoginMessages = {
   sqlBackslash: 'A SQL Server login name cannot contain a backslash.',
   windowsName: 'Enter a Windows login as DOMAIN\\name.',
   mismatch: 'Password and confirm password do not match.',
+  tooLong: `A password can have at most ${loginLimits.password} characters.`,
   broken: 'The password holds a broken character (half of a surrogate pair), which SQL Server would not receive as typed. Retype the password.',
   blankWithoutPolicy: 'Enter a password. A blank password needs Enforce password policy, so the server can refuse it.',
   defaultDatabase: 'Choose a default database from the list.',
@@ -224,13 +225,14 @@ export const passwordScriptHeader = '/* Varia leaves passwords out of scripts. R
 
 /** Why a New Login request cannot be sent, or undefined: the problems the page shows before anything is sent. `password` is
  *  only its length and whether it equals the confirmation, so no value leaves the secret slot. */
-export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean } | undefined, model?: Pick<NewLoginModel, 'databases' | 'languages'>): string | undefined {
+export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean; readonly tooLong?: boolean } | undefined, model?: Pick<NewLoginModel, 'databases' | 'languages'>): string | undefined {
   if (!login.name) return newLoginMessages.nameRequired
   if (login.auth === 'sql' && login.name.includes('\\')) return newLoginMessages.sqlBackslash
   if (login.auth === 'windows' && !windowsLoginName.test(login.name)) return newLoginMessages.windowsName
   if (model && !model.databases.some(database => database.name === login.defaultDatabase)) return newLoginMessages.defaultDatabase
   if (model && login.defaultLanguage !== undefined && !model.languages.some(language => language.name === login.defaultLanguage)) return newLoginMessages.defaultLanguage
   if (login.auth === 'sql' && password) {
+    if (password.tooLong) return newLoginMessages.tooLong
     if (!password.matches) return newLoginMessages.mismatch
     if (password.wellFormed === false) return newLoginMessages.broken
     if (password.empty && !login.checkPolicy) return newLoginMessages.blankWithoutPolicy

@@ -157,6 +157,18 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
   // The dialog takes focus as it opens, so Enter is OK and Escape is Cancel, as in SSMS.
   useEffect(() => { form.current?.focus() }, [])
+  // A run disables the page and the field that had focus, which drops focus to the body. When it ends, focus comes back: to the
+  // password after the server's policy refused it (it must be retyped), else to the dialog, so Enter and Escape work again.
+  const wasBusy = useRef(false)
+  useEffect(() => {
+    if (busy) { wasBusy.current = true; return }
+    if (!wasBusy.current) return
+    wasBusy.current = false
+    const active = document.activeElement
+    if (active && active !== document.body && form.current?.contains(active)) return
+    const password = open.error?.code === 'PASSWORD_POLICY' ? form.current?.querySelector<HTMLInputElement>('.object-dialog-page:not([hidden]) input[type="password"]:not(:disabled)') : null
+    if (password) { password.focus(); password.select() } else form.current?.focus()
+  }, [busy, open.error])
   const pageKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const next = pageForKey(spec.pages, open.page, event.key, tabs)
     if (!next) return

@@ -147,3 +147,16 @@ describe('icon registry', () => {
     expect(result.status).toBe(0)
   })
 })
+
+describe('smoke fixtures', () => {
+  // A stub's node with an icon id the registry lacks renders no icon, and the smoke run passes without noticing.
+  it('name only registered icons in the stub backends', () => {
+    const files = ['scripts/fixtures', 'tests/fixtures'].flatMap(dir => readdirSync(dir).filter(file => file.endsWith('.mjs')).map(file => join(dir, file)))
+    const named = files.flatMap(file => {
+      const code = readFileSync(file, 'utf8')
+      return [...code.matchAll(/\bobject\(\{[^}]*\}, [^,]+, '([^']+)'/g), ...code.matchAll(/\bicon: '([^']+)'/g)].map(match => ({ file: file.replace(/\\/g, '/'), icon: match[1] }))
+    })
+    expect(named.length).toBeGreaterThan(20)
+    expect(named.filter(({ icon }) => !isIconId(icon))).toEqual([])
+  })
+})

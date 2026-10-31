@@ -51,6 +51,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
   readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest) => void
+  /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
+  readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
 }
 
 /** Delete Object's checkboxes; they apply to databases only. */
@@ -82,7 +84,11 @@ export const databasePropertiesDefinition: ObjectDialogDefinition<DatabaseProper
 }
 
 /** New Login (D2a): opens on a SQL Server's Security or Logins folder or a login, and on success reloads Logins and selects the new
- *  login there. A SQL Server login's password goes only with OK. */
+ *  login there, as after a failure or Stop that left it created. A SQL Server login's password goes only with OK. */
+const revealLogin = (effects: DialogEffects, request: BuiltRequest) => {
+  const login = (request as Partial<Pick<CreateLoginRequest, 'login'>>).login
+  if (login) effects.reveal('logins', { kind: 'login', name: login.name })
+}
 export const newLoginDefinition: ObjectDialogDefinition<NewLoginModel, NewLoginDraft> = {
   dialog: 'newLogin',
   targetOf: newLoginTarget,
@@ -92,10 +98,8 @@ export const newLoginDefinition: ObjectDialogDefinition<NewLoginModel, NewLoginD
   secrets: draft => draft.auth === 'sql',
   longRun: 'newLogin',
   fileName: draft => (draft.name || 'Login') + '.sql',
-  afterSuccess: (effects, request) => {
-    const login = (request as Partial<Pick<CreateLoginRequest, 'login'>>).login
-    if (login) effects.reveal('logins', { kind: 'login', name: login.name })
-  }
+  afterSuccess: revealLogin,
+  afterPartial: revealLogin
 }
 
 export interface DialogModels { readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly newLogin: NewLoginModel }

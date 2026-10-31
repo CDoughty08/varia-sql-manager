@@ -5,16 +5,23 @@ using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Actions;
 
-/// <summary>New Login (D2a): its describe, Script Action and run. The run follows SSMS's order without a transaction: a probe and
-/// the A24 live check showed that an open transaction holding a new login's DENY CONNECT SQL and DISABLE can block other SQL
-/// logins from signing in until it ends, so a statement waiting for a lock would lock users out. A failure or Stop therefore
-/// leaves what completed, and the reply says so. The password is bound only as @password and scrubbed from every message.</summary>
+/// <summary>New Login (D2a): its describe, Script Action and run. The run follows SSMS's order without a transaction (owner
+/// decision 6's fallback, critic A24): on SQL Server 2025, an open transaction holding a CREATE LOGIN kept logins whose security
+/// token was not cached (a first sign-in) from signing in until it ended, and one holding a server role membership change kept
+/// every SQL Server login out, so a statement waiting for a lock would lock users out. A failure or Stop therefore leaves what
+/// completed, and the reply starts with the login's real state. The password is bound only as @password and scrubbed from SQL
+/// Server's text, never from Varia's own sentences.</summary>
 internal sealed partial class ActionService
 {
     internal const string CreateLoginStep = "Create the login";
-    /// <summary>Joined to a failure or Stop after the login was created: the statements run one by one, as in SSMS.</summary>
-    internal const string LoginCreatedMessage = "The login was created; the steps after it did not all complete.";
-
+    /// <summary>Starts the message of a failure or Stop after the login was created: the statements run one by one, as in SSMS.</summary>
+    internal const string LoginCreatedMessage = "The login was created, but the steps after it did not all complete.";
+    /// <summary>Joined when Deny was chosen and DENY CONNECT SQL did not complete.</summary>
+    internal const string LoginCanConnectMessage = "It can connect: permission to connect was not denied.";
+    /// <summary>Joined when Disabled was chosen and DISABLE did not complete.</summary>
+    internal const string LoginEnabledMessage = "It is enabled.";
+    /// <summary>Joined when a server role was not added.</summary>
+    internal const string LoginRolesMessage = "Not every server role was added.";
     private static bool SameMembers(ActionArgs args) => args.NewName is null && args.CloseConnections is null && args.DeleteHistory is null && args.Changes is null && args.Design is null
         && args.Identity is null;
     /// <summary>Whether a request carries New Login's members, which only createLogin takes.</summary>
@@ -99,7 +106,7 @@ internal sealed partial class ActionService
     }
 
     /// <summary>OK: the preflight (the name, and ALTER ANY LOGIN), then CREATE LOGIN and the statements after it, one by one in
-    /// SSMS's order. Every message the reply carries is scrubbed of the password.</summary>
+    /// SSMS's order. What SQL Server says is scrubbed of the password; Varia's own sentences are not.</summary>
     private async Task<ActionExecuteResult> ExecuteNewLoginJobAsync(SqlConnection connection, ActionArgs args, CancellationToken token)
     {
         var messages = CollectMessages(connection);
@@ -116,14 +123,45 @@ internal sealed partial class ActionService
                 if (!reader.GetBoolean(1)) return new([], [], 0, Error("PERMISSION_DENIED", "You do not have permission to create logins (ALTER ANY LOGIN)."));
             }
         }
-        var steps = new List<RunStep> { new(CreateLoginStep, context => CreateLoginAsync(connection, login, args.Secrets?.Password, dryRun: false, context.Token)) };
+        var secrets = args.Secrets;
+        string Scrubbed(string text) => LoginSql.Scrub(text, secrets);
+        var steps = new List<RunStep> { new(CreateLoginStep, context => CreateLoginAsync(connection, login, secrets?.Password, dryRun: false, context.Token)) };
         steps.AddRange(LoginSql.After(login, args.ServerRoles!, args.Status!).Select(statement => new RunStep(StepTitle(statement.Template),
             context => RunStatementAsync(connection, statement, dryRun: false, context.Token), Detail: statement.Template == ActionTemplate.AddServerRoleMember ? statement.Names[0] : null)));
-        var (done, failure, completed) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action));
-        if (failure is not null && completed > 0) failure = failure with { Message = ScriptingErrors.Clip(failure.Message + " " + LoginCreatedMessage, ActionErrors.MaxMessage) };
-        var secrets = args.Secrets;
-        return new([.. done.Select(step => step.Message is null ? step : step with { Message = LoginSql.Scrub(step.Message, secrets) })], [.. messages.Collected().Select(text => LoginSql.Scrub(text, secrets))], 0,
-            failure is null ? null : failure with { Message = LoginSql.Scrub(failure.Message, secrets) });
+        var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
+        if (failure is not null && done is [{ Status: "cancelled" }, ..])
+        {
+            // A Stop that reached SqlClient as CREATE LOGIN finished on the server: the login may exist although the step says
+            // cancelled. The preflight's own statement tells, within the cleanup budget; a connection Stop broke leaves it unknown.
+            try
+            {
+                using var budget = new CancellationTokenSource(CleanupBudget(args.Action));
+                await using var command = connection.CreateCommand();
+                command.CommandText = LoginSql.Preflight;
+                Add(command, "@name", SqlDbType.NVarChar, 128, login.Name);
+                if (await command.ExecuteScalarAsync(budget.Token) is true) (done, failure) = StoppedAsCreated(done, failure);
+            }
+            catch (Exception exception) when (exception is SqlException or InvalidOperationException or OperationCanceledException) { }
+        }
+        if (failure is not null && done is [{ Status: "done" }, ..]) failure = PartlyCreated(failure, args.Status!, done);
+        return new(done, [.. messages.Collected().Select(Scrubbed)], 0, failure);
+    }
+
+    /// <summary>A Stop whose CREATE LOGIN completed after all (the login exists): that step is done, and the message says nothing
+    /// after it ran.</summary>
+    internal static (List<ActionStepDto> Steps, ActionError Failure) StoppedAsCreated(List<ActionStepDto> steps, ActionError failure) =>
+        ([steps[0] with { Status = "done" }, .. steps.Skip(1)], failure with { Message = "The action was stopped as \"" + CreateLoginStep + "\" completed; nothing after it ran." });
+
+    /// <summary>A failure or Stop after CREATE LOGIN: the message starts with the login's real state (whether it can connect or is
+    /// enabled against the Status chosen, and whether a server role is missing), so a clip cuts the list of completed steps, never that.</summary>
+    internal static ActionError PartlyCreated(ActionError failure, LoginStatusDto status, IReadOnlyList<ActionStepDto> steps)
+    {
+        bool Done(string title) => steps.Any(step => step.Title == title && step.Status == "done");
+        var state = LoginCreatedMessage;
+        if (status.Connect == "deny" && !Done(StepTitle(ActionTemplate.DenyConnect))) state += " " + LoginCanConnectMessage;
+        if (!status.Enabled && !Done(StepTitle(ActionTemplate.DisableLogin))) state += " " + LoginEnabledMessage;
+        if (steps.Any(step => step.Title == StepTitle(ActionTemplate.AddServerRoleMember) && step.Status != "done")) state += " " + LoginRolesMessage;
+        return failure with { Message = ScriptingErrors.Clip(state + " " + failure.Message, ActionErrors.MaxMessage) };
     }
 
     /// <summary>Runs (or, for the live checks, dry-runs) the CREATE LOGIN batch. The password is one nvarchar(128) parameter,

@@ -446,7 +446,6 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>A scratch database something else creates (the backend's Create Catalog dry run), dropped with the rest.</summary>
     public void Adopt(string name) { if (!created.Contains(name)) created.Add(name); }
 
-    /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     /// <summary>Stops and drops an Extended Events session by name, if it exists.</summary>
     internal static string DropXeSql(string name) =>
         "IF EXISTS (SELECT 1 FROM sys.dm_xe_sessions WHERE name = " + Quote(name) + ") ALTER EVENT SESSION " + Bracket(name) + " ON SERVER STATE = STOP;\n"
@@ -464,6 +463,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Records that the checks are about to create <see cref="XeSession"/>, so disposal stops and drops it.</summary>
     public string OwnXeSession() { ownsXeSession = true; return XeSession; }
 
+    /// <summary>Drops the Extended Events session and the New Login checks' logins, then the snapshot first, brings the offline
+    /// database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
         if (ownsXeSession) await run(DropXeSql(XeSession), "master");

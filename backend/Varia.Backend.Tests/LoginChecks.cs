@@ -20,6 +20,7 @@ internal static class LoginChecks
         Statements(check);
         Script(check);
         Scrub(check);
+        Partial(check);
         Validation(check);
         await ServiceAsync(check);
     }
@@ -124,8 +125,44 @@ internal static class LoginChecks
         const string secret = "Pa'ss-" + "Z9q";
         var scrubbed = LoginSql.Scrub("bad N'Pa''ss-Z9q' and Pa'ss-Z9q end", new(secret));
         check(scrubbed == "bad N'<password>' and <password> end" && LoginSql.Scrub("Pa'ss-Z9q", null) == "Pa'ss-Z9q" && LoginSql.Scrub("x", new("")) == "x"
-            && LoginSql.Scrub("old Ol-Z9q", new(null, "Ol-Z9q")) == "old <password>",
+            && LoginSql.Scrub("old 'Ol-Z9q' and \"Ol-Z9q\"", new(null, "Ol-Z9q")) == "old '<password>' and \"<password>\"" && LoginSql.Scrub("old Long-Ol-Z9q", new(null, "Long-Ol-Z9q")) == "old <password>",
             "the scrubber replaces a password, its doubled-quote form and an old password, and leaves text alone without one: " + scrubbed);
+        // A short password is replaced only where it is quoted, so SQL Server's own words stay readable and do not show where its letters occur.
+        const string role = "Cannot alter the server role 'VariaNoSuchRole', because it does not exist or you do not have permission.";
+        var shortOne = LoginSql.Scrub(role + " near 'e'.", new("e"));
+        var word = LoginSql.Scrub(role + " near N'server'.", new("server"));
+        check(shortOne == role + " near '<password>'." && word == role + " near N'<password>'."
+            && LoginSql.Scrub(role, new("in")) == role && LoginSql.BareSecretLength == 8,
+            "a one-letter or dictionary-word password is replaced only where it stands quoted, never inside SQL Server's own words: " + shortOne + " | " + word);
+        // The runner hands the scrubber SQL Server's text only: a password SQL Server quotes is replaced before it becomes the reply.
+        var echoed = ConnectionFailureChecks.Sql(15118, 1, 16, "server", "Password validation failed for 'Long-Pw-Z9q'.");
+        var failed = ActionErrors.FromSql(ActionsCatalog.Current, echoed, null, ddl: true, inUseAdvice: null, serverText: text => LoginSql.Scrub(text, new("Long-Pw-Z9q")));
+        check(failed.Message == "Password validation failed for '<password>'." && ActionErrors.FromSql(ActionsCatalog.Current, echoed, null, ddl: true, inUseAdvice: null).Message.Contains("Long-Pw-Z9q", StringComparison.Ordinal),
+            "a failure's SQL Server text goes through New Login's scrubber before it becomes the reply: " + failed.Message);
+    }
+
+    /// <summary>The reply after CREATE LOGIN completed and something after it did not: the login's real state comes first.</summary>
+    private static void Partial(Action<bool, string> check)
+    {
+        static ActionStepDto Step(string status, ActionTemplate? template = null, string? detail = null) => new(status, template is { } value ? ActionService.StepTitle(value) : ActionService.CreateLoginStep, Detail: detail);
+        var failure = new ActionError("PERMISSION_DENIED", "Cannot alter the server role 'r255'. Completed before the failure: " + string.Join(", ", Enumerable.Repeat("Add to a server role", 255)) + ".", false);
+        var roles = Enumerable.Range(0, 255).Select(index => Step("done", ActionTemplate.AddServerRoleMember, "r" + index)).Append(Step("failed", ActionTemplate.AddServerRoleMember, "r255"));
+        var many = ActionService.PartlyCreated(failure, new("grant", true), [Step("done"), .. roles]);
+        check(many.Message.StartsWith(ActionService.LoginCreatedMessage + " " + ActionService.LoginRolesMessage + " Cannot alter", StringComparison.Ordinal) && many.Message.Length <= ActionErrors.MaxMessage
+            && many.Code == "PERMISSION_DENIED",
+            "a server role's failure after 255 completed roles still starts with the login's state, and stays within the message limit");
+        var stopped = new ActionError("CANCELLED", "The action was stopped at \"Deny permission to connect\".", true);
+        var open = ActionService.PartlyCreated(stopped, new("deny", false), [Step("done"), Step("cancelled", ActionTemplate.DenyConnect), Step("skipped", ActionTemplate.DisableLogin), Step("skipped", ActionTemplate.AddServerRoleMember, "r")]);
+        var denied = ActionService.PartlyCreated(stopped, new("deny", false), [Step("done"), Step("done", ActionTemplate.DenyConnect), Step("cancelled", ActionTemplate.DisableLogin)]);
+        var plain = ActionService.PartlyCreated(stopped, new("grant", true), [Step("done"), Step("cancelled", ActionTemplate.AddServerRoleMember, "r")]);
+        check(open.Message == ActionService.LoginCreatedMessage + " " + ActionService.LoginCanConnectMessage + " " + ActionService.LoginEnabledMessage + " " + ActionService.LoginRolesMessage + " " + stopped.Message
+            && denied.Message == ActionService.LoginCreatedMessage + " " + ActionService.LoginEnabledMessage + " " + stopped.Message
+            && plain.Message == ActionService.LoginCreatedMessage + " " + ActionService.LoginRolesMessage + " " + stopped.Message,
+            "a failure or Stop after CREATE LOGIN says the login can connect or is enabled when Deny or Disabled did not apply, and when a server role is missing: " + open.Message);
+        var (steps, raced) = ActionService.StoppedAsCreated([Step("cancelled"), Step("skipped", ActionTemplate.DenyConnect)], new("CANCELLED", "The action was stopped at \"Create the login\".", true));
+        check(steps is [{ Status: "done", Title: "Create the login" }, { Status: "skipped" }] && raced.Code == "CANCELLED"
+            && ActionService.PartlyCreated(raced, new("deny", true), steps).Message.StartsWith(ActionService.LoginCreatedMessage + " " + ActionService.LoginCanConnectMessage + " The action was stopped as", StringComparison.Ordinal),
+            "a Stop that raced CREATE LOGIN's completion, once the login is found, reports that step done and the login's state: " + raced.Message);
     }
 
     private static void Validation(Action<bool, string> check)

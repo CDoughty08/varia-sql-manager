@@ -7,7 +7,7 @@ import {
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
-import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, ownLoginRefuses, passwordScriptHeader, saPrincipalId } from './logins.ts'
+import { loginGreyedMessage, loginLimits, loginMessages, loginRules, loginSubtypes, loginTypeSubtypes, loginVerbs, newLoginMessages, ownLoginRefuses, passwordScriptHeader, saPrincipalId } from './logins.ts'
 import { designerEngines } from '../designer/catalog.ts'
 
 const cell = (value: string) => value.replaceAll('|', '\\|')
@@ -364,7 +364,11 @@ function newLoginDocs(): string[] {
     'sensitive as a whole (its frames are zeroed on both sides once used); `actions.script` refuses one in main and in the backend.',
     `In SQL it is one nvarchar(${loginLimits.password}) parameter, read once inside a constant batch:`,
     '`N\' WITH PASSWORD=N\'\'\' + REPLACE(@password COLLATE Latin1_General_BIN2, N\'\'\'\', N\'\'\'\'\'\') + N\'\'\'\'`; the binary collation keeps',
-    'U+FF07 from being doubled too. A lint pins that form, and the backend replaces the password in any message it returns.',
+    'U+FF07 from being doubled too. A lint pins that form. The fields take one character more than the limit, so a longer pasted',
+    `password is refused ("${newLoginMessages.tooLong}") rather than cut short. The backend replaces the password (and an old`,
+    'one) with `<password>` in SQL Server\'s own error and message text: where SQL Server quotes it (in single or double quotes, as',
+    'typed or with its quotes doubled), and, from 8 characters, anywhere. A shorter password could be part of SQL Server\'s words, and',
+    'Varia\'s own sentences never hold it.',
     '',
     'Script Action never carries or writes the password: a SQL Server login\'s script is one batch in one `SET XACT_ABORT ON` transaction',
     `under the comment "${passwordScriptHeader}", with \`PASSWORD=<password>\` unquoted, so an unedited script fails to parse and runs`,
@@ -372,21 +376,31 @@ function newLoginDocs(): string[] {
     'per batch.',
     '',
     'OK runs SSMS\'s statements in SSMS\'s order, one by one: `CREATE LOGIN`, `DENY CONNECT SQL` (Deny), `ALTER LOGIN … DISABLE`',
-    '(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction: on SQL Server 2025, a',
-    'transaction holding a new login\'s DENY CONNECT SQL and DISABLE kept other SQL Server logins from signing in until it ended',
-    '(6 to 11 seconds in each of three probes, while Windows sign-ins went through), so one statement waiting for a lock would lock',
-    `users out (critic A24, owner decision 6). A failure or Stop leaves what completed, and the message ends "${'The login was created; the steps after it did not all complete.'}"`,
-    'when the login exists. Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a',
+    '(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction (critic A24, owner decision',
+    '6): on SQL Server 2025 an open transaction holding `CREATE LOGIN` keeps out every SQL Server login whose security token is not',
+    'cached (one that has not signed in since the server started) until it ends, and one holding a server role membership change',
+    'keeps out every SQL Server login, so one statement waiting for a lock would lock users out. A live check signs in four such',
+    'logins while New Login waits before each later statement, and shows both blocks with transactions it rolls back.',
+    'A failure or Stop after `CREATE LOGIN` leaves what completed, and the message starts with the login\'s real state: "The login was',
+    'created, but the steps after it did not all complete.", then "It can connect: permission to connect was not denied." when Deny',
+    'did not apply, "It is enabled." when Disabled did not, and "Not every server role was added." when a role is missing, so the clip',
+    'at the message limit cuts the list of completed steps, never that. When Stop reaches SQL Server as `CREATE LOGIN` completes, the',
+    'backend looks for the login within the cleanup budget; if it exists, that step is done and the message says so. Either way the',
+    'dialog reloads Logins and selects the login, as after OK, and stays open with the error.',
+    'Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a',
     'login without ALTER ANY LOGIN (`PERMISSION_DENIED`). The server\'s password policy answers `PASSWORD_POLICY` (15114 to 15118),',
     'which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,',
     '15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server\'s Logins folder, once Object Explorer has listed it, reloads and selects the new login.',
     '',
     'Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live',
-    'check (`VARIA_TEST_SQL_XE=1`, set only for CI\'s disposable SQL Server container): it records `rpc_starting`, `rpc_completed`,',
+    'check (`VARIA_TEST_SQL_XE=1`, set only for CI\'s disposable SQL Server container; it first checks, read-only, that every event,',
+    'field, action and predicate it uses exists on the server): it records `rpc_starting`, `rpc_completed`,',
     '`sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output',
     'parameters) in a scratch session while New Login creates a login and Create Catalog\'s master key batch runs, and fails if either',
-    'password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Developers\' servers never run it (owner',
-    'decision 14). Its result is recorded here once CI has run it.',
+    'password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each half counts only once the session has',
+    'recorded that half\'s own RPC (its constant batch text, or SQL Server\'s notice that it hid the statement), polled for on the',
+    'ring buffer rather than awaited for a fixed time. Developers\' servers never run it (owner decision 14). It has not run yet:',
+    'D2a does not merge until it has run once on a disposable server and its result is recorded here (critic A16).',
     ''
   ]
 }

@@ -138,7 +138,13 @@ internal static partial class LoginSql
 
     // --- Secrets ----------------------------------------------------------------------------------------------------------
 
-    /// <summary>A message with each secret, and its doubled-quote form, replaced by <see cref="Placeholder"/>, ordinal. SQL Server's
+    /// <summary>From this length a secret is also replaced where it stands unquoted. A shorter one is too likely to be part of the
+    /// message's own words ("e", "in", "server"): replacing it would garble the message and show where the password's text occurs.</summary>
+    public const int BareSecretLength = 8;
+
+    /// <summary>Text SQL Server sent (an error or an informational message; never Varia's own sentences, step titles or names) with
+    /// each secret replaced by <see cref="Placeholder"/>, ordinal: where it is quoted as a literal or name would be ('…', N'…' and
+    /// "…", as typed or with its quotes doubled), and, from <see cref="BareSecretLength"/> characters, anywhere. SQL Server's
     /// messages hold no password in any probed case; this covers the unknown ones (a syntax error if the quoting were ever wrong).</summary>
     public static string Scrub(string text, LoginSecretsDto? secrets)
     {
@@ -146,9 +152,12 @@ internal static partial class LoginSql
         foreach (var secret in new[] { secrets.Password, secrets.OldPassword })
         {
             if (string.IsNullOrEmpty(secret)) continue;
-            var doubled = secret.Replace("'", "''", StringComparison.Ordinal);
-            if (doubled != secret) text = text.Replace(doubled, Placeholder, StringComparison.Ordinal);
-            text = text.Replace(secret, Placeholder, StringComparison.Ordinal);
+            // The doubled form first: the secret as typed is inside it.
+            foreach (var form in new[] { secret.Replace("'", "''", StringComparison.Ordinal), secret }.Distinct(StringComparer.Ordinal))
+            {
+                text = text.Replace("'" + form + "'", "'" + Placeholder + "'", StringComparison.Ordinal).Replace("\"" + form + "\"", "\"" + Placeholder + "\"", StringComparison.Ordinal);
+                if (secret.Length >= BareSecretLength) text = text.Replace(form, Placeholder, StringComparison.Ordinal);
+            }
         }
         return text;
     }
