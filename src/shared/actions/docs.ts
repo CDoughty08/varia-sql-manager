@@ -3,7 +3,8 @@ import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explor
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
   actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, unknownOutcomeMessage
+  dialogIds, dialogSpecs, objectActions, objectActionSpecs, allFilesType, scriptActionTitles,
+  serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
@@ -42,7 +43,11 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
   statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
-  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this'
+  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
+  serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
+  browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
+  browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
+  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -236,6 +241,7 @@ export function renderObjectActionsDocs(): string {
     '',
     ...promptDocs(),
     ...longRunDocs(),
+    ...serverFilesDocs(),
     ...databasePropertiesDocs(),
     '## SQL',
     '',
@@ -329,6 +335,38 @@ function loginDocs(): string[] {
     '### Login limits',
     '',
     table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
+    ''
+  ]
+}
+
+/** The server file picker (`actions.describe` with `serverFiles`), which New Database, Attach and Restore will open from a "…" button. */
+function serverFilesDocs(): string[] {
+  return [
+    '## Server file picker',
+    '',
+    `\`actions.describe\` with ${code(serverFilesDescribeId)}, the server as its target and a \`files\` member (\`purpose\`, \`path\`,`,
+    '`allFiles`, `exists`) lists one folder on the server, or with no path the server\'s drives (/ on Linux) and its default',
+    'data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past',
+    'its limit or outside the type filter): the answer\'s entries hold that path\'s own entry, or none when it does not exist.',
+    'Paths are the server\'s, with its separator; SQL Server\'s service account must be able to read them.',
+    '',
+    table(['Purpose', 'Title', 'Files of type', 'Extensions'], serverFilePurposes.map(purpose => {
+      const spec = serverFilePurposeSpecs[purpose]
+      const types = serverFileTypesLabel(purpose)
+      return [code(purpose), spec.title + ' - <server>', types ? types + ', ' + allFilesType : 'Folders only', spec.extensions.join(', ') || '—']
+    })),
+    '',
+    'A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and',
+    'times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,',
+    '`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with',
+    'nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant',
+    'statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A',
+    'missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and',
+    'Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main\'s deadline for a listing is 15 s. Listings take',
+    'a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog\'s describe.',
+    '',
+    'The picker\'s titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of',
+    'type, File name, Folder name) are SSMS\'s as recalled, not yet checked against SSMS 22.',
     ''
   ]
 }

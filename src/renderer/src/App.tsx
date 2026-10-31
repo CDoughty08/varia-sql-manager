@@ -16,6 +16,7 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
+import ServerFilePicker from './server-files/ServerFilePicker'
 import TableDesigner from './designer/TableDesigner'
 import SsisProperties from './ssis/SsisProperties'
 import DatabaseProperties from './properties/DatabaseProperties'
@@ -314,6 +315,7 @@ export default function App() {
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
     <ObjectDialog />
     <CreateCatalogDialog />
+    <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />

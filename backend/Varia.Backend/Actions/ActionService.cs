@@ -48,6 +48,12 @@ internal sealed class ActionServiceOptions
     public int MaxRegistered { get; init; } = 128;
     public TimeSpan DescribeBudget { get; set; } = TimeSpan.FromSeconds(40);
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>The server file picker's budget for one listing (actionLimits.browseMs).</summary>
+    public TimeSpan BrowseBudget { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>The picker's listings run one at a time per connection under a gate of their own, outside the read gates: SQL
+    /// Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a listing
+    /// past its budget still holds its gate, and must not hold one that Database Properties or Delete Object waits for.</summary>
+    public int BrowsePerConnection { get; init; } = 1;
     public TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED; the
     /// action's cleanup budget (its compensation and cleanup steps) is added to it.</summary>
@@ -78,6 +84,7 @@ internal sealed partial class ActionService : IDisposable
     private readonly RequestRegistry running;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> executeGates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> browseGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim readTotal;
     private readonly SemaphoreSlim executeTotal;
     private int activeJobs;
@@ -99,6 +106,9 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>How long a Stop's reply waits for the job: SQL Server ending the statement, then the action's own cleanup.</summary>
     private TimeSpan StopWait(string action) => Options.StopGrace + CleanupBudget(action);
     private TimeSpan CleanupBudget(string action) => catalog.Actions.Contains(action) ? catalog.CleanupBudget(action) : TimeSpan.FromMilliseconds(catalog.Limit("cleanupMs"));
+    /// <summary>The describe id of the server file picker (src/shared/actions/catalog.ts serverFilesDescribeId).</summary>
+    public const string ServerFilesDescribe = "serverFiles";
+    public const string ManagedInstanceFilesMessage = "Azure SQL Managed Instance does not let Varia browse its folders.";
 
     public ActionService(IActionHost host, ActionServiceOptions? options = null, ActionsCatalog? catalog = null, ExplorerCatalog? explorer = null)
     {
@@ -144,10 +154,23 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
+    /// dialog and a target its action serves, the table designer and a database, SQL Server's own included, or the server
+    /// file picker, the server and what to list (a known purpose and a server path, without All Files for a folder).</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        if (args.Files is { } files)
+        {
+            if (!catalog.ServerFilePurposes.ContainsKey(files.Purpose ?? "")) throw Invalid("purpose.");
+            if (files.Path is not null && !ServerPath.Valid(files.Path, catalog.Limit("serverPath"))) throw Invalid("path.");
+            if (files.Purpose == "folder" && files.AllFiles == true) throw Invalid("a folder picker lists folders only.");
+            if (files.Exists == true && (files.Path is null || files.AllFiles is not null)) throw Invalid("exists checks one path.");
+            if (args.Target is not { Kind: "server" }) throw Invalid("target.");
+            try { ExplorerRefs.Object(args.Target, explorer); }
+            catch (RequestException) { throw Invalid("target."); }
+            return args.Target;
+        }
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         return Target(args.Target, catalog.ActionOf(args.Dialog));
@@ -214,6 +237,20 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        if (args.Files is { } files)
+        {
+            // Only SQL Server's own disks: Azure SQL Database has none, and Managed Instance keeps its files to itself (no RESTORE
+            // FROM DISK, attach or file specs), so nothing in Varia picks one there.
+            var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
+            if (engine != "box") return Task.FromResult(new ActionDescribeResult(null, 0, Error("NOT_SUPPORTED", engine == "managedInstance" ? ManagedInstanceFilesMessage : CloudMessage)));
+            return RunAsync(args.ConnectionId, args.RequestId, action: null, read: true, Options.BrowseBudget, token,
+                async (connection, profile, band, job) =>
+                {
+                    var (listing, error) = await ServerFiles.ListAsync(connection, catalog, files, profile.Linux, job);
+                    return new ActionDescribeResult(null, watch.ElapsedMilliseconds, error, ServerFiles: listing);
+                },
+                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
+        }
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -256,18 +293,19 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Registers the request, then runs the job on the pool under the read or execute gates with its own
     /// connection. Past its budget, a describe or script answers TIMEOUT; DDL has none (Stop ends it). A disconnect answers
-    /// CANCELLED. Failures before any DDL, such as an engine the action does not run on or a Kerberos sign-in, are values.
+    /// CANCELLED. Failures before any DDL, such as an engine the action does not run on (a null action: the caller checked) or a
+    /// Kerberos sign-in, are values.
     /// Stop on DDL (the request's own token) has already sent SQL Server an attention through the job's token; the reply then
     /// waits up to StopGrace plus the action's cleanup budget for the job, whose steps say what completed and what Varia
     /// undid, and past it answers CANCELLED, an unknown outcome.</summary>
-    private async Task<T> RunAsync<T>(string connectionId, string requestId, string action, bool read, TimeSpan? budget, CancellationToken token,
-        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed)
+    private async Task<T> RunAsync<T>(string connectionId, string requestId, string? action, bool read, TimeSpan? budget, CancellationToken token,
+        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", bool browse = false)
     {
         var profile = host.Profile(connectionId);
         var served = profile.Explorer(explorer);
         // Each action declares the engines it runs on: Azure SQL Database reaches one database per connection and refuses USE,
         // and Managed Instance cannot set SINGLE_USER, attach, detach or restore from a disk.
-        if (!Serves(action, served.ServerEngine)) return failed(ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine)));
+        if (action is not null && !Serves(action, served.ServerEngine)) return failed(ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine)));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(requestId, connectionId, source);
         try
@@ -275,17 +313,17 @@ internal sealed partial class ActionService : IDisposable
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var job = Task.Run(() => JobAsync(connectionId, read, profile, served.Band, work, failed, jobSource), CancellationToken.None);
+            var job = Task.Run(() => JobAsync(connectionId, read, browse, profile, served.Band, work, failed, jobSource), CancellationToken.None);
             _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             try { return await job.WaitAsync(source.Token); }
             catch (OperationCanceledException) when (source.IsCancellationRequested && !token.IsCancellationRequested)
             {
                 if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
-                return failed(ActionErrors.Create(catalog, "TIMEOUT", "Reading the object took longer than " + (int)budget!.Value.TotalSeconds + " seconds. Try again."));
+                return failed(ActionErrors.Create(catalog, "TIMEOUT", reading + " took longer than " + (int)budget!.Value.TotalSeconds + " seconds. Try again."));
             }
             catch (OperationCanceledException) when (!read && token.IsCancellationRequested && !entry.Forgotten)
             {
-                try { return await job.WaitAsync(StopWait(action), CancellationToken.None); }
+                try { return await job.WaitAsync(StopWait(action ?? ""), CancellationToken.None); }
                 catch (TimeoutException) { throw new OperationCanceledException(token); }
                 // Only the preflight, the gates or the sign-in can throw on cancellation: no DDL had started.
                 catch (Exception error) when (error is OperationCanceledException or SqlException) { return failed(Error("CANCELLED", "The action was stopped before it changed anything.")); }
@@ -294,19 +332,21 @@ internal sealed partial class ActionService : IDisposable
         finally { running.Unregister(requestId, entry); }
     }
 
-    private async Task<T> JobAsync<T>(string connectionId, bool read, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
+    private async Task<T> JobAsync<T>(string connectionId, bool read, bool browse, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
         Func<ActionError, T> failed, CancellationTokenSource jobSource)
     {
         Interlocked.Increment(ref activeJobs);
         try
         {
             var token = jobSource.Token;
-            var gate = (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
-            var total = read ? readTotal : executeTotal;
+            // The picker's listings take only their own gate (ActionServiceOptions.BrowsePerConnection), never a read gate.
+            var gate = browse ? browseGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.BrowsePerConnection))
+                : (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
+            var total = browse ? null : read ? readTotal : executeTotal;
             if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy();
             try
             {
-                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy();
+                if (total is not null && !await total.WaitAsync(Options.GateWait, token)) throw Busy();
                 try
                 {
                     await using var connection = host.Connection(connectionId);
@@ -321,7 +361,7 @@ internal sealed partial class ActionService : IDisposable
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
                 }
-                finally { total.Release(); }
+                finally { total?.Release(); }
             }
             finally { gate.Release(); }
         }
@@ -842,12 +882,23 @@ internal sealed partial class ActionService : IDisposable
         return await RunStatementAsync(connection, statement, dryRun: true, token);
     }
 
+    /// <summary>The live checks' only way to list with SQL Server 2016's statements on a newer server, or under another catalogue's
+    /// limits (a smaller browseEntries), on a connection of its own. Not reachable from the wire.</summary>
+    internal async Task<(ServerFilesDto? Listing, ActionError? Error)> ListServerFilesAsync(string connectionId, ServerFilesArgsDto files, bool legacy, ActionsCatalog? limits, CancellationToken token)
+    {
+        await using var connection = host.Connection(connectionId);
+        await host.OpenAsync(connection, token);
+        await RunAsync(connection, ActionSql.ReadPrologue, token);
+        return await ServerFiles.ListAsync(connection, limits ?? catalog, files, host.Profile(connectionId).Linux, token, legacy);
+    }
+
     /// <summary>Cancels a disconnected connection's requests and drops its gates.</summary>
     public void Forget(string connectionId)
     {
         running.Forget(connectionId);
         readGates.TryRemove(connectionId, out _);
         executeGates.TryRemove(connectionId, out _);
+        browseGates.TryRemove(connectionId, out _);
     }
 
     public void CancelAll() => running.ForgetAll();
@@ -857,5 +908,6 @@ internal sealed partial class ActionService : IDisposable
         running.ForgetAll();
         readGates.Clear();
         executeGates.Clear();
+        browseGates.Clear();
     }
 }

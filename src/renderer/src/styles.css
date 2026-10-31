@@ -885,6 +885,41 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .sub-dialog-backdrop { z-index: 20001; }
 .connection-modal.sub-dialog { width: min(420px, calc(100vw - 48px)); }
 .sub-dialog-body { display: flex; flex-direction: column; gap: 6px; padding: 10px 16px; }
+/* The server file picker (Locate Backup File): a wide sub-dialog whose tree takes the height the fields leave. */
+.connection-modal.sub-dialog.server-file-picker { width: min(700px, calc(100vw - 48px)); height: min(560px, calc(100vh - 48px)); }
+.server-file-picker .sub-dialog-body { flex: 1; min-height: 0; }
+.server-file-picker .object-dialog-message { margin: 0; }
+.sub-dialog-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.server-files-banner { display: flex; align-items: flex-start; gap: var(--varia-space-2); padding: var(--varia-space-1) var(--varia-space-2); border-radius: var(--varia-radius-sm); background: var(--varia-statusPill-infoBackground); color: var(--varia-statusPill-infoForeground); overflow-wrap: anywhere; }
+.server-files-label { font-size: var(--varia-size-xs); color: var(--varia-dialog-labelForeground); }
+.server-files-table { flex: 1; min-height: 120px; display: flex; flex-direction: column; border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); background: var(--varia-input-background); overflow: hidden; }
+.server-files-head, .server-files-row { display: grid; grid-template-columns: minmax(0, 1fr) 104px 124px; align-items: center; column-gap: var(--varia-space-2); }
+.server-files-table.folders .server-files-head, .server-files-table.folders .server-files-row:not(.server-files-note) { grid-template-columns: minmax(0, 1fr) 104px; }
+/* The headings sit in the scroller, above the rows, so a scrollbar narrows both alike and Size stays over its column. */
+.server-files-head { position: sticky; top: 0; z-index: 1; height: var(--varia-row); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); background: var(--varia-input-background); border-bottom: 1px solid var(--varia-input-border); }
+.server-files-tree { flex: 1; min-height: 0; overflow: auto; outline: none; scroll-padding-top: var(--varia-row); }
+.server-files-tree:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.server-files-row { height: var(--varia-row); padding: 0 var(--varia-space-2) 0 var(--varia-space-1); white-space: nowrap; cursor: default; user-select: none; }
+.server-files-row[role="treeitem"]:hover:not([aria-selected="true"]) { background: var(--varia-list-hoverBackground); }
+.server-files-row[aria-selected="true"] { background: var(--varia-list-inactiveSelectionBackground); color: var(--varia-list-inactiveSelectionForeground); }
+.server-files-tree:focus .server-files-row[aria-selected="true"] { background: var(--varia-list-activeSelectionBackground); color: var(--varia-list-activeSelectionForeground); box-shadow: inset 2px 0 var(--varia-focusBorder); }
+.server-files-name { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; overflow: hidden; }
+.server-files-indent, .server-files-twisty { flex: none; }
+.server-files-twisty { width: var(--varia-glyph-md); display: inline-flex; justify-content: center; }
+.server-files-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.server-files-tag { flex: none; padding: 0 var(--varia-space-1); border-radius: var(--varia-radius-pill); background: var(--varia-badge-background); color: var(--varia-badge-foreground); font-size: var(--varia-size-xs); }
+.server-files-size, .server-files-modified { overflow: hidden; text-overflow: ellipsis; color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); }
+.server-files-size { text-align: right; }
+.server-file-picker .server-files-row[aria-selected="true"] .server-files-size, .server-file-picker .server-files-row[aria-selected="true"] .server-files-modified { color: inherit; }
+.server-files-note { grid-template-columns: minmax(0, 1fr); color: var(--varia-descriptionForeground); }
+.server-files-note.error { color: var(--varia-errorForeground); }
+@media (forced-colors: active) {
+  .server-files-banner { border: 1px solid CanvasText; }
+  .server-files-row[aria-selected="true"], .server-files-tree:focus .server-files-row[aria-selected="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .server-files-row[aria-selected="true"] .icon, .server-file-picker .server-files-row[aria-selected="true"] .server-files-size, .server-file-picker .server-files-row[aria-selected="true"] .server-files-modified { color: HighlightText; }
+  .server-files-row[aria-selected="true"] .server-files-tag { color: HighlightText; background: Highlight; outline: 1px solid HighlightText; }
+  .server-files-tree:focus .server-files-row[aria-selected="true"] { outline: 2px solid HighlightText; outline-offset: -2px; }
+}
 .database-owner-list { width: 100%; min-height: 200px; }
 /* Table Designer: the toolbar strip, its bars, the column grid over Column Properties, and the Properties panel (F4). */
 .editor-container[hidden] { display: none; }
