@@ -3,11 +3,12 @@
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, nodeStatuses, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
 import type { DatabaseRuntime } from '../explorer/status.ts'
 import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
+import { loginsCatalog } from './logins.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
 export const objectActions = [
@@ -42,17 +43,22 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** The servers that offer it (absent: every one). On another, the menu hides the item; the backend's own refusal of such a
-   *  request comes with its engine gate (W5-0b), which reads this list from actions-catalog.json. */
-  readonly engines?: readonly ServerEngine[]
+  /** The servers it runs on (critic A1); the backend refuses it elsewhere before opening a connection. */
+  readonly engines: readonly ServerEngine[]
+  /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
+   *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
+  readonly cleanupMs?: number
 }
+/** Box editions and Managed Instance: Azure SQL Database reaches one database per connection and refuses USE, so its
+ *  actions are a follow-up. */
+const onServers: readonly ServerEngine[] = ['box', 'managedInstance']
 const actionSpecData = {
-  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows' },
-  rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename' },
+  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
+  rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename', engines: onServers },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
-  delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete' },
+  delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
   // SSMS 22's access key for Properties is unverified; P is free in Varia's Object Explorer menu.
-  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true }
+  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true, engines: onServers }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
@@ -389,8 +395,13 @@ export const actionLimits = {
   /** How long a stopped action's reply waits for SQL Server to end the statement, then answers CANCELLED (outcome unknown). */
   stopGraceMs: 10_000,
   /** When a running rename appears in the status bar, with Stop. */
-  statusDelayMs: 300
+  statusDelayMs: 300,
+  /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
+  cleanupMs: 10_000
 } as const
+
+/** Whether an action runs on a server of this engine. */
+export const actionServes = (action: ObjectAction, engine: ServerEngine): boolean => objectActionSpecs[action].engines.includes(engine)
 
 /** What a renderer says when the backend stopped (or its connection broke) while DDL ran: the outcome is unknown. */
 export const unknownOutcomeMessage = 'The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.'
@@ -411,7 +422,7 @@ const optionJson = (def: DatabaseOptionDef) => ({
 /**
  * The catalogue as the backend embeds it, keys sorted and everything resolved, so C# needs no rules of its own: `rows`
  * has one row per kind with actions and each of its subtypes ('' for none), then one per subtype and status the kind has an
- * overlay for (with `status`). An action with `engines` lists them.
+ * overlay for (with `status`). Each action lists its `engines` and its cleanup budget.
  */
 export function actionsCatalogJson(): string {
   const rows = nodeKinds.flatMap(kind => actionKindSpecs[kind]
@@ -422,7 +433,7 @@ export function actionsCatalogJson(): string {
     : [])
   const actionJson = (action: ObjectAction) => {
     const spec: ObjectActionSpec = objectActionSpecs[action]
-    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines }
+    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
   }
   return [
     '{',
@@ -432,10 +443,11 @@ export function actionsCatalogJson(): string {
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
     `  "errors": ${block(actionErrorCodes.map(code => ({ code, retryable: actionErrorRetryable[code] })))},`,
     `  "limits": ${line(actionLimits)},`,
+    `  "logins": ${line(loginsCatalog())},`,
     `  "ownerNotOn": ${line(ownerNotOn)},`,
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
-    '  "version": 2',
+    '  "version": 3',
     '}',
     ''
   ].join('\n')

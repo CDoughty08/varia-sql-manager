@@ -12,10 +12,14 @@ internal sealed record CatalogKind(string Kind, string Title, string Scope, stri
 internal sealed record CatalogScope(IReadOnlyList<string> Required, IReadOnlyList<string> Forbidden);
 
 /// <summary>What a server can browse: its version band (12 below SQL Server 2016, else the major version up to 17, or the
-/// band of the catalog columns it has when that is higher), whether it is a cloud edition, and whether it runs on Linux.</summary>
-internal readonly record struct ExplorerProfile(int Band, bool Cloud, bool Linux = false)
+/// band of the catalog columns it has when that is higher), whether it is a cloud edition, whether it runs on Linux, and whether
+/// it is Azure SQL Managed Instance.</summary>
+internal readonly record struct ExplorerProfile(int Band, bool Cloud, bool Linux = false, bool ManagedInstance = false)
 {
+    /// <summary>The folders' engine: Managed Instance browses as a box server.</summary>
     public string Engine => Cloud ? "cloud" : "box";
+    /// <summary>The actions' engine (src/shared/explorer/catalog.ts serverEngineOf): box, managedInstance or cloud.</summary>
+    public string ServerEngine => Cloud ? "cloud" : ManagedInstance ? "managedInstance" : "box";
 }
 
 /// <summary>The Object Explorer tree as src/shared/explorer/catalog.ts declares it, embedded as explorer-catalog.json (a
@@ -34,7 +38,7 @@ internal sealed class ExplorerCatalog
     private sealed record KindJson(string Kind, string Title, string Scope, string Icon, List<string> Subtypes, Dictionary<string, string> SubtypeIcons,
         Dictionary<string, string> VariantIcons, List<string> Folders, Dictionary<string, List<string>> SubtypeFolders, List<string> HistoryLookup, List<string> Parents,
         string? List, List<string> Rows, int MaxName);
-    private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<string> Queries,
+    private sealed record CatalogJson(int Version, List<int> CloudEngineEditions, List<FolderJson> Folders, List<KindJson> Kinds, List<int> ManagedInstanceEngineEditions, List<string> Queries,
         Dictionary<string, CatalogScope> Scopes);
 
     private readonly Dictionary<string, CatalogFolder> folders;
@@ -46,6 +50,7 @@ internal sealed class ExplorerCatalog
     {
         if (json.Version != 1) throw new InvalidOperationException("Unsupported Object Explorer catalogue version.");
         CloudEditions = json.CloudEngineEditions.ToHashSet();
+        ManagedInstanceEditions = json.ManagedInstanceEngineEditions.ToHashSet();
         folders = json.Folders.ToDictionary(folder => folder.Id, folder => new CatalogFolder(folder.Id, folder.Label, folder.Owner, folder.Parent, folder.Order, folder.Since,
             folder.Engines, folder.List, folder.Rows ?? [], folder.Filter), StringComparer.Ordinal);
         kinds = json.Kinds.ToDictionary(kind => kind.Kind, kind => new CatalogKind(kind.Kind, kind.Title, kind.Scope, kind.Icon, kind.Subtypes, kind.SubtypeIcons, kind.VariantIcons,
@@ -77,6 +82,7 @@ internal sealed class ExplorerCatalog
     public static int BandOf(int major) => major < 13 ? MinBand : Math.Min(major, MaxBand);
 
     public IReadOnlySet<int> CloudEditions { get; }
+    public IReadOnlySet<int> ManagedInstanceEditions { get; }
     public IReadOnlyList<string> Queries { get; }
     public IReadOnlyList<string> FolderIds { get; }
     public IReadOnlyDictionary<string, CatalogScope> Scopes { get; }
@@ -90,7 +96,7 @@ internal sealed class ExplorerCatalog
     /// (<paramref name="catalogBand"/>): Azure SQL Database and Managed Instance report version 12 while running the newest
     /// engine. On SQL Server the catalog band never exceeds the version's.</summary>
     public ExplorerProfile Profile(int major, int edition, int catalogBand = MinBand) =>
-        new(Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)), CloudEditions.Contains(edition));
+        new(Math.Max(BandOf(major), Math.Clamp(catalogBand, MinBand, MaxBand)), CloudEditions.Contains(edition), ManagedInstance: ManagedInstanceEditions.Contains(edition));
 
     public string RootFolder(string id)
     {

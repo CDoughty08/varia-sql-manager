@@ -81,12 +81,15 @@ internal static class ActionLiveChecks
             var name = ActionChecks.Long(fragment);
             foreach (var template in Enum.GetValues<ActionTemplate>())
             {
-                var plan = new PlannedStatement(template, "master", Enumerable.Repeat(name, ActionSql.ParameterCount(template)).ToList());
+                // sp_detach_db's @skipchecks is true or false only (ActionSql.Checked); its name is the procedure's own argument.
+                var plan = template == ActionTemplate.DetachDatabase ? ActionSql.Detach(name, updateStatistics: true)
+                    : new PlannedStatement(template, "master", Enumerable.Repeat(name, ActionSql.ParameterCount(template)).ToList());
                 var selected = await service.Actions.DryRunAsync(info.Id, plan, CancellationToken.None);
                 var expected = template switch
                 {
                     ActionTemplate.RenameObject => [Bracket(name) + "." + Bracket(name), name],
                     ActionTemplate.DeleteBackupHistory => [name],
+                    ActionTemplate.DetachDatabase => [name, "false"],
                     _ => new List<string?> { ActionSql.Statement(plan) }
                 };
                 if (!selected.SequenceEqual(expected)) mismatches.Add(template + " " + fragment[..1]);

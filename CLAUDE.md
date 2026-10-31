@@ -168,7 +168,7 @@ pages, limits, error codes, display formats, benchmarks).
   unescaped) and refuses any other SMO comment batch a name breaks, caps output at 4,000,000 characters, never executes
   DDL, and never logs scripts, names or options.
 - Object actions (Select Top 1000 Rows, Rename, Delete, Properties), their dialogs, pages and database options live only
-  in `src/shared/actions/catalog.ts` and `database.ts`; after changing them, regenerate `docs/object-actions.md` and the
+  in `src/shared/actions/catalog.ts`, `database.ts` and `logins.ts` (login subtypes, protected-principal rules and limits); after changing them, regenerate `docs/object-actions.md` and the
   backend's embedded `Actions/actions-catalog.json` with `npx vitest run tests/object-actions-catalog.test.ts -u`. DDL runs
   only in `ActionService` (and, for the SSIS Catalog's server verbs, in `SsisActionService`; see the SSIS bullet): on its own unpooled connection (the application name plus " - Object Actions", never retried),
   never the explorer or scripting pool; with statements only from constant templates in `ActionSql`, `Actions/DatabaseAlter`

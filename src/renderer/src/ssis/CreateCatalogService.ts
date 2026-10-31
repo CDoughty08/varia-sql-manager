@@ -126,7 +126,7 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
     // A failure after the restore was undone, or Create Catalog stopped after enabling CLR: the folder shows what is there now.
     if (value?.steps.some(step => step.status === 'done')) this.refresh(open)
     // A Stop whose removal failed left part of a catalog on the server: an alert, as a failure is, not a quiet Stopped.
-    const leftBehind = value?.steps.some(step => step.status === 'failed' && step.message?.startsWith(createCatalog.cleanupStep))
+    const leftBehind = value?.steps.some(step => step.status === 'failed' && step.title === createCatalog.cleanupStep)
     if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: leftBehind ? 'failed' : 'stopped', error: value.error, steps: value.steps, stopping: undefined }); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: failure('CANCELLED', createCatalogMessages.stopped), stopping: undefined }); this.refresh(open); return }
     const error = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? failure('CONNECTION_LOST', createCatalogMessages.unknown)

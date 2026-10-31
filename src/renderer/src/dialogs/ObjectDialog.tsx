@@ -139,7 +139,7 @@ export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] })
   if (!steps.length) return null
   return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
-    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.message ?? '' }))} />
+    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.title }))} />
   </section>
 }
 
