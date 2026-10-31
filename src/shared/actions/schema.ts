@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import { actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import { loginLimits } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
@@ -133,8 +134,21 @@ export interface ActionScriptResult {
   readonly warnings: readonly string[]
   readonly error?: ActionError
 }
-export type ActionStepStatus = 'done' | 'failed' | 'skipped' | 'cancelled'
-export interface ActionStep { readonly status: ActionStepStatus; readonly message?: string }
+export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled'] as const
+export type ActionStepStatus = typeof actionStepStatuses[number]
+/**
+ * One step of an action's reply. `title` says what it does (constant text); `message` is SQL Server's text for a failed
+ * step; `detail` names what it acts on (a role, database or credential, never a secret); `compensates` marks a step that
+ * undid an earlier one's change, or cleaned up, after a failure or Stop; `progress` is a long step's percent done.
+ */
+export interface ActionStep {
+  readonly status: ActionStepStatus
+  readonly title: string
+  readonly message?: string
+  readonly detail?: string
+  readonly compensates?: boolean
+  readonly progress?: number
+}
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
@@ -216,6 +230,23 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     }
   }
 }) satisfies z.ZodType<ActionRequest>
+/** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
+ *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
+export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
+  .pipe(actionRequestSchema)
+
+/** The bounds of a step (C#: ActionSteps.Bound clips to them). */
+export const actionStepSchema = z.object({
+  status: z.enum(actionStepStatuses), title: z.string().max(loginLimits.stepTitle), message: z.string().max(actionLimits.messageChars).optional(),
+  detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
+}).strict() satisfies z.ZodType<ActionStep>
+const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
+/** actions.execute's answer, which main checks before the renderer sees it: one step per planned statement, the commit, and
+ *  compensation and cleanup steps, at most statements + 8; bounded messages. */
+export const actionExecuteResultSchema = z.object({
+  steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+}).strict() satisfies z.ZodType<ActionExecuteResult>
 
 export const actionCancelSchema = z.object({
   requestIds: z.array(z.uuid()).min(1).max(actionLimits.cancelIds).refine(ids => new Set(ids).size === ids.length, 'Duplicate request id.')

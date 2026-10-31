@@ -192,13 +192,27 @@ internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId,
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+/// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
+/// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
+/// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
+internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>");
+        return true;
+    }
+}
 /// <summary>Which database Database Properties read (database_id and create_date as the describe writes it): its preflight
 /// refuses a database that has taken the name since, after a rename, a drop or a restore.</summary>
 internal sealed record DatabaseIdentityDto(int Id, string Created);
 /// <summary>Database Properties' changes: only what differs from the describe. Options and Scoped map a catalogue key to a token.</summary>
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
+/// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).</summary>
+internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
+    bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>
@@ -225,8 +239,11 @@ internal sealed record DesignIdentityDto(string Seed, string Increment);
 internal sealed record TableDesignerModelDto(string Database, int Band, List<string> Schemas, bool SchemasTruncated, string DefaultSchema, string DefaultFilegroup,
     bool CaseSensitiveNames, bool AccentSensitiveNames, bool? CanCreate = null);
 internal sealed record ActionScriptResult(string? Text, string Database, List<string> Warnings, ActionError? Error = null);
-/// <summary>Status: done, failed, skipped or cancelled; Message: the step's title, or SQL Server's text for a failed one.</summary>
-internal sealed record ActionStepDto(string Status, string? Message = null);
+/// <summary>One step of an action's reply (src/shared/actions/schema.ts ActionStep). Status: done, failed, skipped or cancelled;
+/// Title: what the step does (at most 64 characters, constant text); Message: SQL Server's text for a failed one; Detail: a name
+/// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
+/// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
+internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
 internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>

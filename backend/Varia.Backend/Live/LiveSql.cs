@@ -328,6 +328,7 @@ internal static partial class LiveSql
         }
         if (commented || code.Contains("/*", StringComparison.Ordinal)) problems.Add("has a comment");
         foreach (var (name, pattern) in BuiltinPatterns) if (pattern.IsMatch(code)) problems.Add("uses " + name);
+        problems.AddRange(CatalogSql.SecretUses(code));
         if (code.Contains('#')) problems.Add("uses a temporary table");
         if (code.Contains("sp_executesql", StringComparison.OrdinalIgnoreCase)) problems.Add("runs dynamic SQL");
         foreach (Match match in Forbidden().Matches(code)) problems.Add("uses " + match.Value.ToUpperInvariant());
