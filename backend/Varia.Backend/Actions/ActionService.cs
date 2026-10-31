@@ -148,6 +148,8 @@ internal sealed partial class ActionService : IDisposable
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
+        if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         // New Login opens on the server: its action makes a login rather than acting on a row.
@@ -174,7 +176,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
-        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
+        if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles, mappings or status.");
         switch (args.Action)
         {
             case "rename":
@@ -219,13 +221,14 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin" : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
+                _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -234,7 +237,7 @@ internal sealed partial class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
-        if (args.Action == "createLogin") return Task.FromResult(ScriptNewLogin(args));
+        if (args.Action == "createLogin") return ScriptNewLoginAsync(args, token);
         // A new table's script runs in its database; a database's or a server object's action in master.
         var database = args.Action == "createTable" ? target.Name! : ScriptDatabase(target);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: true, Options.ScriptBudget, token,
@@ -559,6 +562,10 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
         ActionTemplate.AddServerRoleMember => "Add to a server role",
+        ActionTemplate.CreateUserForLogin => "Create a user",
+        ActionTemplate.AlterUserSchema => "Set the default schema",
+        ActionTemplate.CreateSchemaFor => "Create a schema",
+        ActionTemplate.AddRoleMember => "Add to a database role",
         _ => "Drop the object"
     };
 

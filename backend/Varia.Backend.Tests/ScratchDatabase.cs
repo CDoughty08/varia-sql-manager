@@ -75,6 +75,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>Where the New Login checks (D2a) run Create Catalog's master key batch under the Extended Events check (created on demand).</summary>
     public string LoginsDatabase => Name + "_lgn";
+    /// <summary>Where the User Mapping checks (D2b) map New Login's logins (created on demand).</summary>
+    public string MappingDatabase => Name + "_lgm";
+    /// <summary>The User Mapping checks' offline database, which a mapping must not reach (created on demand).</summary>
+    public string MappingOffline => Name + "_lgmo";
     /// <summary>A SQL login the New Login checks create, `tag` being 1 to 8 lowercase letters or digits; dropped on disposal once owned.</summary>
     public string LoginNamed(string tag) => Name + "_l" + tag;
     /// <summary>The New Login checks' Extended Events session (critic A16), dropped on disposal once owned.</summary>
@@ -92,8 +96,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
-    // _lgn is New Login's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_lgn)?$")]
+    // _lgn is New Login's, _lgm and _lgmo (offline) its User Mapping's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_lgn|_lgm|_lgmo)?$")]
     private static partial Regex Pattern();
     // A run's own login, and New Login's (_l and a tag).
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8})?$")]
@@ -453,6 +457,14 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 
     /// <summary>New Login's database for the Extended Events check's master key batch.</summary>
     public Task<string> CreateLoginsDatabaseAsync() => CreateMarkedAsync(LoginsDatabase);
+    /// <summary>User Mapping's database, and its offline one.</summary>
+    public async Task<(string Online, string Offline)> CreateMappingDatabasesAsync()
+    {
+        await CreateMarkedAsync(MappingDatabase);
+        await CreateMarkedAsync(MappingOffline);
+        await Exec("ALTER DATABASE " + Bracket(MappingOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        return (MappingDatabase, MappingOffline);
+    }
     /// <summary>Records a login the checks are about to create (by <see cref="LoginNamed"/>), so disposal drops it.</summary>
     public string OwnLogin(string tag)
     {
@@ -469,7 +481,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     {
         if (ownsXeSession) await run(DropXeSql(XeSession), "master");
         foreach (var login in ownedLogins) await run("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + Quote(login) + ") DROP LOGIN " + Bracket(login) + ";", "master");
-        foreach (var name in created) await Drop(run, name, name != Offline);
+        foreach (var name in created) await Drop(run, name, name != Offline && name != MappingOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");

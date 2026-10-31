@@ -187,17 +187,20 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
+/// what the table designer needs of a database (tableDesigner), or one database's roles and schemas for User Mapping (loginDatabaseRoles).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design, createLogin (Target the server) Login, ServerRoles,
-/// Status and, on execute only, Secrets; Validate refuses the rest.</summary>
+/// Mappings, Status and, on execute only, Secrets; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, NewLoginDto? Login = null,
-    List<string>? ServerRoles = null, LoginStatusDto? Status = null);
+    List<string>? ServerRoles = null, LoginStatusDto? Status = null, List<UserMappingDto>? Mappings = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
+/// <summary>One database New Login's User Mapping maps (src/shared/actions/logins.ts UserMappingChoice): the user to create for the login,
+/// its default schema (none when null), and the database roles to add it to, public never.</summary>
+internal sealed record UserMappingDto(string Database, string User, string? DefaultSchema, List<string> RolesAdd);
 /// <summary>New Login's Status page: Connect grant or deny; Enabled.</summary>
 internal sealed record LoginStatusDto(string Connect, bool Enabled);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
@@ -235,7 +238,10 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null);
+    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null);
+/// <summary>User Mapping's read of one database (src/shared/actions/logins.ts LoginDatabaseRoles): its roles and schemas by name, each
+/// bounded by loginLimits, and whether guest has CONNECT there.</summary>
+internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated);
 /// <summary>New Login's describe (src/shared/actions/logins.ts NewLoginModel): the server's facts, then the databases, languages and
 /// server roles its lists offer, each bounded by loginLimits (a truncation flag says more exist).</summary>
 internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,

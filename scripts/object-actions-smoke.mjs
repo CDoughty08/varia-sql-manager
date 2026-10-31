@@ -573,7 +573,8 @@ try {
   // 8. New Login (D2a): Security › New › Login… opens "Login - New" with SSMS's pages and defaults; the password fields are masked
   // and keep what was typed across pages; Script (clipboard and a query window, so AutoRecover too) never carries the password,
   // which goes only with OK; PASSWORD_POLICY keeps the dialog and its password; Stop answers Stopped with the steps; OK adds the
-  // login, and Logins shows and selects it. New Login… on the Logins folder opens the same dialog.
+  // login, and Logins shows and selects it. New Login… on the Logins folder opens the same dialog. User Mapping (D2b) maps
+  // AppData with the login's name, a schema chosen in Select Schema and a role, by pointer and by keys, never the offline Archive.
   const loginDialog = () => page.getByRole('dialog', { name: 'Login - New', exact: true })
   const typed = 'Typed-Z9q-' + Date.now().toString(36)
   // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
@@ -586,7 +587,7 @@ try {
   await page.getByRole('menuitem', { name: 'Login…', exact: true }).click(fast)
   await expect(loginDialog()).toBeVisible()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Ready')
-  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'Status'])
+  expect(await loginDialog().getByRole('navigation', { name: 'Select a page', exact: true }).getByRole('button').allTextContents()).toEqual(['General', 'Server Roles', 'User Mapping', 'Status'])
   // A Windows server: Windows authentication, so the password fields are greyed until SQL Server authentication is chosen.
   await expect(loginDialog().getByRole('radio', { name: 'Windows authentication', exact: true })).toBeChecked()
   await expect(passwordField(loginDialog(), 'Password')).toBeDisabled()
@@ -603,7 +604,7 @@ try {
   // fields line up with Login name.
   await resizeWindow(application, page, 1024, 768)
   await zoom(1.5)
-  await expect(objectDialogTabs(loginDialog())).toHaveCount(3)
+  await expect(objectDialogTabs(loginDialog())).toHaveCount(4)
   const loginPage = objectDialogPage(loginDialog())
   const loginOk = loginDialog().getByRole('button', { name: 'OK', exact: true })
   const narrowLogin = async () => {
@@ -635,6 +636,50 @@ try {
   await expect(serverRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeChecked()
   await expect(serverRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeDisabled()
   await serverRoles.getByRole('checkbox', { name: 'dbcreator', exact: true }).check()
+  // User Mapping: Map fills User with the login's name; the selected database's roles are read once, public checked and greyed.
+  await loginDialog().getByRole('button', { name: 'User Mapping', exact: true }).click()
+  const mappingGrid = loginDialog().getByRole('grid', { name: 'Users mapped to this login:', exact: true })
+  const mappingRow = database => mappingGrid.getByRole('row').filter({ has: page.getByRole('checkbox', { name: `Map ${database}`, exact: true }) })
+  const mappingCells = async database => (await mappingRow(database).getByRole('gridcell').allTextContents()).map(text => text.replace('…', ''))
+  await expect(mappingGrid.getByRole('columnheader')).toHaveText(['Map', 'Database', 'User', 'Default Schema'])
+  await expect(mappingGrid.getByRole('checkbox', { name: 'Map Archive', exact: true }), 'an offline database cannot be mapped').toBeDisabled()
+  await expect(mappingRow('Archive')).toContainText('OFFLINE')
+  await mappingGrid.getByRole('checkbox', { name: 'Map AppData', exact: true }).check()
+  expect(await mappingCells('AppData')).toEqual(['', 'AppData', 'app_reader', ''])
+  const databaseRoles = loginDialog().getByRole('group', { name: 'Database role membership for: AppData', exact: true })
+  await expect(databaseRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeChecked()
+  await expect(databaseRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeDisabled()
+  await expect(loginDialog().getByRole('checkbox', { name: 'Guest account enabled for: AppData', exact: true })).not.toBeChecked()
+  await databaseRoles.getByRole('checkbox', { name: 'db_datareader', exact: true }).check()
+  // Select Schema (the cell's … button) lists the database's schemas; OK puts the one chosen in Default Schema.
+  await mappingGrid.getByRole('button', { name: 'Select Schema for AppData', exact: true }).click()
+  const selectSchema = page.getByRole('dialog', { name: 'Select Schema', exact: true })
+  await expect(selectSchema.getByRole('listbox', { name: 'Schemas in AppData:', exact: true }).getByRole('option')).toHaveText(['dbo', 'sales'])
+  await selectSchema.getByRole('listbox', { name: 'Schemas in AppData:', exact: true }).selectOption('sales')
+  await selectSchema.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(selectSchema).toHaveCount(0)
+  expect(await mappingCells('AppData')).toEqual(['', 'AppData', 'app_reader', 'sales'])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-new-login-user-mapping-dark.png') })
+  // By keys: Down moves to Archive and master, Space maps and unmaps master (whose guest may connect), Home and Right reach User, F2 edits it, and
+  // Escape ends the edit, never the dialog.
+  await mappingGrid.focus()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(loginDialog().getByRole('checkbox', { name: 'Guest account enabled for: master', exact: true })).toBeChecked()
+  await page.keyboard.press(' ')
+  await expect(mappingGrid.getByRole('checkbox', { name: 'Map master', exact: true })).toBeChecked()
+  // Home is the Map column (Select Schema left the cursor in Default Schema); two Rights reach User.
+  await page.keyboard.press('Home')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('F2')
+  await expect(loginDialog().getByRole('textbox', { name: 'User in master', exact: true })).toBeFocused()
+  await expect(loginDialog().getByRole('textbox', { name: 'User in master', exact: true })).toHaveValue('app_reader')
+  await page.keyboard.press('Escape')
+  await expect(loginDialog().getByRole('textbox', { name: 'User in master', exact: true })).toHaveCount(0)
+  await expect(loginDialog()).toBeVisible()
+  await page.keyboard.press(' ')
+  await expect(mappingGrid.getByRole('checkbox', { name: 'Map master', exact: true })).not.toBeChecked()
   await loginDialog().getByRole('button', { name: 'General', exact: true }).click()
   expect(await passwordField(loginDialog(), 'Password').evaluate(input => [input.type, input.value.length])).toEqual(['password', typed.length])
   await loginDialog().getByRole('button', { name: 'Script options', exact: true }).click()
@@ -648,7 +693,9 @@ try {
   const loginScripts = (await stubCalls('actions.script')).filter(call => call.action === 'createLogin')
   expect(loginScripts).toHaveLength(2)
   expect(loginScripts.every(call => !Object.hasOwn(call, 'secrets')) && !JSON.stringify(loginScripts).includes(typed)).toBe(true)
-  expect(loginScripts[0]).toMatchObject({ login: { auth: 'sql', name: 'app_reader', checkPolicy: false, checkExpiration: false, mustChange: false }, serverRoles: ['dbcreator'] })
+  expect(loginScripts[0]).toMatchObject({ login: { auth: 'sql', name: 'app_reader', checkPolicy: false, checkExpiration: false, mustChange: false }, serverRoles: ['dbcreator'],
+    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'loginDatabaseRoles').map(call => call.target.name), 'each database\'s roles are read once').toEqual(['AppData', 'master'])
   expect(await stubCalls('actions.execute').then(calls => calls.filter(call => call.action === 'createLogin'))).toEqual([])
   // The server's password policy refuses "Weak": the dialog stays open, says why, and keeps the password typed.
   for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill('Weak')
@@ -664,12 +711,13 @@ try {
   await loginDialog().getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(objectDialogProgress(loginDialog())).toHaveText('Stopped')
   await expect(loginDialog().getByRole('status').filter({ hasText: 'The action was stopped at "Create the login"' })).toBeVisible()
-  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(2)
+  await expect(loginDialog().getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')).toHaveCount(5)
   // A password the policy takes: the dialog closes, and Logins lists the login and selects it.
   for (const label of ['Password', 'Confirm password']) await passwordField(loginDialog(), label).fill(typed)
   await loginDialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(loginDialog()).toHaveCount(0)
-  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true } })
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createLogin', target: { kind: 'server' }, secrets: { password: typed }, serverRoles: ['dbcreator'], status: { connect: 'grant', enabled: true },
+    mappings: [{ database: 'AppData', user: 'app_reader', defaultSchema: 'sales', rolesAdd: ['db_datareader'] }] })
   await expect(explorerTree(page).getByRole('treeitem', { name: 'app_reader', selected: true })).toBeVisible()
   expect(await menuOf('server-a', 'Security', 'Logins')).toContain('New Login…')
   await explorerMenu().getByRole('menuitem', { name: 'New Login…', exact: true }).click(fast)
@@ -696,7 +744,7 @@ try {
   const copies = await recovered(resolve(profile, 'AutoRecover'))
   expect(copies.some(text => text.includes('PASSWORD=<password>'))).toBe(true)
   expect(copies.some(text => text.includes(typed) || text.includes('Weak') || text.includes('Held'))).toBe(false)
-  console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
+  console.log('Object action checks: New Login opens from Security › New and Logins with SSMS\'s pages and defaults, greys the password rows\' labels under Windows authentication, scrolls General in the narrow frame with its fields aligned, keeps its masked password across pages, maps a database (Select Schema, a role, keys) but never an offline one, scripts PASSWORD=<password> to the clipboard and a query window without sending the password, keeps the dialog on PASSWORD_POLICY with focus back on Password, Stops, and selects the new login.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

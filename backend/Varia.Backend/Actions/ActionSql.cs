@@ -9,12 +9,13 @@ namespace Varia.Backend.Actions;
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
 /// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and New Login's ALTER SERVER ROLE …
-/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password).</summary>
+/// ADD MEMBER and its User Mapping's CREATE USER … FOR LOGIN, ALTER USER … WITH DEFAULT_SCHEMA, CREATE SCHEMA … AUTHORIZATION and
+/// ALTER ROLE … ADD MEMBER, each in the mapped database (its CREATE LOGIN is LoginSql's builder, which takes the password).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
-    AddServerRoleMember
+    AddServerRoleMember, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -57,7 +58,7 @@ internal static partial class ActionSql
     public static int ParameterCount(ActionTemplate template) => template switch
     {
         ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
-            or ActionTemplate.AddServerRoleMember => 2,
+            or ActionTemplate.AddServerRoleMember or ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -118,6 +119,11 @@ internal static partial class ActionSql
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
             // The role, then the member, as SMO writes it (captured by D2).
             ActionTemplate.AddServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
+            // User Mapping, each in its database, as SMO writes them (captured by D2): the user, then the login, schema or member.
+            ActionTemplate.CreateUserForLogin => "CREATE USER " + Quote(names[0]) + " FOR LOGIN " + Quote(names[1]),
+            ActionTemplate.AlterUserSchema => "ALTER USER " + Quote(names[0]) + " WITH DEFAULT_SCHEMA=" + Quote(names[1]),
+            ActionTemplate.CreateSchemaFor => "CREATE SCHEMA " + Quote(names[0]) + " AUTHORIZATION " + Quote(names[1]),
+            ActionTemplate.AddRoleMember => "ALTER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -152,6 +158,11 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.AddServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.CreateUserForLogin => Run("DECLARE @stmt nvarchar(max) = N'CREATE USER ' + QUOTENAME(@p1) + N' FOR LOGIN ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AlterUserSchema => Run("DECLARE @stmt nvarchar(max) = N'ALTER USER ' + QUOTENAME(@p1) + N' WITH DEFAULT_SCHEMA=' + QUOTENAME(@p2);\n"),
+            // CREATE SCHEMA must be its batch's only statement, which sp_executesql gives it.
+            ActionTemplate.CreateSchemaFor => Run("DECLARE @stmt nvarchar(max) = N'CREATE SCHEMA ' + QUOTENAME(@p1) + N' AUTHORIZATION ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AddRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -267,6 +278,8 @@ internal static partial class ActionSql
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
         "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
+        // Its User Mapping's statements, and its describe's guest CONNECT state (LoginSql.DatabaseRoles).
+        "N'CREATE USER '", "N' FOR LOGIN '", "N'ALTER USER '", "N' WITH DEFAULT_SCHEMA='", "N'CREATE SCHEMA '", "N' AUTHORIZATION '", "N'ALTER ROLE '",
         // The login preflight (Login).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
@@ -453,6 +466,9 @@ internal static partial class ActionSql
         // New Login: its describe and preflight in master, and every CREATE LOGIN its builder can write, run and dry run.
         yield return ("new login describe", LintCatalog(LoginSql.Describe, ExplorerCatalog.MaxBand, database: false));
         yield return ("new login preflight", LintCatalog(LoginSql.Preflight, ExplorerCatalog.MaxBand, database: false));
+        // User Mapping: its read of a database and its per-database preflight, each run inside the database through ModuleCall.
+        yield return ("login database roles", LintCatalog(LoginSql.DatabaseRoles, ExplorerCatalog.MaxBand, database: true));
+        yield return ("login mapping preflight", LintCatalog(LoginSql.MappingPreflight, ExplorerCatalog.MaxBand, database: true));
         foreach (var item in LoginSql.Lint()) yield return item;
     }
 }

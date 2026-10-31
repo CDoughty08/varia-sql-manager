@@ -11,6 +11,7 @@ import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
+import UserMappingPage from './pages/UserMappingPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -18,7 +19,7 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
-  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, status: NewLoginStatusPage }
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {

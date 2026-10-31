@@ -73,7 +73,7 @@ the Servers column above says which. Menus read the server through `explorerServ
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
-| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), Status (`settings-gear`) | Yes |
+| `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -319,6 +319,10 @@ names by a live dry run:
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
 | Add to a server role (New Login) | `ALTER SERVER ROLE [role] ADD MEMBER [login]` |
+| Create a user (User Mapping) | `CREATE USER [user] FOR LOGIN [login]`, in its database |
+| Set the default schema (User Mapping) | `ALTER USER [user] WITH DEFAULT_SCHEMA=[schema]`, in its database |
+| Create a schema (User Mapping) | `CREATE SCHEMA [schema] AUTHORIZATION [user]`, in its database, in a batch of its own |
+| Add to a database role (User Mapping) | `ALTER ROLE [role] ADD MEMBER [user]`, in its database |
 
 ## Logins
 
@@ -371,7 +375,7 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 ### New Login
 
 Security › New › Login…, and New Login… on the Logins folder and on a login, open "Login - New", a modal dialog with the pages
-General, Server Roles, Status (User Mapping and Securables follow once their OK works). Its action is `createLogin`, on
+General, Server Roles, User Mapping, Status (Securables follows once its OK works). Its action is `createLogin`, on
 SQL Server (Managed Instance follows); its target is the server.
 
 - **General**: Login name; Windows authentication (DOMAIN\name) or SQL Server authentication (the default when the server
@@ -381,6 +385,16 @@ SQL Server (Managed Instance follows); its target is the server.
   15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server
   takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.
 - **Server Roles**: every server role, public checked and greyed (every login is a member).
+- **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login
+  listed, virtualized; a database that is not online or not open to this login shows its state chip (or NO ACCESS) and cannot
+  be mapped. Map fills User with the login name (which a rename follows while they match); a blank User is the login name and a
+  blank Default Schema leaves the clause out. The … button (and Alt+Down) opens Select Schema, the database's schemas. Below it,
+  "Guest account enabled for:" the selected database (read-only, as in SSMS) and "Database role membership for:" it: public
+  checked and greyed, the others enabled once its row is mapped. The keys are the grid's: arrows, Home/End, Page Up/Down,
+  Space toggles Map, F2 or Enter or typing edits User or Default Schema, Enter or Tab commits, Escape ends the edit only.
+  Selecting a database reads its roles, schemas and guest state once (`actions.describe` with dialog `loginDatabaseRoles`,
+  on the action's read connection, inside the database through sp_executesql; a newer selection cancels a read still
+  running); at most 256 roles and 1,024 schemas are listed, and 256 databases mapped.
 - **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).
 
 The password fields are masked, never reach the dialog's snapshot, React state that is saved, AutoRecover, a toast or a log, and
@@ -397,24 +411,32 @@ Varia's own sentences never hold it.
 Script Action never carries or writes the password: a SQL Server login's script is one batch in one `SET XACT_ABORT ON` transaction
 under the comment "/* Varia leaves passwords out of scripts. Replace <password> with the login's password, as an N'…' literal, before you run this script. */", with `PASSWORD=<password>` unquoted, so an unedited script fails to parse and runs
 nothing (no later statement can give a role to an existing login of that name). A Windows login's script is SSMS's, one statement
-per batch.
+per batch. Each mapped database's statements run there through `EXEC [database].sys.sp_executesql N'…'` inside that transaction
+(a Windows login's script uses `USE [database]` and `GO` as SSMS does); Script reads the server only when a Default Schema is
+chosen, to learn whether the database has it (SSMS's CREATE SCHEMA), and never refuses a name.
 
 OK runs SSMS's statements in SSMS's order, one by one: `CREATE LOGIN`, `DENY CONNECT SQL` (Deny), `ALTER LOGIN … DISABLE`
-(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name. They do not share a transaction (critic A24, owner decision
+(Disabled), then `ALTER SERVER ROLE … ADD MEMBER` per role by name, then per mapped database by name, in it: `CREATE USER … FOR
+LOGIN`, `ALTER USER … WITH DEFAULT_SCHEMA=` when one is chosen, `CREATE SCHEMA … AUTHORIZATION` the user when the database
+lacks it, and `ALTER ROLE … ADD MEMBER` per role by name (at most 512 statements in all, or OK and Script refuse:
+"This login would need more than 512 statements. Map fewer databases, or apply the rest afterwards."). They do not share a transaction (critic A24, owner decision
 6): on SQL Server 2025 an open transaction holding `CREATE LOGIN` keeps out every SQL Server login whose security token is not
 cached (one that has not signed in since the server started) until it ends, and one holding a server role membership change
 keeps out every SQL Server login, so one statement waiting for a lock would lock users out. A live check signs in four such
 logins while New Login waits before each later statement, and shows both blocks with transactions it rolls back.
 A failure or Stop after `CREATE LOGIN` leaves what completed, and the message starts with the login's real state: "The login was
 created, but the steps after it did not all complete.", then "It can connect: permission to connect was not denied." when Deny
-did not apply, "It is enabled." when Disabled did not, and "Not every server role was added." when a role is missing, so the clip
+did not apply, "It is enabled." when Disabled did not, "Not every server role was added." when a role is missing, and "Not every database was mapped as chosen." when a mapping step is, so the clip
 at the message limit cuts the list of completed steps, never that. When Stop reaches SQL Server as `CREATE LOGIN` completes, the
 backend looks for the login within the cleanup budget; if it exists, that step is done and the message says so. Either way the
 dialog reloads Logins and selects the login, as after OK, and stays open with the error.
 Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a
-login without ALTER ANY LOGIN (`PERMISSION_DENIED`). The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
+login without ALTER ANY LOGIN (`PERMISSION_DENIED`); then, per mapped database, one that is gone (`NOT_FOUND`), not online or
+not open to this login (`DATABASE_UNAVAILABLE`), a user name a user or role there already has (`NAME_IN_USE`) and a role it lacks
+(`NOT_FOUND`). The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
 which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
-15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login.
+15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
+and each mapped database's Users folder that Object Explorer has listed reloads (after a partial run too).
 
 Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live
 check (`VARIA_TEST_SQL_XE=1`, set only for CI's disposable SQL Server container; it first checks, read-only, that every event,

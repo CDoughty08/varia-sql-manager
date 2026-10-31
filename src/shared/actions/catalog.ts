@@ -335,6 +335,7 @@ export const pageIds = [
   'filegroups',
   'options',
   'serverRoles',
+  'userMapping',
   'status'
 ] as const
 export type PageId = typeof pageIds[number]
@@ -379,10 +380,11 @@ const dialogSpecData = {
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
   },
   // SSMS's "Login - New" is modal, and the password must never live in a document's view state. General keeps its password
-  // fields mounted across page switches. User Mapping (D2b) and Securables (D2d) join once their OK works (critic A17).
+  // fields mounted across page switches, and User Mapping its grid (a cell being edited, the scroll position). Securables (D2d)
+  // joins once its OK works (critic A17).
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
-    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('status', 'Status')]
+    pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
   }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
