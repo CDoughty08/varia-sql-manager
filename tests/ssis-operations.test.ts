@@ -238,7 +238,7 @@ describe('Integration Services Operations documents', () => {
     expect(api.cancelSsis).not.toHaveBeenCalled()
     expect(handle().disposed).toBe(true)
     expect(service.get(id)).toBeUndefined()
-    answer({ ok: true, value: { steps: [{ status: 'done' }], elapsedMs: 1 } })
+    answer({ ok: true, value: { steps: [{ status: 'done', title: 'Stop the operation' }], elapsedMs: 1 } })
     await settled()
     expect(service.get(id)).toBeUndefined()
     // The app closing withdraws a stop still on its way, rather than leave it with nothing to say how it ended.

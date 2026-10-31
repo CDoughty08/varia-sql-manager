@@ -6,12 +6,26 @@ using Varia.Backend.Scripting;
 namespace Varia.Backend.Actions;
 
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
-/// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup.</summary>
-internal enum ActionTemplate { DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory }
+/// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
+/// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER.</summary>
+internal enum ActionTemplate
+{
+    DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser
+}
+
+/// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
+/// names (its index among the main steps) once that step completed and a later one failed or was stopped; a cleanup runs after
+/// any failure or Stop. Both run under a fresh token bounded by the action's catalogue budget, and only when <c>When</c> (over
+/// the main steps' statuses) allows it.</summary>
+internal enum StepKind { Main, Compensation, Cleanup }
 
 /// <summary>One statement of an action: its template, the database it runs in, and the names it takes, verbatim (a
-/// schema-scoped object's schema and name, then a new name; a database's name, then a new name).</summary>
-internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names);
+/// schema-scoped object's schema and name, then a new name; a database's name, then a new name; sp_detach_db's @skipchecks
+/// as true or false, from <see cref="ActionSql.Detach"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
+internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
+    Func<IReadOnlyList<string>, bool>? When = null);
 
 /// <summary>All SQL of the action path, as constant text per template, kind and version band. DDL is built by SQL Server
 /// from that text: names reach it only as nvarchar(128) parameters (@db, @p1…) passed through QUOTENAME, or as a
@@ -40,7 +54,7 @@ internal static partial class ActionSql
 
     public static int ParameterCount(ActionTemplate template) => template switch
     {
-        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase => 2,
+        ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -64,6 +78,20 @@ internal static partial class ActionSql
         _ => throw new InvalidOperationException("No DROP for " + kind)
     };
 
+    /// <summary>sp_detach_db's @skipchecks from Update Statistics (critic A21): 'false' runs UPDATE STATISTICS first, as SSMS's
+    /// Detach does when the box is checked; 'true' skips it. The only values the template may carry (Checked).</summary>
+    public static PlannedStatement Detach(string database, bool updateStatistics, StepKind kind = StepKind.Main, int? undoes = null) =>
+        new(ActionTemplate.DetachDatabase, "master", [database, updateStatistics ? "false" : "true"], kind, undoes);
+
+    /// <summary>The plan, or a throw when its names do not fit its template: the wrong count, or an @skipchecks that is not
+    /// true or false. Every statement passes it before it runs or is scripted.</summary>
+    public static PlannedStatement Checked(PlannedStatement plan)
+    {
+        if (plan.Names.Count != ParameterCount(plan.Template)) throw new InvalidOperationException("The plan has the wrong number of names for " + plan.Template + ".");
+        if (plan.Template == ActionTemplate.DetachDatabase && plan.Names[1] is not ("true" or "false")) throw new InvalidOperationException("@skipchecks is true or false.");
+        return plan;
+    }
+
     /// <summary>The statement itself as SSMS writes it, names quoted by C#'s QUOTENAME.</summary>
     public static string Statement(PlannedStatement plan)
     {
@@ -76,6 +104,15 @@ internal static partial class ActionSql
             ActionTemplate.SetSingleUser => "ALTER DATABASE " + Quote(names[0]) + " SET  SINGLE_USER WITH ROLLBACK IMMEDIATE",
             ActionTemplate.DropDatabase => "DROP DATABASE " + Quote(names[0]),
             ActionTemplate.DeleteBackupHistory => "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = " + Literal(names[0]),
+            // SMO writes two spaces after SET (probed by D1 and D3), and @skipchecks as a plain string.
+            ActionTemplate.SetMultiUser => "ALTER DATABASE " + Quote(names[0]) + " SET  MULTI_USER",
+            ActionTemplate.SetRestrictedUser => "ALTER DATABASE " + Quote(names[0]) + " SET  RESTRICTED_USER",
+            ActionTemplate.DetachDatabase => "EXEC master.dbo.sp_detach_db @dbname = " + Literal(names[0]) + ", @skipchecks = '" + Checked(plan).Names[1] + "'",
+            ActionTemplate.DisableLogin => "ALTER LOGIN " + Quote(names[0]) + " DISABLE",
+            ActionTemplate.EnableLogin => "ALTER LOGIN " + Quote(names[0]) + " ENABLE",
+            ActionTemplate.DenyConnect => "DENY CONNECT SQL TO " + Quote(names[0]),
+            ActionTemplate.GrantConnect => "GRANT CONNECT SQL TO " + Quote(names[0]),
+            ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -100,6 +137,15 @@ internal static partial class ActionSql
             ActionTemplate.SetSingleUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE';\n"),
             ActionTemplate.DropDatabase => Run("DECLARE @stmt nvarchar(max) = N'DROP DATABASE ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DeleteBackupHistory => dryRun ? "SELECT @p1 AS database_name;" : "EXEC msdb.dbo.sp_delete_database_backuphistory @database_name = @p1;",
+            ActionTemplate.SetMultiUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  MULTI_USER';\n"),
+            ActionTemplate.SetRestrictedUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  RESTRICTED_USER';\n"),
+            // sp_detach_db takes the name as its own argument (never text), and @skipchecks only as true or false (Checked).
+            ActionTemplate.DetachDatabase => dryRun ? "SELECT @p1 AS database_name, @p2 AS skipchecks;" : "EXEC master.dbo.sp_detach_db @dbname = @p1, @skipchecks = @p2;",
+            ActionTemplate.DisableLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' DISABLE';\n"),
+            ActionTemplate.EnableLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' ENABLE';\n"),
+            ActionTemplate.DenyConnect => Run("DECLARE @stmt nvarchar(max) = N'DENY CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -177,6 +223,33 @@ internal static partial class ActionSql
         + "FROM sys.databases AS d LEFT JOIN sys.database_mirroring AS dm ON dm.database_id = d.database_id LEFT JOIN sys.server_principals AS sp ON sp.sid = d.owner_sid "
         + "WHERE d.name = @name;";
 
+    /// <summary>The login preflight (D4 §6), in master: the login's row (type, state, SID, policy flags, CONNECT SQL denied,
+    /// whether it is this connection's own login or a Windows group it gets in through, sysadmin membership, its sessions with
+    /// VIEW SERVER STATE, what it owns, the permissions to change it, and whether @new is another principal's name), then at
+    /// most @take names of the databases it owns. Catalog views only: a READ COMMITTED read never takes LOGINPROPERTY's locks.</summary>
+    public const string Login = "SELECT p.principal_id AS principal_id, p.type AS principal_type, p.is_disabled AS is_disabled, CONVERT(varchar(172), p.sid, 2) AS sid_hex, "
+        + "p.create_date AS create_date, l.is_policy_checked AS policy_checked, l.is_expiration_checked AS expiration_checked, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END) AS connect_denied, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.principal_id = p.principal_id AND t.usage = N'GRANT OR DENY') THEN 1 ELSE 0 END) AS is_own, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_role_members AS m JOIN sys.server_principals AS r ON r.principal_id = m.role_principal_id "
+        + "WHERE m.member_principal_id = p.principal_id AND r.name = N'sysadmin') THEN 1 ELSE 0 END) AS is_sysadmin, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.security_id = p.sid AND es.is_user_process = 1) END AS sessions, "
+        + "(SELECT COUNT(*) FROM sys.databases AS d WHERE d.owner_sid = p.sid) AS owned_databases, "
+        + "(SELECT COUNT(*) FROM sys.server_principals AS o WHERE o.owning_principal_id = p.principal_id) + (SELECT COUNT(*) FROM sys.endpoints AS e WHERE e.principal_id = p.principal_id) AS owned_server_objects, "
+        + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 0)) AS can_alter, "
+        + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'CONTROL SERVER'), 0)) AS can_control_server, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_principals AS x WHERE x.name = @new AND x.principal_id <> p.principal_id) THEN 1 ELSE 0 END) AS name_in_use "
+        + "FROM sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id "
+        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X');\n"
+        + "SELECT TOP (@take) d.name AS database_name FROM sys.databases AS d JOIN sys.server_principals AS p ON p.sid = d.owner_sid "
+        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY d.name;";
+
+    /// <summary>The sessions this backend's process (@pid) holds in a database, bounded by its own connections: the action keeps
+    /// those its pooled connections were given, which a cleared pool leaves for a moment before the server ends them. Without VIEW
+    /// SERVER STATE only this session is visible: none.</summary>
+    public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
+        + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -184,6 +257,10 @@ internal static partial class ActionSql
         "N'.'", "N'.sys.sp_executesql'", "N'.sys.sp_rename'", "N'OBJECT'", "N'SCHEMA'", "N'DATABASE'", "N'ALTER'", "N'CONTROL'", "N'VIEW SERVER STATE'", "N'ALTER ANY DATABASE'",
         "N'A name could not be quoted.'", "N'DROP TABLE '", "N'DROP VIEW '", "N'DROP PROCEDURE '", "N'DROP FUNCTION '", "N'DROP DATABASE '", "N'ALTER DATABASE '",
         "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
+        // The shared templates (critic A21).
+        "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
+        // The login preflight (Login).
+        "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -215,12 +292,16 @@ internal static partial class ActionSql
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
 
+    /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as every catalog lint refuses them.</summary>
+    private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
+
     /// <summary>Problems with one executable batch (empty when it passes): leftover format holes, a name parameter outside
     /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments.</summary>
     public static List<string> LintExecutable(string text, ActionTemplate template)
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
+        problems.AddRange(SecretUses(text));
         var bare = QuotedPlaceholder().Replace(text, "");
         if (Placeholder().IsMatch(bare)) problems.Add("uses a name parameter outside QUOTENAME or a procedure argument");
         // The database a batch runs in reaches T-SQL only as QUOTENAME(@db) + N'.sys.…'.
@@ -240,6 +321,7 @@ internal static partial class ActionSql
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
+        problems.AddRange(SecretUses(text));
         var bare = BuilderUse().Replace(text, "");
         foreach (Match used in Variable().Matches(bare))
             if (used.Value is "@db" or "@p1" or "@p2" or "@n1") problems.Add("uses " + used.Value + " outside QUOTENAME, CONVERT or the collation lookup");
@@ -278,6 +360,7 @@ internal static partial class ActionSql
     {
         var problems = new List<string>();
         if (text.Contains('{', StringComparison.Ordinal) || text.Contains('}', StringComparison.Ordinal)) problems.Add("has a format hole");
+        problems.AddRange(SecretUses(text));
         if (!text.Contains(Guard, StringComparison.Ordinal)) problems.Add("has no quoting guard");
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
         if (Variable().Matches(text.Replace("ISJSON(@design)", "", StringComparison.Ordinal).Replace("OPENJSON(@design)", "", StringComparison.Ordinal)).Any(used => used.Value == "@design"))
@@ -314,6 +397,7 @@ internal static partial class ActionSql
         var problems = new List<string>();
         var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal);
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        problems.AddRange(CatalogSql.SecretUses(text));
         if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
         if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
@@ -345,6 +429,8 @@ internal static partial class ActionSql
             yield return ("database band " + band, LintCatalog(Database, band, database: false));
         }
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
+        yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.

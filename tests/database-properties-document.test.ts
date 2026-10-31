@@ -20,7 +20,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const appData: ObjectRef = { kind: 'database', name: 'AppData' }
 const node = (object: ObjectRef = appData, connectionId = 'c1', id = 12): ExplorerMenuNode => ({ id, connectionId, ref: { type: 'object', object }, kind: 'database', label: object.name ?? '', lost: false })
 const settled = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setTimeout(resolve, 0)) }
-const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } }
+const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done', title: 'Set the options' }], messages: [], elapsedMs: 1 } }
 const inUse = { code: 'IN_USE', message: 'Other connections use the database.', retryable: true } as const
 /** Connects `id` to `server`, as the Connect dialog does (a new connection, even to a server connected before). */
 const connectionsAdd = (connections: ConnectionService, id: string, server: string) => connections.add({ ...connectionInfo(id), server }, connectionOptions)
@@ -154,7 +154,7 @@ describe('Database Properties as a document', () => {
     const requestId = (api.executeObjectAction.mock.calls[0][0] as ActionRequest).requestId
     properties.stop(id)
     expect(api.cancelObjectActions.mock.calls.at(-1)).toEqual([[requestId]])
-    execute.resolve({ ok: true, value: { steps: [{ status: 'cancelled' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'Stopped.', retryable: true } } })
+    execute.resolve({ ok: true, value: { steps: [{ status: 'cancelled', title: 'Set the options' }], messages: [], elapsedMs: 1, error: { code: 'CANCELLED', message: 'Stopped.', retryable: true } } })
     expect(await applied).toBe(false)
     expect(state()).toMatchObject({ phase: 'ready', error: { code: 'CANCELLED' }, stale: false, changed: true })
     // The server goes while the next Apply runs: whether it ran is unknown, so fields lock until the database is read again.

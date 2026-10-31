@@ -28,10 +28,10 @@ internal static class DatabasePropertiesChecks
         var options = Catalog.DatabaseOptions.Values.ToList();
         var scoped = Catalog.ScopedConfigurations.Values.ToList();
         var orders = options.Concat(scoped).Select(option => option.SmoOrder).ToList();
-        check(ActionsCatalog.Version == 2 && options.Count == 46 && scoped.Count == 8 && orders.Distinct().Count() == orders.Count && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"])
+        check(ActionsCatalog.Version == 3 && options.Count == 46 && scoped.Count == 8 && orders.Distinct().Count() == orders.Count && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"])
             && Catalog.ActionOf("databaseProperties") == "properties" && Catalog.ActionOf("deleteObject") == "delete" && Catalog.ServesSystemObjects("properties") && !Catalog.ServesSystemObjects("delete")
             && Catalog.CompatibilityLevels.SequenceEqual([100, 110, 120, 130, 140, 150, 160, 170]) && Catalog.OwnerNotOn.SequenceEqual(["master", "model", "tempdb"]),
-            "the embedded actions catalogue is version 2 with Database Properties' dialog, its 46 options and 8 scoped configurations in one strict SMO order (" + options.Count + ", " + scoped.Count + ")");
+            "the embedded actions catalogue is version 3 with Database Properties' dialog, its 46 options and 8 scoped configurations in one strict SMO order (" + options.Count + ", " + scoped.Count + ")");
         check(options.Concat(scoped).Where(option => option.Settable).All(option => option.Sql is not null && (option.Sql.Kind != "set" || option.Sql.Seconds == true || option.Sql.Tokens!.Keys.ToHashSet().SetEquals(option.Tokens!)))
             && options.All(option => DatabaseProperties.Token(option.Key, true) is not null),
             "every settable option says how it is written, a SET option for each of its tokens, and the describe reads every option");
@@ -234,6 +234,8 @@ internal static class DatabasePropertiesChecks
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId) => throw new InvalidOperationException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => Task.CompletedTask;
         public bool ClearPoolsFor(string connectionId, string database) => false;
+        public bool FreeDatabase(string connectionId, string database) => false;
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

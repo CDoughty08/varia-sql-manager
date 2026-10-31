@@ -4,7 +4,7 @@ import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
-import { actionDescribeSchema, actionRequestSchema } from '../shared/actions/schema.ts'
+import { actionDescribeSchema, actionExecuteResultSchema, actionRequestSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 
@@ -36,7 +36,7 @@ export const requestSchemas = {
   'explorer.children': explorerChildrenParamsSchema,
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
-  'actions.script': actionRequestSchema,
+  'actions.script': actionScriptRequestSchema,
   'actions.execute': actionRequestSchema,
   'ssis.describe': ssisDescribeSchema,
   'ssis.execute': ssisExecuteSchema,
@@ -49,7 +49,9 @@ export const requestSchemas = {
 const principal = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 /** Answers main checks before the renderer sees them: the backend is trusted, but these come from native code. */
 export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
-  'connections.identity': z.object({ principal: principal.optional() }).strict()
+  'connections.identity': z.object({ principal: principal.optional() }).strict(),
+  // Steps carry SQL Server's text and names: bounded here as in C# (ActionSteps.Bound).
+  'actions.execute': actionExecuteResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {
