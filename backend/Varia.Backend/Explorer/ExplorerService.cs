@@ -235,8 +235,10 @@ internal sealed class ExplorerService : IDisposable
         var value = node.Ref.Object ?? node.Ref.Owner!;
         return 96 + 2L * (node.Label.Length + (node.Sublabel?.Length ?? 0) + (node.Detail?.Length ?? 0) + (value.Database?.Length ?? 0) + (value.Schema?.Length ?? 0)
             + (value.Name?.Length ?? 0) + (value.Parent is { } parent ? parent.Schema.Length + parent.Name.Length : 0) + (value.SsisFolder?.Length ?? 0)
-            + (value.SsisProject?.Length ?? 0));
+            + (value.SsisProject?.Length ?? 0)) + (node.Database is null ? 0 : DatabaseEstimate);
     }
+    /// <summary>A database row's runtime state on the wire: its four keys and small values.</summary>
+    internal const int DatabaseEstimate = 64;
 
     internal sealed record Values(string? ObjectSchema, string? ObjectName, CursorKey? Key, bool First, int Take, string? Name, string? Schema, string? Owner, DateTime? D1, DateTime? D2,
         string? SsisFolder, string? SsisProject, string? SsisCatalog = null);

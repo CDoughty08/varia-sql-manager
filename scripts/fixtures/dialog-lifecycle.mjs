@@ -3,12 +3,14 @@
 // open waits for it before its prompt, and drops the dead page's queued Script As save without showing it; a crash
 // while the page's Unsaved query prompt is open closes that prompt, and the crash prompt follows at once; a reload asks
 // first (Cancel keeps the page, Reload reloads it); a quit while a Script As File… waits behind Save Grid Results exits
-// once the dialogs are answered; and a quit while the reload prompt is open, answered Reload, still exits.
+// once the dialogs are answered; and a quit while the reload prompt is open, answered Reload, still exits. longRunRefusals
+// covers the long-run registry: a window close refused and a reload prompt naming the run while Create Catalog runs.
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { electron, expect } from './smoke.mjs'
-import { expandExplorerPath, explorerRow } from './explorer-tree.mjs'
-import { anyResultGrid, backendReady, editorTextbox, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
+import { actionsStubData, installActionsStub } from './actions-stub.mjs'
+import { expandExplorerPath, explorerRow, revealExplorerRow } from './explorer-tree.mjs'
+import { anyResultGrid, backendReady, editorTextbox, errorBanner, gridCell, lostServerRows, outputStatus, queryServer, toolbarButton } from './ui.mjs'
 
 const createScript = 'CREATE TABLE dbo.Orders (Id int);'
 const wait = ms => new Promise(done => setTimeout(done, ms))
@@ -18,11 +20,11 @@ const exists = path => access(path).then(() => true, () => false)
  *  released; other saves choose `path`; Restart is answered after 300 ms; the crash prompt Reload; the reload prompt
  *  `globalThis.variaReloadAnswer`; every other prompt its second button (Don't Save, Cancel). A message box titled in
  *  `hold` stays open until answer() or, as Electron's does, until its signal aborts it (it then answers its cancelId and
- *  is listed in `globalThis.variaAborted`). */
+ *  is listed in `globalThis.variaAborted`). Each message box's detail is kept in `globalThis.variaDetails`. */
 async function mockDialogs(application, path, hold = []) {
   await application.evaluate(({ BrowserWindow, dialog, ipcMain }, [filePath, held]) => {
     const log = globalThis.variaDialogs = [], { appendFileSync } = process.getBuiltinModule('node:fs')
-    const answers = globalThis.variaAnswers = {}, aborted = globalThis.variaAborted = []
+    const answers = globalThis.variaAnswers = {}, aborted = globalThis.variaAborted = [], details = globalThis.variaDetails = []
     if (!globalThis.variaObservingCommands) {
       globalThis.variaObservingCommands = true
       // Main's listener runs first. A rendered workbench can precede its command subscription's IPC, which main's
@@ -46,6 +48,7 @@ async function mockDialogs(application, path, hold = []) {
     })
     dialog.showOpenDialog = (_window, options) => track(options, async () => ({ canceled: true, filePaths: [] }))
     dialog.showMessageBox = (_window, options) => track(options, async () => {
+      details.push({ title: options.title, detail: options.detail })
       if (held.includes(options.title)) {
         return new Promise(resolve => {
           answers[options.title] = response => resolve({ response, checkboxChecked: false })
@@ -290,6 +293,63 @@ export async function dialogLifecycle(launchOptions) {
     if (!exited) await answer(application, 'Unsaved query', 1).catch(() => false)
     await expect.poll(() => exited, { timeout: 30000 }).toBe(true)
     expect((await readFile(dialogs + '.dialogs', 'utf8')).trim().split('\n')).toEqual(['Reload workbench', 'Unsaved query'])
+    expect(errors).toEqual([])
+  } finally { await run.cleanup() }
+}
+
+/**
+ * The long-run registry with Create Catalog as the run, on the object actions' stub server: while it runs, closing the
+ * window is refused with a banner naming it and its server, which the dialog repeats where nothing covers it, and the
+ * window stays; the reload prompt names it first;
+ * once Stop has ended it, the reload prompt no longer does. (Its modal dialog covers Disconnect and Restart, whose
+ * refusals tests/create-catalog-service.test.ts checks.)
+ */
+export async function longRunRefusals(launchOptions) {
+  const run = await launch(launchOptions, 'long-run')
+  try {
+    const { application, page, profile, errors } = run
+    await mockDialogs(application, join(profile, 'long-run'))
+    await application.evaluate(installActionsStub, actionsStubData())
+    await connect(page)
+    const catalogs = ['server-a', 'Integration Services Catalogs']
+    const createDialog = page.getByRole('dialog', { name: 'Create Catalog', exact: true })
+    // The tree may still be loading below the server, moving the row, so the right-click repeats until the folder's menu opens.
+    await expect(async () => {
+      await page.keyboard.press('Escape')
+      await (await revealExplorerRow(page, ...catalogs)).click({ button: 'right', force: true })
+      await page.getByRole('menu', { name: 'Object Explorer', exact: true }).getByRole('menuitem', { name: 'Create Catalog…', exact: true }).click({ force: true, timeout: 2000 })
+      await expect(createDialog).toBeVisible({ timeout: 2000 })
+    }).toPass()
+    await createDialog.getByLabel('Enable CLR Integration', { exact: true }).check()
+    // The stub holds a create with this password until its Stop arrives.
+    await createDialog.getByLabel('Password', { exact: true }).fill('Held')
+    await createDialog.getByLabel('Retype Password', { exact: true }).fill('Held')
+    await createDialog.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(createDialog.getByRole('status')).toContainText('Creating the catalog')
+    const closing = 'Create Catalog is running on server-a, and closing the window would stop it part way. Stop it, or wait for it to finish, then close the window.'
+    await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
+    await expect(errorBanner(page)).toContainText(closing)
+    // The dialog covers the banner, so it says so too, where nothing covers it.
+    const refusal = createDialog.getByRole('alert')
+    await expect(refusal).toHaveText(closing)
+    expect(await refusal.evaluate(element => {
+      const box = element.getBoundingClientRect()
+      return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)) && box.top >= 0 && box.bottom <= innerHeight
+    }), 'the refusal is on top and in the window').toBe(true)
+    expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
+    const reloadDetails = () => application.evaluate(() => globalThis.variaDetails.filter(entry => entry.title === 'Reload workbench').map(entry => entry.detail))
+    const reload = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())
+    await reload()
+    await expect.poll(async () => (await reloadDetails()).length).toBe(1)
+    expect((await reloadDetails())[0]).toMatch(/^Create Catalog is running on server-a: reloading stops it part way.(\n\n|$)/)
+    await expect(createDialog.getByRole('status')).toContainText('Creating the catalog')
+    await createDialog.getByRole('button', { name: 'Stop', exact: true }).click()
+    await expect(createDialog.getByRole('status').filter({ hasText: 'Create Catalog was stopped' })).toBeVisible()
+    await createDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(createDialog).toHaveCount(0)
+    await reload()
+    await expect.poll(async () => (await reloadDetails()).length).toBe(2)
+    expect((await reloadDetails())[1] ?? '').not.toContain('Create Catalog')
     expect(errors).toEqual([])
   } finally { await run.cleanup() }
 }

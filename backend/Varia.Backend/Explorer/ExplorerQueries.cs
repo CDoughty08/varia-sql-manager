@@ -173,7 +173,7 @@ internal static class ExplorerQueries
             var kind = subtype ?? (row.B(9) ? "snapshot" : null);
             return Node(row.Context, new ObjectRefDto("database", Name: row.Key(0)), row.Key(0), kind, sublabel,
                 ExplorerLabels.Join([Owner(row.S(8)), "Compatibility level " + row.I(6).ToString(CultureInfo.InvariantCulture), row.S(7) is { } model ? "Recovery model " + model : null]),
-                status, row.D(5), hasChildren: hasChildren);
+                status, row.D(5), hasChildren: hasChildren) with { Database = new(row.I(0), row.I(1), row.B(2), row.B(3)) };
         }
     };
 

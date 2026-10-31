@@ -1,6 +1,6 @@
 import type { TargetKeys } from '../../../shared/commands/context-keys'
 import type { ContextMenuId } from '../../../shared/commands/menus'
-import { folderSpecs } from '../../../shared/explorer/catalog.ts'
+import { folderSpecs, nodeStatuses } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerTarget } from '../../../shared/explorer/refs.ts'
 import type { PaneId } from '../../../shared/layouts'
 import { onUnexpectedError } from '../core/errors'
@@ -8,9 +8,10 @@ import type { CommandArgs } from '../core/types'
 import { gridAnchor } from '../grid/anchor'
 
 /**
- * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`), its
- * node id in `ExplorerService`, whether it is a server whose connection was lost with its backend generation, whether it
- * is a folder with a filter, and whether it is a folder with names to copy (a fully loaded Columns folder).
+ * The Object Explorer node a context menu is for, captured when it opened: what the node is (`ExplorerTarget`: its status,
+ * a database's runtime state and its server's engine among it), its node id in `ExplorerService`, whether it is a server
+ * whose connection was lost with its backend generation, whether it is a folder with a filter, and whether it is a folder
+ * with names to copy (a fully loaded Columns folder).
  */
 export interface ExplorerMenuNode extends ExplorerTarget { readonly id: number; readonly lost: boolean; readonly filtered?: boolean; readonly insertable?: boolean }
 /** A text field's state when its menu opened: what Cut, Copy, Paste, Delete, Select All, Undo, and Redo can do. */
@@ -72,6 +73,9 @@ export function targetKeys(target: MenuTarget | undefined): TargetKeys {
     explorerFolderFilterable: target?.kind === 'explorer' && filterable(target.node),
     explorerFolderFiltered: target?.kind === 'explorer' && !!target.node?.filtered,
     explorerFolderInsertable: target?.kind === 'explorer' && target.node?.kind === 'folder' && !!target.node.insertable,
+    explorerNodeStatus: target?.kind === 'explorer' && target.node?.status && (nodeStatuses as readonly string[]).includes(target.node.status) ? target.node.status : '',
+    explorerServerEngine: target?.kind === 'explorer' ? target.node?.engine ?? '' : '',
+    explorerServerLinux: target?.kind === 'explorer' && !!target.node?.linux,
     outputView: target?.kind === 'output' ? target.view : '',
     pane: target?.kind === 'dockTab' ? target.pane : '',
     paneFloating: target?.kind === 'dockTab' && target.floating

@@ -167,6 +167,13 @@ export const part = {
   connectionScroll: '.connection-scroll',
   environmentPreview: '.environment-preview',
   optionsNote: '.options-note',
+  // Object dialogs (Delete Object): the column beside the page list, the page shown in it, and a run's Steps panel
+  objectDialogMain: '.object-dialog-main',
+  objectDialogPage: '.object-dialog-page:not([hidden])',
+  objectDialogSteps: '.object-dialog-steps',
+  objectDialogCaption: '.object-dialog-caption',
+  stepList: '.step-list',
+  stepListText: '.step-list-text',
   optionsDescription: '.options-description',
   optionsForm: '.options-form',
   optionsPage: '.options-page',
@@ -458,6 +465,28 @@ export const connectOutcome = dialog => dialog.locator(part.connectOutcome)
 export const objectDialogConnection = dialog => dialog.getByRole('region', { name: 'Connection', exact: true })
 export const objectDialogProgress = dialog => dialog.getByRole('region', { name: 'Progress', exact: true }).getByRole('status')
 export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('listitem')
+/** An object dialog's page tabs, where the dialog is narrow ("Select a page" is then a tablist), and the page it shows. */
+export const objectDialogTabs = dialog => dialog.getByRole('tablist', { name: 'Select a page', exact: true }).getByRole('tab')
+export const objectDialogPage = dialog => dialog.locator(part.objectDialogPage)
+/**
+ * For layout checks: puts a Steps panel of `count` done steps, marked up as StepsPanel draws one, above the dialog's page
+ * (no modal dialog has steps yet), and returns a function that removes it. Remove it before the dialog renders again.
+ */
+export async function addObjectDialogSteps(dialog, count) {
+  await dialog.evaluate((form, [steps, selectors]) => {
+    const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text) node.textContent = text; return node }
+    const section = element('section', selectors.steps)
+    section.dataset.smokeSteps = ''
+    section.setAttribute('aria-labelledby', 'smoke-steps-caption')
+    const caption = section.appendChild(element('div', selectors.caption, 'Steps'))
+    caption.id = 'smoke-steps-caption'
+    const list = section.appendChild(element('ol', selectors.list))
+    for (let index = 0; index < steps; index++) list.appendChild(element('li')).appendChild(element('span', selectors.text, `Step ${index + 1} of a long run`))
+    form.querySelector(selectors.main).insertBefore(section, form.querySelector(selectors.page))
+  }, [count, Object.fromEntries(Object.entries({ main: part.objectDialogMain, page: part.objectDialogPage, steps: part.objectDialogSteps, caption: part.objectDialogCaption, list: part.stepList, text: part.stepListText })
+    .map(([key, selector]) => [key, key === 'main' || key === 'page' ? selector : selector.slice(1)]))])
+  return () => dialog.evaluate(form => form.querySelector('[data-smoke-steps]')?.remove())
+}
 /** The Options dialog's page heading (Query Execution › SQL Server › General), notes, form and description pane. */
 export const optionsHeading = dialog => dialog.getByRole('heading', { level: 3 })
 export const optionsNotes = dialog => dialog.locator(part.optionsNote)

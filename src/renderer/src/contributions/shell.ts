@@ -62,7 +62,7 @@ const onPane = (action: (pane: PaneId) => void) => (args?: CommandArgs) => { con
  * main's exit flow (which waits for that subscription) always finds a `window.close` handler. The panel commands act on
  * the panel whose tab menu runs them.
  */
-export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, explorer, shellOptions, ssisCatalog }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'explorer' | 'shellOptions' | 'ssisCatalog'>, host: ShellHost): Disposable {
+export function shellContribution({ commands, documents, files, quickInput, connections, queries, panes, explorer, shellOptions, longRuns }: Pick<Workbench, 'commands' | 'documents' | 'files' | 'quickInput' | 'connections' | 'queries' | 'panes' | 'explorer' | 'shellOptions' | 'longRuns'>, host: ShellHost): Disposable {
   const located = (args: CommandArgs | undefined, location: PaneLocation) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) === location }
   const open = (args: CommandArgs | undefined) => { const pane = paneOf(args); return !!pane && host.paneLocation(pane) !== 'closed' }
   const dockAt = (side: DockSide) => ({ when: open, run: onPane(pane => host.dockPaneAt(pane, side)) })
@@ -74,12 +74,15 @@ export function shellContribution({ commands, documents, files, quickInput, conn
     if (!node) return undefined
     return node.kind === 'server' && node.lost && connections.get(node.connectionId)?.lost ? node : null
   }
-  /** Why a server cannot be disconnected now: a query running on it, or a document's DDL (an Apply, a Save) that a disconnect would cut short. */
-  const disconnectRefusal = (id: string) => queries.isConnectionRunning(id) ? runningOnServer : documents.connectionBusy(id)
+  /**
+   * Why a server cannot be disconnected now: a query running on it, a long run on it (a restore, Create Catalog), or a
+   * document's DDL (an Apply, a Save) that a disconnect would cut short.
+   */
+  const disconnectRefusal = (id: string) => queries.isConnectionRunning(id) ? runningOnServer : longRuns.disconnectRefusal(id) ?? documents.connectionBusy(id)
   const registrations = [
     // Remembering the layout is best-effort; a failed preferences write must never prevent exit.
-    // A running Create Catalog would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
-    commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => ssisCatalog.closeRefusal()) }),
+    // A long run (Create Catalog, a restore) would be stopped part way by the close (its request is cancelled as the page unloads), so the close is refused.
+    commands.register('window.close', { run: () => files.closeWindow(async () => { await host.flushLayout().catch(() => {}) }, () => longRuns.closeRefusal()) }),
     // Focus moves there too, so the F5 that follows refreshes Object Explorer rather than executing the query.
     commands.register('window.explorer', { run: () => host.reveal('explorer', { focus: true }) }),
     // The box asks for focus itself once shown, as revealing a hidden pane mounts it on a later render.

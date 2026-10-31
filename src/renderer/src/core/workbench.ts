@@ -51,6 +51,7 @@ import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
+import { LongRunService } from '../services/long-runs'
 import { actionsContribution } from '../contributions/actions'
 import { designerContribution } from '../contributions/designer'
 import { notificationsContribution } from '../contributions/notifications'
@@ -139,6 +140,8 @@ export interface Workbench extends Disposable {
   readonly dialogs: ObjectDialogService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
+  /** The long runs (Create Catalog, later a restore): they refuse a window close, a Disconnect of their server and Restart. */
+  readonly longRuns: LongRunService
   /** The table designers (New › Table…): their designs, saves and prompts. */
   readonly designers: TableDesignerService
   /** The SSIS Catalog's properties documents (Folder, Project, Package and Environment Properties). */
@@ -209,7 +212,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
-  const ssisCatalog = new CreateCatalogService({ api, connections, explorer })
+  const longRuns = new LongRunService({ api })
+  const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
@@ -318,6 +322,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     dialogs,
     ssisCatalog,
+    longRuns,
     designers,
     ssisProperties,
     properties,
@@ -364,6 +369,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       actions.dispose()
       dialogs.dispose()
       ssisCatalog.dispose()
+      longRuns.dispose()
       connections.dispose()
       editorOptions.dispose()
       shellOptions.dispose()

@@ -48,6 +48,8 @@ import { userInfo } from 'node:os'
 import { parseWorkspaceLayout } from '../shared/layouts'
 import { sessionPrompt, sessionPromptRequestSchema } from '../shared/sessions'
 import { confirmOpenConnectionsSchema, openConnectionsAnswer, openConnectionsBox } from './open-connections'
+import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from './action-prompts'
+import type { LongRunState } from '../shared/long-runs.ts'
 import type { ApiResult, OpenedFiles, OpenSqlFile, QueryResult, RecoveredDocument, ReloadAnswer, RpcMethod, RpcMethods } from '../shared/contracts'
 import { memoryEventSchema } from '../shared/ipc/port-messages'
 import { explorerCancelParamsSchema } from '../shared/explorer/schema.ts'
@@ -120,6 +122,8 @@ function lossDetailsFor(generation: number) {
 /** A command's title with its setting filled in (Select Top <n> Rows), from validated settings only. */
 const menuTitle = (id: CommandId, title: string) => commandTitle(id, settings.current(), title)
 // The palette's theme picker shows themes before one is chosen; the window chrome follows the shown theme.
+// The page's long runs (a restore, Create Catalog), which the reload prompt names; a new page starts with none.
+let longRuns: LongRunState = noLongRuns
 let previewTheme: ResolvedTheme | null = null
 let previewSeq = 0
 // Renderer lifecycle: exit confirmation needs a live workbench that has subscribed to commands.
@@ -195,6 +199,7 @@ function resetRendererState(relaunch = true): void {
   rendererReady = false
   reloadApproved = false
   rendererGeneration++
+  longRuns = noLongRuns
   oneDialog.reset()
   menuBridge.reset()
   contextMenus.close()
@@ -310,16 +315,17 @@ function requestClose(intent: CloseIntent): void {
   command('window.close')
 }
 
-/** Restarting closes every connection and rolls back open transactions, so main asks first when there are any. The
- *  connections are counted when the prompt's turn comes (another dialog may be open first), and a request made while
- *  one is pending shares its answer, so a double-click restarts once. */
+/** Restarting closes every connection and rolls back open transactions, and stops a long run part way (the page lets
+ *  Restart through while the backend does not answer), so main asks first when there are any, naming the run. They are
+ *  counted when the prompt's turn comes (another dialog may be open first), and a request made while one is pending
+ *  shares its answer, so a double-click restarts once. */
 function restartBackend(): Promise<boolean> {
   restarting ??= (async () => {
     try {
-      if (backend.connectionCount() > 0) {
+      if (backend.connectionCount() > 0 || longRuns.total > 0) {
         const { response } = await pageDialog((window, signal) => {
           const count = backend.connectionCount()
-          return count === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: count === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : `All ${count} connections close and uncommitted transactions are rolled back.`, buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
+          return count === 0 && longRuns.total === 0 ? Promise.resolve({ response: 0 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Restart SQL backend', message: 'Restart the SQL backend?', detail: restartDetail(longRuns, count), buttons: ['Restart', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal })
         }, { response: 1 }, true)
         if (response !== 0) return false
       }
@@ -472,7 +478,7 @@ function createWindow(place: { bounds?: Rectangle; maximized?: boolean } = {}): 
   contents.on('will-prevent-unload', event => {
     if (closeApproved || reloadApproved) { reloadApproved = false; event.preventDefault(); return }
     const generation = rendererGeneration
-    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: lossDetailsFor(pageGeneration).reload, buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
+    void oneDialog(signal => window.isDestroyed() ? Promise.resolve({ response: 1 }) : dialog.showMessageBox(window, { type: 'warning', title: 'Reload workbench', message: 'Reload Varia SQL Manager?', detail: reloadDetail(longRuns, lossDetailsFor(pageGeneration).reload), buttons: ['Reload', 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal }),
       { response: 1 }, true).then(({ response }) => {
       if (response !== 0 || window.isDestroyed() || generation !== rendererGeneration) return
       reloadApproved = true
@@ -830,6 +836,15 @@ app.whenReady().then(async () => {
     const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, { type: 'warning', title: prompt.title, message: prompt.message, detail: prompt.detail, buttons: prompt.buttons.map(button => button.label), defaultId: prompt.defaultId, cancelId: prompt.cancelId, noLink: true, signal }), { response: prompt.cancelId, checkboxChecked: false }, true)
     return prompt.buttons[response]?.answer ?? 'cancel'
   })
+  // An object action's confirmation (Rename Database's Open Connections, Disable Login): main writes the box from the
+  // catalogue and validated facts; a page that reloads or crashes while it is open gets the prompt's cancel answer.
+  handle('varia:confirm-action', async value => {
+    const box = confirmActionBox(value)
+    const { response } = await pageDialog((window, signal) => dialog.showMessageBox(window, actionMessageBox(box, signal)), { response: box.cancelId, checkboxChecked: false }, true)
+    return actionPromptAnswer(box, response)
+  })
+  // The page's long runs, which the reload prompt names. A reload or crash resets them (resetRendererState).
+  handle('varia:long-runs', value => { longRuns = parseLongRuns(value) })
   // Database Properties' Open Connections prompt; a page that reloads or crashes while it is open gets No.
   handle('varia:confirm-open-connections', async value => {
     confirmOpenConnectionsSchema.parse(value)

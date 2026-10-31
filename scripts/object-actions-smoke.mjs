@@ -5,8 +5,8 @@ import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
-  backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogProgress, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -184,6 +184,47 @@ try {
   await expect(objectDialogConnection(dialog()).locator('dd')).toHaveText(['server-a', 'sa'])
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['dbo.Lines', 'Table', 'dbo', '', ''])
+  // Where the dialog is narrower than 720 px (zoomed in on a 1024 × 768 window, a viewport under 768 CSS px), "Select a
+  // page" is a row of tabs, the Connection and Progress boxes wrap onto a row of their own inside the dialog, and the
+  // page keeps its room; forced colours mark the selected tab alone. Back at 100 %, the list returns, and a long run's
+  // steps scroll within the column, above OK.
+  const sizeBefore = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  const zoomBefore = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomFactor())
+  const zoom = factor => application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(value), factor)
+  await resizeWindow(application, page, 1024, 768)
+  await zoom(1.5)
+  await expect(objectDialogTabs(dialog())).toHaveCount(1)
+  await expect(objectDialogTabs(dialog()).first()).toHaveAttribute('aria-selected', 'true')
+  const narrowFrame = async () => {
+    const boxes = await Promise.all([dialog(), objectDialogTabs(dialog()).first(), objectDialogConnection(dialog()), dialog().getByRole('region', { name: 'Progress', exact: true }), dialog().getByRole('tabpanel')].map(locator => locator.boundingBox()))
+    if (boxes.some(box => !box)) return 'not laid out'
+    const [form, tab, connection, progress, shown] = boxes
+    const inside = box => box.width >= 100 && box.x >= form.x - 1 && box.x + box.width <= form.x + form.width + 1 && box.y >= tab.y + tab.height - 1 && box.y + box.height <= form.y + form.height
+    return { viewport: await page.evaluate(() => innerWidth < 768), tab: tab.height <= 40, boxes: inside(connection) && inside(progress), page: shown.height >= form.height * 0.3 }
+  }
+  await expect.poll(narrowFrame, 'the narrow frame: a short tab row, both boxes inside the dialog below it, and room for the page').toEqual({ viewport: true, tab: true, boxes: true, page: true })
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-narrow-dark.png') })
+  await page.emulateMedia({ forcedColors: 'active' })
+  // A second, unselected tab beside the selected one (Delete Object has one page): only the selected one has a bar.
+  const bars = await objectDialogTabs(dialog()).first().evaluate(tab => {
+    const other = tab.cloneNode(true)
+    other.setAttribute('aria-selected', 'false')
+    tab.after(other)
+    const colors = [tab, other].map(node => getComputedStyle(node).borderBottomColor)
+    other.remove()
+    return colors
+  })
+  await page.emulateMedia({ forcedColors: null })
+  expect(bars[0], 'forced colours: the selected tab\'s bar differs from an unselected tab\'s').not.toBe(bars[1])
+  await zoom(zoomBefore)
+  await expect(dialog().getByRole('navigation', { name: 'Select a page' }).getByRole('button', { name: 'General' })).toHaveAttribute('aria-current', 'page')
+  await expect(objectDialogTabs(dialog())).toHaveCount(0)
+  const removeSteps = await addObjectDialogSteps(dialog(), 40)
+  const [stepsBox, okBox, pageBox] = await Promise.all([dialog().getByRole('region', { name: 'Steps', exact: true }), dialog().getByRole('button', { name: 'OK', exact: true }), objectDialogPage(dialog())].map(locator => locator.boundingBox()))
+  await removeSteps()
+  expect(stepsBox.y + stepsBox.height, 'forty steps end above OK').toBeLessThanOrEqual(okBox.y)
+  expect(pageBox.height, 'the page keeps its room under forty steps').toBeGreaterThan(60)
+  await resizeWindow(application, page, ...sizeBefore)
   await expect(objectDialogWarnings(dialog())).toHaveText(['Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.'])
   // Script › Script Action to Clipboard puts the action's script there; the dialog stays open, as in SSMS.
   await dialog().getByRole('button', { name: 'Script options', exact: true }).click()

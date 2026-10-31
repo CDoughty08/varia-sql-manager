@@ -367,7 +367,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
         var probed = profile.ProductVersion is not null;
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
-            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
+            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null);
     }
 
     /// <summary>Records a connected profile under a new id: its settings, the server's profile, and the database its session

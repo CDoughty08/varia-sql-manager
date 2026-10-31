@@ -1,7 +1,7 @@
 import type { Platform } from './keybindings'
 import { comparisons, parseWhen, referencedKeys, type ContextRecord } from './when'
 import { actionContextKey, objectActions, objectActionSpecs, type ActionContextKey } from '../actions/catalog.ts'
-import { folderIds, nodeKinds } from '../explorer/catalog.ts'
+import { folderIds, nodeKinds, nodeStatuses, serverEngines } from '../explorer/catalog.ts'
 import { scriptAsTitleKeys, scriptVerbContextKey, scriptVerbs, scriptVerbSpecs, type ScriptVerbContextKey } from '../scripting/catalog.ts'
 import { ssisVerbContextKey, ssisVerbs, ssisVerbSpecs, type SsisVerbContextKey } from '../ssis/catalog.ts'
 
@@ -107,6 +107,15 @@ export const contextKeys = {
   explorerSelectionFilterable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is a folder that Filter Settings can filter.' },
   explorerSelectionFiltered: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer folder has a filter.' },
   explorerSelectionInsertable: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node has a name to copy: a server, an object, or a fully loaded Columns folder.' },
+  explorerSelectionStatus: {
+    type: 'enum', scope: 'state', values: ['', ...nodeStatuses],
+    description: "The selected Object Explorer node's status badge from `src/shared/explorer/catalog.ts` ('disabled' for a disabled login, 'unavailable' for an offline database), or '' for none. Keep it out of keybinding `when` clauses."
+  },
+  explorerSelectionServerEngine: {
+    type: 'enum', scope: 'state', values: ['', ...serverEngines],
+    description: "The kind of server the selected Object Explorer node is on: 'box' (SQL Server), 'managedInstance' or 'cloud' (Azure SQL Database and the other cloud editions), or '' with no selection. Keep it out of keybinding `when` clauses."
+  },
+  explorerSelectionServerLinux: { type: 'boolean', scope: 'state', description: 'The selected Object Explorer node is on SQL Server on Linux.' },
   explorerScriptTitle: {
     type: 'enum', scope: 'state', values: ['', ...scriptAsTitleKeys],
     description: "The selected Object Explorer node's Script submenu title key from `src/shared/scripting/catalog.ts` ('table' shows Script Table as), or '' when it has none. Keep it out of keybinding `when` clauses."
@@ -130,6 +139,15 @@ export const contextKeys = {
     description: "The id of the Object Explorer folder the menu is for, from `src/shared/explorer/catalog.ts` ('tables' offers New › Table…), or '' for anything else."
   },
   explorerFolderInsertable: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a Columns folder whose columns have all loaded, so Copy Name copies their list.' },
+  explorerNodeStatus: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...nodeStatuses],
+    description: "The status badge of the Object Explorer node the menu is for ('disabled', 'unavailable', 'readOnly' or 'noAccess'), or '' for none."
+  },
+  explorerServerEngine: {
+    type: 'enum', scope: 'target', menu: 'explorer.context', values: ['', ...serverEngines],
+    description: "The kind of server the Object Explorer node the menu is for is on: 'box', 'managedInstance' or 'cloud', or '' for the empty area."
+  },
+  explorerServerLinux: { type: 'boolean', scope: 'target', menu: 'explorer.context', description: 'The menu is for a node on SQL Server on Linux.' },
   outputView: { type: 'enum', scope: 'target', menu: 'output.context', values: ['grid', 'messages', ''], description: 'The Query Output view the menu is for: a results grid or the messages.' },
   pane: { type: 'enum', scope: 'target', menu: 'dockTab.context', values: ['explorer', 'editor', 'output', ''], description: "The panel the menu is for (from its tab or its ⋯ button): Object Explorer, the query editor, or Query Output." },
   paneFloating: { type: 'boolean', scope: 'target', menu: 'dockTab.context', description: 'The panel the menu is for is floating.' }

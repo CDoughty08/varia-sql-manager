@@ -5,32 +5,37 @@ import { contextKeyNames, contextKeys, contextKeyValues, contextRecord, isContex
 import { defaultRules, platforms, resolveKeybinding, specForPlatform, type Platform, type ResolvedRule } from '../src/shared/commands/keybindings'
 import { assignMnemonics, buildMenuModel, contextMenuIds, maxSubmenuDepth, menubarIds, menuIds, menuRoots, menuTitle, mnemonicIndex, submenuIds, submenus, type MenuId } from '../src/shared/commands/menus'
 import { evaluateWhen, parseWhen, referencedKeys } from '../src/shared/commands/when'
-import { actionContextValues, actionMenuState } from '../src/shared/actions/catalog'
+import { actionContextValues, actionMenuState, actionStatuses } from '../src/shared/actions/catalog'
 import { ssisVerbContextKey, ssisVerbContextValues, ssisVerbMenuState, ssisVerbs } from '../src/shared/ssis/catalog'
 import { themeMenuModel } from '../src/shared/theme/menu'
 import type { KeybindingSpec } from '../src/shared/commands/catalog'
 import { isIconId } from '../src/shared/icons'
 import type { CommandId as RendererCommandId } from '../src/renderer/src/core/types'
 import { workbenchFixture } from './fixtures/workbench'
-import { folderIds, kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
+import { folderIds, kindSpecs, nodeKinds, nodeStatuses, serverEngines } from '../src/shared/explorer/catalog'
 import { noExplorerContext } from '../src/renderer/src/explorer/ExplorerService'
 import { scriptAsTitleKeys, scriptCommandIds, scriptVerbContextKey, scriptVerbs } from '../src/shared/scripting/catalog'
 
 const rule = (command: CommandId, spec: KeybindingSpec, platform: Platform = 'win32') => resolveKeybinding(command, spec, platform)!
 const kinds = (rules: ResolvedRule[], platform: Platform = 'win32') => findConflicts(rules, platform).map(conflict => [conflict.kind, conflict.chord, ...conflict.commands])
 
-/** Object Explorer's selection keys for each kind of node its menu can open on, as ExplorerService publishes them. */
+/**
+ * Object Explorer's selection keys for each kind of node its menu can open on, as ExplorerService publishes them: every
+ * subtype, with no status and each status the kind's actions change with, on each kind of server.
+ */
 const explorerSelections: Partial<ContextKeys>[] = [
-  ...nodeKinds.flatMap(kind => [undefined, ...kindSpecs[kind].subtypes ?? []].map(subtype => ({
-    ...noExplorerContext, explorerNode: kind, explorerHasSelection: true, explorerSelectionKind: kind, ...actionContextValues(actionMenuState({ kind, subtype })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
-  }))),
-  { ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder' },
+  ...nodeKinds.flatMap(kind => [undefined, ...kindSpecs[kind].subtypes ?? []].flatMap(subtype => [undefined, ...actionStatuses(kind)].flatMap(status => serverEngines.map((engine): Partial<ContextKeys> => ({
+    ...noExplorerContext, explorerNode: kind, explorerHasSelection: true, explorerSelectionKind: kind, explorerNodeStatus: status ?? '', explorerSelectionStatus: status ?? '',
+    explorerServerEngine: engine, explorerSelectionServerEngine: engine, ...actionContextValues(actionMenuState({ kind, subtype, status, engine })), ...ssisVerbContextValues(ssisVerbMenuState(kind))
+  }))))),
+  ...serverEngines.map((engine): Partial<ContextKeys> => ({ ...noExplorerContext, explorerNode: 'folder', explorerHasSelection: true, explorerSelectionKind: 'folder', explorerServerEngine: engine, explorerSelectionServerEngine: engine })),
   { ...noExplorerContext, explorerNode: 'background' }
 ]
 /** Whether two placements' `when` clauses can both hold: for Object Explorer's menu, on some node, with any other keys. */
 function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean {
   const asts = clauses.flatMap(clause => clause === undefined ? [] : [parseWhen(clause)])
-  for (const selection of menu === 'explorer.context' ? explorerSelections : [{}]) {
+  // Object Explorer's submenus (New, Tasks, Script … as) open on the same node as its menu.
+  for (const selection of menuRoots(menu).includes('explorer.context') ? explorerSelections : [{}]) {
     const free = [...new Set(asts.flatMap(referencedKeys))].filter(key => !Object.hasOwn(selection, key)) as ContextKey[]
     if (free.length > 12) throw new Error(`${menu}: too many keys to enumerate (${free.join(', ')})`)
     const search = (index: number, values: Record<string, boolean | string>): boolean => index === free.length
@@ -212,7 +217,10 @@ describe('context keys', () => {
     expect(record).toMatchObject({ isMac: true, isWindows: false, isLinux: false, queryRunning: true, activePanel: 'explorer', editorFocus: false })
     expect(contextRecord('win32')).toMatchObject({ isWindows: true, activePanel: '', hasActiveDocument: false, explorerNode: '', outputView: '', paneFloating: false })
     expect(contextRecord('linux', { explorerNode: 'table', paneFloating: true })).toMatchObject({ explorerNode: 'table', outputView: '', paneFloating: true })
-    expect(keysOfScope('target')).toEqual(['explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'outputView', 'pane', 'paneFloating'])
+    expect(keysOfScope('target')).toEqual([
+      'explorerNode', 'explorerServerLost', 'explorerFolderFilterable', 'explorerFolderFiltered', 'explorerFolder', 'explorerFolderInsertable', 'explorerNodeStatus', 'explorerServerEngine', 'explorerServerLinux',
+      'outputView', 'pane', 'paneFloating'
+    ])
     expect(isContextKey('__proto__')).toBe(false)
     expect(isContextKey('constructor')).toBe(false)
   })
@@ -227,6 +235,8 @@ describe('context keys', () => {
   it('keep Object Explorer selection keys in step with the catalogue and out of keybinding conditions', () => {
     expect(contextKeys.explorerSelectionKind.values).toEqual(['', 'folder', ...nodeKinds])
     expect(contextKeys.explorerSelectionFolder.values).toEqual(['', ...folderIds])
+    for (const key of ['explorerSelectionStatus', 'explorerNodeStatus'] as const) expect(contextKeys[key].values).toEqual(['', ...nodeStatuses])
+    for (const key of ['explorerSelectionServerEngine', 'explorerServerEngine'] as const) expect(contextKeys[key].values).toEqual(['', ...serverEngines])
     // The SSIS verb keys (ssisVerb<Verb>) describe the selection too.
     const explorerKeys = contextKeyNames.filter(key => (key.startsWith('explorer') || key.startsWith('ssisVerb')) && contextKeys[key].scope === 'state')
     expect(explorerKeys.sort()).toEqual(Object.keys(noExplorerContext).sort())
