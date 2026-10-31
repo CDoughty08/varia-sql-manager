@@ -42,7 +42,8 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** The servers that offer it (absent: every one). On another, the item is hidden and the backend refuses the request. */
+  /** The servers that offer it (absent: every one). On another, the menu hides the item; the backend's own refusal of such a
+   *  request comes with its engine gate (W5-0b), which reads this list from actions-catalog.json. */
   readonly engines?: readonly ServerEngine[]
 }
 const actionSpecData = {
@@ -166,14 +167,24 @@ export interface ActionTarget {
 const noActions = Object.freeze(Object.fromEntries(objectActions.map(action => [action, '']))) as Readonly<Record<ObjectAction, ActionState>>
 /** Whether an action with these `engines` is offered on a server of `engine`; an unknown engine offers it. */
 export const offeredOnEngine = (engines: readonly ServerEngine[] | undefined, engine: ServerEngine | undefined): boolean => !engine || !engines || engines.includes(engine)
-/** Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). */
-export function actionMenuState(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> {
+/** What `actionMenuState` reads, for tests until the catalogue declares engines, overlays and database rules. */
+export interface ActionMenuSources {
+  readonly kinds?: { readonly [K in NodeKind]?: ActionKindSpec }
+  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> }
+  readonly rules?: readonly DatabaseActionRule[]
+}
+/**
+ * Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). The kind's row with its status
+ * overlay, narrowed for a database by its runtime state, then hidden on a server whose engine the action does not serve.
+ */
+export function actionMenuState(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Readonly<Record<ObjectAction, ActionState>> {
   if (!target || target.kind === 'folder') return noActions
   const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
-  const listed = actionRow(target.kind, target.subtype, status)
+  const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
   if (!listed) return noActions
-  const row = target.kind === 'database' ? databaseActionState(listed, target.database).row : listed
-  return Object.fromEntries(objectActions.map(action => [action, offeredOnEngine((objectActionSpecs[action] as ObjectActionSpec).engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
+  const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
+  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> } = sources.actions ?? objectActionSpecs
+  return Object.fromEntries(objectActions.map(action => [action, offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {

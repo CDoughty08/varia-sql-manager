@@ -259,8 +259,10 @@ describe('Create Catalog command', () => {
     expect(fixture.api.closeWindowCancelled).toHaveBeenCalledTimes(1)
     const run = { kind: 'createCatalog', server: 'server-a.example' } as const
     expect(fixture.files.getSnapshot().error).toBe(longRunMessages.close(run))
+    // The modal dialog covers the command banner, so it shows the refusal too.
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.close(run))
     expect(fixture.api.setLongRuns).toHaveBeenLastCalledWith({ runs: [run], total: 1 })
-    // Disconnect's server picker greys the server, naming the run.
+    // Disconnect's server picker greys the server, naming the run; asking it is no refusal for the dialog to show.
     const picker = async () => {
       await fixture.commands.execute('connection.disconnect', undefined, 'palette')
       const row = fixture.quickInput.getSnapshot().rows.find(item => item.item.id === 'server-a')?.item
@@ -268,9 +270,11 @@ describe('Create Catalog command', () => {
       return row
     }
     expect(await picker()).toMatchObject({ disabled: true, disabledHint: longRunMessages.stop(run) })
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.close(run))
     await fixture.commands.execute('backend.restart', undefined, 'menu')
     expect(fixture.api.restartBackend).not.toHaveBeenCalled()
     expect(fixture.commands.getSnapshot().error).toBe(longRunMessages.stop(run))
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.stop(run))
     expect(fixture.api.cancelSsis).not.toHaveBeenCalled()
     answer.resolve(created)
     await running
@@ -280,6 +284,29 @@ describe('Create Catalog command', () => {
     expect(fixture.api.closeWindow).toHaveBeenCalledOnce()
     await fixture.commands.execute('backend.restart', undefined, 'menu')
     expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+  })
+  it('lets Restart through while the backend does not answer, as the banner\'s Restart now is then the only way out of a run that cannot stop', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    // A hung backend: Create Catalog never answers, and neither does its Stop.
+    fixture.api.executeSsis.mockImplementationOnce(() => new Promise(() => {}))
+    fixture.api.cancelSsis.mockImplementation(() => new Promise(() => {}))
+    fixture.ssisCatalog.open(folder())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    fixture.ssisCatalog.setEnableClr(true)
+    void fixture.ssisCatalog.create(secret, secret)
+    fixture.api.push({ status: 'unresponsive', generation: 1, silentMs: 15_000 })
+    fixture.ssisCatalog.stop()
+    await fixture.commands.execute('backend.restart', undefined, 'toolbar')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+    expect(fixture.commands.getSnapshot().error).toBeFalsy()
+    // Answering again, the backend can stop the run, so Restart is refused once more.
+    fixture.api.push(readyBackend())
+    await fixture.commands.execute('backend.restart', undefined, 'toolbar')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+    expect(fixture.commands.getSnapshot().error).toBe(longRunMessages.stop({ kind: 'createCatalog', server: 'server-a.example' }))
   })
   it('is hidden from the context menu of a lost server\'s Integration Services Catalogs', () => {
     const fixture = workbenchFixture()

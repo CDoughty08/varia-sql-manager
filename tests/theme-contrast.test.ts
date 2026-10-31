@@ -69,6 +69,10 @@ describe('built-in theme contrast', () => {
     ]
     for (const pair of expected) expect(contrastPairs).toContainEqual(pair)
   })
+  it('checks the object dialog\'s narrow tab text and a step\'s progress fill on its track, wherever StepList draws', () => {
+    expect(contrastPairs).toContainEqual({ foreground: 'list.inactiveSelectionForeground', background: ['editorWidget.background'], minimum: 4.5 })
+    for (const surface of ['editorWidget.background', 'editor.background', 'panel.background']) expect(contrastPairs).toContainEqual({ foreground: 'focusBorder', background: [surface, 'badge.background'], minimum: 3 })
+  })
   it('checks every foreground key and every SQL scope, or exempts it with a reason', () => {
     const checked = new Set<string>(contrastPairs.map(pair => pair.foreground))
     // Indicators (status dots and rings) are glyphs: they need a pair as text colors do.

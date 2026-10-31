@@ -30,6 +30,8 @@ export interface OpenCreateCatalog {
   readonly steps?: readonly ActionStep[]
   /** What the form needs before Create can run (SSMS's own words); the password never appears in it. */
   readonly problem?: string
+  /** Why a window close or Restart was just refused while Create Catalog runs: the dialog covers the command banner. */
+  readonly refusal?: string
 }
 export interface CreateCatalogSnapshot { readonly open?: OpenCreateCatalog }
 export interface CreateCatalogServiceOptions {
@@ -37,7 +39,7 @@ export interface CreateCatalogServiceOptions {
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: { refresh(id?: number): void }
   /** Create Catalog is a long run: while it runs, closing the window, disconnecting its server and Restart are refused. */
-  readonly longRuns?: { begin(run: { readonly kind: 'createCatalog'; readonly connectionId: string; readonly server: string }): Disposable }
+  readonly longRuns?: { begin(run: { readonly kind: 'createCatalog'; readonly connectionId: string; readonly server: string; refused?(message: string): void }): Disposable }
   readonly newId?: () => string
 }
 
@@ -107,13 +109,13 @@ export class CreateCatalogService extends SnapshotStore<CreateCatalogSnapshot> i
     if (problem) { this.update(open, { problem }); return }
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', problem: undefined, error: undefined, steps: undefined, stopping: undefined })
-    const run = this.options.longRuns?.begin({ kind: 'createCatalog', connectionId: open.connectionId, server: open.server })
+    const run = this.options.longRuns?.begin({ kind: 'createCatalog', connectionId: open.connectionId, server: open.server, refused: refusal => this.update(open, { refusal }) })
     let result: ApiResult<SsisExecuteResult>
     try {
       result = await this.call<SsisExecuteResult>(() => this.options.api.executeSsis({
         connectionId: open.connectionId, requestId, action: { verb: 'createCatalog', password, enableClr: open.enableClr, startupProcedure: open.startupProcedure }
       }))
-    } finally { run?.dispose() }
+    } finally { run?.dispose(); this.update(open, { refusal: undefined }) }
     if (!this.end(open, requestId)) return
     const value = result.ok ? result.value : undefined
     if (value && !value.error) {

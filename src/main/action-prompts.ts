@@ -18,3 +18,8 @@ export const noLongRuns: LongRunState = Object.freeze({ runs: [], total: 0 })
 export const parseLongRuns = (value: unknown): LongRunState => longRunStateSchema.parse(value)
 /** The reload prompt's detail: the running work it would stop, first, then what AutoRecover keeps. */
 export const reloadDetail = (runs: LongRunState, loss: string): string => [longRunMessages.reload(runs), loss].filter(Boolean).join('\n\n')
+/** The Restart SQL Backend prompt's detail: the running work it would stop, first, then the connections it closes. */
+export const restartDetail = (runs: LongRunState, connections: number): string => [
+  longRunMessages.restart(runs),
+  connections === 1 ? 'The connection closes and uncommitted transactions are rolled back.' : connections > 1 ? `All ${connections} connections close and uncommitted transactions are rolled back.` : undefined
+].filter(Boolean).join('\n\n')

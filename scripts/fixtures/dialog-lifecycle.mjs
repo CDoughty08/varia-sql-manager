@@ -299,7 +299,8 @@ export async function dialogLifecycle(launchOptions) {
 
 /**
  * The long-run registry with Create Catalog as the run, on the object actions' stub server: while it runs, closing the
- * window is refused with a banner naming it and its server and the window stays, and the reload prompt names it first;
+ * window is refused with a banner naming it and its server, which the dialog repeats where nothing covers it, and the
+ * window stays; the reload prompt names it first;
  * once Stop has ended it, the reload prompt no longer does. (Its modal dialog covers Disconnect and Restart, whose
  * refusals tests/create-catalog-service.test.ts checks.)
  */
@@ -328,6 +329,13 @@ export async function longRunRefusals(launchOptions) {
     const closing = 'Create Catalog is running on server-a, and closing the window would stop it part way. Stop it, or wait for it to finish, then close the window.'
     await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
     await expect(errorBanner(page)).toContainText(closing)
+    // The dialog covers the banner, so it says so too, where nothing covers it.
+    const refusal = createDialog.getByRole('alert')
+    await expect(refusal).toHaveText(closing)
+    expect(await refusal.evaluate(element => {
+      const box = element.getBoundingClientRect()
+      return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)) && box.top >= 0 && box.bottom <= innerHeight
+    }), 'the refusal is on top and in the window').toBe(true)
     expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1)
     const reloadDetails = () => application.evaluate(() => globalThis.variaDetails.filter(entry => entry.title === 'Reload workbench').map(entry => entry.detail))
     const reload = () => application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.reload())

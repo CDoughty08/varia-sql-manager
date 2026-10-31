@@ -196,14 +196,40 @@ describe('object action catalogue', () => {
     expect(offeredOnEngine(['box'], 'cloud')).toBe(false)
     for (const engine of ['box', 'managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
   })
-  it('takes a live sample over the listing only when it is newer, and reads a newer sample without a row as plainly online', () => {
+  it('composes the menu state from the status overlay, the database rules and the engine gate, in that order', () => {
+    // As D1b and D3a will declare them: Delete for box servers only, an overlay for unavailable databases, and a rule.
+    const actions = { delete: { engines: ['box'] } } as const
+    const kinds = { database: { row: { rename: 'enabled', delete: 'enabled', properties: 'enabled' }, statuses: { readOnly: { rename: 'disabled' } } } } as const
+    const rules: DatabaseActionRule[] = [{ action: 'properties', states: ['offline'], hide: true, reason: 'Offline.' }, { action: 'delete', states: ['restoring'], reason: 'Restoring.' }]
+    const sources = { actions, kinds, rules }
+    const online = { state: 0, userAccess: 0, readOnly: false, standby: false }
+    expect(actionMenuState({ kind: 'database' }, sources)).toEqual({ selectTop: '', rename: 'enabled', delete: 'enabled', properties: 'enabled' })
+    // The engine gate: hidden on Managed Instance and Azure SQL Database, kept on a box and where the engine is unknown.
+    expect(actionMenuState({ kind: 'database', engine: 'managedInstance' }, sources).delete).toBe('')
+    expect(actionMenuState({ kind: 'database', engine: 'cloud' }, sources).delete).toBe('')
+    expect(actionMenuState({ kind: 'database', engine: 'box' }, sources).delete).toBe('enabled')
+    expect(actionMenuState({ kind: 'database', engine: undefined }, sources).delete).toBe('enabled')
+    expect(actionMenuState({ kind: 'database', engine: 'managedInstance' }, sources).rename).toBe('enabled')
+    // The runtime narrowing: a rule greys an enabled action, or hides it.
+    expect(actionMenuState({ kind: 'database', database: { ...online, state: 1 } }, sources)).toMatchObject({ delete: 'disabled', properties: 'enabled' })
+    expect(actionMenuState({ kind: 'database', database: { ...online, state: 6 } }, sources)).toMatchObject({ delete: 'enabled', properties: '' })
+    // The rules read only a database's runtime; another kind's is ignored.
+    expect(actionMenuState({ kind: 'table', database: { ...online, state: 6 } }, { rules })).toEqual(actionMenuState({ kind: 'table' }))
+    // The status overlay applies before the rules and the gate.
+    expect(actionMenuState({ kind: 'database', status: 'readOnly', engine: 'cloud', database: { ...online, state: 6 } }, sources)).toEqual({ selectTop: '', rename: 'disabled', delete: '', properties: '' })
+  })
+  it('takes a live sample over the listing only when it is newer, and reads a newer complete sample without a row as plainly online', () => {
     const listed = { state: 6, userAccess: 0, readOnly: false, standby: false }
     const row = { name: 'Sales', state: 1, userAccess: 1, readOnly: true, standby: false }
     expect(currentDatabaseRuntime(listed, 1_000)).toBe(listed)
-    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_000, row })).toBe(listed)
-    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_001, row })).toEqual({ state: 1, userAccess: 1, readOnly: true, standby: false })
-    expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row: undefined })).toEqual({ state: 0, userAccess: 0, readOnly: false, standby: false })
-    expect(currentDatabaseRuntime(undefined, undefined, { at: 5, row })).toMatchObject({ state: 1 })
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_000, row, complete: true })).toBe(listed)
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 1_001, row, complete: true })).toEqual({ state: 1, userAccess: 1, readOnly: true, standby: false })
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row: undefined, complete: true })).toEqual({ state: 0, userAccess: 0, readOnly: false, standby: false })
+    // A sample cut at the probe's 1,000 rows: a database past the cut keeps its listed state; a row it has still wins.
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row: undefined, complete: false })).toBe(listed)
+    expect(currentDatabaseRuntime(undefined, undefined, { at: 2_000, row: undefined, complete: false })).toBeUndefined()
+    expect(currentDatabaseRuntime(listed, 1_000, { at: 2_000, row, complete: false })).toMatchObject({ state: 1 })
+    expect(currentDatabaseRuntime(undefined, undefined, { at: 5, row, complete: true })).toMatchObject({ state: 1 })
     expect(currentDatabaseRuntime(undefined, undefined)).toBeUndefined()
   })
   it('declares the database node\'s Tasks and Tasks › Restore submenus, hidden while nothing is placed in them', () => {

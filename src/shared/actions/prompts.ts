@@ -15,14 +15,30 @@ export const renameDatabaseFactsSchema = z.object({
   database: name,
   /** Sessions using the database, or absent when they could not be counted. */
   sessions: count.optional(),
-  /** Of them, the sessions with an open transaction, which closing rolls back (A7). */
-  transactions: count,
-  /** Varia's own query tabs connected to it, and the names of those with an open transaction. */
+  /** Of them, the sessions with an open transaction, which closing rolls back (A7), or absent when they could not be counted. */
+  transactions: count.optional(),
+  /** Varia's own query tabs connected to it, and the names of those with an open transaction (`promptTabFacts` bounds them). */
   tabs: count,
   tabsWithTransactions: z.array(z.string().min(1).max(promptLimits.tabName)).max(promptLimits.tabs),
+  /** Varia's tabs with an open transaction past the named ones. */
+  moreTabsWithTransactions: count.optional(),
   /** Whether Varia may close them (SINGLE_USER); not on Managed Instance. */
   canClose: z.boolean()
 }).strict()
+/**
+ * The tab facts of a prompt from every tab name: the first `promptLimits.tabs` names, each clipped to `promptLimits.tabName`
+ * characters (an empty one named by its position), and a count of the rest, so a prompt names what it can and counts the
+ * others rather than failing validation.
+ */
+export function promptTabFacts(names: readonly string[]): { readonly tabsWithTransactions: string[]; readonly moreTabsWithTransactions?: number } {
+  const named = names.slice(0, promptLimits.tabs).map((text, index) => {
+    // zod counts UTF-16 units; a clip never leaves half of a surrogate pair.
+    const clipped = text.slice(0, promptLimits.tabName)
+    return (/[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped) || `Query ${index + 1}`
+  })
+  const more = Math.min(names.length - named.length, promptLimits.count)
+  return more > 0 ? { tabsWithTransactions: named, moreTabsWithTransactions: more } : { tabsWithTransactions: named }
+}
 /** D4b: disabling a login. */
 export const disableLoginFactsSchema = z.object({
   login: name,
@@ -61,9 +77,13 @@ export const actionPrompts = {
     message: facts => facts.sessions === undefined
       ? `Other connections may be using ${show(facts.database)}. Close them and rename the database?`
       : `${plural(facts.sessions, 'connection is', 'connections are')} using ${show(facts.database)}${facts.tabs ? ` (${plural(facts.tabs, 'query window', 'query windows')} in Varia)` : ''}. Close them and rename the database?`,
+    // A7: the box always says what closing rolls back; when the transactions could not be counted, it says so generally.
     detail: facts => [
-      ...facts.transactions ? [`${plural(facts.transactions, 'session has an open transaction', 'sessions have open transactions')}, which closing rolls back.`] : [],
-      ...facts.tabsWithTransactions.length ? [`Varia's query windows with open transactions: ${facts.tabsWithTransactions.map(show).join(', ')}.`] : [],
+      ...facts.transactions === undefined ? ['Closing them rolls back any open transaction.']
+        : facts.transactions ? [`${plural(facts.transactions, 'session has an open transaction', 'sessions have open transactions')}, which closing rolls back.`] : [],
+      ...facts.tabsWithTransactions.length || facts.moreTabsWithTransactions ? [`Varia's query windows with open transactions: ${[
+        ...facts.tabsWithTransactions.map(show), ...facts.moreTabsWithTransactions ? [facts.tabsWithTransactions.length ? `and ${plural(facts.moreTabsWithTransactions, 'more', 'more')}` : plural(facts.moreTabsWithTransactions, 'window', 'windows')] : []
+      ].join(', ')}.`] : [],
       ...facts.canClose ? [] : ['This server does not let Varia close them.'],
       'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.'
     ],

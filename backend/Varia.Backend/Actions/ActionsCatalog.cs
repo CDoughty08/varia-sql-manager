@@ -2,8 +2,9 @@ using System.Text.Json;
 
 namespace Varia.Backend.Actions;
 
-/// <summary>One Object Explorer kind and subtype ('' for none) with the actions it offers enabled and greyed.</summary>
-internal sealed record ActionRow(string Kind, string Subtype, IReadOnlyList<string> Enabled, IReadOnlyList<string> Disabled);
+/// <summary>One Object Explorer kind and subtype ('' for none) with the actions it offers enabled and greyed; with a
+/// <c>Status</c>, the row a node with that status badge gets (the catalogue's status overlay applied).</summary>
+internal sealed record ActionRow(string Kind, string Subtype, IReadOnlyList<string> Enabled, IReadOnlyList<string> Disabled, string Status = "");
 
 /// <summary>How a database option is written (src/shared/actions/database.ts' OptionSql): 'set' with its keyword, '= ',
 /// the SQL text per token, SMO's termination and " SECONDS"; 'scoped' with its configuration name and secondary form; and
@@ -33,11 +34,11 @@ internal sealed class ActionsCatalog
     private sealed record ActionJson(string Action, string Class, string Title, bool? SystemObjects = null);
     private sealed record DialogJson(string Dialog, string Action, List<string> Pages);
     private sealed record ErrorJson(string Code, bool Retryable);
-    private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled);
+    private sealed record RowJson(string Kind, string Subtype, List<string> Enabled, List<string> Disabled, string? Status = null);
     private sealed record CatalogJson(int Version, List<ActionJson> Actions, List<int> CompatibilityLevels, List<OptionJson> DatabaseOptions, List<DialogJson> Dialogs, List<ErrorJson> Errors,
         Dictionary<string, long> Limits, List<string> OwnerNotOn, List<RowJson> Rows, List<OptionJson> ScopedConfigurations);
 
-    private readonly Dictionary<(string Kind, string Subtype), ActionRow> rows;
+    private readonly Dictionary<(string Kind, string Subtype, string Status), ActionRow> rows;
     private readonly Dictionary<string, bool> errors;
     private readonly Dictionary<string, string> dialogActions;
     private readonly HashSet<string> systemActions;
@@ -45,7 +46,7 @@ internal sealed class ActionsCatalog
     private ActionsCatalog(CatalogJson json)
     {
         if (json.Version != Version) throw new InvalidOperationException("Unsupported object actions catalogue version.");
-        rows = json.Rows.ToDictionary(row => (row.Kind, row.Subtype), row => new ActionRow(row.Kind, row.Subtype, row.Enabled, row.Disabled));
+        rows = json.Rows.ToDictionary(row => (row.Kind, row.Subtype, row.Status ?? ""), row => new ActionRow(row.Kind, row.Subtype, row.Enabled, row.Disabled, row.Status ?? ""));
         errors = json.Errors.ToDictionary(row => row.Code, row => row.Retryable, StringComparer.Ordinal);
         Actions = [.. json.Actions.Select(row => row.Action)];
         systemActions = json.Actions.Where(row => row.SystemObjects == true).Select(row => row.Action).ToHashSet(StringComparer.Ordinal);
@@ -83,13 +84,17 @@ internal sealed class ActionsCatalog
     /// <summary>Whether the action also serves SQL Server's own objects (Properties on master, model, msdb and tempdb).</summary>
     public bool ServesSystemObjects(string action) => systemActions.Contains(action);
 
-    /// <summary>The row of a kind and subtype ('' or null for none), or null when the kind offers no actions.</summary>
-    public ActionRow? Row(string kind, string? subtype) => rows.GetValueOrDefault((kind, subtype ?? ""));
+    /// <summary>The row of a kind and subtype ('' or null for none), or null when the kind offers no actions. With a status
+    /// the kind has an overlay for, that status's row; another status leaves the subtype's row, as in the catalogue.</summary>
+    public ActionRow? Row(string kind, string? subtype, string? status = null) =>
+        (string.IsNullOrEmpty(status) ? null : rows.GetValueOrDefault((kind, subtype ?? "", status))) ?? rows.GetValueOrDefault((kind, subtype ?? "", ""));
 
-    /// <summary>Whether some row of the kind enables the action: what Validate checks before the preflight derives the subtype.</summary>
+    /// <summary>Whether some row of the kind, a status's included, enables the action: what Validate checks before the
+    /// preflight derives the subtype.</summary>
     public bool Offered(string kind, string action) => rows.Values.Any(row => row.Kind == kind && row.Enabled.Contains(action));
 
-    /// <summary>Whether the derived subtype's row enables the action now.</summary>
+    /// <summary>Whether the derived subtype's row enables the action now. It reads the row without a status: the preflights
+    /// that derive a status (a disabled login) arrive with the actions that need them.</summary>
     public bool Allows(string kind, string subtype, string action) => (Row(kind, subtype) ?? Row(kind, "")) is { } row && row.Enabled.Contains(action);
 
     public bool Retryable(string code) => errors.TryGetValue(code, out var retryable) ? retryable : throw new InvalidOperationException("Unknown object action error " + code);

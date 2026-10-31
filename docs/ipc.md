@@ -302,7 +302,8 @@ cancel that reaches main before the load was written is sent right after it; one
 are not envelope errors but `result.error` values with their own codes, so each tree node shows its own failure.
 A database row also carries its runtime state as `sys.databases` lists it, `database: { state: int, userAccess: int,
 readOnly: bool, standby: bool }` (`state_desc` and `user_access_desc` as their numbers), so menus can narrow a database's
-actions by it; a newer live status sample wins (`currentDatabaseRuntime`). `connections.connect` answers `linux: bool`
+actions by it; a newer live status sample wins (`currentDatabaseRuntime`), but one cut at its row cap only for the
+databases it has rows for. `connections.connect` answers `linux: bool`
 when the server's profile was read (SQL Server on Linux or in a Linux container), for the `explorerServerLinux` context key;
 `engineEdition` gives `explorerServerEngine` (`box`, `managedInstance` for edition 8, `cloud` for Azure SQL Database).
 
@@ -413,7 +414,7 @@ the restore that fails or is stopped adds the step "Remove the incomplete catalo
 most 30 s for each lock (a database left restoring only while it still is and no other session holds it), as SSMS's
 DropCatalog does; when a part of it fails, the message names only what is left to delete; a restore refused because the database appeared (27135) answers `CATALOG_EXISTS` and removes nothing.
 Create Catalog is a long run: while it runs the renderer refuses to close the window or quit (`LongRunService.closeRefusal`,
-checked by `FileService.closeWindow`), to disconnect its server and to restart the backend, since its unload would cancel the
+checked by `FileService.closeWindow`, and said in its dialog too), to disconnect its server and to restart a backend that answers, since its unload would cancel the
 request, which past the restore is a Stop; main's reload prompt names it (`varia:long-runs`, below). A backend whose stdin ends
 anyway (a confirmed reload, a crashed renderer) cancels everything as usual, then
 waits up to 120 s (`createDrainMs`) for a Create Catalog past its restore to finish or remove what it made before it exits, and
@@ -493,9 +494,10 @@ neither word a prompt nor choose its default button. No backend method is involv
 **Long runs** (`src/shared/long-runs.ts`): whenever its long runs change, the page sends main
 `varia:long-runs { runs: [{ kind, server: 1–256 }] (≤ 16), total: 0–1,000,000 ≥ runs }` (strict; trusted senders only;
 answers nothing), and main's reload prompt then names the first run ("Create Catalog is running on <server>: reloading
-stops it part way.", or "…, with N more runs: reloading stops them part way.") before what AutoRecover keeps. A reload or
-crash resets it. The refusals themselves are the renderer's (`LongRunService`); main's 130 s drain of a stopping backend
-stays the last resort.
+stops it part way.", or "…, with N more runs: reloading stops them part way.") before what AutoRecover keeps; so does the
+Restart SQL Backend prompt ("…: restarting the backend stops it part way."), which the page lets a long run reach only while
+the backend does not answer (a run on a hung backend cannot stop). A reload or crash resets it. The refusals themselves are
+the renderer's (`LongRunService`); main's 130 s drain of a stopping backend stays the last resort.
 
 The **Table Designer** uses the same three methods too, with no new method (so no new entry in the five places a method is
 declared). `actions.describe { connectionId, requestId, dialog: 'tableDesigner', target: { kind: 'database', name } }` (any

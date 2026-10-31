@@ -1,9 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { unknownOutcomeMessage } from '../src/shared/actions/catalog'
 import type { ActionExecuteResult } from '../src/shared/actions/schema'
 import type { ApiResult, ExplorerChildrenResult } from '../src/shared/contracts'
 import type { ExplorerChildrenParams } from '../src/shared/explorer/refs'
-import { moduleRenameNote, renameMessages, stateJobText } from '../src/renderer/src/actions/ObjectActionService'
+import { moduleRenameNote, renameMessages, stateJobsText, stateJobText } from '../src/renderer/src/actions/ObjectActionService'
 import { deferred } from './fixtures/documents'
 import { connectionInfo, connectionOptions, explorerAnswer, readyBackend, workbenchFixture } from './fixtures/workbench'
 
@@ -184,6 +185,19 @@ describe('status-bar state jobs', () => {
     expect(stateJobText({ ...rename, step: 'Closing connections', stopping: true }).text).toBe('Stopping the rename of Sales to Sales2…')
     expect(stateJobText({ verb: 'disable', label: 'app_user', stopping: false })).toEqual({ text: 'Disabling app_user…', stop: 'Stop disable' })
     expect(stateJobText({ verb: 'enable', label: 'app_user', stopping: true })).toEqual({ text: 'Stopping the enable of app_user…', stop: 'Stop enable' })
+  })
+  it('names the one Stop for every job it stops: the verb for one, a count for several, and actions when the verbs differ', () => {
+    const rename = { verb: 'rename', label: 'Sales', newName: 'Sales2', stopping: false } as const
+    const disable = { verb: 'disable', label: 'app_user', stopping: false } as const
+    expect(stateJobsText([])).toBeUndefined()
+    expect(stateJobsText([rename])).toEqual({ text: 'Renaming Sales to Sales2…', stop: 'Stop rename' })
+    expect(stateJobsText([rename, { ...rename, label: 'Hr', newName: 'Hr2' }])).toEqual({ text: 'Renaming Sales to Sales2…', stop: 'Stop 2 renames' })
+    expect(stateJobsText([rename, disable])).toEqual({ text: 'Renaming Sales to Sales2…', stop: 'Stop 2 actions' })
+    // Stopping shows only once every job is stopping, as the button is disabled only then.
+    expect(stateJobsText([{ ...rename, stopping: true }, disable])?.text).toBe('Renaming Sales to Sales2…')
+    expect(stateJobsText([{ ...rename, stopping: true }, { ...disable, stopping: true }])?.text).toBe('Stopping the rename of Sales to Sales2…')
+    // The status bar names its Stop from it.
+    expect(readFileSync('src/renderer/src/scripting/ScriptingStatus.tsx', 'utf8')).toContain('const first = stateJobsText(running)')
   })
   it('runs any verb as one job per node: a second action is refused, a step shows, and Stop and a disconnect reach it', async () => {
     const { actions, api, orders, node, commands, connections } = await setup()

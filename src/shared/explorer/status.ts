@@ -13,12 +13,15 @@ const plainlyOnline: DatabaseRuntime = Object.freeze({ state: 0, userAccess: 0, 
 /**
  * A database's runtime state now: the live sample when it was taken after the listing (`at` and `listedAt` in epoch ms),
  * else the listing's. The probe reports only databases that are not plainly online and open to everyone, so a newer
- * sample without a row for the database means exactly that. Neither known: undefined.
+ * complete sample without a row for the database means exactly that. A sample cut at its row cap (`complete` false, as
+ * ExplorerStatusService tracks it) says nothing about a database it has no row for: the listing stands. Neither known:
+ * undefined.
  */
-export function currentDatabaseRuntime(listed: DatabaseRuntime | undefined, listedAt: number | undefined, sample?: { readonly at: number; readonly row: DatabaseStatusRow | undefined }): DatabaseRuntime | undefined {
+export function currentDatabaseRuntime(listed: DatabaseRuntime | undefined, listedAt: number | undefined, sample?: { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean }): DatabaseRuntime | undefined {
   if (!sample || listed && listedAt !== undefined && sample.at <= listedAt) return listed
   const row = sample.row
-  return row ? { state: row.state, userAccess: row.userAccess, readOnly: row.readOnly, standby: row.standby } : plainlyOnline
+  if (row) return { state: row.state, userAccess: row.userAccess, readOnly: row.readOnly, standby: row.standby }
+  return sample.complete ? plainlyOnline : listed
 }
 /** A row of `explorer.progress`: a restore or a recovery that is running, and how far it has come. */
 export interface ProgressRow { readonly name: string; readonly command: string; readonly percent: number }

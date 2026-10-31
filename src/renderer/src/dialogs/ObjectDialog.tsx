@@ -116,23 +116,28 @@ export const pagePanelId = (page: PageId) => `object-dialog-panel-${page}`
 
 /**
  * "Select a page": a list of page buttons (the current one `aria-current`), or, in a narrow dialog, a `tablist` whose tabs
- * control the page panels. Each page shows its catalogue icon.
+ * control the page panels that are rendered (`rendered`; the current page's when absent): a page not mounted yet has no
+ * panel for its tab to name. Each page shows its catalogue icon.
  */
-export function PageList({ pages, current, tabs, onPage, onKeyDown, navRef }: {
-  readonly pages: readonly DialogPageSpec[]; readonly current: PageId; readonly tabs: boolean; onPage(page: PageId): void; onKeyDown?(event: KeyboardEvent<HTMLElement>): void; readonly navRef?: Ref<HTMLElement>
+export function PageList({ pages, current, tabs, rendered, onPage, onKeyDown, navRef }: {
+  readonly pages: readonly DialogPageSpec[]; readonly current: PageId; readonly tabs: boolean; readonly rendered?: ReadonlySet<PageId>; onPage(page: PageId): void; onKeyDown?(event: KeyboardEvent<HTMLElement>): void; readonly navRef?: Ref<HTMLElement>
 }) {
+  const controls = (page: PageId) => (rendered ? rendered.has(page) : page === current) ? pagePanelId(page) : undefined
   const buttons = pages.map(page => <button key={page.id} type="button" data-page={page.id} onClick={() => onPage(page.id)} {...tabs
-    ? { role: 'tab', id: pageTabId(page.id), 'aria-selected': page.id === current, 'aria-controls': pagePanelId(page.id), tabIndex: page.id === current ? 0 : -1 }
+    ? { role: 'tab', id: pageTabId(page.id), 'aria-selected': page.id === current, 'aria-controls': controls(page.id), tabIndex: page.id === current ? 0 : -1 }
     : { 'aria-current': page.id === current ? 'page' as const : undefined }}><Icon name={page.icon} />{page.title}</button>)
   return tabs
     ? <nav ref={navRef} className="object-dialog-pages tabs" aria-label="Pages"><div className="object-dialog-tabs" role="tablist" aria-label="Select a page" onKeyDown={onKeyDown}>{buttons}</div></nav>
     : <nav ref={navRef} className="object-dialog-pages" aria-label="Select a page" onKeyDown={onKeyDown}><div className="object-dialog-caption">Select a page</div>{buttons}</nav>
 }
 
-/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). */
+/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). A long list scrolls,
+ *  and a new step scrolls it to the end, where the run is. */
 export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] }) {
+  const panel = useRef<HTMLElement>(null)
+  useEffect(() => { if (panel.current) panel.current.scrollTop = panel.current.scrollHeight }, [steps.length])
   if (!steps.length) return null
-  return <section className="object-dialog-steps" aria-labelledby="object-dialog-steps">
+  return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
     <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.message ?? '' }))} />
   </section>
@@ -170,13 +175,14 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   }
   const title = open.title
   const progress = progressText[open.phase]
+  const mounted = framePages(spec.pages, open.page, visited)
   return <div className="modal-backdrop"><form ref={form} className={'connection-modal object-dialog' + (spec.size === 'large' ? ' large' : '') + (tabs ? ' narrow' : '')} role="dialog" aria-modal="true" aria-labelledby="object-dialog-title" noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); void dialogs.ok() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id="object-dialog-title">{title}</h2>
       <button type="button" className="icon-button" aria-label={'Close ' + title} disabled={executing} onClick={close}><Icon name="close" /></button></div>
     <div className="object-dialog-body">
       <div className="object-dialog-side">
-        <PageList pages={spec.pages} current={open.page} tabs={tabs} onPage={page => dialogs.setPage(page)} onKeyDown={pageKeyDown} navRef={nav} />
+        <PageList pages={spec.pages} current={open.page} tabs={tabs} rendered={new Set(mounted.map(({ page }) => page.id))} onPage={page => dialogs.setPage(page)} onKeyDown={pageKeyDown} navRef={nav} />
         <section className="object-dialog-box" aria-labelledby="object-dialog-connection">
           <div className="object-dialog-caption" id="object-dialog-connection">Connection</div>
           <dl><dt>Server:</dt><dd>{displayText(open.server)}</dd><dt>Connection:</dt><dd>{open.login ? displayText(open.login) : '—'}</dd></dl>
@@ -192,7 +198,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
         {spec.steps && open.steps && <StepsPanel steps={open.steps} />}
-        {framePages(spec.pages, open.page, visited).map(({ page, shown }) => {
+        {mounted.map(({ page, shown }) => {
           const Page = components[page.id]
           return <div key={page.id} className="object-dialog-page" hidden={!shown} {...tabs ? { role: 'tabpanel', id: pagePanelId(page.id), 'aria-labelledby': pageTabId(page.id) } : {}}>
             {Page && <Page open={open} editable={usable && !busy} />}</div>

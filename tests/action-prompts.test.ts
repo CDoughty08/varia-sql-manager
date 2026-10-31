@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail } from '../src/main/action-prompts'
-import { actionPromptRequestSchema, promptLimits, type ActionPromptRequest } from '../src/shared/actions/prompts'
+import { actionMessageBox, actionPromptAnswer, confirmActionBox, noLongRuns, parseLongRuns, reloadDetail, restartDetail } from '../src/main/action-prompts'
+import { actionPromptRequestSchema, promptLimits, promptTabFacts, type ActionPromptRequest } from '../src/shared/actions/prompts'
 import { longRunKinds, longRunLimits, longRunMessages, longRunStateSchema, longRunSubjects } from '../src/shared/long-runs'
 
 const rename = (facts: Partial<Extract<ActionPromptRequest, { prompt: 'renameDatabase' }>['facts']> = {}): ActionPromptRequest =>
@@ -25,6 +25,24 @@ describe('object action prompts (varia:confirm-action)', () => {
     ])
     expect(busy).toMatchObject({ buttons: ['Rename When Free', 'Cancel'], defaultId: 0, cancelId: 1 })
     expect(confirmActionBox(rename({ sessions: undefined })).message).toBe('Other connections may be using Sales. Close them and rename the database?')
+  })
+  it('says what closing rolls back even when the transactions could not be counted, and counts the tabs it cannot name', () => {
+    // A7: sessions and transactions unknown, the box still warns that closing rolls back.
+    expect(confirmActionBox(rename({ sessions: undefined, transactions: undefined })).detail.split('\n\n')).toEqual([
+      'Closing them rolls back any open transaction.', 'Rename When Free waits until they disconnect; Stop in the status bar ends the wait.'
+    ])
+    const names = Array.from({ length: 10 }, (_, index) => `Query${index + 1}.sql`)
+    const tabs = promptTabFacts(names)
+    expect(tabs).toEqual({ tabsWithTransactions: names.slice(0, promptLimits.tabs), moreTabsWithTransactions: 2 })
+    const box = confirmActionBox(rename({ transactions: 10, tabs: 10, ...tabs }))
+    expect(box.detail.split('\n\n')[1]).toBe(`Varia's query windows with open transactions: ${names.slice(0, 8).join(', ')}, and 2 more.`)
+    expect(confirmActionBox(rename({ tabsWithTransactions: [], moreTabsWithTransactions: 3 })).detail).toContain("Varia's query windows with open transactions: 3 windows.")
+    // Long or empty names are clipped or numbered, never refused, and a clip keeps surrogate pairs whole.
+    const long = promptTabFacts(['x'.repeat(promptLimits.tabName + 50), '', 'y'.repeat(promptLimits.tabName - 1) + '😀'])
+    expect(long.tabsWithTransactions.map(name => name.length)).toEqual([promptLimits.tabName, 'Query 2'.length, promptLimits.tabName - 1])
+    expect(long.moreTabsWithTransactions).toBeUndefined()
+    expect(actionPromptRequestSchema.safeParse(rename({ ...long, ...promptTabFacts(Array.from({ length: 50 }, () => 'z'.repeat(1000))) })).success).toBe(true)
+    expect(promptTabFacts([])).toEqual({ tabsWithTransactions: [] })
   })
   it('words Disable Login\'s prompt, with Cancel the default for a login a service runs as', () => {
     expect(confirmActionBox(disable())).toEqual({
@@ -87,6 +105,16 @@ describe('long runs in main (varia:long-runs)', () => {
     expect(reloadDetail({ runs: [restore], total: 1 }, 'Unsaved queries are kept.')).toBe('A restore is running on sql-prod-01: reloading stops it part way.\n\nUnsaved queries are kept.')
     expect(reloadDetail({ runs: [restore, { kind: 'backup', server: 'b' }], total: 2 }, '')).toBe('A restore is running on sql-prod-01, with 1 more run: reloading stops them part way.')
     expect(reloadDetail({ runs: [restore], total: 40 }, '')).toBe('A restore is running on sql-prod-01, with 39 more runs: reloading stops them part way.')
+  })
+  it('names the runs first in the Restart prompt, which the page lets through while the backend does not answer', () => {
+    expect(restartDetail(noLongRuns, 1)).toBe('The connection closes and uncommitted transactions are rolled back.')
+    expect(restartDetail(noLongRuns, 3)).toBe('All 3 connections close and uncommitted transactions are rolled back.')
+    expect(restartDetail({ runs: [restore], total: 1 }, 2)).toBe('A restore is running on sql-prod-01: restarting the backend stops it part way.\n\nAll 2 connections close and uncommitted transactions are rolled back.')
+    expect(restartDetail({ runs: [restore], total: 3 }, 0)).toBe('A restore is running on sql-prod-01, with 2 more runs: restarting the backend stops them part way.')
+    const main = readFileSync('src/main/index.ts', 'utf8')
+    const restart = main.slice(main.indexOf('function restartBackend('), main.indexOf('function restartBackend(') + 1200)
+    expect(restart).toContain('if (backend.connectionCount() > 0 || longRuns.total > 0)')
+    expect(restart).toContain('detail: restartDetail(longRuns, count)')
   })
   it('accepts only bounded, well-formed states', () => {
     expect(parseLongRuns({ runs: [restore], total: 1 })).toEqual({ runs: [restore], total: 1 })

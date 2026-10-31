@@ -97,6 +97,9 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
       {open.problem && <p className="connect-error" id="create-catalog-problem" role="alert">{open.problem}</p>}
       {open.error && <p className={'connect-error' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>{open.error.message}</p>}
     </div>
+    {/* A window close or Restart refused while Create Catalog runs: the dialog covers the command banner, so it says why
+        here, outside the scroll, above Stop. */}
+    {executing && open.refusal && <p className="connect-error create-catalog-refusal" role="alert">{open.refusal}</p>}
     <div className="connection-footer">
       <span />
       <button className="primary" type="submit" disabled={!fields}>OK</button>

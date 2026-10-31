@@ -35,16 +35,19 @@ export const longRunStateSchema = z.object({
 }).strict().refine(state => state.total >= state.runs.length, 'total counts every run')
 
 const subject = (run: LongRun) => `${longRunSubjects[run.kind]} is running on ${displayText(run.server)}`
-/** The refusals and the reload prompt's line. Server names are shown through displayText. */
+const stops = (state: LongRunState, doing: string) => {
+  const first = state.runs[0]
+  if (!first) return undefined
+  return state.total === 1 ? `${subject(first)}: ${doing} stops it part way.` : `${subject(first)}, with ${state.total - 1} more ${state.total === 2 ? 'run' : 'runs'}: ${doing} stops them part way.`
+}
+/** The refusals and the reload and restart prompts' line. Server names are shown through displayText. */
 export const longRunMessages = {
   /** Closing the window. */
   close: (run: LongRun) => `${subject(run)}, and closing the window would stop it part way. Stop it, or wait for it to finish, then close the window.`,
   /** Disconnect of its server, and Restart SQL Backend. */
   stop: (run: LongRun) => `${subject(run)}. Stop it first.`,
   /** The first line of main's reload prompt's detail. */
-  reload: (state: LongRunState) => {
-    const first = state.runs[0]
-    if (!first) return undefined
-    return state.total === 1 ? `${subject(first)}: reloading stops it part way.` : `${subject(first)}, with ${state.total - 1} more ${state.total === 2 ? 'run' : 'runs'}: reloading stops them part way.`
-  }
+  reload: (state: LongRunState) => stops(state, 'reloading'),
+  /** The first line of main's Restart SQL Backend prompt's detail (the page lets Restart through while the backend does not answer). */
+  restart: (state: LongRunState) => stops(state, 'restarting the backend')
 } as const

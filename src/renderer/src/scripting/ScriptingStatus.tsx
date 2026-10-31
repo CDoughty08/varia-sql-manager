@@ -1,5 +1,5 @@
 import { useCallback, useRef, type FocusEvent } from 'react'
-import { stateJobText } from '../actions/ObjectActionService'
+import { stateJobsText } from '../actions/ObjectActionService'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 
 /**
@@ -15,7 +15,8 @@ export default function ScriptingStatus() {
   const { jobs: stateJobs } = useServiceSnapshot(actions)
   const shown = jobs.filter(job => job.visible)
   const running = stateJobs.filter(job => job.visible)
-  const first = running[0] && stateJobText({ ...running[0], stopping: running.every(job => job.stopping) })
+  // One Stop stops every visible job, so its name counts them (and says "actions" when their verbs differ).
+  const first = stateJobsText(running)
   const returnTo = useRef<HTMLElement | null>(null)
   const entered = (event: FocusEvent<HTMLElement>) => {
     if (event.relatedTarget instanceof HTMLElement && !event.currentTarget.contains(event.relatedTarget)) returnTo.current = event.relatedTarget

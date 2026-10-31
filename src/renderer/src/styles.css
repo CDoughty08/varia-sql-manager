@@ -856,22 +856,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .create-catalog-path { font-family: var(--varia-font-mono); overflow-wrap: anywhere; user-select: text; }
 .create-catalog-dialog .connect-error, .create-catalog-status { margin: 10px 0 0; }
 .create-catalog-dialog .connect-error.info { color: var(--varia-banner-warningForeground); background: var(--varia-banner-warningBackground); }
+.create-catalog-dialog .create-catalog-refusal { flex-shrink: 0; margin: 0 20px 12px; }
 @media (forced-colors: active) {
   .object-dialog-pages > button[aria-current="page"], .object-dialog-script-list > li[aria-selected="true"] { outline: 1px solid CanvasText; outline-offset: -1px; }
 }
 /* Large object dialogs, the property grid's expandable rows, and a sub-dialog over a dialog or document (Select Database Owner). */
 .connection-modal.object-dialog.large { width: min(960px, calc(100vw - 48px)); height: min(680px, calc(100vh - 48px)); }
-.object-dialog-steps { margin: 8px 10px 0; }
+/* A long run's steps scroll within at most 40 % of the column, so the page and the footer keep their room. */
+.object-dialog-steps { flex: 0 1 auto; min-height: 0; max-height: 40%; overflow: auto; margin: 8px 10px 0; }
 .object-dialog-steps > .object-dialog-caption { padding: 0 0 4px; }
-/* Under 720 px (narrowFrameQuery) the page list is a row of tabs above the Connection and Progress boxes. */
+/* Under 720 px (narrowFrameQuery) the page list is a row of tabs above the Connection and Progress boxes. The boxes have
+   a basis of their own, so they wrap onto a row below the tabs rather than shrink to nothing beside them. */
 .object-dialog.narrow .object-dialog-body { flex-direction: column; }
 .object-dialog.narrow .object-dialog-side { flex: 0 0 auto; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--varia-dialog-separatorBackground); }
-.object-dialog.narrow .object-dialog-box { flex: 1 1 0; min-width: 0; padding-bottom: 4px; }
-.object-dialog-pages.tabs { flex: 1 0 100%; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding-bottom: 0; }
+.object-dialog.narrow .object-dialog-box { flex: 1 1 160px; min-width: 0; padding-bottom: 4px; }
+.object-dialog-pages.tabs { flex: 0 0 100%; align-self: flex-start; flex-direction: row; overflow-x: auto; overflow-y: hidden; padding-bottom: 0; }
 .object-dialog-tabs { display: flex; }
 .object-dialog-tabs > button { display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 3px 10px; white-space: nowrap; }
 .object-dialog-tabs > button[aria-selected="true"] { border-bottom-color: var(--varia-focusBorder); color: var(--varia-list-inactiveSelectionForeground); transition: none; }
 .object-dialog-tabs > button:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+/* Forced colours paint every border, the transparent ones included: only the selected tab keeps its bar. */
+@media (forced-colors: active) {
+  .object-dialog-tabs > button:not([aria-selected="true"]) { border-bottom-color: Canvas; transition: none; }
+  .object-dialog-tabs > button[aria-selected="true"] { border-bottom-color: Highlight; transition: none; }
+}
 .property-parent { display: flex; align-items: center; min-width: 0; }
 .property-twisty { width: 16px; height: 16px; padding: 0; border: 0; background: transparent; color: inherit; }
 .sub-dialog-backdrop { z-index: 20001; }

@@ -47,8 +47,12 @@ describe('object dialog frame', () => {
     const tabs = html(createElement(PageList, { pages, current: 'files', tabs: true, onPage: () => {} }))
     expect(tabs).toContain('role="tablist" aria-label="Select a page"')
     expect(tabs).toContain('role="tab" id="object-dialog-tab-files" aria-selected="true" aria-controls="object-dialog-panel-files" tabindex="0"')
-    expect(tabs).toContain('role="tab" id="object-dialog-tab-general" aria-selected="false" aria-controls="object-dialog-panel-general" tabindex="-1"')
+    // A tab names a panel only once its page is mounted: General's and Options' are not, so they name none.
+    expect(tabs).toContain('role="tab" id="object-dialog-tab-general" aria-selected="false" tabindex="-1"')
+    expect(tabs.match(/aria-controls="[^"]*"/g)).toEqual(['aria-controls="object-dialog-panel-files"'])
     expect(tabs).not.toContain('aria-current')
+    const kept = html(createElement(PageList, { pages, current: 'options', tabs: true, rendered: new Set(['files', 'options'] as const), onPage: () => {} }))
+    expect(kept.match(/aria-controls="[^"]*"/g)).toEqual(['aria-controls="object-dialog-panel-files"', 'aria-controls="object-dialog-panel-options"'])
     // The dialog is min(820 px, viewport - 48 px) wide, so it is under 720 px below a 768 px viewport.
     expect(narrowFrameQuery).toBe('(max-width: 767px)')
   })

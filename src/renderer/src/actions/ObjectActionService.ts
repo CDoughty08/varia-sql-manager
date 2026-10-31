@@ -48,6 +48,17 @@ export function stateJobText(job: Pick<StateJob, 'verb' | 'label' | 'newName' | 
   const { running, noun } = verbText[job.verb], what = job.label + (job.newName !== undefined ? ` to ${job.newName}` : '')
   return { text: job.stopping ? `Stopping the ${noun} of ${what}…` : job.step ? `${running} ${what}: ${job.step}…` : `${running} ${what}…`, stop: `Stop ${noun}` }
 }
+/**
+ * The status bar's segment for the visible state jobs: the first job's text, and the name of the one Stop, which stops
+ * them all, so it names them all: "Stop rename" for one, "Stop 2 renames", or "Stop 2 actions" when their verbs differ.
+ */
+export function stateJobsText(jobs: readonly Pick<StateJob, 'verb' | 'label' | 'newName' | 'step' | 'stopping'>[]): { readonly text: string; readonly stop: string } | undefined {
+  const first = jobs[0]
+  if (!first) return undefined
+  const { text, stop } = stateJobText({ ...first, stopping: jobs.every(job => job.stopping) })
+  if (jobs.length === 1) return { text, stop }
+  return { text, stop: jobs.every(job => job.verb === first.verb) ? `Stop ${jobs.length} ${verbText[first.verb].noun}s` : `Stop ${jobs.length} actions` }
+}
 
 /** sp_rename leaves a module's definition text with its old name, as SQL Server does. */
 export const moduleRenameNote = 'The definition text keeps the old name; script the object with CREATE OR ALTER to update it.'
