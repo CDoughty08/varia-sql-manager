@@ -639,6 +639,10 @@ internal static class ExplorerChecks
         var databaseBytes = JsonBridge.Encode(database, Json).Length;
         check(JsonBridge.Encode(database with { Database = null }, Json).Length + ExplorerService.DatabaseEstimate >= databaseBytes && ExplorerService.Estimate(database) >= databaseBytes,
             "a database row's runtime state counts toward the size cut at least as much as it adds to the page");
+        var login = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("login", Name: new string('l', 128))), new string('l', 128), "login", false) { ConnectDenied = true };
+        check(JsonBridge.Encode(login with { ConnectDenied = null }, Json).Length + ExplorerService.ConnectDeniedEstimate >= JsonBridge.Encode(login, Json).Length
+                && ExplorerService.Estimate(login) - ExplorerService.Estimate(login with { ConnectDenied = null }) == ExplorerService.ConnectDeniedEstimate,
+            "a login's connectDenied counts toward the size cut at least as much as it adds to the page");
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>

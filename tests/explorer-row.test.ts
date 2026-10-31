@@ -7,6 +7,10 @@ import { onlineStatus, type RowStatus } from '../src/renderer/src/explorer/Explo
 import { databaseChips, serverChips } from '../src/shared/explorer/status'
 import { RowKind } from '../src/renderer/src/explorer/tree-model'
 import type { TreeNode } from '../src/renderer/src/explorer/tree-model'
+import { stylesheetRules } from './fixtures/css-rules'
+import { selectorParts } from './fixtures/css-cascade'
+import { colorKeys, cssVariable } from '../src/shared/theme/registry'
+import { contrastPairs } from '../src/shared/theme/contrast-pairs'
 
 // A server row draws its connection colour through the theme, which server rendering has no store for.
 vi.mock('../src/renderer/src/core/WorkbenchContext', async original => ({ ...await original<object>(), useConnectionAccent: () => undefined }))
@@ -191,9 +195,20 @@ describe('Object Explorer row visuals', () => {
     expect(deniedRow).toContain('data-tone="warning"')
     expect(deniedRow).toContain('<span class="status-pill-label">CONNECT DENIED</span>')
     expect(deniedRow).toContain('data-badge="noAccess"')
-    for (const markup of [disabledRow, deniedRow]) expect(markup).toContain('class="explorer-row dimmed"')
-    expect(plainRow).not.toMatch(/oe-chips|dimmed|data-badge/)
+    // A row with static chips keeps its name whole up to 65 % of the row while the chips give way (styles.css, M5).
+    for (const markup of [disabledRow, deniedRow]) expect(markup).toContain('class="explorer-row dimmed static-chips"')
+    expect(plainRow).not.toMatch(/oe-chips|dimmed|data-badge|static-chips/)
     expect(plainRow).toContain('aria-label="AppUser"')
+    // Disabled and denied permission to connect: the disabled badge, both chips and both phrases, since Enable alone would
+    // leave it unable to connect.
+    const both = login('Retired', { status: 'disabled', connectDenied: true, detail: 'SQL Server authentication · Disabled · Permission to connect denied' })
+    expect(rowName(both)).toBe('Retired, Permission to connect denied, Disabled')
+    expect(rowDescription(both)).toBe('Login\nSQL Server authentication · Disabled · Permission to connect denied\nCONNECT SQL is denied: the login cannot connect.\nThe login is disabled: new connections are refused; open sessions continue.')
+    const bothRow = render(both)
+    expect(bothRow).toContain('data-badge="disabled"')
+    expect([...bothRow.matchAll(/<span class="status-pill-label">([^<]*)<\/span>/g)].map(match => match[1])).toEqual(['CONNECT DENIED', 'DISABLED'])
+    // connectDenied alone is what the status already says for a login only denied; it adds nothing to a database.
+    expect(rowName(login('Denied', { status: 'noAccess', connectDenied: true }))).toBe('Denied, Permission to connect denied')
     // Other kinds keep their status words and no chip: a disabled trigger, a database the login cannot open.
     expect(render(node({ kind: 'trigger', label: 'trg', status: 'disabled' }))).not.toContain('oe-chips')
     expect(rowName(node({ kind: 'database', label: 'Locked', status: 'noAccess' }))).toBe('Locked, no access')
@@ -216,5 +231,48 @@ describe('Object Explorer row visuals', () => {
     expect(renderToStaticMarkup(createElement(Label, { text: 'dbo.a\u202eorders', match: 'ord' }))).toBe('<bdi class="oe-label">dbo.a⟨U+202E⟩<span class="oe-match">ord</span>ers</bdi>')
     // Where lower-casing changes the length, nothing is marked rather than the wrong letters.
     expect(renderToStaticMarkup(createElement(Label, { text: 'İstanbul', match: 'stan' }))).toBe('<bdi class="oe-label">İstanbul</bdi>')
+  })
+})
+
+describe('Object Explorer row styles', () => {
+  const rules = stylesheetRules().filter(rule => !rule.at.length)
+  /** The top-level declarations of `property` on rules that list `selector` (one part of a selector list, exactly). */
+  const declared = (selector: string, property: string) => rules.filter(rule => selectorParts(rule.selector).includes(selector))
+    .flatMap(rule => rule.declarations.filter(declaration => declaration.property === property).map(declaration => declaration.value))
+  it('colour each status badge by its state, a denied login and a database the login cannot open in amber', () => {
+    const colours = Object.fromEntries(['disabled', 'error', 'unavailable', 'lost', 'noAccess', 'loading'].map(badge => [badge, declared(`.oe-badge[data-badge="${badge}"]`, 'color')]))
+    expect(colours).toEqual({
+      disabled: ['var(--varia-errorForeground)'], error: ['var(--varia-errorForeground)'], unavailable: ['var(--varia-disabledForeground)'], lost: ['var(--varia-disabledForeground)'],
+      noAccess: ['var(--varia-warningForeground)'], loading: []
+    })
+  })
+  it('fill a badge\'s disc with its row\'s fill over the side bar, on every row state and in the row rules\' order', () => {
+    const states = ['.explorer-row.active-connection', '.explorer-row:hover', '.explorer-row[aria-selected="true"]', '.explorer-tree:focus .explorer-row[aria-selected="true"]']
+    const order = (selector: string) => rules.findIndex(rule => selectorParts(rule.selector).includes(selector))
+    const keyOf = new Map(colorKeys.map(key => [`var(${cssVariable(key)})`, key]))
+    for (const state of states) {
+      const [fill] = declared(state, 'background')
+      expect(fill, state).toMatch(/^var\(--varia-[\w-]+\)$/)
+      expect(declared(`${state} .oe-badge`, 'background'), state).toEqual([`linear-gradient(${fill}, ${fill}) var(--varia-sideBar-background)`])
+      // The red and amber badges are contrast-checked on that disc, as on the plain side bar.
+      for (const foreground of ['errorForeground', 'warningForeground'] as const) {
+        for (const background of [['sideBar.background'], ['sideBar.background', keyOf.get(fill)]]) {
+          expect(contrastPairs.some(pair => pair.foreground === foreground && pair.background.join() === background.join()), `${foreground} on ${background.join(' + ')}`).toBe(true)
+        }
+      }
+    }
+    const rowOrder = states.map(order), badgeOrder = states.map(state => order(`${state} .oe-badge`))
+    expect(badgeOrder.every(at => at >= 0)).toBe(true)
+    expect([...badgeOrder].sort((a, b) => a - b)).toEqual(badgeOrder)
+    expect([...rowOrder].sort((a, b) => a - b)).toEqual(rowOrder)
+    // Forced colors keep a selected badge on Highlight, the focused tree's too (the more specific rule above would win it).
+    const forced = stylesheetRules().find(rule => rule.at.join(' ') === '@media (forced-colors: active)' && selectorParts(rule.selector).includes('.explorer-tree:focus .explorer-row[aria-selected="true"] .oe-icon .oe-badge'))
+    expect(forced?.declarations).toContainEqual({ property: 'background', value: 'Highlight' })
+  })
+  it('keep a login\'s name whole up to 65 % of its row while its static chips give way first (M5)', () => {
+    expect(declared('.explorer-row.static-chips .oe-label', 'max-width')).toEqual(['65cqw'])
+    expect(declared('.explorer-row.static-chips .oe-label', 'flex')).toEqual(['0 1 auto'])
+    expect(declared('.explorer-row.static-chips .oe-label', 'min-width')).toEqual(['0'])
+    expect(Number(declared('.explorer-row.static-chips .oe-end', 'flex-shrink')[0])).toBeGreaterThanOrEqual(1000)
   })
 })

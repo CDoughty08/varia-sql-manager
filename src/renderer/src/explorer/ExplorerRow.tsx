@@ -71,8 +71,8 @@ const statusSentences = {
   noAccess: 'The current login cannot open this database.',
   readOnly: ''
 } as const
-/** A row's static chips, from its listing rather than a probe: a login's Disabled or Connect denied (D4a). */
-const listedChips = (node: Pick<TreeNode, 'kind' | 'status'>): StatusChip[] => node.kind === 'login' ? loginChips(node.status) : []
+/** A row's static chips, from its listing rather than a probe: a login's Disabled and Connect denied (D4a). */
+const listedChips = (node: Pick<TreeNode, 'kind' | 'status' | 'connectDenied'>): StatusChip[] => node.kind === 'login' ? loginChips(node.status, node.connectDenied) : []
 const lostSentence = 'The connection was lost when the SQL backend restarted. Reconnect, or remove the server.'
 /** A database whose live state is not the one Databases listed it with (its chevron and folders are the list's). */
 export const changedSentence = 'Its state changed since Databases loaded. Refresh Databases to update it.'
@@ -250,13 +250,14 @@ function ExplorerRow({ rowId, kind, top, level, posinset, setsize, node: listed,
   const sublabel = shownSublabel(node), counted = !partial
   const tag = root ? environmentTag(environment) : undefined
   // A server's chips (running jobs, availability groups) follow its name and come before its environment. Server and database
-  // rows show live chips (group names are the server's text); a login shows its listing's static chip.
-  const chips = live || root ? status?.chips : listedChips(node)
+  // rows show live chips (group names are the server's text); a login shows its listing's static chips.
+  const staticChips = live || root ? undefined : listedChips(node)
+  const chips = staticChips ?? status?.chips
   const serverWords = root && status?.words ? displayText(status.words) : undefined
   const name = [rowName(node), serverWords, tag?.description].filter(Boolean).join(', ')
   const tooltip = [rowTooltip(node, counted, note), serverWords, tag?.description].filter(Boolean).join('\n')
   return <div ref={menuTarget} role="treeitem" id={`oe-${rowId}`} data-row-id={rowId}
-    className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}`}
+    className={`explorer-row${folder ? ' folder' : ''}${root ? ' server' : ''}${node.lost ? ' lost' : ''}${active ? ' active-connection' : ''}${dimmed ? ' dimmed' : ''}${staticChips?.length ? ' static-chips' : ''}`}
     aria-level={level} aria-setsize={setsize || undefined} aria-posinset={posinset || undefined} aria-expanded={expandable ? node.expanded : undefined} aria-selected={selected}
     aria-busy={node.load === 'loading' || undefined} aria-label={name} aria-description={rowDescription(node, counted, note)} title={clip(tooltip)} style={style} draggable={(draggable && !renaming) || undefined}
     onMouseDown={select} onDoubleClick={() => { if (expandable) actions.toggle(rowId); else actions.activate(rowId) }}

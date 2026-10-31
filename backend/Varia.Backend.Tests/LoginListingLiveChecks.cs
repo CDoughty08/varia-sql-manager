@@ -44,15 +44,18 @@ internal static class LoginListingLiveChecks
         var words = service.Actions.Catalog.Logins;
 
         // Every login the listing shows, against what the catalog views say of it. Another run's scratch login can appear or go
-        // between the two reads, so those are left out.
-        var expected = (await Sql("SELECT p.name, p.type, CONVERT(int, p.is_disabled), CONVERT(int, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp "
+        // between the two reads, so those are left out. Like the listing, the baseline reads uncommitted rows, so another run's
+        // open CREATE or ALTER LOGIN cannot hold it; a failed read is a failing check, not an exception that ends the run.
+        var baseline = await Sql("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;\nSELECT p.name, p.type, CONVERT(int, p.is_disabled), CONVERT(int, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp "
             + "WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END), CONVERT(int, ISNULL(l.is_policy_checked, 0)), "
             + "CONVERT(int, ISNULL(l.is_expiration_checked, 0)) FROM sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id "
-            + "WHERE p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY p.name;")).Sets[0]
-            .Where(row => !ScratchDatabase.IsScratchName(row[0]!)).ToDictionary(row => row[0]!, StringComparer.Ordinal);
+            + "WHERE p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY p.name;");
+        check(baseline.Status == "completed" && baseline.Sets.Count == 1, "the Logins listing checks read the catalog views' logins: " + baseline.Status + " " + baseline.Error);
+        if (baseline.Status != "completed" || baseline.Sets.Count != 1) return;
+        var expected = baseline.Sets[0].Where(row => !ScratchDatabase.IsScratchName(row[0]!)).ToDictionary(row => row[0]!, StringComparer.Ordinal);
         var (all, allError) = await Listing();
         var wrong = all.Where(node => !ScratchDatabase.IsScratchName(node.Label)).Where(node => !expected.TryGetValue(node.Label, out var row)
-                || node.Status != words.StatusOf(row[2] == "1", row[3] == "1")
+                || node.Status != words.StatusOf(row[2] == "1", row[3] == "1") || node.ConnectDenied != (row[3] == "1" ? true : null)
                 || node.Detail != words.Detail(row[1]!, row[2] == "1", row[3] == "1", row[4] == "1", row[5] == "1"))
             .Select(node => node.Label + " (" + node.Status + ", " + node.Detail + ")").ToList();
         check(allError is null && all.Count >= expected.Count && wrong.Count == 0 && all.Any(node => node.Subtype == "sa"),
@@ -75,7 +78,7 @@ internal static class LoginListingLiveChecks
         async Task<string> Row()
         {
             var (nodes, error) = await Listing(only);
-            return error is not null ? "error " + error.Code : string.Join(" | ", nodes.Select(node => node.Subtype + ", " + (node.Status ?? "none") + ", " + node.Detail));
+            return error is not null ? "error " + error.Code : string.Join(" | ", nodes.Select(node => node.Subtype + ", " + (node.Status ?? "none") + (node.ConnectDenied == true ? " + connectDenied" : "") + ", " + node.Detail));
         }
         var states = new List<string> { await Row() };
         await Sql("ALTER LOGIN " + Bracket(login) + " DISABLE;");
@@ -89,10 +92,10 @@ internal static class LoginListingLiveChecks
         check(states.SequenceEqual([
                 "sql, none, SQL Server authentication",
                 "sql, disabled, SQL Server authentication · Disabled",
-                "sql, noAccess, SQL Server authentication · Permission to connect denied",
-                "sql, disabled, SQL Server authentication · Disabled · Permission to connect denied",
+                "sql, noAccess + connectDenied, SQL Server authentication · Permission to connect denied",
+                "sql, disabled + connectDenied, SQL Server authentication · Disabled · Permission to connect denied",
                 "sql, none, SQL Server authentication · Password policy enforced · Password expiration enforced"]),
-            "a scratch login's row says disabled, denied permission to connect (noAccess), both, and its password policy, each as the server changes it: " + string.Join(" / ", states));
+            "a scratch login's row says disabled, denied permission to connect (noAccess, connectDenied), both (disabled, connectDenied), and its password policy, each as the server changes it: " + string.Join(" / ", states));
 
         // P8: another session holds ALTER LOGIN … DISABLE in an open transaction. LOGINPROPERTY would wait for it; the listing's
         // catalog views answer under READ UNCOMMITTED. A blocked listing would answer BLOCKED after the pool's 5 s lock timeout,

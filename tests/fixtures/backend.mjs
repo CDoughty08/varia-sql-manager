@@ -344,13 +344,14 @@ const fixtureLogins = [
   ['Denied', 302, 'S', { connectDenied: true, policyChecked: true }],
   ['Locked', 303, 'S', { policyChecked: true, expirationChecked: true }],
   ['NT SERVICE\\SQLSERVERAGENT', 304, 'U', {}],
+  ['Retired', 305, 'S', { disabled: true, connectDenied: true, policyChecked: true }],
   ['sa', 1, 'S', { disabled: true, policyChecked: true }]
 ]
 /** A login row as the backend lists it (ExplorerQueries' logins listing). */
 function fixtureLogin([name, principalId, type, state]) {
   const facts = { disabled: false, connectDenied: false, policyChecked: false, expirationChecked: false, ...state }
   const status = loginStatusOf(facts.disabled, facts.connectDenied)
-  return explorerObject({ kind: 'login', name }, name, { subtype: loginSubtypeOf(principalId, type, name), detail: loginDetail(type, facts), ...status ? { status } : {} })
+  return explorerObject({ kind: 'login', name }, name, { subtype: loginSubtypeOf(principalId, type, name), detail: loginDetail(type, facts), ...status ? { status } : {}, ...facts.connectDenied ? { connectDenied: true } : {} })
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {

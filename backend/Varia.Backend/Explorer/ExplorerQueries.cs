@@ -156,13 +156,14 @@ internal static class ExplorerQueries
     private static string? Owner(string? name) => name is null ? null : "Owner " + name;
 
     /// <summary>A login as src/shared/actions/logins.ts describes it: the subtype the menus grey by (and the preflight re-derives),
-    /// disabled or denied permission to connect (noAccess) as two statuses, and its kind, state and password policy in words.</summary>
+    /// disabled or denied permission to connect (noAccess) as two statuses, a denial also as ConnectDenied (so a login that is both
+    /// shows both), and its kind, state and password policy in words.</summary>
     private static ExplorerNode Login(Row row)
     {
         var rules = Actions.ActionsCatalog.Current.Logins;
         var (disabled, denied) = (row.B(0), row.B(1));
         var detail = rules.Detail(row.Code(4), disabled, denied, row.B(5), row.B(6));
-        return ServerObject(row, "login", rules.SubtypeOf(row.I(3), row.Code(4), row.Key(0)), detail.Length == 0 ? null : detail, rules.StatusOf(disabled, denied), row.D(2));
+        return ServerObject(row, "login", rules.SubtypeOf(row.I(3), row.Code(4), row.Key(0)), detail.Length == 0 ? null : detail, rules.StatusOf(disabled, denied), row.D(2)) with { ConnectDenied = denied ? true : null };
     }
     private static string? Disabled(bool disabled) => disabled ? "disabled" : null;
 

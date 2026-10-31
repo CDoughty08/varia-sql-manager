@@ -917,6 +917,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (node.detail !== wire.detail) { node.detail = wire.detail; changed = true }
     if (node.icon !== wire.icon) { node.icon = wire.icon; changed = true }
     if (node.status !== wire.status) { node.status = wire.status; changed = true }
+    if (!!node.connectDenied !== !!wire.connectDenied) { node.connectDenied = wire.connectDenied || undefined; changed = true }
     if (node.created !== wire.created) { node.created = wire.created; changed = true }
     this.takeRuntime(node, wire)
     // The subtype picks the folders below (a table's history row), so they are listed again.
@@ -1044,6 +1045,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.detail = wire.detail
     node.subtype = wire.subtype
     node.status = wire.status
+    if (wire.connectDenied) node.connectDenied = true
     node.created = wire.created
     this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren

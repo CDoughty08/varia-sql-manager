@@ -37,8 +37,14 @@ describe('Logins listing (D4a)', () => {
   it('draws Disabled and Connect denied as different static chips, and none for a login that can connect', () => {
     expect(loginChips(undefined)).toEqual([])
     expect(loginChips('readOnly')).toEqual([])
-    expect(loginChips('disabled')).toEqual([{ id: 'state', tone: 'neutral', label: 'DISABLED', words: 'Disabled', title: 'The login is disabled: new connections are refused; open sessions continue.', icon: 'arrow-small-down' }])
-    expect(loginChips('noAccess')).toEqual([{ id: 'state', tone: 'warning', label: 'CONNECT DENIED', words: 'Permission to connect denied', title: 'CONNECT SQL is denied: the login cannot connect.', icon: 'circle-slash' }])
+    const disabled = { id: 'disabled', tone: 'neutral', label: 'DISABLED', words: 'Disabled', title: 'The login is disabled: new connections are refused; open sessions continue.', icon: 'arrow-small-down' }
+    const denied = { id: 'connectDenied', tone: 'warning', label: 'CONNECT DENIED', words: 'Permission to connect denied', title: 'CONNECT SQL is denied: the login cannot connect.', icon: 'circle-slash' }
+    expect(loginChips('disabled')).toEqual([disabled])
+    expect(loginChips('noAccess')).toEqual([denied])
+    expect(loginChips('noAccess', true)).toEqual([denied])
+    // Disabled and denied: the status says disabled (its badge), and both chips show, so Enable is not mistaken for the cure.
+    expect(loginChips('disabled', true)).toEqual([denied, disabled])
+    expect(new Set(loginChips('disabled', true).map(chip => chip.id)).size).toBe(2)
     expect(loginChipDocs.map(doc => [doc.status, doc.chip])).toEqual([['disabled', 'DISABLED'], ['noAccess', 'CONNECT DENIED']])
     // The chip's glyph is the badge's, so the row says one thing twice rather than two things.
     expect(loginChips('disabled')[0].icon).toBe(statusBadges.disabled)
@@ -49,5 +55,11 @@ describe('Logins listing (D4a)', () => {
     expect(docs).toContain('## Login status')
     expect(docs).toContain('| `noAccess` | CONNECT DENIED | warning | Permission to connect denied | CONNECT SQL is denied: the login cannot connect. |')
     expect(docs).toContain('| `G` | `windowsGroup` | Windows group |')
+    const prose = (text: string) => text.replace(/\s+/g, ' ')
+    expect(prose(docs)).toContain('the listing also sends `connectDenied`, so its row shows both chips and says both')
+    expect(prose(docs)).toContain('amber (`warningForeground`) for `noAccess` (a database the current login cannot open, a login denied permission to connect)')
+    expect(prose(readFileSync('docs/ipc.md', 'utf8'))).toContain('A login row carries `connectDenied: true` when CONNECT SQL is denied to it')
+    // README says what the live Logins checks do to a shared server, and names their lane.
+    expect(readFileSync('README.md', 'utf8')).toMatch(/The Logins listing checks create a scratch login .*uncommitted `ALTER LOGIN … DISABLE`.*`--logins-live` runs only them\./)
   })
 })

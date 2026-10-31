@@ -74,15 +74,21 @@ export function databaseChips(row: DatabaseStatusRow | undefined, progress?: Pro
   return chips
 }
 
-/** A login row's chip, static: the Logins listing's status (logins.ts loginStatusOf), never a probe's. Calm Pro states it in
- *  words beside the badge, and Connect denied looks different from Disabled. */
+/** A login row's chips, static: the Logins listing's status (logins.ts loginStatusOf) and denial, never a probe's. Calm Pro
+ *  states them in words beside the badge, and Connect denied looks different from Disabled. */
 const loginStates = {
-  disabled: { id: 'state', tone: 'neutral', label: 'DISABLED', words: 'Disabled', title: 'The login is disabled: new connections are refused; open sessions continue.', icon: 'arrow-small-down' },
-  noAccess: { id: 'state', tone: 'warning', label: 'CONNECT DENIED', words: 'Permission to connect denied', title: 'CONNECT SQL is denied: the login cannot connect.', icon: 'circle-slash' }
+  disabled: { id: 'disabled', tone: 'neutral', label: 'DISABLED', words: 'Disabled', title: 'The login is disabled: new connections are refused; open sessions continue.', icon: 'arrow-small-down' },
+  noAccess: { id: 'connectDenied', tone: 'warning', label: 'CONNECT DENIED', words: 'Permission to connect denied', title: 'CONNECT SQL is denied: the login cannot connect.', icon: 'circle-slash' }
 } as const satisfies Readonly<Record<string, StatusChip>>
-/** A login's chips: one for a disabled login or one denied permission to connect, none otherwise. */
-export function loginChips(status: string | undefined): StatusChip[] {
-  return status === 'disabled' || status === 'noAccess' ? [loginStates[status]] : []
+/** A login's chips: CONNECT DENIED for one denied permission to connect (status `noAccess`, or `disabled` with
+ *  `connectDenied` when it is both: Enable alone would not let it connect), then DISABLED for a disabled login, none
+ *  otherwise. The denial comes first because a narrow pane shows only the first chip, and a disabled login's badge already
+ *  says Disabled. */
+export function loginChips(status: string | undefined, connectDenied = false): StatusChip[] {
+  const chips: StatusChip[] = []
+  if (status === 'noAccess' || connectDenied) chips.push(loginStates.noAccess)
+  if (status === 'disabled') chips.push(loginStates.disabled)
+  return chips
 }
 /** Every chip a login can show, for docs/object-explorer.md. */
 export const loginChipDocs: readonly { readonly status: string; readonly chip: string; readonly tone: string; readonly words: string; readonly title: string }[] =

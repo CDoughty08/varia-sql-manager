@@ -126,9 +126,10 @@ internal sealed record ParentRefDto(string Kind, string Schema, string Name);
 internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
 internal sealed record TextFilterDto(string Op, string Value);
 internal sealed record DateFilterDto(string Op, string Value, string? Value2 = null);
-/// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss. Database: a database node's runtime state.</summary>
+/// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss. Database: a database node's runtime state.
+/// ConnectDenied: a login denied CONNECT SQL, sent only when true (Status says disabled when it is disabled too).</summary>
 internal sealed record ExplorerNode(NodeRefDto Ref, string Label, string Icon, bool HasChildren, string? Sublabel = null, string? Detail = null, string? Subtype = null,
-    string? Status = null, string? Created = null, ExplorerDatabase? Database = null);
+    string? Status = null, string? Created = null, ExplorerDatabase? Database = null, bool? ConnectDenied = null);
 /// <summary>A database's runtime state as the listing read it (sys.databases' state, user_access, is_read_only and
 /// is_in_standby), in the shape of the live status rows, so the renderer's action rules can take the newer of the two.</summary>
 internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly, bool Standby);
