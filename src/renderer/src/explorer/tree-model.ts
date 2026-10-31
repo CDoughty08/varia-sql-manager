@@ -3,6 +3,7 @@
 import type { ExplorerErrorCode } from '../../../shared/contracts'
 import { explorerLimits, folderSpecs, kindSpecs, type ExplorerIcon, type FolderId, type NodeKind, type NodeStatus, type NodeSubtype } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
+import type { DatabaseRuntime } from '../../../shared/explorer/status.ts'
 
 export type LoadState = 'none' | 'loading' | 'loaded' | 'error'
 export type MoreState = 'none' | 'auto' | 'stopped' | 'capped' | 'paused' | 'error'
@@ -71,6 +72,9 @@ export interface TreeNode {
   updatedAt?: number
   /** When a refresh that kept the old children failed (epoch ms); cleared by the next first page. */
   staleSince?: number
+  /** A database row's runtime state as its listing read it, and when that row arrived (epoch ms). */
+  database?: DatabaseRuntime
+  listedAt?: number
   note?: NodeNote
 }
 export interface NodeTable { get(id: number): TreeNode | undefined }

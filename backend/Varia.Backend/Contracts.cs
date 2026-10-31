@@ -15,9 +15,9 @@ internal sealed record AdvancedConnectionOptions(
     string ApplicationIntent = "ReadWrite", string CurrentLanguage = "", bool Replication = false, string IpAddressPreference = "IPv4First",
     string ServerCertificate = "", string AttachDbFilename = "", string FailoverPartner = "", string FailoverPartnerSpn = "",
     bool MultiSubnetFailover = false, string ServerSpn = "", bool UserInstance = false);
-/// <summary>ProductVersion, Login and EngineEdition come from the server profile probed at connect; they are absent when the probe failed.</summary>
+/// <summary>ProductVersion, Login, EngineEdition and Linux come from the server profile probed at connect; they are absent when the probe failed.</summary>
 internal sealed record ConnectionInfo(string Id, string Server, string Database, string ServerVersion, string? DisplayName = null, string? Color = null, int CommandTimeout = 0,
-    string? ProductVersion = null, string? Login = null, int? EngineEdition = null);
+    string? ProductVersion = null, string? Login = null, int? EngineEdition = null, bool? Linux = null);
 /// <summary>connections.identity: the Kerberos principal integrated authentication would use off Windows, when the default
 /// credential cache holds a ticket (at most 256 characters). Windows, and Linux or macOS without a ticket, answer none.</summary>
 internal sealed record IntegratedIdentity(string? Principal);
@@ -126,9 +126,12 @@ internal sealed record ParentRefDto(string Kind, string Schema, string Name);
 internal sealed record ExplorerFilterDto(TextFilterDto? Name = null, TextFilterDto? Schema = null, TextFilterDto? Owner = null, DateFilterDto? Created = null);
 internal sealed record TextFilterDto(string Op, string Value);
 internal sealed record DateFilterDto(string Op, string Value, string? Value2 = null);
-/// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss.</summary>
+/// <summary>One tree node. Created is server local time, yyyy-MM-ddTHH:mm:ss. Database: a database node's runtime state.</summary>
 internal sealed record ExplorerNode(NodeRefDto Ref, string Label, string Icon, bool HasChildren, string? Sublabel = null, string? Detail = null, string? Subtype = null,
-    string? Status = null, string? Created = null);
+    string? Status = null, string? Created = null, ExplorerDatabase? Database = null);
+/// <summary>A database's runtime state as the listing read it (sys.databases' state, user_access, is_read_only and
+/// is_in_standby), in the shape of the live status rows, so the renderer's action rules can take the newer of the two.</summary>
+internal sealed record ExplorerDatabase(int State, int UserAccess, bool ReadOnly, bool Standby);
 /// <summary>A catalog failure, returned as a value so its code reaches the tree row.</summary>
 internal sealed record ExplorerError(string Code, string Message, bool Retryable, string? Action = null);
 /// <summary>A page of children: static folders first (first page only), then rows. Total is on the first page only.</summary>

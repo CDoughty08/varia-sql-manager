@@ -89,6 +89,11 @@ export const glyphUse: Readonly<Record<GlyphSizeName, readonly string[]>> = {
   lg: []
 }
 
+/** `--varia-<name>`, in px: the thickness of indicators that are neither text nor icons. */
+export const indicators = {
+  progress: { px: 4, use: 'A progress bar\'s track and fill, as under a running step in a StepList.' }
+} as const
+
 /** The planned use of each height; `densityUse` lists the rules that take it today. */
 export interface DensityMetrics {
   /** `--varia-header`: the title bar. */
@@ -147,6 +152,7 @@ export function metricVariables(density: Density = defaultDensity): Readonly<Rec
     ...Object.fromEntries(Object.entries(motion).map(([name, entry]) => [`--varia-motion-${name}`, ms(entry.ms)])),
     '--varia-motion-ease': motionEasing,
     ...Object.fromEntries(Object.entries(glyphSizes).map(([name, glyph]) => [`--varia-glyph-${name}`, px(glyph.px)])),
+    ...Object.fromEntries(Object.entries(indicators).map(([name, indicator]) => [`--varia-${name}`, px(indicator.px)])),
     ...densityVariables(density)
   }
 }
@@ -213,6 +219,10 @@ export function renderMetricDocs(): string {
     '',
     table(['Token', 'px', 'Use', 'Sized with it'], (Object.keys(glyphSizes) as GlyphSizeName[]).map(name => [`\`--varia-glyph-${name}\``, glyphSizes[name].px, glyphSizes[name].use,
       glyphUse[name].map(selector => `\`${selector}\``).join(', ')])),
+    '',
+    '## Indicators',
+    '',
+    table(['Token', 'px', 'Use'], Object.entries(indicators).map(([name, indicator]) => [`\`--varia-${name}\``, indicator.px, indicator.use])),
     '',
     '## Bars and rows',
     '',

@@ -620,6 +620,10 @@ internal static class ExplorerChecks
         var node = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("column", new string('d', 128), Name: new string('c', 128), Parent: new ParentRefDto("table", new string('s', 128), new string('t', 128)))),
             new string('c', 128), "symbol-field", false, "(nvarchar(128), not null)");
         check(ExplorerService.Estimate(node) * 2000 > new ExplorerOptions().SizeCut, "a page of 2,000 rows with 128-character names passes the size cut, so it is split");
+        var database = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("database", Name: new string('d', 128))), new string('d', 128), "database", true) { Database = new(6, 2, true, true) };
+        var databaseBytes = JsonBridge.Encode(database, Json).Length;
+        check(JsonBridge.Encode(database with { Database = null }, Json).Length + ExplorerService.DatabaseEstimate >= databaseBytes && ExplorerService.Estimate(database) >= databaseBytes,
+            "a database row's runtime state counts toward the size cut at least as much as it adds to the page");
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>

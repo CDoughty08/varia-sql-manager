@@ -8,12 +8,12 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 
 ## Actions
 
-| Action | Menu title | Command | Kind | Group | Mnemonic | Windows and Linux | macOS | Context key |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `1_query` 2 | w | — | — | `explorerActionSelectTop` |
-| `rename` | Rename | `explorer.rename` | inline | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` |
-| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` |
-| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` |
+| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Servers | Context key |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 2 | w | — | — | All | `explorerActionSelectTop` |
+| `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | All | `explorerActionRename` |
+| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | All | `explorerActionDelete` |
+| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | All | `explorerActionProperties` |
 
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
@@ -42,15 +42,36 @@ is reserved on Windows and Linux.
 | `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
 | `function` | `aggregate` | – | ✓ | ○ | – |
 
+## Menus, statuses, database states and servers
+
+An action's item goes in `explorer.context`, `explorer.tasks`, `explorer.tasks.restore`: Object Explorer's menu, or its Tasks submenus. Tasks (`explorer.tasks`) and Tasks › Restore (`explorer.tasks.restore`) stay hidden while nothing is placed in them, so they appear with their first action.
+
+A node's status badge (`explorerNodeStatus`) can overlay its row: a disabled login offers Enable in place of Disable.
+No kind changes its actions by status yet.
+
+A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.
+Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
+No rule narrows a database's actions yet.
+
+An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+
 ## Dialogs
 
-| Dialog | Title | Opens as | Action | Pages |
-| --- | --- | --- | --- | --- |
-| `deleteObject` | Delete Object | Modal dialog | `delete` | General |
-| `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General, Files, Filegroups, Options |
+| Dialog | Title | Opens as | Action | Pages | Steps panel |
+| --- | --- | --- | --- | --- | --- |
+| `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
+| `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
+
+A modal dialog with more than one page lists them beside the page (SSMS's "Select a page"); where the dialog is narrower
+than 720 px (a viewport under 768 CSS px, as when zoomed in: the window is at least 1024 px wide) the list becomes a row of tabs above the page (a `tablist` named "Select a page", arrow keys, Home and End). A
+page marked kept mounted stays in the page once visited, hidden while another shows, so what it holds (a running list,
+a typed value) survives switching away. A dialog with a steps panel shows its plan as a list of steps, scrolling in at most 40 % of the column
+(`kit/StepList.tsx`, Create Catalog's too), each pending, running, done, failed, cancelled or skipped, with an optional
+progress bar under a running step.
 
 In a modal dialog, the Script button scripts to a new query window; its arrow lists Script Action to New Query Window, Script Action to File, Script Action to Clipboard. Script never runs anything.
 OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statement in SQL Server.
@@ -62,6 +83,51 @@ confirmation.
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
 [docs/table-designer.md](table-designer.md) describes them.
+
+## Confirmations
+
+An action that asks first (A13) sends main a prompt id and bounded facts (`varia:confirm-action`); main checks them
+(names up to 128 characters, counts up to 1,000,000, at most 8 query window names, no unknown members), writes
+the message box from `src/shared/actions/prompts.ts` with names shown through `displayText`, and answers with the
+chosen button's id; Escape, a closed box or a page that went away answers Cancel. The page can neither word a prompt nor
+choose its default. Database Properties' Open Connections prompt keeps its own channel.
+
+| Prompt | Title | Buttons | Example |
+| --- | --- | --- | --- |
+| `renameDatabase` | Rename Database | **Close Connections and Rename**, Rename When Free, Cancel | 3 connections are using Sales (2 query windows in Varia). Close them and rename the database? 1 session has an open transaction, which closing rolls back. Varia's query windows with open transactions: Query 1.sql. Rename When Free waits until they disconnect; Stop in the status bar ends the wait. |
+| `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. |
+
+The default button is bold. Rename Database defaults to Rename When Free where Varia may not close the connections, and
+Disable Login to Cancel for a login a service runs as.
+
+## Long runs
+
+An action that changes a server for seconds or hours registers as a long run (`LongRunService`) while it runs. Until it
+ends, closing the window is refused with a banner naming it and its server, Disconnect of its server and Restart SQL
+Backend are refused with "<Run> is running on <server>. Stop it first.", and main's reload prompt names it first
+(the page reports at most 16 runs, server names up to 256 characters, and counts the rest; `varia:long-runs`).
+A run shown in a modal dialog (Create Catalog) repeats a refused close or Restart in that dialog, which covers the banner.
+While the backend does not answer, the run cannot be stopped either, so Restart SQL Backend goes on to main's prompt,
+which names the run it would stop part way.
+A long run never holds the document task, so nothing waits for it silently; main's drain of a stopping backend stays the
+last resort.
+
+| Kind | Named as |
+| --- | --- |
+| `createCatalog` | Create Catalog |
+| `newDatabase` | New Database |
+| `attach` | An attach |
+| `restore` | A restore |
+| `verify` | A backup verification |
+| `newLogin` | New Login |
+| `backup` | A backup |
+| `shrink` | A shrink |
+
+Create Catalog is the only long run so far; the others are reserved for the actions that will use them.
+
+A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
+shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
+connections…").
 
 ## Database Properties
 
@@ -255,4 +321,4 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `collations` | 8,192 | Collations the Collation list offers |
 | `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
-| `statusDelayMs` | 300 | How long a rename runs before the status bar shows it with Stop, in ms |
+| `statusDelayMs` | 300 | How long a state action (a rename, a login's Disable or Enable) runs before the status bar shows it with Stop, in ms |

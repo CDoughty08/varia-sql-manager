@@ -349,7 +349,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         pools[id] = new() { [connectionString] = 0 };
         var probed = profile.ProductVersion is not null;
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
-            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
+            profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null, probed ? profile.Linux : null);
     }
 
     /// <summary>The connection's settings, which its other pools derive from. SqlClient's pool blocking (Auto blocks for every

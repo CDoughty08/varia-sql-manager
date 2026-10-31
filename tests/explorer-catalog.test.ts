@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bandOf, childParentKinds, cloudEngineEditions, engineOf, explorerCatalogJson, explorerIcons, explorerLimits, filterProperties, folderGates, folderIds, folderOwnerKinds,
   folderServed, folderSpecs, foldersFor, kindScopes, kindSpecs, laterFolders, maxBand, maxNameOf, minBand, nodeKinds, nodeSubtypes, parentKinds, queryIds, refFields,
-  rootFolder, scopeFields, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
+  rootFolder, scopeFields, serverEngineOf, serverEngines, staticChildren, statusBadges, subfolders, type ExplorerProfile, type FolderId, type KindSpec, type NodeKind
 } from '../src/shared/explorer/catalog'
 import { renderExplorerDocs } from '../src/shared/explorer/docs'
 import { iconSpec, isIconId } from '../src/shared/icons'
@@ -118,6 +118,9 @@ describe('Object Explorer catalogue', () => {
     }
     expect([11, 12, 13, 14, 15, 16, 17, 18, 99].map(bandOf)).toEqual([12, 12, 13, 14, 15, 16, 17, 17, 17])
     expect([1, 2, 3, 4, 8, 5, 6, 9, 11, 12].map(engineOf)).toEqual(['box', 'box', 'box', 'box', 'box', 'cloud', 'cloud', 'cloud', 'cloud', 'cloud'])
+    // Actions and menus tell Managed Instance apart; a connection whose profile probe failed counts as SQL Server.
+    expect([1, 2, 3, 4, 8, 5, 6, 9, 11, 12, undefined].map(serverEngineOf)).toEqual(['box', 'box', 'box', 'box', 'managedInstance', 'cloud', 'cloud', 'cloud', 'cloud', 'cloud', 'box'])
+    expect(serverEngines).toEqual(['box', 'managedInstance', 'cloud'])
     expect(cloudEngineEditions).toEqual([5, 6, 9, 11, 12])
   })
   it('lists rows exactly in the folders and kinds that have a query, with filters only in folders', () => {

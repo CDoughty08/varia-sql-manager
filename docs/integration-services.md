@@ -433,8 +433,9 @@ a lock or not; the restore itself (and its switch to read-write) gets 30 s more 
 waiting, and only a restore still running then (waiting for a lock on msdb's backup history, say) is cancelled too, the database it left
 restoring dropped (one that turns out online is named for the user to delete). Then what was created is removed. The reply waits for
 that past the usual grace, up to 120 s more, a disconnect included, and lists the steps (the removal's own failures clipped to
-2,048 characters); past that it answers `CANCELLED` as not known yet, and the job goes on. Closing the window or quitting is
-refused while Create Catalog runs. A backend that shuts down anyway (a renderer reload, Restart Backend) waits up to
+2,048 characters); past that it answers `CANCELLED` as not known yet, and the job goes on. Create Catalog is a long run
+(docs/object-actions.md, Long runs): while it runs, closing the window or quitting, Disconnect of its server and Restart SQL
+Backend (while the backend answers) are refused with a message naming it, which its dialog repeats, and the reload prompt names it. A backend that shuts down anyway (a confirmed reload, a crash) waits up to
 120 s for a Create Catalog past its restore to finish or remove what it made, and main lets that generation run 130 s after its
 stdin ends (2 s otherwise) before it kills it; only a kill or a crash in that window leaves an incomplete catalog, which Create Catalog then
 refuses as `CATALOG_EXISTS` until its database is dropped. The CLR agreement is checked from the server's facts before any step, in a

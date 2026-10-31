@@ -17,6 +17,7 @@ const menuNames: Readonly<Record<MenuId, string>> = {
   ...Object.fromEntries(applicationMenus.map(menu => [menu.id, menu.label])) as Record<typeof applicationMenus[number]['id'], string>,
   'file.recent': 'File › Recent Files', 'edit.findReplace': 'Edit › Find and Replace', 'edit.advanced': 'Edit › Advanced', 'edit.bookmarks': 'Edit › Bookmarks', 'edit.intellisense': 'Edit › IntelliSense',
   theme: 'View › Theme', 'query.connection': 'Query › Connection', 'editor.context': 'Editor context menu', 'explorer.context': 'Object Explorer context menu', 'explorer.new': 'Object Explorer context menu › New',
+  'explorer.tasks': 'Object Explorer context menu › Tasks', 'explorer.tasks.restore': 'Object Explorer context menu › Tasks › Restore',
   ...Object.fromEntries(scriptSubmenuIds.map(id => [id, 'Object Explorer context menu › Script … as' + (id === scriptAsSubmenuId ? '' : ` › ${submenus[id].title}`)])) as Record<typeof scriptSubmenuIds[number], string>,
   'tableDesigner.context': 'Table designer context menu', 'documentTab.context': 'Query tab context menu', 'output.context': 'Query Output context menu', 'dockTab.context': 'Panel tab context menu', 'input.context': 'Text field context menu',
   'ssis.operation.context': 'Integration Services Operations context menu'
@@ -109,6 +110,8 @@ function menuTable(menu: MenuId): string[] {
     items.push({ group: extra.group, order: extra.order, title: extra.role, cells: [code(extra.group), extra.role[0].toUpperCase() + extra.role.slice(1), `Electron role ${code(extra.role)}`, shownWhen(extra.platforms ?? platforms)] })
   }
   items.sort((a, b) => (a.group < b.group ? -1 : a.group > b.group ? 1 : 0) || a.order - b.order || a.title.localeCompare(b.title))
+  // A submenu with nothing visible is left out of its menu, so one that has no items yet never shows.
+  if (!items.length && submenuIds.some(id => id === menu && !submenus[id].dynamic)) return ['Nothing is placed here yet, so the submenu stays hidden.']
   const lines = [row(['Group', 'Item', 'Command', 'Shown']), row(['---', '---', '---', '---']), ...items.map(item => row(item.cells))]
   if (submenuIds.some(id => id === menu && submenus[id].dynamic === 'theme')) {
     const label = (item: { label: string; mnemonic?: string }) => item.mnemonic ? withAccessKey(menu, item.label, item.mnemonic, platforms) : item.label

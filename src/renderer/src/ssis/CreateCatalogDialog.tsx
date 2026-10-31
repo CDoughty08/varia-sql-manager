@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { ActionStep } from '../../../shared/actions/schema.ts'
 import { ssisActions, ssisLimits } from '../../../shared/ssis/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
-import type { IconId } from '../../../shared/icons.ts'
+import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
 import type { OpenCreateCatalog } from './CreateCatalogService'
-
-const stepIcons: Readonly<Record<ActionStep['status'], IconId>> = { done: 'check', failed: 'error', cancelled: 'debug-stop', skipped: 'circle-slash' }
-const stepStatus: Readonly<Record<ActionStep['status'], string>> = { done: 'Done', failed: 'Failed', cancelled: 'Stopped', skipped: 'Skipped' }
 
 /** The steps Create Catalog will run on this server: CLR only when it is off. */
 function plannedSteps(open: OpenCreateCatalog): readonly string[] {
@@ -89,15 +85,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
         </fieldset>
         <section className="property-section create-catalog-plan" aria-labelledby="create-catalog-plan">
           <div className="create-catalog-caption" id="create-catalog-plan">This changes the server</div>
-          <ol className="create-catalog-steps" aria-labelledby="create-catalog-plan">
-            {(steps.length ? steps.map(step => step.message ?? '') : plannedSteps(open)).map((text, index) => {
-              const step = steps[index]
-              return <li key={index} data-status={step?.status ?? 'pending'}>
-                <Icon name={step ? stepIcons[step.status] : 'circle-outline'} />
-                <span>{step ? <><span className="visually-hidden">{stepStatus[step.status]}: </span>{text}</> : text}</span>
-              </li>
-            })}
-          </ol>
+          <StepList labelledBy="create-catalog-plan" steps={steps.length ? steps.map(step => ({ state: step.status, text: step.message ?? '' })) : plannedSteps(open).map(text => ({ state: 'pending', text }))} />
           <dl className="create-catalog-files">
             <dt>Backup</dt><dd className="create-catalog-path">{open.setup.backupFile}</dd>
             <dt>Data file</dt><dd className="create-catalog-path">{open.setup.dataFile}</dd>
@@ -109,6 +97,9 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
       {open.problem && <p className="connect-error" id="create-catalog-problem" role="alert">{open.problem}</p>}
       {open.error && <p className={'connect-error' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>{open.error.message}</p>}
     </div>
+    {/* A window close or Restart refused while Create Catalog runs: the dialog covers the command banner, so it says why
+        here, outside the scroll, above Stop. */}
+    {executing && open.refusal && <p className="connect-error create-catalog-refusal" role="alert">{open.refusal}</p>}
     <div className="connection-footer">
       <span />
       <button className="primary" type="submit" disabled={!fields}>OK</button>

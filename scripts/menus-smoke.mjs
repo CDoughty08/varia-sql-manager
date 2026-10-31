@@ -2,7 +2,7 @@ import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
-import { dialogLifecycle, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
+import { dialogLifecycle, longRunRefusals, rendererWatchdog } from './fixtures/dialog-lifecycle.mjs'
 import { sessionPrompts } from './fixtures/session-prompts.mjs'
 import { activeMenuItem, anyResultGrid, backendReady, banner, documentTabs, documentTabSlots, editorText as editorTextOf, errorMessages, explorerLabel, gridCell, gridPart, matching, menuItemNames, messages as messagesOf, openMenus as openMenusOf, outputPane, outputView, paneMenuButton, paneTab, part, quickInput, searchBox, serverRows, statusBar, titleBar, toolbarButton } from './fixtures/ui.mjs'
 
@@ -1282,13 +1282,15 @@ try {
   // while a Script As save waits exits once the dialogs are answered, and one during the reload prompt survives Reload.
   // A renderer crash Chromium cannot see (a process spawned at the renderer's launch holds its channel) gets the crash
   // prompt from main's watchdog, once, and Reload brings the workbench back (in a new window, which takes over a quit the
-  // lost page could not finish); Close there closes the window at once.
+  // lost page could not finish); Close there closes the window at once. While a long run (Create Catalog) runs, a window
+  // close is refused naming it and the reload prompt names it.
   expect(failures).toEqual([])
   await application.close()
   application = undefined
   await dialogLifecycle(launchOptions)
   await rendererWatchdog(launchOptions)
-  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt, reloads and finishes a quit the lost page could not, and Close closes at once.')
+  await longRunRefusals(launchOptions)
+  console.log('Menus checks: Restart asked twice restarts once, a crash prompt waits for the open file dialog, drops the dead page\'s queued ones and closes its message box, the reload and not-responding prompts wait their turn, a quit waits for queued dialogs, and a quit during the reload prompt survives Reload; a renderer crash Chromium cannot see still gets one crash prompt, reloads and finishes a quit the lost page could not, and Close closes at once; a long run refuses the close and is named in the reload prompt.')
 
   // 17. Open transactions and running queries (fixtures/session-prompts.mjs), in a fresh app: F5 connects a disconnected
   // query first; no execution reads its transaction; closing, changing connection and quitting read it then and ask

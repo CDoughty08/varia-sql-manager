@@ -1,5 +1,5 @@
 import type { ExplorerNode as WireNode, VariaApi } from '../../../shared/contracts'
-import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, parentKinds, type FolderId, type NodeKind } from '../../../shared/explorer/catalog.ts'
+import { cloudEngineEditions, explorerLimits, filterProperties, folderSpecs, kindSpecs, nodeStatuses, parentKinds, serverEngineOf, type FolderId, type NodeKind, type NodeStatus, type ServerEngine } from '../../../shared/explorer/catalog.ts'
 import { displayText, insertTextFor, refKey, type ExplorerFilter, type ExplorerNodeRef, type ExplorerTarget, type ObjectRef, type ParentRef } from '../../../shared/explorer/refs.ts'
 import { explorerFilterSchema } from '../../../shared/explorer/schema.ts'
 import { actionContextValues, actionMenuState, type ActionContextValues } from '../../../shared/actions/catalog.ts'
@@ -47,11 +47,14 @@ export interface ExplorerContextState extends ScriptContextValues, ActionContext
   readonly explorerSelectionFilterable: boolean
   readonly explorerSelectionFiltered: boolean
   readonly explorerSelectionInsertable: boolean
+  readonly explorerSelectionStatus: '' | NodeStatus
+  readonly explorerSelectionServerEngine: '' | ServerEngine
+  readonly explorerSelectionServerLinux: boolean
   readonly explorerLoading: boolean
 }
 export const noExplorerContext: ExplorerContextState = {
   explorerHasSelection: false, explorerSelectionKind: '', explorerSelectionFolder: '', explorerSelectionFilterable: false, explorerSelectionFiltered: false,
-  explorerSelectionInsertable: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
+  explorerSelectionInsertable: false, explorerSelectionStatus: '', explorerSelectionServerEngine: '', explorerSelectionServerLinux: false, ...scriptContextValues(scriptMenuState(undefined)), ...actionContextValues(actionMenuState(undefined)), ...ssisVerbContextValues(ssisVerbMenuState(undefined)),
   explorerLoading: false
 }
 export type RefreshScope = 'server' | 'databases' | 'other'
@@ -126,8 +129,12 @@ const objectOf = (ref: ExplorerNodeRef): ObjectRef => ref.type === 'object' ? re
 const isParentKind = (kind: string): kind is ParentRef['kind'] => (parentKinds as readonly string[]).includes(kind)
 const sameParent = (a: ParentRef, b: ObjectRef) => a.kind === b.kind && a.schema === b.schema && a.name === b.name
 
-const targetOf = (node: TreeNode): ExplorerTarget =>
-  ({ connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label })
+/** What a node is, and the server it is on: the engine and platform its connection's profile reported at connect. */
+const targetOf = (node: TreeNode, connection: Pick<LiveConnection, 'engineEdition' | 'linux'> | undefined): ExplorerTarget => ({
+  connectionId: node.connectionId, ref: node.ref, kind: node.kind, ...(node.folder ? { folder: node.folder } : {}), ...(node.subtype ? { subtype: node.subtype } : {}), label: node.label,
+  ...(node.status ? { status: node.status } : {}), ...(node.database ? { database: node.database, listedAt: node.listedAt } : {}),
+  engine: serverEngineOf(connection?.engineEdition), linux: !!connection?.linux
+})
 
 /** The server row's "(SQL Server 16.0.4135.4 - sa)", from the profile probed at connect, else the reported version. */
 export function serverSublabel(connection: Pick<LiveConnection, 'serverVersion' | 'productVersion' | 'login'>): string {
@@ -389,12 +396,17 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
   /** The selected node as a command target; synthetic rows have none. */
   target(): ExplorerTarget | undefined {
     const node = this.selectedNode()
-    return node && targetOf(node)
+    return node && targetOf(node, this.connectionOf(node.connectionId))
   }
   /** A row's node (a synthetic row's owner) as a context menu's target, with its id; undefined for a removed node. */
   menuNode(rowId: number | undefined): ExplorerMenuNode | undefined {
     const node = rowId === undefined ? undefined : this.nodes.get(rowOwner(rowId))
-    return node && this.attached(node) ? { ...targetOf(node), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) } : undefined
+    return node && this.attached(node)
+      ? { ...targetOf(node, this.connectionOf(node.connectionId)), id: node.id, lost: node.lost, ...(node.filtered ? { filtered: true } : {}), ...(node.kind === 'folder' && this.insertable(node) ? { insertable: true } : {}) }
+      : undefined
+  }
+  private connectionOf(connectionId: string): LiveConnection | undefined {
+    return this.connections.getSnapshot().find(connection => connection.id === connectionId)
   }
   /** The server and database a new query for the row should use (the database is the node's, if it has one). */
   queryTarget(id: number | undefined = this.selected): { connectionId: string; database?: string } | undefined {
@@ -906,6 +918,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (node.icon !== wire.icon) { node.icon = wire.icon; changed = true }
     if (node.status !== wire.status) { node.status = wire.status; changed = true }
     if (node.created !== wire.created) { node.created = wire.created; changed = true }
+    this.takeRuntime(node, wire)
     // The subtype picks the folders below (a table's history row), so they are listed again.
     const subtype = node.subtype !== wire.subtype
     if (subtype) { node.subtype = wire.subtype; changed = true }
@@ -1019,6 +1032,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     this.nodes.set(node.id, node)
     return node
   }
+  /** A database row's runtime state, stamped with when it was listed, so a newer live status sample can replace it. */
+  private takeRuntime(node: TreeNode, wire: WireNode): void {
+    if (wire.database) { node.database = wire.database; node.listedAt = this.now() }
+    else if (node.database) { node.database = undefined; node.listedAt = undefined }
+  }
   private createChild(parent: TreeNode, wire: WireNode): TreeNode {
     const ref = this.intern(parent, wire.ref)
     const node = this.createNode(parent.id, parent.connectionId, ref, ref.type === 'folder' ? 'folder' : ref.object.kind, ref.type === 'folder' ? ref.folder : undefined, parent.level, wire.label, wire.icon)
@@ -1027,6 +1045,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.subtype = wire.subtype
     node.status = wire.status
     node.created = wire.created
+    this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren
     if (ref.type === 'folder' && this.filters.get(parent.connectionId)?.size) node.filtered = this.filters.get(parent.connectionId)!.has(refKey(parent.connectionId, ref))
     return node
@@ -1325,6 +1344,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (this.disposed) return
     const node = this.selectedNode()
     const folder = node?.folder ? folderSpecs[node.folder] : undefined
+    const target = node && targetOf(node, this.connectionOf(node.connectionId))
     const next: ExplorerContextState = {
       explorerHasSelection: !!node,
       explorerSelectionKind: node?.kind ?? '',
@@ -1332,8 +1352,11 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
       explorerSelectionFilterable: !!node && !!folder?.filter?.length,
       explorerSelectionFiltered: !!node?.filtered,
       explorerSelectionInsertable: !!node && (node.kind === 'server' || this.insertable(node)),
+      explorerSelectionStatus: target?.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : '',
+      explorerSelectionServerEngine: target?.engine ?? '',
+      explorerSelectionServerLinux: !!target?.linux,
       ...scriptContextValues(scriptMenuState(node && { kind: node.kind, subtype: node.subtype, parentKind: node.ref.type === 'object' ? node.ref.object.parent?.kind : undefined })),
-      ...actionContextValues(actionMenuState(node && { kind: node.kind, subtype: node.subtype })),
+      ...actionContextValues(actionMenuState(target)),
       ...ssisVerbContextValues(ssisVerbMenuState(node?.kind)),
       explorerLoading: this.loader.pending > 0
     }

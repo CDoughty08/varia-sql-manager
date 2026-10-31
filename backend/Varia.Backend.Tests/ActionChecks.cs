@@ -51,6 +51,20 @@ internal static class ActionChecks
         check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties"]),
             "the catalogue lists the action error codes and the Delete Object and Database Properties dialogs");
+        // A kind's status overlay is emitted as a second row for the same kind and subtype, with its status, and an action
+        // may carry engines (src/shared/actions/catalog.ts); the catalogue must load both, as a later PR will embed them.
+        using (var embedded = typeof(ActionsCatalog).Assembly.GetManifestResourceStream("Varia.Backend.Actions.actions-catalog.json")!)
+        {
+            var json = System.Text.Json.Nodes.JsonNode.Parse(embedded)!.AsObject();
+            json["rows"]!.AsArray().Add(new System.Text.Json.Nodes.JsonObject { ["kind"] = "database", ["subtype"] = "", ["status"] = "unavailable", ["enabled"] = new System.Text.Json.Nodes.JsonArray("selectTop"), ["disabled"] = new System.Text.Json.Nodes.JsonArray("rename") });
+            json["actions"]![0]!.AsObject()["engines"] = new System.Text.Json.Nodes.JsonArray("box");
+            ActionsCatalog? overlaid = null;
+            try { overlaid = ActionsCatalog.Parse(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json.ToJsonString()))); } catch (ArgumentException) { }
+            check(overlaid is not null && overlaid.Row("database", "", "unavailable") is { Status: "unavailable" } overlay && overlay.Enabled.SequenceEqual(["selectTop"])
+                && overlaid.Row("database", "") is { Status: "" } plain && plain.Enabled.Contains("rename") && overlaid.Row("database", null, "readOnly") == plain
+                && overlaid.Allows("database", "", "rename") && !Catalog.Offered("database", "selectTop") && overlaid.Offered("database", "selectTop"),
+                "a status overlay's row loads beside its subtype's row, is the row for that status only, and counts toward what the kind offers");
+        }
     }
 
     private static void Lint(Action<bool, string> check)

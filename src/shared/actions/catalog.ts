@@ -3,7 +3,9 @@
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, type NodeKind, type NodeSubtype } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, nodeStatuses, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
+import type { DatabaseRuntime } from '../explorer/status.ts'
+import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
 
@@ -22,34 +24,51 @@ export const dialogIds = [
   'databaseProperties'
 ] as const
 export type DialogId = typeof dialogIds[number]
-export type ActionCommandId = 'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties'
+/** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
+export const actionMenus = ['explorer.context', 'explorer.tasks', 'explorer.tasks.restore'] as const
+export type ActionMenuId = typeof actionMenus[number]
 export interface ObjectActionSpec {
+  /** The palette's title, and the menu's unless `menuTitle` is set. */
   readonly title: string
+  /** The menu's title when it is shorter than the palette's (SSMS's "Disable" for "Disable Login"). */
+  readonly menuTitle?: string
   readonly mnemonic: string
+  /** Where the item is: Object Explorer's context menu unless it names a Tasks submenu. */
+  readonly menu?: ActionMenuId
   readonly group: string
   readonly order: number
   readonly class: ActionClass
   readonly dialog?: DialogId
-  readonly command: ActionCommandId
+  readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
+  /** The servers that offer it (absent: every one). On another, the menu hides the item; the backend's own refusal of such a
+   *  request comes with its engine gate (W5-0b), which reads this list from actions-catalog.json. */
+  readonly engines?: readonly ServerEngine[]
 }
-export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec } = {
+const actionSpecData = {
   selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows' },
   rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename' },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete' },
   // SSMS 22's access key for Properties is unverified; P is free in Varia's Object Explorer menu.
   properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true }
-}
+} as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
+export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
+/** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
+export type ActionCommandId = typeof actionSpecData[ObjectAction]['command']
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
 export type ActionState = '' | 'disabled' | 'enabled'
 export type ActionRow = Partial<Record<ObjectAction, 'enabled' | 'disabled'>>
+/** A status's change to a row: each action it names takes that state, and '' takes the action away. */
+export type ActionRowOverlay = Partial<Record<ObjectAction, ActionState>>
 export interface ActionKindSpec {
   /** A node without a subtype, and subtypes `subtypes` does not list. */
   readonly row: ActionRow
   readonly subtypes?: Partial<Record<NodeSubtype, ActionRow>>
+  /** Overlaid on the subtype's row for a node with that status (a disabled login offers Enable in place of Disable). */
+  readonly statuses?: Partial<Record<NodeStatus, ActionRowOverlay>>
 }
 const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabled' }
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
@@ -73,23 +92,104 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   database: { row: { ...editable, properties: 'enabled' }, subtypes: { system: { ...locked, properties: 'enabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } } }
 }
 
-/** The row of a kind and subtype, or undefined when the kind offers no actions (or the subtype is not the kind's). */
-export function actionRow(kind: NodeKind, subtype?: NodeSubtype): ActionRow | undefined {
-  const spec = actionKindSpecs[kind]
-  if (!spec || subtype !== undefined && !kindSpecs[kind].subtypes?.includes(subtype)) return undefined
-  return (subtype && spec.subtypes?.[subtype]) || spec.row
+/** A row with an overlay applied: the actions it names take its state, and '' removes them. */
+export function overlayRow(row: ActionRow, overlay: ActionRowOverlay | undefined): ActionRow {
+  if (!overlay) return row
+  return Object.fromEntries(objectActions.flatMap(action => { const state = action in overlay ? overlay[action] : row[action]; return state ? [[action, state]] : [] })) as ActionRow
 }
-/** What the selection is: a folder, or an object with its subtype. */
-export interface ActionTarget { readonly kind: NodeKind | 'folder'; readonly subtype?: NodeSubtype }
+/**
+ * The row of a kind, subtype and status, or undefined when the kind offers no actions (or the subtype is not the kind's).
+ * A status the kind has no overlay for leaves the subtype's row as it is. `specs` is for tests, until a kind declares overlays.
+ */
+export function actionRow(kind: NodeKind, subtype?: NodeSubtype, status?: NodeStatus, specs: { readonly [K in NodeKind]?: ActionKindSpec } = actionKindSpecs): ActionRow | undefined {
+  const spec = specs[kind]
+  if (!spec || subtype !== undefined && !kindSpecs[kind].subtypes?.includes(subtype)) return undefined
+  const row = (subtype && spec.subtypes?.[subtype]) || spec.row
+  return status ? overlayRow(row, spec.statuses?.[status]) : row
+}
+/** The statuses a kind has overlays for, in `nodeStatuses` order. */
+export const actionStatuses = (kind: NodeKind): NodeStatus[] => nodeStatuses.filter(status => actionKindSpecs[kind]?.statuses?.[status])
+
+/** sys.databases.state by name; values SQL Server may add later are `other`. */
+export const databaseStateIds = { 0: 'online', 1: 'restoring', 2: 'recovering', 3: 'recoveryPending', 4: 'suspect', 5: 'emergency', 6: 'offline', 7: 'copying', 10: 'offlineSecondary' } as const
+export type DatabaseStateId = typeof databaseStateIds[keyof typeof databaseStateIds] | 'other'
+export const databaseStateOf = (state: number): DatabaseStateId => (databaseStateIds as Readonly<Record<number, DatabaseStateId>>)[state] ?? 'other'
+/** sys.databases.user_access by name. */
+export type DatabaseAccessId = 'multi' | 'single' | 'restricted'
+export const databaseAccessOf = (userAccess: number): DatabaseAccessId => userAccess === 1 ? 'single' : userAccess === 2 ? 'restricted' : 'multi'
+/**
+ * A rule that narrows an enabled database action by the database's runtime state. It applies when the state is one of
+ * `states`, the access one of `access`, or (`readOnly`) the database is read-only or standby, and then greys the action, or
+ * hides it (`hide`). The first rule that applies wins; its `reason` is why the action is unavailable.
+ */
+export interface DatabaseActionRule {
+  readonly action: ObjectAction
+  readonly states?: readonly DatabaseStateId[]
+  readonly access?: readonly DatabaseAccessId[]
+  readonly readOnly?: true
+  readonly hide?: true
+  readonly reason: string
+}
+/** The database rules, in order. Wave 5's database actions (Take Offline, Bring Online, Detach, Restore) add theirs here;
+ *  the backend's preflight re-derives the state before any DDL runs. */
+export const databaseActionRules: readonly DatabaseActionRule[] = []
+const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
+  !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
+/**
+ * A database's row narrowed by its runtime state, and why each narrowed action is unavailable. Without a runtime (the
+ * state is unknown) the row stands: better a working item whose preflight refuses with the server's reason than a
+ * missing one.
+ */
+export function databaseActionState(row: ActionRow, runtime: DatabaseRuntime | undefined, rules: readonly DatabaseActionRule[] = databaseActionRules): { readonly row: ActionRow; readonly reasons: Partial<Record<ObjectAction, string>> } {
+  if (!runtime) return { row, reasons: {} }
+  const narrowed: ActionRow = {}, reasons: Partial<Record<ObjectAction, string>> = {}
+  for (const action of objectActions) {
+    const state = row[action]
+    if (!state) continue
+    const rule = state === 'enabled' ? rules.find(item => item.action === action && ruleApplies(item, runtime)) : undefined
+    if (rule) reasons[action] = rule.reason
+    if (!rule?.hide) narrowed[action] = rule ? 'disabled' : state
+  }
+  return { row: narrowed, reasons }
+}
+
+/**
+ * What the selection is: a folder, or an object with its subtype, its status badge, a database's runtime state, and the
+ * kind of server it is on. Each fact narrows the menu only when it is known.
+ */
+export interface ActionTarget {
+  readonly kind: NodeKind | 'folder'
+  readonly subtype?: NodeSubtype
+  readonly status?: NodeStatus
+  readonly database?: DatabaseRuntime
+  readonly engine?: ServerEngine
+}
 const noActions = Object.freeze(Object.fromEntries(objectActions.map(action => [action, '']))) as Readonly<Record<ObjectAction, ActionState>>
-/** Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). */
-export function actionMenuState(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> {
-  const row = target && target.kind !== 'folder' ? actionRow(target.kind, target.subtype) : undefined
-  return row ? Object.fromEntries(objectActions.map(action => [action, row[action] ?? ''])) as Record<ObjectAction, ActionState> : noActions
+/** Whether an action with these `engines` is offered on a server of `engine`; an unknown engine offers it. */
+export const offeredOnEngine = (engines: readonly ServerEngine[] | undefined, engine: ServerEngine | undefined): boolean => !engine || !engines || engines.includes(engine)
+/** What `actionMenuState` reads, for tests until the catalogue declares engines, overlays and database rules. */
+export interface ActionMenuSources {
+  readonly kinds?: { readonly [K in NodeKind]?: ActionKindSpec }
+  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> }
+  readonly rules?: readonly DatabaseActionRule[]
+}
+/**
+ * Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). The kind's row with its status
+ * overlay, narrowed for a database by its runtime state, then hidden on a server whose engine the action does not serve.
+ */
+export function actionMenuState(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Readonly<Record<ObjectAction, ActionState>> {
+  if (!target || target.kind === 'folder') return noActions
+  const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
+  const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
+  if (!listed) return noActions
+  const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
+  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> } = sources.actions ?? objectActionSpecs
+  return Object.fromEntries(objectActions.map(action => [action, offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
-  return [undefined, ...kindSpecs[kind].subtypes ?? []].some(subtype => actionRow(kind, subtype)?.[action] === 'enabled')
+  const statuses = [undefined, ...actionStatuses(kind)]
+  return [undefined, ...kindSpecs[kind].subtypes ?? []].some(subtype => statuses.some(status => actionRow(kind, subtype, status)?.[action] === 'enabled'))
 }
 
 const pascal = <S extends string>(text: S) => (text.charAt(0).toUpperCase() + text.slice(1)) as Capitalize<S>
@@ -103,17 +203,27 @@ export const actionContextValues = (state: Readonly<Record<ObjectAction, ActionS
 /** Keys only while Object Explorer has focus and no text field does (the inline rename box, a filter field). */
 export const explorerKeyWhen = "activePanel == 'explorer' && !textInputFocus"
 export interface ActionKeybinding { readonly key?: string; readonly win?: string; readonly linux?: string; readonly mac?: string; readonly when: string }
+/** Where an action command appears, in the shape of `MenuPlacement`. */
+export interface ActionMenuPlacement {
+  readonly menu: ActionMenuId
+  readonly group: string
+  readonly order: number
+  /** The menu's title when it differs from the palette's. */
+  readonly title?: string
+  readonly mnemonic: string
+  readonly when: string
+}
 /** A command catalogue entry, in the shape of `CommandDescriptor`. */
 export interface ActionCommandEntry {
   readonly title: string
   readonly category: 'Object Explorer'
-  readonly icon: 'table' | 'edit' | 'close' | 'settings-gear'
+  readonly icon: IconId
   readonly keywords: readonly string[]
   readonly precondition: string
   readonly unavailableHint: string
   readonly titleSetting?: { readonly setting: 'objectExplorer.selectTopRows'; readonly template: string }
   readonly keybindings?: readonly ActionKeybinding[]
-  readonly menus: readonly [{ readonly menu: 'explorer.context'; readonly group: string; readonly order: number; readonly mnemonic: string; readonly when: string }]
+  readonly menus: readonly [ActionMenuPlacement, ...ActionMenuPlacement[]]
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
   selectTop: {
@@ -132,15 +242,23 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
     unavailableHint: 'Select a database in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
   }
 }
-/** The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). */
+/**
+ * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
+ * restore, New Database) never sets `documentTask`: it registers with the renderer's long-run registry, so closing the
+ * window is refused with a message instead of waiting on it.
+ */
 export function actionCommandEntries(): { readonly [K in ActionCommandId]: ActionCommandEntry } {
   return Object.fromEntries(objectActions.map(action => {
-    const spec = objectActionSpecs[action], { documentTask, ...data } = commandData[action], key = actionContextKey(action)
+    const spec: ObjectActionSpec = objectActionSpecs[action], { documentTask, ...data } = commandData[action], key = actionContextKey(action)
+    const placement: ActionMenuPlacement = {
+      menu: spec.menu ?? 'explorer.context', group: spec.group, order: spec.order, ...spec.menuTitle ? { title: spec.menuTitle } : {}, mnemonic: spec.mnemonic,
+      // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out.
+      when: `${key} != '' && explorerNode != 'background'`
+    }
     const entry: ActionCommandEntry = {
       title: spec.title, category: 'Object Explorer', ...data,
       precondition: `backendReady && ${key} == 'enabled'` + (documentTask ? ' && !documentBusy' : ''),
-      // The keys describe the selection, which a node's menu has just selected; the empty area's menu keeps it, so it opts out.
-      menus: [{ menu: 'explorer.context', group: spec.group, order: spec.order, mnemonic: spec.mnemonic, when: `${key} != '' && explorerNode != 'background'` }]
+      menus: [placement]
     }
     return [spec.command, entry]
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
@@ -182,12 +300,25 @@ export function propertiesCommandEntries(): { readonly [K in PropertiesCommandId
   }
 }
 
-export type PageId =
-  | 'general'
-  | 'files'
-  | 'filegroups'
-  | 'options'
-export interface DialogPageSpec { readonly id: PageId; readonly title: string; readonly icon: 'settings-gear' }
+// One page id per line, so later dialogs append cleanly.
+export const pageIds = [
+  'general',
+  'files',
+  'filegroups',
+  'options'
+] as const
+export type PageId = typeof pageIds[number]
+export interface DialogPageSpec {
+  readonly id: PageId
+  readonly title: string
+  /** The icon beside the title in the page list. */
+  readonly icon: IconId
+  /**
+   * The page stays mounted, hidden, while another is shown, so what it holds outside the draft (a password field, a grid
+   * cell being edited, its scroll position) survives a page switch. Other pages mount when shown.
+   */
+  readonly keepMounted?: true
+}
 /**
  * Where a dialog opens: 'modal' over the workbench (Delete Object, a confirmation), or 'document', a non-modal tab whose
  * pages are sections in one scrolling column (Database Properties), as U1 D2 asks instead of SSMS's "Select a page".
@@ -202,21 +333,25 @@ export interface DialogSpec {
   /** The action OK runs and Script scripts; its catalogue row decides where the dialog opens. */
   readonly action: ObjectAction
   readonly pages: readonly DialogPageSpec[]
+  /** A modal dialog whose run has several steps lists them under its message bar once the run reports them. */
+  readonly steps?: true
 }
-const page = (id: PageId, title: string): DialogPageSpec => ({ id, title, icon: 'settings-gear' })
+const page = (id: PageId, title: string, options: { readonly icon?: IconId; readonly keepMounted?: true } = {}): DialogPageSpec =>
+  ({ id, title, icon: options.icon ?? 'settings-gear', ...options.keepMounted ? { keepMounted: true } : {} })
 /** SSMS's dialogs. A modal one has a "Select a page" list, Connection and Progress boxes, a Script button, and OK and
  *  Cancel; a document has its pages as sections, a Script drawer, and Apply (DatabasePropertiesService). SSMS's
  *  later Database Properties pages (Change Tracking, Permissions, Extended Properties, Mirroring, Transaction Log
  *  Shipping, Query Store) are listed once they exist. */
-export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = {
+const dialogSpecData = {
   deleteObject: { title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [page('general', 'General')] },
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
   }
-}
-/** The dialogs that open over the workbench (ObjectDialogService); the others are documents. */
-export type ModalDialogId = 'deleteObject'
+} as const satisfies { readonly [D in DialogId]: DialogSpec }
+export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
+/** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
+export type ModalDialogId = { readonly [D in DialogId]: typeof dialogSpecData[D]['surface'] extends 'modal' ? D : never }[DialogId]
 export type DocumentDialogId = Exclude<DialogId, ModalDialogId>
 export const isModalDialog = (dialog: DialogId): dialog is ModalDialogId => dialogSpecs[dialog].surface === 'modal'
 /** A dialog's title bar: its title, and for 'withName' dialogs the object as Object Explorer shows it. */
@@ -275,15 +410,23 @@ const optionJson = (def: DatabaseOptionDef) => ({
 
 /**
  * The catalogue as the backend embeds it, keys sorted and everything resolved, so C# needs no rules of its own: `rows`
- * has one row per kind with actions and each of its subtypes ('' for none).
+ * has one row per kind with actions and each of its subtypes ('' for none), then one per subtype and status the kind has an
+ * overlay for (with `status`). An action with `engines` lists them.
  */
 export function actionsCatalogJson(): string {
   const rows = nodeKinds.flatMap(kind => actionKindSpecs[kind]
-    ? [undefined, ...kindSpecs[kind].subtypes ?? []].map(subtype => { const row = actionRow(kind, subtype)!; return { kind, subtype: subtype ?? '', enabled: byState(row, 'enabled'), disabled: byState(row, 'disabled') } })
+    ? [undefined, ...actionStatuses(kind)].flatMap(status => [undefined, ...kindSpecs[kind].subtypes ?? []].map(subtype => {
+      const row = actionRow(kind, subtype, status)!
+      return { kind, subtype: subtype ?? '', status, enabled: byState(row, 'enabled'), disabled: byState(row, 'disabled') }
+    }))
     : [])
+  const actionJson = (action: ObjectAction) => {
+    const spec: ObjectActionSpec = objectActionSpecs[action]
+    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines }
+  }
   return [
     '{',
-    `  "actions": ${block(objectActions.map(action => ({ action, class: objectActionSpecs[action].class, title: objectActionSpecs[action].title, systemObjects: objectActionSpecs[action].systemObjects })))},`,
+    `  "actions": ${block(objectActions.map(actionJson))},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
