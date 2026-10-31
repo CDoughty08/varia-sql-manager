@@ -1298,35 +1298,54 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
-/* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so it scrolls), the Select
-   backup devices list and the Backup Timeline, whose backups and log coverage are drawn in theme colours. */
+/* Restore Database (D1e): the problems a section lists, the sets grid (wider than the column, so its scroller is a tab
+   stop), the Select backup devices list and the Backup Timeline. The timeline draws in CSS pixels; its marks take chart
+   series colours from the page (ChartView's keys) and, under forced colours, system colours from here, with shapes that
+   tell them apart either way. */
 .restore-problems { list-style: none; margin: 0 0 var(--varia-space-2); padding: 0; font-size: var(--varia-size-xs); color: var(--varia-errorForeground); }
 .restore-problems li { display: flex; align-items: center; gap: var(--varia-space-1); }
+.restore-source-choice { margin-bottom: var(--varia-space-2); }
+.restore-grid-title { margin: 0 0 var(--varia-space-1); }
 .restore-sets { overflow-x: auto; }
+.restore-sets:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
 .restore-sets > .object-dialog-grid { width: max-content; min-width: 100%; }
 .object-dialog-grid tr[data-problem] td { color: var(--varia-descriptionForeground); }
-.restore-verify { display: flex; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
-.restore-files > .checkbox-label, .restore-options > .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); margin: var(--varia-space-1) 0; font-size: var(--varia-size-xs); }
+.restore-plan-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2) var(--varia-space-3); margin-top: var(--varia-space-2); }
+.restore-plan-row > .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-plan-row > .field-note { flex: 1; min-width: 0; margin: 0; }
+/* Restore to: a read-only value drawn as a field, one line at the control's height, ending in an ellipsis (its title holds it all). */
+.property-value.restore-to { flex: 1; min-width: 0; height: var(--varia-control); padding: 0 var(--varia-space-2); border: 1px dashed var(--varia-input-border); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-sm); line-height: calc(var(--varia-control) - 2px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+/* Path fields take the column's width, as the selects beside them do. */
+.property-field-control > .property-input-action { flex: 1; }
+.property-field-control > .property-input-action > .property-input { width: auto; height: var(--varia-control); }
+.restore-files-table > .object-dialog-grid { width: 100%; }
+.restore-files-table > .object-dialog-grid td:last-child { width: 45%; }
+.restore-files-table > .object-dialog-grid td:last-child > .property-input { width: 100%; }
+.restore-files > .checkbox-label, .restore-options > .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); margin: var(--varia-space-1) 0; }
 .restore-media { display: flex; gap: var(--varia-space-2); margin-top: var(--varia-space-1); }
-.restore-media > select { flex: 1; min-width: 0; }
+.connection-modal .restore-media > select { flex: 1; min-width: 0; height: auto; min-height: calc(8 * var(--varia-row)); }
 .restore-media-buttons { display: flex; flex-direction: column; gap: var(--varia-space-1); }
-.restore-timeline { width: 560px; max-width: calc(100vw - 32px); }
+.connection-modal.sub-dialog.restore-timeline { width: min(560px, calc(100vw - 48px)); }
 .restore-timeline-mode { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0 0 var(--varia-space-2); padding: 0; border: 0; }
 .restore-timeline-mode > legend { margin-bottom: var(--varia-space-1); padding: 0; font-size: var(--varia-size-xs); }
-.restore-timeline-track { display: block; width: 100%; height: 40px; margin-top: var(--varia-space-3); cursor: pointer; }
-.restore-timeline-track:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: 2px; }
-.restore-timeline-base { fill: var(--varia-panel-border); }
-rect.restore-timeline-covered { fill: var(--varia-statusPill-successForeground); }
-rect.restore-timeline-full { fill: var(--varia-foreground); }
-rect.restore-timeline-differential { fill: var(--varia-charts-foreground); }
-rect.restore-timeline-log { fill: var(--varia-descriptionForeground); }
+.restore-timeline-mode .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-timeline-box { margin-top: var(--varia-space-3); min-width: 0; }
+.restore-timeline-track { display: block; cursor: pointer; }
+.restore-timeline-track:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }
+.restore-timeline-base { fill: var(--varia-input-border); }
 .restore-timeline-point { fill: var(--varia-focusBorder); }
 .restore-timeline-ends { display: flex; justify-content: space-between; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
-.restore-timeline-swatch { display: inline-block; width: 10px; height: 10px; margin: 0 var(--varia-space-1) 0 var(--varia-space-2); vertical-align: middle; }
-.restore-timeline-swatch.restore-timeline-covered { background: var(--varia-statusPill-successForeground); }
-.restore-timeline-swatch.restore-timeline-full { background: var(--varia-foreground); }
-.restore-timeline-swatch.restore-timeline-differential { background: var(--varia-charts-foreground); }
-.restore-timeline-swatch.restore-timeline-log { background: var(--varia-descriptionForeground); }
+.restore-timeline-legend { display: flex; flex-wrap: wrap; gap: var(--varia-space-1) var(--varia-space-3); margin: var(--varia-space-2) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
+.restore-timeline-legend > li { display: flex; align-items: center; gap: var(--varia-space-1); }
+.restore-timeline-swatch { flex: none; width: var(--varia-glyph-sm); height: var(--varia-glyph-sm); }
+@media (forced-colors: active) {
+  .restore-timeline-track, .restore-timeline-swatch { forced-color-adjust: none; }
+  .restore-timeline-full, .restore-timeline-differential, .restore-timeline-log { fill: CanvasText; }
+  .restore-timeline-covered { fill: Highlight; }
+  .restore-timeline-base { fill: GrayText; }
+  .restore-timeline-point { fill: LinkText; }
+  .property-value.restore-to { border-color: CanvasText; }
+}
 /* A switch: a checkbox drawn as a track and thumb. On, the thumb moves right and the track fills; the words beside it
    say the state too. State changes are instant, as selection is. */
 .switch-field { display: inline-flex; align-items: center; gap: var(--varia-space-2); }

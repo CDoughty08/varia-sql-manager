@@ -82,6 +82,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string RestoreSource => Name + "_rst";
     /// <summary>Where the Restore Database checks restore a plan of <see cref="RestoreSource"/>'s backups (adopted when used).</summary>
     public string RestoreTarget => Name + "_rstr";
+    /// <summary>Restore Database's forked source: FULL recovery, restored in place to a point in time between its log backups, so
+    /// the next log forks; its backups are files like <see cref="RestoreSource"/>'s, deleted before its history.</summary>
+    public string RestoreFork => Name + "_rstf";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -92,8 +95,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, and _rst Restore Database's source and _rstr where its plans are restored.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's, and _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_rst|_rstr|_rstf)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -461,11 +464,21 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return row[1]!;
     }
 
-    /// <summary>A file for one of <see cref="RestoreSource"/>'s backups (<see cref="Backup.PartIn"/>), which disposal deletes.</summary>
-    public string RestoreFile(string part)
+    /// <summary>Creates the marked forked source in FULL recovery (after <see cref="CreateRestoreSourceAsync"/>, whose folder it shares).</summary>
+    public async Task<string> CreateRestoreForkAsync()
+    {
+        if (restoreTarget is null) throw new InvalidOperationException("Create the restore source first.");
+        await CreateMarkedAsync(RestoreFork);
+        await Exec("ALTER DATABASE " + Bracket(RestoreFork) + " SET RECOVERY FULL;");
+        return RestoreFork;
+    }
+
+    /// <summary>A file for one of <see cref="RestoreSource"/>'s backups, or <see cref="RestoreFork"/>'s (<see cref="Backup.PartIn"/>), which disposal deletes.</summary>
+    public string RestoreFile(string part, string? database = null)
     {
         var (folder, _) = restoreTarget ?? throw new InvalidOperationException("Create the restore source first.");
-        var file = Backup.PartIn(folder, RestoreSource, part);
+        if (database is not null && database != RestoreSource && database != RestoreFork) throw new InvalidOperationException("Only the restore sources' backups get a file.");
+        var file = Backup.PartIn(folder, database ?? RestoreSource, part);
         if (!restoreFiles.Contains(file)) restoreFiles.Add(file);
         return file;
     }
@@ -484,7 +497,11 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         {
             var deleted = true;
             foreach (var file in restoreFiles) deleted &= (await run(Backup.DeleteSql(file, target.Major), "master")).Status == "completed";
-            if (deleted) await run(HistorySql(RestoreSource), "msdb");
+            if (deleted)
+            {
+                await run(HistorySql(RestoreSource), "msdb");
+                if (created.Contains(RestoreFork)) await run(HistorySql(RestoreFork), "msdb");
+            }
         }
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");
     }

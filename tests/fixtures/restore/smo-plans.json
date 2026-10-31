@@ -2,18 +2,18 @@
   "source": "SMO DatabaseRestorePlanner over a live history (RestoreLiveChecks); names, servers, users and paths replaced, times moved by whole days to 2026-01-01",
   "history": [
     {
-      "id": "135ea7a4-290c-4c92-bbb5-31d02b7f56d4",
+      "id": "6ff8648d-077c-47e1-a78a-e766fdd40f66",
       "name": "log3",
       "type": "log",
       "server": "SQLHOST",
       "database": "Sales",
       "position": 1,
       "firstLsn": "71000000192000001",
-      "lastLsn": "71000000204000001",
+      "lastLsn": "71000000204800001",
       "checkpointLsn": "71000000200800001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:40",
-      "finish": "2026-01-01T21:37:40",
+      "start": "2026-01-01T01:28:33",
+      "finish": "2026-01-01T01:28:33",
       "sizeBytes": 81920,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -22,11 +22,12 @@
         "C:\\Backup\\Sales_log3.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
-      "id": "e69d8ee3-c1f0-409c-b1a3-b27516736805",
+      "id": "33e90ce4-51c0-497e-88f7-62fd84d13932",
       "name": "diff",
       "type": "differential",
       "server": "SQLHOST",
@@ -36,8 +37,8 @@
       "lastLsn": "71000000203200001",
       "checkpointLsn": "71000000200800001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:38",
-      "finish": "2026-01-01T21:37:38",
+      "start": "2026-01-01T01:28:31",
+      "finish": "2026-01-01T01:28:31",
       "sizeBytes": 1138688,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -46,11 +47,12 @@
         "C:\\Backup\\Sales_diff.bak"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
-      "id": "0075d135-5381-4747-8e13-85f16bdca326",
+      "id": "31d64132-9171-4e1c-b8d6-04c9eb74afdc",
       "name": "log2",
       "type": "log",
       "server": "SQLHOST",
@@ -60,8 +62,8 @@
       "lastLsn": "71000000192000001",
       "checkpointLsn": "71000000188000002",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:36",
-      "finish": "2026-01-01T21:37:36",
+      "start": "2026-01-01T01:28:28",
+      "finish": "2026-01-01T01:28:28",
       "sizeBytes": 77824,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -70,11 +72,12 @@
         "C:\\Backup\\Sales_log.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
-      "id": "25dbf40b-7fac-47c4-8bf2-3bed1ec7ce7d",
+      "id": "bb065d76-74ab-41da-bf29-86ab07e62c78",
       "name": "log1",
       "type": "log",
       "server": "SQLHOST",
@@ -84,8 +87,8 @@
       "lastLsn": "71000000187200001",
       "checkpointLsn": "71000000179200001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:33",
-      "finish": "2026-01-01T21:37:33",
+      "start": "2026-01-01T01:28:26",
+      "finish": "2026-01-01T01:28:26",
       "sizeBytes": 81920,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -94,11 +97,12 @@
         "C:\\Backup\\Sales_log.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
-      "id": "8f75eaa3-1a1d-42d3-88d2-0a75acfcc2df",
+      "id": "45cf3358-baed-4ed8-a64c-0b4edbc7ae7f",
       "name": "full",
       "type": "full",
       "server": "SQLHOST",
@@ -108,8 +112,8 @@
       "lastLsn": "71000000181600001",
       "checkpointLsn": "71000000179200001",
       "databaseBackupLsn": "0",
-      "start": "2026-01-01T21:37:33",
-      "finish": "2026-01-01T21:37:33",
+      "start": "2026-01-01T01:28:26",
+      "finish": "2026-01-01T01:28:26",
       "sizeBytes": 4436992,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -119,8 +123,9 @@
         "C:\\Backup\\Sales_full2.bak"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     }
   ],
   "media": [
@@ -135,8 +140,8 @@
       "lastLsn": "71000000187200001",
       "checkpointLsn": "71000000179200001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:33",
-      "finish": "2026-01-01T21:37:33",
+      "start": "2026-01-01T01:28:26",
+      "finish": "2026-01-01T01:28:26",
       "sizeBytes": 81920,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -145,8 +150,9 @@
         "C:\\Backup\\Sales_log.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
       "id": "1:2",
@@ -159,8 +165,8 @@
       "lastLsn": "71000000192000001",
       "checkpointLsn": "71000000188000002",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:36",
-      "finish": "2026-01-01T21:37:36",
+      "start": "2026-01-01T01:28:28",
+      "finish": "2026-01-01T01:28:28",
       "sizeBytes": 77824,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -169,8 +175,9 @@
         "C:\\Backup\\Sales_log.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
       "id": "2:1",
@@ -183,8 +190,8 @@
       "lastLsn": "71000000181600001",
       "checkpointLsn": "71000000179200001",
       "databaseBackupLsn": "0",
-      "start": "2026-01-01T21:37:33",
-      "finish": "2026-01-01T21:37:33",
+      "start": "2026-01-01T01:28:26",
+      "finish": "2026-01-01T01:28:26",
       "sizeBytes": 4436992,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -194,8 +201,9 @@
         "C:\\Backup\\Sales_full2.bak"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
       "id": "3:1",
@@ -208,8 +216,8 @@
       "lastLsn": "71000000203200001",
       "checkpointLsn": "71000000200800001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:38",
-      "finish": "2026-01-01T21:37:38",
+      "start": "2026-01-01T01:28:31",
+      "finish": "2026-01-01T01:28:31",
       "sizeBytes": 1138688,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -218,8 +226,9 @@
         "C:\\Backup\\Sales_diff.bak"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     },
     {
       "id": "4:1",
@@ -229,11 +238,11 @@
       "database": "Sales",
       "position": 1,
       "firstLsn": "71000000192000001",
-      "lastLsn": "71000000204000001",
+      "lastLsn": "71000000204800001",
       "checkpointLsn": "71000000200800001",
       "databaseBackupLsn": "71000000179200001",
-      "start": "2026-01-01T21:37:40",
-      "finish": "2026-01-01T21:37:40",
+      "start": "2026-01-01T01:28:33",
+      "finish": "2026-01-01T01:28:33",
       "sizeBytes": 81920,
       "userName": "CONTOSO\\dba",
       "copyOnly": false,
@@ -242,8 +251,9 @@
         "C:\\Backup\\Sales_log3.trn"
       ],
       "recoveryModel": "FULL",
-      "firstForkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef",
-      "forkGuid": "203bdaaf-c8b0-4e24-9fbc-704d360a19ef"
+      "firstForkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "forkGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f",
+      "familyGuid": "89a04431-fd2e-4512-b7bb-f217302f5e1f"
     }
   ],
   "plans": [
@@ -263,7 +273,7 @@
     },
     {
       "goal": "between log1 and log2",
-      "stopAt": "2026-01-01T21:37:34",
+      "stopAt": "2026-01-01T01:28:27",
       "names": [
         "full",
         "log1",
@@ -277,7 +287,7 @@
     },
     {
       "goal": "between log2 and the differential",
-      "stopAt": "2026-01-01T21:37:37",
+      "stopAt": "2026-01-01T01:28:29",
       "names": [
         "full",
         "diff",
@@ -292,7 +302,7 @@
     },
     {
       "goal": "between the differential and log3",
-      "stopAt": "2026-01-01T21:37:39",
+      "stopAt": "2026-01-01T01:28:32",
       "names": [
         "full",
         "diff",

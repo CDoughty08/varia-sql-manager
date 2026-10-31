@@ -12,7 +12,6 @@ internal sealed record ActionRow(string Kind, string Subtype, IReadOnlyList<stri
 internal sealed record OptionSqlJson(string Kind, string? Keyword = null, bool? Eq = null, Dictionary<string, string>? Tokens = null, bool? Termination = null, bool? Seconds = null,
     string? Name = null, bool? Secondary = null);
 internal sealed record RangeJson(long Min, long Max);
-/// <summary>A database option or scoped configuration as the catalogue resolves it for C#.</summary>
 /// <summary>The restore block of actions-catalog.json (src/shared/actions/restore.ts restoreCatalog()).</summary>
 internal sealed record RestoreCatalogJson(string Describe, List<string> Requests, List<string> Engines, Dictionary<string, long> Limits, List<string> SystemDatabases, List<string> SourceKinds,
     List<string> RecoveryStates, Dictionary<string, string> Messages)
@@ -20,6 +19,7 @@ internal sealed record RestoreCatalogJson(string Describe, List<string> Requests
     public long Limit(string key) => Limits.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore limit " + key);
     public string Message(string key) => Messages.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore message " + key);
 }
+/// <summary>A database option or scoped configuration as the catalogue resolves it for C#.</summary>
 internal sealed record OptionJson(string Key, string Label, string Control, bool Settable, int SmoOrder, List<string>? Tokens = null, RangeJson? Range = null, int? Since = null, List<string>? NotOn = null,
     bool? Exclusive = null, OptionSqlJson? Sql = null, bool? RefusedReadOnly = null);
 

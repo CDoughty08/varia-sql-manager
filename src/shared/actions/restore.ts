@@ -19,14 +19,18 @@ export const restoreLimits = {
   mediaReadMs: 120_000,
   /** Main's deadline for a restore describe: the budget and time to answer (critic A2). */
   describeDeadlineMs: 130_000,
+  /** Restore describes one connection runs at once, under their own gate: a media read on an unreachable share holds it past
+   *  its budget until SQL Server's file call returns, so it never holds a gate Database Properties or Delete Object waits for. */
+  mediaReadsPerConnection: 2,
   /** Learn: up to 64 devices that belong to one media set. */
   backupDevices: 64,
   /** Databases msdb's history lists (more set `historyTruncated`). */
   historyDatabases: 1_024,
   /** The newest backup sets one database's history, or the media, lists. */
   historySets: 1_024,
-  /** Sets one restore runs; a longer plan is scripted in pieces instead. */
-  planSets: 256,
+  /** Sets one restore runs: as many as the history lists. Each RESTORE is a statement of its own, so SQL Server's 2,100
+   *  parameters bound one statement (its devices and moves), not the plan. */
+  planSets: 1_024,
   /** 64 devices and 2 × 1000 MOVE parameters stay under SQL Server's 2,100 parameters. */
   restoreMoves: 1_000,
   /** Destination names (sys.databases minus master and tempdb) and other databases' files, for Restore As collisions. */
@@ -34,14 +38,17 @@ export const restoreLimits = {
   serverFiles: 8_192,
   /** backupset.name and user_name are nvarchar(128). */
   setName: 128,
-  /** A set id: a backup_set_uuid (history), <media set>:<position> (devices), or tail. */
+  /** A set id: a backup_set_uuid (history) or <media set>:<position> (devices). */
   setId: 36,
   /** LSNs are numeric(25, 0), sent as decimal text. */
   lsnDigits: 25,
   /** A backup set's position in its media set (RESTORE … WITH FILE). */
   position: 32_767,
   /** SMO's restore plan writes STATS = 5, as SSMS asks. */
-  stats: 5
+  stats: 5,
+  /** Restore's Script: every RESTORE repeats the moves, so a long log chain with many files outgrows the object actions' cap;
+   *  Script As's cap, which the backend checks as it writes, before the text is whole. */
+  scriptChars: 4_000_000
 } as const
 
 /** What the document says where SSMS has no words of its own, and the refusals main and the backend share. */
@@ -53,10 +60,18 @@ export const restoreMessages = {
   runUnavailable: 'Restoring runs in a later update. Script shows what it will run.',
   invalidPlan: 'The selected backup sets do not form a valid restore plan.',
   noFullBackup: 'No full backup precedes the point to restore to.',
-  afterLastBackup: 'The point to restore to is after the last log backup: take a tail-log backup to restore to it.',
+  afterLastBackup: 'The point to restore to is after the last log backup.',
+  /** Manual Selection with a point the checked sets cannot stop at. */
+  notReached: 'The checked backup sets do not reach the point to restore to: check the log backup that covers it, or restore to the last backup taken.',
+  /** The plan's full backup changed and its files are not read yet (or could not be read). */
+  filesNotRead: 'The files of the full backup to restore are not read yet.',
   noHistory: 'msdb has no backup history for this database. Choose Device to restore from backup files.',
   noSets: 'The backup media hold no backup sets.',
-  notDisk: 'This backup set is not on a disk file; Varia restores from disk files only.'
+  notDisk: 'This backup set is not on a disk file; Varia restores from disk files only.',
+  /** Why Manual Selection cannot check a set the planner never uses (the row's title and its checkbox's description). */
+  damaged: 'This backup set is marked damaged.',
+  copyOnlyLog: 'A copy-only log backup is not part of the log chain.',
+  notPlanned: 'File and partial backups restore with T-SQL.'
 } as const
 
 /** A backup set's kind, from msdb's type letter or HEADERONLY's BackupType. Only full, differential and log sets are planned. */
@@ -129,8 +144,13 @@ export interface BackupSetRow {
   readonly copyOnly: boolean
   readonly damaged: boolean
   readonly recoveryModel?: string
+  /** The recovery fork at the set's first LSN and at its last; they differ when a restore to a point in time forked the log inside it. */
   readonly firstForkGuid?: string
   readonly forkGuid?: string
+  /** Where the fork happened when the two differ (msdb's fork_point_lsn, HEADERONLY's ForkPointLSN). */
+  readonly forkPointLsn?: string
+  /** The database's family: the same across its restores, different for another database of the same name. */
+  readonly familyGuid?: string
   /** The media set's disk files, in family order. */
   readonly devices: readonly string[]
   /** Why the set cannot be restored as it is: a striped set with families missing, or one that is not on disk. */
@@ -211,12 +231,13 @@ export interface RestoreOptions {
   readonly closeConnections: boolean
 }
 
+/** Whether a name is one of SQL Server's own databases, in any case: a case-insensitive server, the default, matches MSDB too. */
+export const isRestoreSystemDatabase = (name: string): boolean => (restoreSystemDatabases as readonly string[]).includes(name.toLowerCase())
 /** Why a destination name cannot be restored to in wave 5, or undefined. */
-export const restoreTargetProblem = (name: string): string | undefined =>
-  (restoreSystemDatabases as readonly string[]).includes(name) ? restoreMessages.systemDatabase : undefined
+export const restoreTargetProblem = (name: string): string | undefined => isRestoreSystemDatabase(name) ? restoreMessages.systemDatabase : undefined
 
-/** The id form of a set: a history set's uuid, <media set>:<position> from the media, or the tail-log backup the plan adds. */
-export const restoreSetIdPattern = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]?:[1-9][0-9]{0,4}|tail)$/
+/** The id form of a set: a history set's uuid, or <media set>:<position> from the media. */
+export const restoreSetIdPattern = /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]?:[1-9][0-9]{0,4})$/
 /** STOPAT's text: the server's local date and time to the second, as SMO writes it. */
 export const restoreTimePattern = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$/
 
@@ -225,8 +246,9 @@ export const restoreTimePattern = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}
 const two = (value: number) => String(value).padStart(2, '0')
 /** SSMS's stamp in default file names: yyyy-MM-dd_HH-mm-ss, local time. */
 export const fileStamp = (at: Date): string => `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}_${two(at.getHours())}-${two(at.getMinutes())}-${two(at.getSeconds())}`
-/** Characters no file name on the server's platform may hold, which a database name can (SSMS's defaults keep the name; recalled). */
-const unsafe = (separator: ServerPathSeparator) => separator === '\\' ? /[\\/:*?"<>|\u0000-\u001f]/g : /[/\u0000]/g
+/** Characters a default file name cannot hold, which a database name can (SSMS's defaults keep the name; recalled): what Windows
+ *  refuses, and on Linux the separator and what serverPathSchema refuses on every platform (files.ts). */
+const unsafe = (separator: ServerPathSeparator) => separator === '\\' ? /[\\/:*?"<>|\u0000-\u001f]/g : /[/*?"<>|\u0000-\u001f]/g
 export const fileNamePart = (name: string, separator: ServerPathSeparator): string => name.replace(unsafe(separator), '_')
 const inFolder = (folder: string | undefined, separator: ServerPathSeparator, name: string) =>
   folder ? (folder.endsWith(separator) ? folder : folder + separator) + name : ''

@@ -24,10 +24,11 @@ internal static class RestoreChecks
         var options = new ActionServiceOptions();
         check(Restore.Describe == "restoreDatabase" && Restore.Requests.SequenceEqual(["restore"]) && Restore.Engines.SequenceEqual(["box"])
             && Restore.SystemDatabases.SequenceEqual(["master", "model", "msdb", "tempdb"]) && Restore.Limit("mediaReadMs") == (long)options.RestoreDescribeBudget.TotalMilliseconds
-            && Restore.Limit("backupDevices") == 64 && Restore.Limit("restoreMoves") == 1_000 && Restore.Limit("stats") == 5 && Restore.Limit("planSets") == 256
+            && Restore.Limit("backupDevices") == 64 && Restore.Limit("restoreMoves") == 1_000 && Restore.Limit("stats") == 5 && Restore.Limit("planSets") == Restore.Limit("historySets")
+            && Restore.Limit("scriptChars") == 4_000_000 && Restore.Limit("mediaReadsPerConnection") == options.RestorePerConnection && options.RestorePerConnection == 2
             && !Catalog.Actions.Contains("restore") && !Catalog.Dialogs.ContainsKey("restoreDatabase") && Catalog.Retryable("MEDIA") == false && Catalog.Retryable("FILE_ACCESS") == false,
             "the restore block is restore.ts': describe restoreDatabase, action restore on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
-            + "64 devices, 1000 moves; restore is no object action (no menu item or command, critic A17), and MEDIA and FILE_ACCESS are not retryable");
+            + "64 devices, 1000 moves, as many sets as the history lists, a 4,000,000-character script, two media reads per connection; restore is no object action (no menu item or command, critic A17), and MEDIA and FILE_ACCESS are not retryable");
         // 64 devices and two parameters per move stay under SQL Server's 2,100 parameters, with room for @db, @file, @standby, @stopat and the tail's two.
         check(Restore.Limit("backupDevices") + 2 * Restore.Limit("restoreMoves") + 6 <= 2_100, "a restore statement's parameters stay under SQL Server's 2,100");
 
@@ -55,7 +56,84 @@ internal static class RestoreChecks
         check(catalogRefused.Count == 0, "the restore catalog lint refuses literals, listings without TOP (@take) and ORDER BY, metadata functions, procedures, temporary tables, unknown parameters and secrets: " + string.Join(" | ", catalogRefused));
 
         CheckScripts(check);
+        CheckMediaErrors(check);
         await ValidationAsync(check);
+        await GatesAsync(check);
+    }
+
+    /// <summary>A SqlException carrying SQL Server's errors with their numbers and messages, as a failed media read raises them.</summary>
+    private static SqlException Sql(params (int Number, string Message)[] errors)
+    {
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var constructor = typeof(SqlError).GetConstructor(flags, [typeof(int), typeof(byte), typeof(byte), typeof(string), typeof(string), typeof(string), typeof(int), typeof(Exception)])
+            ?? throw new Exception("SqlClient's SqlError constructor changed; update RestoreChecks.Sql");
+        var collection = (SqlErrorCollection)(typeof(SqlErrorCollection).GetConstructor(flags, Type.EmptyTypes) ?? throw new Exception("SqlErrorCollection's constructor changed")).Invoke([]);
+        var add = typeof(SqlErrorCollection).GetMethod("Add", flags) ?? throw new Exception("SqlErrorCollection.Add changed");
+        foreach (var (number, message) in errors) add.Invoke(collection, [constructor.Invoke([number, (byte)1, (byte)16, "server", message, "", 0, null])]);
+        var create = typeof(SqlException).GetMethod("CreateException", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static, [typeof(SqlErrorCollection), typeof(string)])
+            ?? throw new Exception("SqlException.CreateException changed");
+        return (SqlException)create.Invoke(null, [collection, "17.00.1000"])!;
+    }
+
+    /// <summary>How a failed media read becomes a value: 3201 by its operating system error (not there: PATH_NOT_FOUND; denied,
+    /// held by another program or anything else: FILE_ACCESS), even with a "(" in the device's name; media a restore cannot use
+    /// (MEDIA); and anything else as FromSql has it.</summary>
+    private static void CheckMediaErrors(Action<bool, string> check)
+    {
+        const string terminating = "RESTORE LABELONLY is terminating abnormally.";
+        string Code(params (int, string)[] errors) => RestoreDescribe.MediaError(Catalog, Sql(errors), null) is { } error ? error.Code + (error.Message.Contains("terminating", StringComparison.Ordinal) ? "+" : "") : "null";
+        string Open(string device, string os) => "Cannot open backup device '" + device + "'. Operating system error " + os + ".";
+        var cases = new (string Name, string Expected, (int, string)[] Errors)[]
+        {
+            ("a missing file", "PATH_NOT_FOUND+", [(3201, Open("C:\\B\\x.bak", "2(The system cannot find the file specified.)")), (3013, terminating)]),
+            ("a missing folder", "PATH_NOT_FOUND", [(3201, Open("C:\\No\\x.bak", "3(The system cannot find the path specified.)"))]),
+            ("an unreachable share", "PATH_NOT_FOUND", [(3201, Open("\\\\10.255.255.1\\s\\x.bak", "53(The network path was not found.)"))]),
+            ("access denied", "FILE_ACCESS+", [(3201, Open("C:\\B\\x.bak", "5(Access is denied.)")), (3013, terminating)]),
+            ("a file another program holds", "FILE_ACCESS", [(3201, Open("C:\\B\\x.bak", "32(The process cannot access the file because it is being used by another process.)"))]),
+            ("a missing file whose name holds 5(", "PATH_NOT_FOUND", [(3201, Open("C:\\B\\copy 5(1).bak", "2(The system cannot find the file specified.)"))]),
+            ("denied, whose name holds 2(", "FILE_ACCESS", [(3201, Open("C:\\B\\copy 2(1).bak", "5(Access is denied.)"))]),
+            ("another program's media", "MEDIA+", [(3241, "The media family on device 'C:\\B\\x.bak' is incorrectly formed. SQL Server cannot process this media family."), (3013, terminating)]),
+            ("a missing family", "MEDIA", [(3242, "The file on device 'C:\\B\\x.bak' is not a valid Microsoft Tape Format backup set.")]),
+            ("a damaged set", "MEDIA", [(3183, "RESTORE detected an error on page (1:2) in database \"x\" as read from the backup set.")]),
+            ("anything else", "SQL_ERROR+", [(3013, terminating)]),
+            ("a lock", "null", [(1222, "Lock request time out period exceeded.")])
+        };
+        var wrong = cases.Where(item => Code(item.Errors) != item.Expected).Select(item => item.Name + " gave " + Code(item.Errors)).ToList();
+        check(wrong.Count == 0, "a failed media read is PATH_NOT_FOUND when its operating system error says the file or path is not there, FILE_ACCESS for any other, MEDIA for media a restore cannot use, with SQL Server's whole message: " + string.Join(", ", wrong));
+    }
+
+    /// <summary>SQL Server ends a read of a file on an unreachable share only when the file call returns, so a restore describe past
+    /// its budget still holds its gate. Describes stuck on as many servers as the read gates allow in total, two on one of them,
+    /// leave Database Properties and Delete Object their read gates on those servers and others.</summary>
+    private static async Task GatesAsync(Action<bool, string> check)
+    {
+        var host = new ServerFilesChecks.StuckHost();
+        using var service = new ActionService(host);
+        service.Options.RestoreDescribeBudget = TimeSpan.FromMilliseconds(400);
+        service.Options.GateWait = TimeSpan.FromSeconds(5);
+        var servers = Enumerable.Range(0, service.Options.ReadTotal).Select(_ => Guid.NewGuid().ToString()).ToList();
+        ActionDescribeArgs Media(string connectionId) => new(connectionId, Guid.NewGuid().ToString(), "restoreDatabase", new ObjectRefDto("server"), null, new("devices", Devices: ["\\\\unreachable\\share\\x.bak"]));
+        var stuck = servers.Select(Media).Append(Media(servers[0])).Select(args => service.DescribeAsync(args, CancellationToken.None)).ToList();
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        while (host.Held < stuck.Count && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        var timedOut = await Task.WhenAll(stuck);
+        host.Blocking = false;
+        async Task<string> Describe(string connectionId, string dialog, ObjectRefDto target)
+        {
+            try { return (await service.DescribeAsync(new(connectionId, Guid.NewGuid().ToString(), dialog, target), CancellationToken.None)).Error?.Code ?? "none"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var properties = await Describe(servers[0], "databaseProperties", new ObjectRefDto("database", Name: "AppData"));
+        var delete = await Describe(servers[0], "deleteObject", new ObjectRefDto("table", "AppData", "dbo", "Orders"));
+        var other = await Describe(Guid.NewGuid().ToString(), "databaseProperties", new ObjectRefDto("database", Name: "AppData"));
+        var heldWhile = host.Held;
+        host.Release();
+        watch.Restart();
+        while (service.ActiveJobs > 0 && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(10);
+        check(timedOut.All(result => result.Error?.Code == "TIMEOUT") && heldWhile == stuck.Count && properties == "CONNECTION_LOST" && delete == "CONNECTION_LOST" && other == "CONNECTION_LOST"
+            && service.ActiveJobs == 0 && service.RunningCount == 0,
+            "restore describes stuck past their budget hold only their own gate: Database Properties and Delete Object still open on that server and others (their unreachable fake answers CONNECTION_LOST, not BUSY): "
+            + string.Join(", ", timedOut.Select(result => result.Error?.Code)) + " | " + properties + " | " + delete + " | " + other + " | " + heldWhile + " held");
     }
 
     /// <summary>SMO's RestorePlan.Script() text as the D1 probe captured it on SQL Server 2025 (scratchpad D1-database-wizards-probe-output2.txt),
@@ -103,7 +181,7 @@ internal static class RestoreChecks
         var wrong = cases.Where(item => !RestoreSql.Statements(Restore, item.Database, item.Options, item.Exists).SequenceEqual(item.Expected)).Select(item => item.Name).ToList();
         check(wrong.Count == 0, "Script writes SMO's restore plan text for the probed plans (tail log, relocation, standby, norecovery, point in time): " + string.Join(", ", wrong));
 
-        var script = RestoreSql.Script(Restore, db, cases[3].Options, true);
+        var script = RestoreSql.Script(Restore, db, cases[3].Options, true, Restore.Limit("scriptChars"))!;
         var nl = Environment.NewLine;
         check(script.StartsWith("USE [master]" + nl + "RESTORE DATABASE ", StringComparison.Ordinal) && script.EndsWith(nl + nl + "GO" + nl, StringComparison.Ordinal),
             "a restore's script starts with USE [master] and ends with GO");
@@ -119,6 +197,16 @@ internal static class RestoreChecks
         check(hostileText == "RESTORE DATABASE [a]]b'c; DROP DATABASE x --] FROM  DISK = N'C:\\O''Brien ]]\\x.bak',  DISK = N'\\\\files\\share\\''; --.bak' WITH  FILE = 1,  MOVE N'l''o]g' TO N'/var/opt/mssql/data/x''y.ldf',  STANDBY = N'C:\\u''.bak',  NOUNLOAD,  STATS = 5"
             && RestoreSql.TailName("C:\\B\\X_LogBackup_1.bak") == "X_LogBackup_1" && RestoreSql.TailName("/var/b/x.y.trn") == "x.y" && RestoreSql.TailName("C:\\B\\noext") == "noext",
             "a hostile database name, logical name and paths are quoted as SMO quotes them, striped devices in family order: " + hostileText);
+        // A request under 4 MiB whose text would be about 200 million characters: 1,000 moves of quote-filled names on every one of
+        // 256 sets. Script stops at its limit after a few statements, never building the whole text.
+        var quotes = new List<RestoreMoveDto>([.. Enumerable.Range(0, 1_000).Select(index => new RestoreMoveDto(index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + new string('\'', 124), "C:\\" + index.ToString("D4", System.Globalization.CultureInfo.InvariantCulture) + new string('\'', 253)))]);
+        var huge = Options([Set("1:1", "full", 1, b + "f.bak"), .. Enumerable.Range(2, 255).Select(index => Set("1:" + index, "log", index, b + "l.trn"))], moves: quotes);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var tooLarge = RestoreSql.Script(Restore, db, huge, false, Restore.Limit("scriptChars"));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var fits = RestoreSql.Script(Restore, db, huge with { Sets = huge.Sets[..4] }, false, Restore.Limit("scriptChars"));
+        check(tooLarge is null && allocated < 64L * 1024 * 1024 && fits is { Length: > 3_000_000 and <= 4_000_000 },
+            "a restore's script stops once it passes 4,000,000 characters, allocating " + (allocated / 1024 / 1024) + " MiB rather than the whole text's gigabyte, and a long one under the limit is written whole");
     }
 
     private static async Task ValidationAsync(Action<bool, string> check)
@@ -157,6 +245,7 @@ internal static class RestoreChecks
         var scriptInvalid = new (string Name, ActionArgs Args)[]
         {
             ("no options", Script(null)), ("master", Script(good, "master")), ("msdb", Script(good, "msdb")), ("model", Script(good, "model")), ("tempdb", Script(good, "tempdb")),
+            ("MSDB", Script(good, "MSDB")), ("Master", Script(good, "Master")), ("Model", Script(good, "Model")), ("TempDB", Script(good, "TempDB")),
             ("a log first", Script(Options([chain[1]]))), ("two fulls", Script(Options([chain[0], chain[0] with { Id = "1:3" }]))), ("a differential third", Script(Options([.. chain, Set("2:1", "differential", 1, path)]))),
             ("a set twice", Script(Options([chain[0], chain[1], chain[1]]))), ("a file set", Script(Options([chain[0], Set("2:1", "file", 1, path)]))),
             ("a bad set id", Script(Options([chain[0] with { Id = "x" }]))), ("position 0", Script(Options([chain[0] with { File = 0 }]))), ("no devices", Script(Options([chain[0] with { Devices = [] }]))),
@@ -165,7 +254,7 @@ internal static class RestoreChecks
             ("keep replication left restoring", Script(Options(chain, recovery: "norecovery", keep: true))), ("a move twice", Script(Options(chain, moves: [new("a", "C:\\a.mdf"), new("a", "C:\\b.mdf")]))),
             ("two moves to one path", Script(Options(chain, moves: [new("a", "C:\\a.mdf"), new("b", "C:\\A.MDF")]))), ("a relative move", Script(Options(chain, moves: [new("a", "a.mdf")]))),
             ("a relative tail", Script(Options(chain, tail: new("t.bak", true)))), ("a 1001st move", Script(Options(chain, moves: [.. Enumerable.Range(0, 1001).Select(index => new RestoreMoveDto("f" + index, "C:\\f" + index + ".mdf"))]))),
-            ("257 sets", Script(Options([chain[0], .. Enumerable.Range(1, 256).Select(index => Set("1:" + (index + 1), "log", index + 1, path))]))),
+            ("1025 sets", Script(Options([chain[0], .. Enumerable.Range(1, 1_024).Select(index => Set("1:" + (index + 1), "log", index + 1, path))]))), ("a tail set id", Script(Options([chain[0], chain[1] with { Id = "tail" }]))),
             ("a bad identity", Script(good, identity: new(0, "2026-10-29T21:05:43.000"))), ("a new name too", Script(good) with { NewName = "x" }),
             ("restore options on a rename", Script(good, action: "rename") with { NewName = "x" }), ("a schema target", Script(good) with { Target = new ObjectRefDto("database", "x", Name: "Sales") })
         };
@@ -173,8 +262,11 @@ internal static class RestoreChecks
         check(scriptAccepted.Count == 0 && Refused(() => service.Validate(Script(good), script: true)) == "accepted"
             && Refused(() => service.Validate(Script(Options(chain, true, "standby", [new("l'o]g", "\\\\s\\h\\x.ldf")], restricted: true, standby: path, tail: new(path, true), close: true, stopAt: "2026-10-29T21:05:43"), "a]b'c",
                 new(5, "2026-10-29T21:05:43.123")), script: true)) == "accepted"
-            && Refused(() => service.Validate(Script(good, "master"), script: true)).Contains(Restore.Message("systemDatabase"), StringComparison.Ordinal),
-            "Validate refuses what restoreRequestSchema refuses, SQL Server's own databases with critic A19's reason, and accepts hostile names: " + string.Join(", ", scriptAccepted));
+            && Refused(() => service.Validate(Script(good, "master"), script: true)).Contains(Restore.Message("systemDatabase"), StringComparison.Ordinal)
+            && Refused(() => service.Validate(Script(good, "MSDB"), script: true)).Contains(Restore.Message("systemDatabase"), StringComparison.Ordinal)
+            && Refused(() => service.Validate(Script(good, "msdb_copy"), script: true)) == "accepted"
+            && Refused(() => service.Validate(Script(Options([chain[0], .. Enumerable.Range(1, 1_023).Select(index => Set("1:" + (index + 1), "log", index + 1, path))])), script: true)) == "accepted",
+            "Validate refuses what restoreRequestSchema refuses, SQL Server's own databases in any case with critic A19's reason, and accepts hostile names, msdb_copy and a 1,024-set plan: " + string.Join(", ", scriptAccepted));
         check(Refused(() => service.Validate(Script(good))).StartsWith("INVALID_PARAMS", StringComparison.Ordinal),
             "actions.execute refuses a restore until D1f runs one (critic A17)");
 
@@ -192,8 +284,9 @@ internal static class RestoreChecks
         using var offline = new ActionService(unreachable);
         var lost = await offline.DescribeAsync(Describe(new("devices", Devices: [path])), CancellationToken.None);
         var scripted = await offline.ScriptAsync(Script(good), CancellationToken.None);
-        check(lost is { Error.Code: "CONNECTION_LOST", Restore: null } && scripted.Error?.Code == "CONNECTION_LOST" && offline.RunningCount == 0,
-            "a restore describe or script that cannot connect is a value, and frees its request");
+        check(lost is { Error.Code: "CONNECTION_LOST", Restore: null } && offline.RunningCount == 0 && scripted is { Error: null, Database: "master", Text: { } text } && text.Contains("RESTORE LOG [Sales]", StringComparison.Ordinal)
+            && unreachable.Connections == 1,
+            "a restore describe that cannot connect is a value and frees its request, and a restore's Script, which reads nothing, opens no connection and takes no gate");
         check(JsonSerializer.Serialize(new RestoreSourceDto("devices", Devices: [path]), new JsonSerializerOptions(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull })
             == "{\"kind\":\"devices\",\"devices\":[\"C:\\\\Backup\\\\x.bak\"]}", "a restore source crosses the wire with restore.ts' member names");
     }

@@ -215,6 +215,13 @@ export const part = {
   chartTooltip: '.live-chart-tip',
   chartSwatch: '.live-chart-swatch',
   chartTableWrap: '.live-chart-table-wrap',
+  // Restore Database's Backup Timeline (src/renderer/src/restore/BackupTimeline.tsx): a backup's mark on the track (full,
+  // differential or log, by kind) and the legend's samples, which draw the same shapes.
+  restoreTimelineFull: '.restore-timeline-track .restore-timeline-full',
+  restoreTimelineDifferential: '.restore-timeline-track .restore-timeline-differential',
+  restoreTimelineLog: '.restore-timeline-track .restore-timeline-log',
+  restoreTimelineCovered: '.restore-timeline-track .restore-timeline-covered',
+  restoreTimelineSwatch: '.restore-timeline-swatch',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',

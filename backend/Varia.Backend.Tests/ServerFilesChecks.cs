@@ -128,7 +128,7 @@ internal static class ServerFilesChecks
 
     /// <summary>A server whose connections never open while Blocking holds them, whatever their token says, as a file-system call
     /// SQL Server is waiting on ignores the attention; Release lets them fail.</summary>
-    private sealed class StuckHost : IActionHost
+    internal sealed class StuckHost : IActionHost
     {
         private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int held, opened;

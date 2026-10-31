@@ -194,10 +194,11 @@ internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId,
 /// (Devices, 1–64 server paths), historyFiles (SetId, a backup_set_uuid) or mediaFiles (Devices and File, the set's position).</summary>
 internal sealed record RestoreSourceDto(string Kind, string? Database = null, List<string>? Devices = null, string? SetId = null, int? File = null);
 /// <summary>One backup set (restore.ts BackupSetRow): Type full, differential, log, file, fileDifferential, partial or partialDifferential;
-/// LSNs as decimal text; dates as the server's local yyyy-MM-ddTHH:mm:ss; Devices the media set's disk files in family order.</summary>
+/// LSNs as decimal text; dates as the server's local yyyy-MM-ddTHH:mm:ss; Devices the media set's disk files in family order; ForkPointLsn
+/// where the recovery fork changed inside the set (FirstForkGuid ≠ ForkGuid); FamilyGuid the database's family across restores.</summary>
 internal sealed record BackupSetDto(string Id, string Name, string Type, string Server, string Database, int Position, string FirstLsn, string LastLsn, string CheckpointLsn,
     string DatabaseBackupLsn, string Start, string Finish, long SizeBytes, string UserName, bool CopyOnly, bool Damaged, List<string> Devices, string? Expiration = null,
-    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null);
+    string? RecoveryModel = null, string? FirstForkGuid = null, string? ForkGuid = null, string? Problem = null, string? ForkPointLsn = null, string? FamilyGuid = null);
 /// <summary>One file of a backup set: Type data, log, filestream, fulltext or other.</summary>
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null);
 internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null);

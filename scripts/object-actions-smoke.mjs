@@ -693,8 +693,9 @@ try {
   console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
 
   // 5b. Restore Database (D1e), which only its test hook opens until its OK restores (critic A17): AppData's history plans
-  // the full, differential and log backups; master is greyed with the reason; the Backup Timeline's slider moves by keys;
-  // Script previews the plan; Prompt before restoring each backup is greyed (critic A22).
+  // the full, differential and log backups; the grid's checkboxes wait for Manual Selection; master is a source but never a
+  // destination; the Backup Timeline draws its marks whole and moves its slider by keys; Script previews the plan; Prompt
+  // before restoring each backup is greyed (critic A22).
   const restoreFrame = name => documentFrame(page, 'Restore Database - ' + name)
   const restoreSection = (title, name = 'AppData') => frameSection(restoreFrame(name), title)
   expect(await page.evaluate(() => window.__variaRestore.open('AppData'))).toEqual(expect.any(String))
@@ -704,17 +705,61 @@ try {
   await expect(restoreSection('General').getByRole('checkbox', { checked: true })).toHaveCount(3)
   const restoreSource = restoreSection('General').getByRole('combobox', { name: 'Database:', exact: true }).first()
   await expect(restoreSource).toHaveValue('AppData')
-  await expect(restoreSource.getByRole('option', { name: 'master', exact: true })).toBeDisabled()
+  await expect(restoreSource.getByRole('option', { name: 'master', exact: true })).toBeEnabled()
+  // Restore to reads as one line in a field's size, not the page's 16 px.
+  await expect(restoreTo).toHaveCSS('font-size', '12px')
+  expect((await restoreTo.boundingBox()).height).toBeLessThanOrEqual(32)
+  // The grid's checkboxes take clicks only while Manual Selection is checked; its scroller is a named tab stop.
+  const manual = restoreSection('General').getByRole('checkbox', { name: 'Manual Selection', exact: true })
+  const setBoxes = restoreSection('General').getByRole('region', { name: 'Backup sets to restore:', exact: true }).getByRole('checkbox')
+  await expect(setBoxes).toHaveCount(3)
+  for (const box of await setBoxes.all()) await expect(box).toBeDisabled()
+  await manual.check()
+  for (const box of await setBoxes.all()) await expect(box).toBeEnabled()
+  await manual.uncheck()
+  await expect(setBoxes.first()).toBeDisabled()
+  const setsRegion = restoreSection('General').getByRole('region', { name: 'Backup sets to restore:', exact: true })
+  await setsRegion.focus()
+  await expect(setsRegion).toBeFocused()
+  await expect(restoreSection('Files').getByRole('table', { name: 'Restore the database files as', exact: true })).toBeVisible()
   await expect(restoreSection('General').getByRole('button', { name: 'Verify Backup Media', exact: true })).toBeDisabled()
   await expect(restoreSection('Options').getByRole('checkbox', { name: 'Prompt before restoring each backup', exact: true })).toBeDisabled()
   await expect(restoreSection('Options').getByRole('checkbox', { name: 'Take tail-log backup before restore', exact: true })).toBeChecked()
   await restoreSection('General').getByRole('button', { name: 'Timeline…', exact: true }).click()
   const timeline = page.getByRole('dialog', { name: 'Backup Timeline', exact: true })
+  // The dialog takes its own width (min(560px, 100vw - 48px)), not the sub-dialog's 420 px.
+  const timelineWidth = await timeline.evaluate(element => ({ width: element.getBoundingClientRect().width, expected: Math.min(560, innerWidth - 48) }))
+  expect(Math.abs(timelineWidth.width - timelineWidth.expected)).toBeLessThanOrEqual(1)
+  // In the Day window the marks keep their pixel size: the full backup a 14 px triangle, the log a 3 px tick, and the
+  // differential's triangle smaller than the full's.
+  const markBox = async selector => (await timeline.locator(selector).first().boundingBox())
+  const [fullMark, differentialMark, logMark] = [await markBox(part.restoreTimelineFull), await markBox(part.restoreTimelineDifferential), await markBox(part.restoreTimelineLog)]
+  expect(fullMark.width).toBeGreaterThanOrEqual(13)
+  expect(differentialMark.width).toBeLessThan(fullMark.width)
+  expect(logMark.width).toBeGreaterThanOrEqual(2.5)
+  // Marks at the window's ends show whole: inside the track.
+  const trackBox = await timeline.getByRole('slider', { name: 'Point in time', exact: true }).boundingBox()
+  for (const mark of [fullMark, differentialMark, logMark]) expect(mark.x + mark.width).toBeLessThanOrEqual(trackBox.x + trackBox.width + 0.5)
+  await expect(timeline.locator(part.restoreTimelineSwatch)).toHaveCount(4)
+  // Under forced colours the marks, the band and the legend's samples take system colours that differ from Canvas.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const forcedFills = await timeline.evaluate((element, selectors) => {
+    const fill = selector => getComputedStyle(element.querySelector(selector)).fill
+    const probe = element.appendChild(document.createElement('div'))
+    probe.style.backgroundColor = 'Canvas'
+    const canvas = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { background: canvas, marks: selectors.map(fill), swatch: getComputedStyle(element.querySelector(selectors.at(-1) + ' polygon')).fill }
+  }, [part.restoreTimelineFull, part.restoreTimelineLog, part.restoreTimelineCovered, part.restoreTimelineSwatch])
+  for (const fill of [...forcedFills.marks.slice(0, 3), forcedFills.swatch]) expect(fill, JSON.stringify(forcedFills)).not.toBe(forcedFills.background)
+  await page.emulateMedia({ forcedColors: 'none' })
   await timeline.getByLabel('Timeline Interval:', { exact: true }).selectOption({ label: 'Hour' })
   const slider = timeline.getByRole('slider', { name: 'Point in time', exact: true })
   await slider.focus()
   await slider.press('Home')
   await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:00:00')
+  // The slider's focus ring is the app's 2 px.
+  await expect(slider).toHaveCSS('outline-width', '2px')
   await expect(timeline.getByRole('radio', { name: 'Specific date and time', exact: true })).toBeChecked()
   await slider.press('ArrowRight')
   await expect(slider).toHaveAttribute('aria-valuetext', '2026-10-29 12:01:00')
@@ -733,9 +778,16 @@ try {
   await expect(scriptDrawer(restoreFrame('master')).getByText('Restore system databases with T-SQL; it needs single-user mode or a stopped Agent.', { exact: true })).toBeVisible()
   await page.screenshot({ path: resolve('artifacts', 'object-actions-restore-dark.png') })
   expect((await stubCalls('actions.script')).length).toBe(scripted)
+  // Select backup devices lists its files in a list eight rows tall, not a one-row spin box.
+  await restoreSection('General', 'master').getByRole('radio', { name: 'Device', exact: true }).click()
+  await restoreSection('General', 'master').getByRole('button', { name: 'Select backup devices', exact: true }).click()
+  const devicesDialog = page.getByRole('dialog', { name: 'Select backup devices', exact: true })
+  expect((await devicesDialog.getByRole('listbox', { name: 'Backup media:', exact: true }).boundingBox()).height).toBeGreaterThanOrEqual(150)
+  await devicesDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(devicesDialog).toHaveCount(0)
   await closeDocumentButton(page, 'Restore Database - AppData').click()
   await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
-  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, greys master and Prompt with their reasons, moves the Backup Timeline\'s point by keys, and scripts the plan.')
+  console.log('Object action checks: Restore Database (test hook) plans the history\'s backups, takes grid clicks only under Manual Selection, refuses master only as the destination, greys Prompt with its reason, draws the Backup Timeline\'s marks whole (and under forced colours) and moves its point by keys, scripts the plan, and lists backup media eight rows tall.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

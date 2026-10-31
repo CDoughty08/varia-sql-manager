@@ -34,7 +34,8 @@ internal static class ActionErrors
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         // Backup media a restore cannot use: a family misformed or missing (3241, 3242), a damaged or unreadable set (3183, 3189).
-        // 3201, a device that cannot be opened, is PATH_NOT_FOUND or FILE_ACCESS by its operating system error (RestoreDescribe.MediaError).
+        // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system
+        // error (RestoreDescribe.MediaError).
         ["MEDIA"] = [3241, 3242, 3183, 3189],
         // 5120: a file SQL Server's account cannot open.
         ["FILE_ACCESS"] = [5120],

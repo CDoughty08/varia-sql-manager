@@ -56,6 +56,10 @@ internal sealed class ActionServiceOptions
     /// Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a listing
     /// past its budget still holds its gate, and must not hold one that Database Properties or Delete Object waits for.</summary>
     public int BrowsePerConnection { get; init; } = 1;
+    /// <summary>Restore Database's describes (LABELONLY, HEADERONLY and FILELISTONLY on files that may sit on a slow or unreachable
+    /// share, and msdb's history) run two at a time per connection under a gate of their own, outside the read gates, for the
+    /// same reason as the picker's: a media read past its budget still holds its gate until SQL Server's file call returns.</summary>
+    public int RestorePerConnection { get; init; } = 2;
     public TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED; the
     /// action's cleanup budget (its compensation and cleanup steps) is added to it.</summary>
@@ -67,6 +71,9 @@ internal sealed class ActionServiceOptions
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
 }
+
+/// <summary>A job's gate when it is not the read or execute gates: the picker's listings, Restore Database's reads.</summary>
+internal enum OwnGate { None, Browse, Restore }
 
 /// <summary>The object's identity and facts the preflight read: its subtype, row, and what refers to it; a login's facts too.</summary>
 internal sealed record ActionSubject(ObjectRefDto Target, string Display, string Title, string Subtype, ScriptPreflight.Row Row, List<ActionWarningDto> Warnings, bool Truncated,
@@ -87,6 +94,7 @@ internal sealed partial class ActionService : IDisposable
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> executeGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> browseGates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> restoreGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim readTotal;
     private readonly SemaphoreSlim executeTotal;
     private int activeJobs;
@@ -237,6 +245,7 @@ internal sealed partial class ActionService : IDisposable
     private long ScriptLimit(string action) => action switch
     {
         "createTable" => designer.Limit("scriptChars"),
+        "restore" => catalog.Restore.Limit("scriptChars"),
         _ => catalog.Limit("scriptChars")
     };
 
@@ -258,7 +267,7 @@ internal sealed partial class ActionService : IDisposable
                     var (listing, error) = await ServerFiles.ListAsync(connection, catalog, files, profile.Linux, job);
                     return new ActionDescribeResult(null, watch.ElapsedMilliseconds, error, ServerFiles: listing);
                 },
-                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
+                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", own: OwnGate.Browse);
         }
         if (args.Restore is not null) return DescribeRestoreAsync(args, token);
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
@@ -275,12 +284,18 @@ internal sealed partial class ActionService : IDisposable
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
+        // Restore's Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
+        if (args.Action == "restore")
+        {
+            var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
+            if (!Serves(args.Action, engine)) return Task.FromResult(new ActionScriptResult(null, "master", [], ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(engine))));
+            return Task.FromResult(ScriptRestore(args, target));
+        }
         // A new table's script runs in its database; a database's or a server object's action in master.
         var database = args.Action == "createTable" ? target.Name! : ScriptDatabase(target);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: true, Options.ScriptBudget, token,
             (connection, profile, band, job) => args.Action switch
             {
-                "restore" => ScriptRestoreJobAsync(args, target),
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
@@ -309,7 +324,7 @@ internal sealed partial class ActionService : IDisposable
     /// waits up to StopGrace plus the action's cleanup budget for the job, whose steps say what completed and what Varia
     /// undid, and past it answers CANCELLED, an unknown outcome.</summary>
     private async Task<T> RunAsync<T>(string connectionId, string requestId, string? action, bool read, TimeSpan? budget, CancellationToken token,
-        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", bool browse = false)
+        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", OwnGate own = OwnGate.None)
     {
         var profile = host.Profile(connectionId);
         var served = profile.Explorer(explorer);
@@ -324,7 +339,7 @@ internal sealed partial class ActionService : IDisposable
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var job = Task.Run(() => JobAsync(connectionId, read, browse, profile, served.Band, work, failed, jobSource), CancellationToken.None);
+            var job = Task.Run(() => JobAsync(connectionId, read, own, profile, served.Band, work, failed, jobSource), CancellationToken.None);
             _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             try { return await job.WaitAsync(source.Token); }
             catch (OperationCanceledException) when (source.IsCancellationRequested && !token.IsCancellationRequested)
@@ -343,17 +358,22 @@ internal sealed partial class ActionService : IDisposable
         finally { running.Unregister(requestId, entry); }
     }
 
-    private async Task<T> JobAsync<T>(string connectionId, bool read, bool browse, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
+    private async Task<T> JobAsync<T>(string connectionId, bool read, OwnGate own, ServerProfile profile, int band, Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work,
         Func<ActionError, T> failed, CancellationTokenSource jobSource)
     {
         Interlocked.Increment(ref activeJobs);
         try
         {
             var token = jobSource.Token;
-            // The picker's listings take only their own gate (ActionServiceOptions.BrowsePerConnection), never a read gate.
-            var gate = browse ? browseGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.BrowsePerConnection))
-                : (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection));
-            var total = browse ? null : read ? readTotal : executeTotal;
+            // The picker's listings and Restore Database's reads take only their own gate (ActionServiceOptions.BrowsePerConnection,
+            // RestorePerConnection), never a read gate.
+            var gate = own switch
+            {
+                OwnGate.Browse => browseGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.BrowsePerConnection)),
+                OwnGate.Restore => restoreGates.GetOrAdd(connectionId, _ => new SemaphoreSlim(Options.RestorePerConnection)),
+                _ => (read ? readGates : executeGates).GetOrAdd(connectionId, _ => new SemaphoreSlim(read ? Options.ReadPerConnection : Options.ExecutePerConnection))
+            };
+            var total = own != OwnGate.None ? null : read ? readTotal : executeTotal;
             if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy();
             try
             {
@@ -910,6 +930,7 @@ internal sealed partial class ActionService : IDisposable
         readGates.TryRemove(connectionId, out _);
         executeGates.TryRemove(connectionId, out _);
         browseGates.TryRemove(connectionId, out _);
+        restoreGates.TryRemove(connectionId, out _);
     }
 
     public void CancelAll() => running.ForgetAll();
@@ -920,5 +941,6 @@ internal sealed partial class ActionService : IDisposable
         readGates.Clear();
         executeGates.Clear();
         browseGates.Clear();
+        restoreGates.Clear();
     }
 }

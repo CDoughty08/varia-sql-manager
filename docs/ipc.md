@@ -547,9 +547,11 @@ Restore Database reads through `actions.describe` as well, with no new method: `
 each a server path as above). It answers `{ restore: { server?, historyDatabases?, sets?, files?, …Truncated }, elapsedMs }`:
 msdb's history, `RESTORE LABELONLY` and `HEADERONLY` on the files, or one set's files (msdb's `backupfile` or
 `RESTORE FILELISTONLY`). Reading media can take long on a large striped set or a slow share, so its deadline is a function
-of the request too: 130 s around the backend's 120 s budget (`restoreLimits`). `actions.script` with the `restore` action
-takes the plan (`restore: { sets, relocate, recovery, … }`, at most 256 sets and 1,000 moves) and answers the script SMO's
-restore plan would write; `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
+of the request too: 130 s around the backend's 120 s budget (`restoreLimits`), and these reads run 2 per connection under
+their own gate, outside the object actions' read gates, so a read held past its budget by an unreachable share never delays
+another dialog's describe. `actions.script` with the `restore` action takes the plan (`restore: { sets, relocate, recovery,
+… }`, at most 1,024 sets and 1,000 moves), is written on no connection, and answers the script SMO's restore plan would
+write (at most 4,000,000 characters, checked as it is written); `actions.execute` refuses `restore` until the run arrives (D1f). docs/object-actions.md
 describes the planner and the limits.
 
 ## Streams and credits

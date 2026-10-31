@@ -4,13 +4,13 @@ using Varia.Backend.Explorer;
 namespace Varia.Backend.Actions;
 
 /// <summary>Restore Database on the object-action path (D1e): its describe (RestoreDescribe) and its Script, which renders SSMS's
-/// text and runs nothing. actions.execute refuses a restore until D1f runs one (critic A17). Validation repeats
+/// text, reads nothing and runs nothing. actions.execute refuses a restore until D1f runs one (critic A17). Validation repeats
 /// src/shared/actions/restore-schema.ts against the catalogue's restore block, so C# holds no limits of its own.</summary>
 internal sealed partial class ActionService
 {
     private RestoreCatalogJson Restore => catalog.Restore;
 
-    [GeneratedRegex(@"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]?:[1-9][0-9]{0,4}|tail)\z")]
+    [GeneratedRegex(@"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[1-9][0-9]?:[1-9][0-9]{0,4})\z")]
     private static partial Regex RestoreSetId();
     [GeneratedRegex(@"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z")]
     private static partial Regex RestoreUuid();
@@ -63,7 +63,8 @@ internal sealed partial class ActionService
         if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null) throw Invalid("restore takes only its options.");
         var target = args.Target ?? throw Invalid("target.");
         if (target.Kind != "database" || target.Database is not null || target.Schema is not null || target.Parent is not null || !ExplorerRefs.Ident(target.Name)) throw Invalid("target.");
-        if (Restore.SystemDatabases.Contains(target.Name!, StringComparer.Ordinal)) throw Invalid(Restore.Message("systemDatabase"));
+        // In any case: a case-insensitive server, the default, takes MSDB for msdb.
+        if (Restore.SystemDatabases.Contains(target.Name!, StringComparer.OrdinalIgnoreCase)) throw Invalid(Restore.Message("systemDatabase"));
         if (args.Identity is { } identity && (identity.Id < 1 || identity.Created is null || !RestoreIdentityCreated().IsMatch(identity.Created))) throw Invalid("identity.");
         var options = args.Restore ?? throw Invalid("restore.");
         var sets = options.Sets ?? throw Invalid("restore.sets.");
@@ -105,15 +106,16 @@ internal sealed partial class ActionService
                 var (model, error) = await RestoreDescribe.DescribeAsync(connection, catalog, args.Restore!, profile.Linux, job);
                 return new ActionDescribeResult(null, watch.ElapsedMilliseconds, error, Restore: model);
             },
-            error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Reading the backups");
+            error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Reading the backups", own: OwnGate.Restore);
     }
 
-    /// <summary>Script: SSMS's text for the restore. It reads nothing and runs nothing; a destination that exists comes with its identity.</summary>
-    private Task<ActionScriptResult> ScriptRestoreJobAsync(ActionArgs args, ObjectRefDto target)
+    /// <summary>Script: SSMS's text for the restore. It reads nothing and runs nothing; a destination that exists comes with its
+    /// identity. Every RESTORE repeats the moves, so the text stops at the limit as it is written, never after.</summary>
+    private ActionScriptResult ScriptRestore(ActionArgs args, ObjectRefDto target)
     {
-        var text = RestoreSql.Script(Restore, target.Name!, args.Restore!, exists: args.Identity is not null);
-        if (text.Length > ScriptLimit(args.Action)) return Task.FromResult(new ActionScriptResult(null, "master", [], Error("SQL_ERROR", "The script is too large.")));
-        return Task.FromResult(new ActionScriptResult(text, "master", []));
+        var text = RestoreSql.Script(Restore, target.Name!, args.Restore!, exists: args.Identity is not null, ScriptLimit(args.Action));
+        return text is null ? new ActionScriptResult(null, "master", [], Error("SQL_ERROR", "The script is too large: it is longer than " + ScriptLimit(args.Action).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + " characters."))
+            : new ActionScriptResult(text, "master", []);
     }
 
 }

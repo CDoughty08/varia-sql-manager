@@ -22,7 +22,7 @@ internal static partial class RestoreSql
         + "bs.position AS position, bs.first_lsn AS first_lsn, bs.last_lsn AS last_lsn, bs.checkpoint_lsn AS checkpoint_lsn, bs.database_backup_lsn AS database_backup_lsn, "
         + "bs.backup_start_date AS start_date, bs.backup_finish_date AS finish_date, bs.backup_size AS size_bytes, bs.user_name AS user_name, bs.expiration_date AS expiration_date, "
         + "bs.is_copy_only AS is_copy_only, bs.is_damaged AS is_damaged, bs.recovery_model AS recovery_model, bs.first_recovery_fork_guid AS first_fork, bs.last_recovery_fork_guid AS last_fork, "
-        + "bs.media_set_id AS media_set_id, ms.media_family_count AS family_count "
+        + "bs.media_set_id AS media_set_id, ms.media_family_count AS family_count, bs.fork_point_lsn AS fork_point_lsn, bs.family_guid AS family_guid "
         + "FROM msdb.dbo.backupset AS bs JOIN msdb.dbo.backupmediaset AS ms ON ms.media_set_id = bs.media_set_id "
         + "WHERE bs.database_name = @db AND bs.is_snapshot = 0 ORDER BY bs.backup_set_id DESC;\n"
         + "SELECT mf.media_set_id AS media_set_id, mf.family_sequence_number AS family, mf.physical_device_name AS device, mf.device_type AS device_type "
@@ -34,9 +34,10 @@ internal static partial class RestoreSql
         + "bf.file_size AS file_size, bf.file_number AS file_id FROM msdb.dbo.backupfile AS bf JOIN msdb.dbo.backupset AS bs ON bs.backup_set_id = bf.backup_set_id "
         + "WHERE bs.backup_set_uuid = @set ORDER BY bf.file_number;";
 
-    /// <summary>The default folders, whether the login may restore (Learn: CREATE ANY DATABASE, or sysadmin and dbcreator), and whether it sees sessions.</summary>
+    /// <summary>The default folders, whether the login may restore (Learn: CREATE ANY DATABASE, or sysadmin and dbcreator), and whether it sees sessions.
+    /// SQL Server 2016 and 2017 have no InstanceDefaultBackupPath (2019 added it), so their backup folder is the data folder.</summary>
     public const string Facts = "SELECT CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath')) AS data_path, CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultLogPath')) AS log_path, "
-        + "CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultBackupPath')) AS backup_path, "
+        + "COALESCE(CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultBackupPath')), CONVERT(nvarchar(260), SERVERPROPERTY('InstanceDefaultDataPath'))) AS backup_path, "
         + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'CREATE ANY DATABASE') = 1 OR IS_SRVROLEMEMBER(N'dbcreator') = 1 OR IS_SRVROLEMEMBER(N'sysadmin') = 1 THEN 1 ELSE 0 END) AS can_restore;";
 
     /// <summary>The databases a restore can overwrite (Learn: all but master and tempdb; snapshots cannot be restored over), with
@@ -159,13 +160,15 @@ internal static partial class RestoreSql
     /// first with Close existing connections on a database that exists (the shared template, critic A12), the tail-log BACKUP LOG,
     /// one RESTORE per set (RESTRICTED_USER and the MOVEs on each, REPLACE on the first, KEEP_REPLICATION, the recovery state and
     /// STOPAT on the last), and SET MULTI_USER last after a RESTORE WITH RECOVERY that did not ask for restricted access.</summary>
-    public static List<string> Statements(RestoreCatalogJson restore, string database, RestoreOptionsDto options, bool exists)
+    public static List<string> Statements(RestoreCatalogJson restore, string database, RestoreOptionsDto options, bool exists) => [.. Lines(restore, database, options, exists)];
+
+    /// <summary><see cref="Statements"/> one at a time, so <see cref="Script"/> can stop at its limit before writing the rest.</summary>
+    private static IEnumerable<string> Lines(RestoreCatalogJson restore, string database, RestoreOptionsDto options, bool exists)
     {
-        var statements = new List<string>();
         var close = options.CloseConnections && exists;
-        if (close) statements.Add(ActionSql.Statement(new PlannedStatement(ActionTemplate.SetSingleUser, "master", [database])));
+        if (close) yield return ActionSql.Statement(new PlannedStatement(ActionTemplate.SetSingleUser, "master", [database]));
         if (options.TailLog is { } tail)
-            statements.Add("BACKUP LOG " + ScriptFormatter.Quote(database) + " TO  DISK = " + Literal(tail.File) + " WITH NOFORMAT, NOINIT,  NAME = " + Literal(TailName(tail.File))
+            yield return ("BACKUP LOG " + ScriptFormatter.Quote(database) + " TO  DISK = " + Literal(tail.File) + " WITH NOFORMAT, NOINIT,  NAME = " + Literal(TailName(tail.File))
                 + ", NOSKIP, NOREWIND, NOUNLOAD, " + (tail.NoRecovery ? " NORECOVERY , " : "") + " " + Stats(restore));
         for (var index = 0; index < options.Sets.Count; index++)
         {
@@ -182,19 +185,25 @@ internal static partial class RestoreSql
             if (index == 0 && options.Replace) with.Add("REPLACE");
             with.Add(Stats(restore));
             if (last && options.StopAt is { } stopAt) with.Add("STOPAT = " + Literal(stopAt));
-            statements.Add("RESTORE " + (set.Type == "log" ? "LOG " : "DATABASE ") + ScriptFormatter.Quote(database) + " FROM  " + string.Join(",  ", set.Devices.Select(device => "DISK = " + Literal(device)))
-                + " WITH  " + string.Join(",  ", with));
+            yield return "RESTORE " + (set.Type == "log" ? "LOG " : "DATABASE ") + ScriptFormatter.Quote(database) + " FROM  " + string.Join(",  ", set.Devices.Select(device => "DISK = " + Literal(device)))
+                + " WITH  " + string.Join(",  ", with);
         }
-        if (close && options.Recovery == "recovery" && !options.RestrictedUser) statements.Add(ActionSql.Statement(new PlannedStatement(ActionTemplate.SetMultiUser, "master", [database])));
-        return statements;
+        if (close && options.Recovery == "recovery" && !options.RestrictedUser) yield return ActionSql.Statement(new PlannedStatement(ActionTemplate.SetMultiUser, "master", [database]));
     }
 
-    /// <summary>SSMS's script: USE [master], the statements one per line, then GO (recalled).</summary>
-    public static string Script(RestoreCatalogJson restore, string database, RestoreOptionsDto options, bool exists)
+    /// <summary>SSMS's script: USE [master], the statements one per line, then GO (recalled); null once it would pass
+    /// <paramref name="limit"/> characters, checked after each statement, so at most one statement (bounded by the request's
+    /// moves and devices) is written past it.</summary>
+    public static string? Script(RestoreCatalogJson restore, string database, RestoreOptionsDto options, bool exists, long limit)
     {
         var text = new StringBuilder();
         text.Append(ScriptFormatter.Use("master")).Append(ScriptFormatter.NewLine);
-        foreach (var statement in Statements(restore, database, options, exists)) text.Append(statement).Append(ScriptFormatter.NewLine);
-        return text.Append(ScriptFormatter.NewLine).Append("GO").Append(ScriptFormatter.NewLine).ToString();
+        foreach (var statement in Lines(restore, database, options, exists))
+        {
+            text.Append(statement).Append(ScriptFormatter.NewLine);
+            if (text.Length > limit) return null;
+        }
+        text.Append(ScriptFormatter.NewLine).Append("GO").Append(ScriptFormatter.NewLine);
+        return text.Length > limit ? null : text.ToString();
     }
 }

@@ -1,17 +1,18 @@
 using System.Data;
 using System.Data.SqlTypes;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Scripting;
 
 namespace Varia.Backend.Actions;
 
-/// <summary>Restore Database's describe (actions.describe 'restoreDatabase', D1e) on the object actions' connection under the read
-/// gates and the catalogue's mediaReadMs: msdb's history (the databases it backed up; one database's sets and their media), the
+/// <summary>Restore Database's describe (actions.describe 'restoreDatabase', D1e) on the object actions' connection under its own
+/// gate (ActionServiceOptions.RestorePerConnection, outside the read gates) and the catalogue's mediaReadMs: msdb's history (the databases it backed up; one database's sets and their media), the
 /// headers of backup files (LABELONLY per device, then HEADERONLY per media set), one set's files (msdb's backupfile, or
 /// FILELISTONLY), and the server's facts. Constant SQL (RestoreSql) with every name, path and position a parameter. Nothing here
 /// logs a name, path or count.</summary>
-internal static class RestoreDescribe
+internal static partial class RestoreDescribe
 {
     public static async Task<(RestoreModelDto? Model, ActionError? Error)> DescribeAsync(SqlConnection connection, ActionsCatalog catalog, RestoreSourceDto source, bool linux, CancellationToken token)
     {
@@ -78,15 +79,25 @@ internal static class RestoreDescribe
         catch (SqlException error) when (!token.IsCancellationRequested && MediaError(catalog, error, connection) is { } media) { return (null, media); }
     }
 
-    /// <summary>A failure reading backup media as a value: a device SQL Server cannot open (3201: its operating system error 5 is
-    /// FILE_ACCESS, others PATH_NOT_FOUND), media a restore cannot use (MEDIA), or what FromSql makes of the rest.</summary>
-    internal static ActionError? MediaError(ActionsCatalog catalog, SqlException error, SqlConnection connection)
+    /// <summary>Operating system errors that say the file or its path is not there: file, path, network path or name not found, a bad name.</summary>
+    private static readonly HashSet<int> Missing = [2, 3, 53, 67, 123, 161];
+    [GeneratedRegex(@"(\d+)\s?\(")]
+    private static partial Regex OsError();
+
+    /// <summary>A failure reading backup media as a value: a device SQL Server cannot open (3201) is PATH_NOT_FOUND when its operating
+    /// system error says the file or path is not there, and FILE_ACCESS otherwise (access denied, a file another program holds);
+    /// FromSql makes the rest a value (media a restore cannot use is MEDIA, by its numbers), or null for a lost connection or a lock.</summary>
+    internal static ActionError? MediaError(ActionsCatalog catalog, SqlException error, SqlConnection? connection)
     {
-        var numbers = error.Errors.Cast<SqlError>().Select(item => item.Number).ToHashSet();
-        var text = string.Join(" ", error.Errors.Cast<SqlError>().Where(item => item.Class > 10).Select(item => item.Message).Distinct());
-        if (numbers.Contains(3201))
-            return ActionErrors.Create(catalog, text.Contains("error 5(", StringComparison.Ordinal) || text.Contains("error 5 (", StringComparison.Ordinal) ? "FILE_ACCESS" : "PATH_NOT_FOUND", text);
-        if (numbers.Overlaps(ActionErrors.Numbers["MEDIA"])) return ActionErrors.Create(catalog, "MEDIA", text);
+        var errors = error.Errors.Cast<SqlError>().ToList();
+        var text = string.Join(" ", errors.Where(item => item.Class > 10).Select(item => item.Message).Distinct());
+        if (errors.FirstOrDefault(item => item.Number == 3201) is { } open)
+        {
+            // The operating system error is the last number before a parenthesis: "Operating system error 5(Access is denied.)."
+            // The device's own name comes earlier in the message, so a "(" in it does not count.
+            var os = OsError().Matches(open.Message).LastOrDefault() is { } match && int.TryParse(match.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number) ? number : -1;
+            return ActionErrors.Create(catalog, Missing.Contains(os) ? "PATH_NOT_FOUND" : "FILE_ACCESS", text);
+        }
         return ActionErrors.CodeOf(error, connection) is "CONNECTION_LOST" or "BLOCKED" ? null : ActionErrors.FromSql(catalog, error, connection, ddl: false, inUseAdvice: null);
     }
 
@@ -198,7 +209,8 @@ internal static class RestoreDescribe
                 var set = new BackupSetDto(reader.GetGuid(0).ToString("D"), Text(reader, 1), type, Text(reader, 3), Text(reader, 4), Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture),
                     Lsn(reader, 6), Lsn(reader, 7), Lsn(reader, 8), Lsn(reader, 9), reader.IsDBNull(10) ? "" : Time(reader.GetValue(10)), reader.IsDBNull(11) ? "" : Time(reader.GetValue(11)),
                     reader.IsDBNull(12) ? 0 : Long(reader.GetValue(12)), Text(reader, 13), !reader.IsDBNull(15) && reader.GetBoolean(15), !reader.IsDBNull(16) && reader.GetBoolean(16), [],
-                    reader.IsDBNull(14) ? null : Time(reader.GetValue(14)), reader.IsDBNull(17) ? null : reader.GetString(17), ForkId(reader, 18), ForkId(reader, 19));
+                    reader.IsDBNull(14) ? null : Time(reader.GetValue(14)), reader.IsDBNull(17) ? null : reader.GetString(17), ForkId(reader, 18), ForkId(reader, 19),
+                    ForkPointLsn: reader.IsDBNull(22) ? null : Lsn(reader, 22), FamilyGuid: ForkId(reader, 23));
                 rows.Add((set, reader.GetInt32(20), reader.IsDBNull(21) ? 1 : Convert.ToInt32(reader.GetValue(21), CultureInfo.InvariantCulture)));
             }
             await reader.NextResultAsync(token);
@@ -261,7 +273,8 @@ internal static class RestoreDescribe
                 var c = (Name: Column("BackupName"), Type: Column("BackupType"), Server: Column("ServerName"), Database: Column("DatabaseName"), Position: Column("Position"), First: Column("FirstLSN"),
                     Last: Column("LastLSN"), Checkpoint: Column("CheckpointLSN"), Base: Column("DatabaseBackupLSN"), Start: Column("BackupStartDate"), Finish: Column("BackupFinishDate"),
                     Size: Column("BackupSize"), User: Column("UserName"), Expiration: Column("ExpirationDate"), CopyOnly: Column("IsCopyOnly"), Damaged: Column("IsDamaged"),
-                    Model: Column("RecoveryModel"), FirstFork: Column("FirstRecoveryForkID"), Fork: Column("RecoveryForkID"), Snapshot: Column("IsSnapshot"));
+                    Model: Column("RecoveryModel"), FirstFork: Column("FirstRecoveryForkID"), Fork: Column("RecoveryForkID"), Snapshot: Column("IsSnapshot"), ForkPoint: Column("ForkPointLSN"),
+                    Family: Column("FamilyGUID"));
                 while (await reader.ReadAsync(token))
                 {
                     if (SetType(Text(reader, c.Type)) is not { } type || (!reader.IsDBNull(c.Snapshot) && Convert.ToBoolean(reader.GetValue(c.Snapshot), CultureInfo.InvariantCulture))) continue;
@@ -272,7 +285,7 @@ internal static class RestoreDescribe
                         !reader.IsDBNull(c.CopyOnly) && Convert.ToBoolean(reader.GetValue(c.CopyOnly), CultureInfo.InvariantCulture),
                         !reader.IsDBNull(c.Damaged) && Convert.ToBoolean(reader.GetValue(c.Damaged), CultureInfo.InvariantCulture), paths,
                         reader.IsDBNull(c.Expiration) ? null : Time(reader.GetValue(c.Expiration)), reader.IsDBNull(c.Model) ? null : Text(reader, c.Model),
-                        ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem));
+                        ForkId(reader, c.FirstFork), ForkId(reader, c.Fork), problem, reader.IsDBNull(c.ForkPoint) ? null : Lsn(reader, c.ForkPoint), ForkId(reader, c.Family)));
                 }
             }
         }

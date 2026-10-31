@@ -1,27 +1,78 @@
-import { useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { timelineIntervals, timelineIntervalSpecs, type TimelineInterval } from '../../../shared/actions/restore.ts'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { timelineIntervals, timelineIntervalSpecs, type BackupSetRow, type TimelineInterval } from '../../../shared/actions/restore.ts'
 import { pointAllowed } from '../../../shared/actions/restore-plan.ts'
+import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import SubDialog from '../dialogs/SubDialog'
-import { draftPlan, restoreToText } from './model'
+import { useForcedColors } from '../live/LiveChart'
+import { draftPlan, restoreToText, sourceSets } from './model'
 import type { SectionProps } from './RestoreDatabase'
 import { coverage, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
 
 const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`
 
+/** The track's drawing, in CSS pixels: never stretched, so a mark keeps its size and shape at any dialog width. */
+const track = { height: 48, inset: 8, bandTop: 20, bandHeight: 8, fallbackWidth: 480 } as const
+type Mark = 'full' | 'differential' | 'log' | 'covered'
+/** Each mark's series colour (chart categorical keys, which have contrast pairs on the dialog's surface) and its label. */
+const marks: { readonly [M in Mark]: { readonly key: ColorKey; readonly label: string } } = {
+  full: { key: 'charts.blue', label: 'Full' },
+  differential: { key: 'charts.purple', label: 'Differential' },
+  log: { key: 'charts.orange', label: 'Transaction Log' },
+  covered: { key: 'charts.green', label: 'Covered by log backups' }
+}
+const kind = (set: BackupSetRow): Exclude<Mark, 'covered'> => set.type === 'log' ? 'log' : set.type === 'differential' ? 'differential' : 'full'
+
+/** A mark's shape at x: a large triangle for a full backup, a small one for a differential, a tick under the band for a log. */
+function Glyph({ mark, x, fill }: { readonly mark: Exclude<Mark, 'covered'>; readonly x: number; readonly fill?: CSSProperties }) {
+  const className = `restore-timeline-${mark}`
+  switch (mark) {
+    case 'full': return <polygon className={className} style={fill} points={`${x - 7},4 ${x + 7},4 ${x},18`} />
+    case 'differential': return <polygon className={className} style={fill} points={`${x - 4.5},9 ${x + 4.5},9 ${x},18`} />
+    case 'log': return <rect className={className} style={fill} x={x - 1.5} y={30} width={3} height={12} />
+  }
+}
+
+/** A legend entry: the mark's own shape, so the legend reads without colour (and under forced colours) too. */
+function Swatch({ mark, fill }: { readonly mark: Mark; readonly fill?: CSSProperties }) {
+  return <svg className="restore-timeline-swatch" viewBox="0 0 14 14" aria-hidden="true">
+    {mark === 'full' ? <polygon className="restore-timeline-full" style={fill} points="0,1 14,1 7,13" />
+      : mark === 'differential' ? <polygon className="restore-timeline-differential" style={fill} points="2.5,4 11.5,4 7,12" />
+        : mark === 'log' ? <rect className="restore-timeline-log" style={fill} x={5.5} y={1} width={3} height={12} />
+          : <rect className="restore-timeline-covered" style={fill} x={0} y={3} width={14} height={8} />}
+  </svg>
+}
+
 /**
  * Backup Timeline: Restore to the last backup taken or a specific date and time, chosen with the Date and Time fields or on
- * the timeline (a slider: the arrows move a minute, Shift an hour), which shows the backups and, in green, where the logs
- * cover (SSMS's sub-dialog, recalled).
+ * the timeline (a slider: the arrows move a minute, Shift an hour), which shows the backups and the stretches the logs cover
+ * (SSMS's sub-dialog, recalled).
  */
 export default function BackupTimeline({ state, draft, facts, service }: Pick<SectionProps, 'state' | 'draft' | 'facts' | 'service'>) {
   const plan = draftPlan(draft, facts)
-  const lastFinish = Math.max(...facts.sets.map(set => timeMs(set.finish) ?? 0))
+  const sets = sourceSets(draft, facts)
+  const lastFinish = Math.max(...sets.map(set => timeMs(set.finish) ?? 0))
   const [specific, setSpecific] = useState(draft.stopAt !== undefined)
   const [point, setPoint] = useState(timeMs(draft.stopAt ?? '') ?? lastFinish)
   const [interval, chooseInterval] = useState<TimelineInterval>('day')
-  const span = timelineWindow(facts.sets, interval, point)
-  const text = timeText(point), allowed = pointAllowed(facts.sets, text)
+  const [width, setWidth] = useState<number>(track.fallbackWidth)
+  const box = useRef<HTMLDivElement>(null)
+  const forced = useForcedColors()
+  useLayoutEffect(() => {
+    const element = box.current
+    if (!element) return
+    const measure = () => { if (element.clientWidth > 0) setWidth(element.clientWidth) }
+    measure()
+    if (typeof ResizeObserver !== 'function') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const span = timelineWindow(sets, interval, point)
+  const text = timeText(point), allowed = pointAllowed(sets, text)
   const id = (key: string) => fieldId(state.id, `timeline-${key}`)
+  // Inset by half the widest glyph, so marks at the window's ends show whole.
+  const scale = width - 2 * track.inset, at = (fraction: number) => track.inset + fraction * scale
+  const fill = (mark: Mark): CSSProperties | undefined => forced ? undefined : { fill: `var(${cssVariable(marks[mark].key)})` }
   const move = (ms: number) => { setSpecific(true); setPoint(Math.round(ms / 1000) * 1000) }
   const keyDown = (event: KeyboardEvent<SVGSVGElement>) => {
     const next = stepPoint(event.key, event.shiftKey, point, span)
@@ -31,10 +82,13 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
     move(next)
   }
   const pointer = (event: PointerEvent<SVGSVGElement>) => {
-    const box = event.currentTarget.getBoundingClientRect()
-    if (box.width > 0) move(span.from + (span.to - span.from) * Math.min(1, Math.max(0, (event.clientX - box.left) / box.width)))
+    const rect = event.currentTarget.getBoundingClientRect()
+    if (rect.width > 2 * track.inset) move(span.from + (span.to - span.from) * Math.min(1, Math.max(0, (event.clientX - rect.left - track.inset) / (rect.width - 2 * track.inset))))
   }
-  const markers = facts.sets.flatMap(set => { const at = timeMs(set.finish); return at === undefined || at < span.from || at > span.to ? [] : [{ set, x: position(at, span) * 1000 }] })
+  // Logs first, then differentials, then fulls: a larger glyph draws over a tick it shares a time with.
+  const order = { log: 0, differential: 1, full: 2 } as const
+  const placed = sets.flatMap(set => { const ms = timeMs(set.finish); return ms === undefined || ms < span.from || ms > span.to ? [] : [{ set, x: at(position(ms, span)) }] })
+    .sort((a, b) => order[kind(a.set)] - order[kind(b.set)])
   return <SubDialog title="Backup Timeline" okDisabled={specific && !allowed} onCancel={() => service.openDialog(state.id, undefined)} className="restore-timeline"
     onOk={() => { service.openDialog(state.id, undefined); service.updateDraft(state.id, { stopAt: specific ? text : undefined }) }}
     status={specific && !allowed ? 'No backup reaches this point in time.' : undefined}>
@@ -52,16 +106,19 @@ export default function BackupTimeline({ state, draft, facts, service }: Pick<Se
         {timelineIntervals.map(value => <option key={value} value={value}>{timelineIntervalSpecs[value].label}</option>)}
       </select>
     </div>
-    <svg className="restore-timeline-track" viewBox="0 0 1000 40" preserveAspectRatio="none" role="slider" tabIndex={0} aria-label="Point in time"
-      aria-valuemin={Math.floor(span.from / 60_000)} aria-valuemax={Math.ceil(span.to / 60_000)} aria-valuenow={Math.floor(point / 60_000)} aria-valuetext={text.replace('T', ' ')}
-      aria-invalid={specific && !allowed ? true : undefined} onKeyDown={keyDown} onPointerDown={pointer}>
-      <rect className="restore-timeline-base" x={0} y={16} width={1000} height={8} />
-      {coverage(facts.sets, span).map((stretch, index) => <rect key={index} className="restore-timeline-covered" x={stretch.from * 1000} y={16} width={Math.max(2, (stretch.to - stretch.from) * 1000)} height={8} />)}
-      {markers.map(({ set, x }) => <rect key={set.id} className={`restore-timeline-backup restore-timeline-${set.type === 'log' ? 'log' : set.type === 'differential' ? 'differential' : 'full'}`} x={x - 2} y={set.type === 'log' ? 12 : 6} width={4} height={set.type === 'log' ? 16 : 28} />)}
-      {specific && <rect className="restore-timeline-point" x={position(point, span) * 1000 - 1.5} y={0} width={3} height={40} />}
-    </svg>
+    <div className="restore-timeline-box" ref={box}>
+      <svg className="restore-timeline-track" width={width} height={track.height} viewBox={`0 0 ${width} ${track.height}`} role="slider" tabIndex={0} aria-label="Point in time"
+        aria-valuemin={Math.floor(span.from / 60_000)} aria-valuemax={Math.ceil(span.to / 60_000)} aria-valuenow={Math.floor(point / 60_000)} aria-valuetext={text.replace('T', ' ')}
+        aria-invalid={specific && !allowed ? true : undefined} onKeyDown={keyDown} onPointerDown={pointer}>
+        <rect className="restore-timeline-base" x={track.inset} y={track.bandTop + 2} width={scale} height={track.bandHeight - 4} />
+        {coverage(sets, span).map((stretch, index) => <rect key={index} className="restore-timeline-covered" style={fill('covered')} x={at(stretch.from)} y={track.bandTop} width={Math.max(2, (stretch.to - stretch.from) * scale)} height={track.bandHeight} />)}
+        {placed.map(({ set, x }) => <Glyph key={set.id} mark={kind(set)} x={x} fill={fill(kind(set))} />)}
+        {specific && <rect className="restore-timeline-point" x={at(position(point, span)) - 1.5} y={0} width={3} height={track.height} />}
+      </svg>
+    </div>
     <div className="restore-timeline-ends"><span>{timeText(span.from).replace('T', ' ')}</span><span>{timeText(span.to).replace('T', ' ')}</span></div>
-    <p className="field-note restore-timeline-legend"><span className="restore-timeline-swatch restore-timeline-full" />Full <span className="restore-timeline-swatch restore-timeline-differential" />Differential <span className="restore-timeline-swatch restore-timeline-log" />Transaction Log <span className="restore-timeline-swatch restore-timeline-covered" />Covered by log backups</p>
+    <ul className="restore-timeline-legend" aria-label="Legend">
+      {(Object.keys(marks) as Mark[]).map(mark => <li key={mark}><Swatch mark={mark} fill={fill(mark)} />{marks[mark].label}</li>)}
+    </ul>
   </SubDialog>
 }
-

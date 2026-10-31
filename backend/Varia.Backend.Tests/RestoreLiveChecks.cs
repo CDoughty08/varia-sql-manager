@@ -14,10 +14,14 @@ namespace Varia.Backend.Tests;
 /// msdb's history and as the media's headers read them, a missing stripe, each set's files, and SMO's DatabaseRestorePlanner on
 /// the same history: the sets it chooses for the last backup and three points in time are the ones tests/fixtures/restore/
 /// smo-plans.json records for the TypeScript planner (VARIA_UPDATE_RESTORE_FIXTURES=1 rewrites it), and its Script() is
-/// actions.script's text for five option sets, a hostile destination name and paths among them. Nothing is restored.</summary>
+/// actions.script's text for five option sets, a hostile destination name and paths among them. Each of the planner's plans is
+/// restored under a scratch name (and dropped) to prove it reaches its point. A second source is restored in place to a point
+/// inside a log backup, which forks its log: tests/fixtures/restore/smo-fork.json records its history, SMO's plans and the
+/// planner's, which restore with every row where the abandoned branch's plan fails.</summary>
 internal static class RestoreLiveChecks
 {
     private const string FixturePath = "tests/fixtures/restore/smo-plans.json";
+    private const string ForkPath = "tests/fixtures/restore/smo-fork.json";
 
     /// <summary>The sets the TypeScript planner restores for a goal: SMO's, but between log2 and the differential, where SMO's plan
     /// restores the differential taken after the point (the check below restores both), the logs that reach it.</summary>
@@ -251,6 +255,84 @@ internal static class RestoreLiveChecks
                 differ.Add(item.Name + ": " + (scripted.Error?.Message ?? string.Join(" / ", actual.Zip(expected).Where(pair => pair.First != pair.Second).Select(pair => pair.First + " <> " + pair.Second).Take(1).DefaultIfEmpty(actual.Count + " <> " + expected.Count))));
         }
         check(differ.Count == 0, "actions.script writes SMO's RestorePlan.Script() for the same sets and options (tail log and closed connections, a hostile relocated name, standby, norecovery, a point in time): " + string.Join(" | ", differ));
+
+        // A fork: full, log1 and log2, then the database restored in place to a point inside log2 (rows 1 to 3 of 4), a row
+        // inserted on the new fork and log3, which starts on the old fork and forks at the point. Times are whole seconds the
+        // server read, a second clear of the rows around them.
+        var forkDb = await scratch.CreateRestoreForkAsync();
+        var fb = "[" + forkDb + "]";
+        var (forkFull, forkLog1, forkLog2, forkLog3) = (scratch.RestoreFile("ffull.bak", forkDb), scratch.RestoreFile("flog1.trn", forkDb), scratch.RestoreFile("flog2.trn", forkDb), scratch.RestoreFile("flog3.trn", forkDb));
+        async Task<string> Now() => (await Sql("WAITFOR DELAY '00:00:01.1'; SELECT CONVERT(nvarchar(19), SYSDATETIME(), 126);")).Sets[0][0][0] ?? throw new InvalidOperationException("No server time.");
+        await Step("CREATE TABLE dbo.t (i int IDENTITY, at datetime2 DEFAULT SYSDATETIME()); INSERT dbo.t DEFAULT VALUES;", forkDb);
+        await Step("BACKUP DATABASE " + fb + " TO DISK = " + Q(forkFull) + " WITH FORMAT, INIT, NAME = N'full';");
+        await Step("INSERT dbo.t DEFAULT VALUES;", forkDb);
+        await Step("BACKUP LOG " + fb + " TO DISK = " + Q(forkLog1) + " WITH FORMAT, INIT, NAME = N'log1';");
+        await Step("WAITFOR DELAY '00:00:01.1'; INSERT dbo.t DEFAULT VALUES;", forkDb);
+        var forkPoint = await Now();
+        await Step("WAITFOR DELAY '00:00:01.1'; INSERT dbo.t DEFAULT VALUES;", forkDb);
+        await Step("BACKUP LOG " + fb + " TO DISK = " + Q(forkLog2) + " WITH FORMAT, INIT, NAME = N'log2';");
+        await Step("ALTER DATABASE " + fb + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\nRESTORE DATABASE " + fb + " FROM DISK = " + Q(forkFull) + " WITH REPLACE, NORECOVERY;\n"
+            + "RESTORE LOG " + fb + " FROM DISK = " + Q(forkLog1) + " WITH NORECOVERY;\nRESTORE LOG " + fb + " FROM DISK = " + Q(forkLog2) + " WITH RECOVERY, STOPAT = " + Q(forkPoint) + ";\n"
+            + "ALTER DATABASE " + fb + " SET MULTI_USER;");
+        var afterRestore = await Now();
+        await Step("WAITFOR DELAY '00:00:01.1'; INSERT dbo.t DEFAULT VALUES;", forkDb);
+        await Step("BACKUP LOG " + fb + " TO DISK = " + Q(forkLog3) + " WITH FORMAT, INIT, NAME = N'log3';");
+        var forkHistory = await Describe(new("history", forkDb));
+        var forkSets = forkHistory.Restore?.Sets ?? [];
+        var forkRead = (await Describe(new("devices", Devices: [forkFull, forkLog1, forkLog2, forkLog3]))).Restore?.Sets ?? [];
+        var (ff, f1, f2, f3) = (Named(forkSets, "full"), Named(forkSets, "log1"), Named(forkSets, "log2"), Named(forkSets, "log3"));
+        static decimal L(string text) => decimal.Parse(text, CultureInfo.InvariantCulture);
+        var m3 = Named(forkRead, "log3");
+        check(ff is not null && f1 is not null && f2 is not null && f3 is not null && f3.FirstForkGuid == f2.ForkGuid && f3.ForkGuid != f3.FirstForkGuid && f2.FirstForkGuid == f2.ForkGuid
+            && f3.ForkPointLsn is { } forkLsn && L(forkLsn) > L(f2.FirstLsn) && L(forkLsn) < L(f2.LastLsn) && L(f3.FirstLsn) <= L(f1.LastLsn)
+            && forkSets.All(set => set.FamilyGuid is { } family && family == ff.FamilyGuid) && m3 is not null && m3.ForkPointLsn == f3.ForkPointLsn && m3.FamilyGuid == f3.FamilyGuid
+            && m3.FirstForkGuid == f3.FirstForkGuid && m3.ForkGuid == f3.ForkGuid,
+            "after a restore to a point inside log2, msdb and the media's headers read log3 as starting on the old fork and forking inside log2 at its fork point, all of one family: "
+            + string.Join(", ", forkSets.Select(set => set.Name + " " + set.FirstLsn + "-" + set.LastLsn + " fork " + set.ForkPointLsn)));
+
+        var forkById = forkSets.ToDictionary(set => set.Id, StringComparer.OrdinalIgnoreCase);
+        RestorePlan ForkPlan(string? stopAt)
+        {
+            var planner = new DatabaseRestorePlanner(smo, forkDb) { ReadHeaderFromMedia = false, RestoreToLastBackup = stopAt is null, BackupTailLog = false };
+            if (stopAt is not null) planner.RestoreToPointInTime = DateTime.ParseExact(stopAt, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture);
+            return planner.CreateRestorePlan(Recovery());
+        }
+        var forkGoals = new (string Name, string? StopAt)[] { ("last backup", null), ("after the restore", afterRestore) };
+        var forkChosen = forkGoals.Select(goal => (goal.Name, goal.StopAt, Names: ForkPlan(goal.StopAt).RestoreOperations.Select(op => forkById.TryGetValue(op.BackupSet.BackupSetGuid.ToString("D"), out var set) ? set.Name : "?").ToList())).ToList();
+        string[] forkVaria = ["full", "log1", "log3"];
+        var forkPath = Fixtures.Path(ForkPath);
+        var forkShift = new DateTime(2026, 1, 1) - DateTime.ParseExact(ff!.Start, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture).Date;
+        var forkPlans = new JsonArray([.. forkChosen.Select(item => (JsonNode)new JsonObject
+        {
+            ["goal"] = item.Name,
+            ["stopAt"] = item.StopAt is null ? null : Shift(item.StopAt, forkShift),
+            ["names"] = new JsonArray([.. item.Names.Select(name => (JsonNode)JsonValue.Create(name))]),
+            ["varia"] = new JsonArray([.. forkVaria.Select(name => (JsonNode)JsonValue.Create(name))])
+        })]);
+        if (Environment.GetEnvironmentVariable("VARIA_UPDATE_RESTORE_FIXTURES") == "1")
+        {
+            var scrubbedFork = Scrub(forkSets, forkRead, forkDb, folder, separator, forkShift);
+            var fixture = new JsonObject { ["source"] = "SMO DatabaseRestorePlanner over a live history forked by a restore to a point in time (RestoreLiveChecks); names, servers, users and paths replaced, times moved by whole days to 2026-01-01", ["history"] = scrubbedFork.History, ["media"] = scrubbedFork.Media, ["plans"] = forkPlans };
+            File.WriteAllText(forkPath, fixture.ToJsonString(new JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n");
+            Console.WriteLine("Rewrote " + ForkPath + ".");
+        }
+        var recordedFork = File.Exists(forkPath) ? JsonNode.Parse(File.ReadAllText(forkPath))?["plans"]?.AsArray() : null;
+        check(forkChosen.All(item => item.Names.SequenceEqual(forkVaria)) && recordedFork is not null && recordedFork.Count == forkPlans.Count
+            && recordedFork.Zip(forkPlans).All(pair => pair.First!["goal"]!.GetValue<string>() == pair.Second!["goal"]!.GetValue<string>()
+                && pair.First["names"]!.AsArray().Select(name => name!.GetValue<string>()).SequenceEqual(pair.Second["names"]!.AsArray().Select(name => name!.GetValue<string>()))),
+            "SMO's planner follows the new fork (full, log1, log3) for the last backup and a point after the restore, as " + ForkPath + " records for the TypeScript planner: "
+            + string.Join(" | ", forkChosen.Select(item => item.Name + ": " + string.Join(",", item.Names))));
+
+        // Restored under the scratch name: the planner's plan comes back ONLINE with every row (and the point's rows); the abandoned
+        // branch's plan (log2, then log3) fails at a RESTORE LOG.
+        var forkMoves = new List<RestoreMoveDto> { new(forkDb, (restoreFacts.DataPath ?? folder) + target + ".mdf"), new(forkDb + "_log", (restoreFacts.LogPath ?? folder) + target + "_log.ldf") };
+        RestoreOptionsDto ForkOptions(IEnumerable<string> names, string? stopAt) => new([.. names.Select(name => Named(forkSets, name) is { } set ? new RestorePlanSetDto(set.Id, [.. set.Devices], set.Position, set.Type, set.Name) : throw new InvalidOperationException("No set " + name))],
+            forkMoves, false, false, false, "recovery", false, stopAt);
+        var forkOutcomes = new List<string>();
+        foreach (var goal in forkGoals) forkOutcomes.Add(await Restored(RestoreSql.Statements(ActionsCatalog.Current.Restore, target, ForkOptions(forkVaria, goal.StopAt), exists: false)));
+        var abandoned = await Restored(RestoreSql.Statements(ActionsCatalog.Current.Restore, target, ForkOptions(["full", "log1", "log2", "log3"], null), exists: false));
+        check(forkOutcomes.SequenceEqual(["4 rows", "3 rows"]) && !abandoned.EndsWith(" rows", StringComparison.Ordinal),
+            "the planner's plan over the fork restores every row, and to the point after the restore its rows, where the abandoned branch's plan fails (" + abandoned + "): " + string.Join(", ", forkOutcomes));
     }
 
     /// <summary>The history and media sets with this run's names, server, user, folders and times replaced, so the fixture holds

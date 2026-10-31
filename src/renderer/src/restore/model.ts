@@ -5,7 +5,7 @@ import {
   backupSetTypeSpecs, pathFileName, restoreAsPath, restoreLimits, restoreMessages, restoreTargetProblem, standbyFile, tailLogFile, type BackupFileRow, type BackupSetRow, type RestoreDestination,
   type RestoreMove, type RestoreOptions, type RestorePlanSet, type RestoreRecovery, type RestoreServerFacts
 } from '../../../shared/actions/restore.ts'
-import { dependants, lastBackupTaken, orderSelection, planRestore, selectionProblem, tailSetId } from '../../../shared/actions/restore-plan.ts'
+import { dependants, lastBackupTaken, orderSelection, planRestore, reachesPoint, selectionProblem, usableSet } from '../../../shared/actions/restore-plan.ts'
 import { restoreOptionsProblems, type RestoreRequest } from '../../../shared/actions/restore-schema.ts'
 import { folderPath, sameServerPath, serverPathProblem } from '../../../shared/actions/files.ts'
 
@@ -17,11 +17,13 @@ export interface RestoreDraft {
   readonly database: string
   /** Source › Device: the backup files, in the order Select backup devices lists them. */
   readonly devices: readonly string[]
+  /** Source › Device › Database: which database's sets on the media restore (the first the media hold until one is chosen). */
+  readonly deviceDatabase?: string
   /** Destination › Database: typed, or one of the server's. */
   readonly destination: string
   /** Restore to: undefined for the last backup taken, else the Timeline's point (the server's local time). */
   readonly stopAt?: string
-  /** The grid's checkboxes, once the person changes one: the sets to restore, in any order. */
+  /** Manual Selection, while it is checked: the grid's checked sets, in any order. Unchecking it brings the planner's plan back. */
   readonly manual?: readonly string[]
   /** Files: Relocate all files to folder, with its two folders. */
   readonly relocate: boolean
@@ -64,11 +66,22 @@ export function initialDraft(database: string, facts: RestoreFacts, at: Date): R
 export function destinationOf(facts: RestoreFacts, name: string): RestoreDestination | undefined {
   return facts.server?.destinations.find(item => item.name === name) ?? facts.server?.destinations.find(item => item.name.toLowerCase() === name.toLowerCase())
 }
-/** The database the backups are of: Source › Database, or the latest full backup's on the devices. */
+/** The databases the media hold, in the order their sets are on them (Source › Device › Database). */
+export function deviceDatabases(facts: RestoreFacts): string[] {
+  return [...new Set(facts.sets.map(set => set.database))]
+}
+/** The database the backups are of: Source › Database, or Source › Device › Database (the first the media hold until one is chosen). */
 export function sourceDatabase(draft: RestoreDraft, facts: RestoreFacts): string {
   if (draft.source === 'database') return draft.database
-  const full = [...facts.sets].filter(set => set.type === 'full').sort((a, b) => a.finish < b.finish ? 1 : -1)[0]
-  return full?.database ?? facts.sets[0]?.database ?? ''
+  const names = deviceDatabases(facts)
+  return draft.deviceDatabase !== undefined && names.includes(draft.deviceDatabase) ? draft.deviceDatabase : names[0] ?? ''
+}
+/** The sets the grid lists and the planner plans: the history's (one database's already), or the chosen database's on the media,
+ *  whose sets of other databases would chain by LSN alone. */
+export function sourceSets(draft: RestoreDraft, facts: RestoreFacts): readonly BackupSetRow[] {
+  if (draft.source === 'database') return facts.sets
+  const database = sourceDatabase(draft, facts)
+  return facts.sets.filter(set => set.database === database)
 }
 /**
  * Whether a tail-log backup can be taken (SSMS offers it, checked, in this case): the destination is the source database,
@@ -82,27 +95,52 @@ export function tailLogPossible(draft: RestoreDraft, facts: RestoreFacts): boole
 /** The plan the grid checks: the planner's, or Manual Selection's in restore order, with why it cannot restore. */
 export interface DraftPlan { readonly ids: readonly string[]; readonly stopAt?: string; readonly problem?: string; readonly manual: boolean }
 export function draftPlan(draft: RestoreDraft, facts: RestoreFacts): DraftPlan {
-  const tail = draft.tailLog && tailLogPossible(draft, facts)
+  const sets = sourceSets(draft, facts)
   if (draft.manual) {
-    const ids = orderSelection(facts.sets, draft.manual.filter(id => id !== tailSetId || tail))
-    const problem = selectionProblem(facts.sets, ids)
-    const lastLog = facts.sets.find(set => set.id === ids.filter(id => id !== tailSetId).at(-1))?.type === 'log'
-    return { ids, ...draft.stopAt && lastLog ? { stopAt: draft.stopAt } : {}, ...problem ? { problem } : {}, manual: true }
+    const ids = orderSelection(sets, draft.manual)
+    let problem = selectionProblem(sets, ids), stopAt: string | undefined
+    // A point the checked sets stop at takes STOPAT on their last log; one they cannot stop at is a problem, never dropped.
+    const atBase = sets.find(set => set.id === ids.at(-1))?.type !== 'log' && lastBackupTaken(sets, ids) === draft.stopAt
+    if (draft.stopAt && !atBase) {
+      if (reachesPoint(sets, ids, draft.stopAt)) stopAt = draft.stopAt
+      else problem ??= restoreMessages.notReached
+    }
+    return { ids, ...stopAt ? { stopAt } : {}, ...problem ? { problem } : {}, manual: true }
   }
-  const plan = planRestore(facts.sets, { ...draft.stopAt ? { stopAt: draft.stopAt } : {}, tailLog: tail })
+  const plan = planRestore(sets, draft.stopAt ? { stopAt: draft.stopAt } : {})
   return { ids: plan.ids, ...plan.stopAt ? { stopAt: plan.stopAt } : {}, ...plan.problem ? { problem: plan.problem } : {}, manual: false }
 }
-/** A grid checkbox: checking adds a set, unchecking removes it and every set after it in the plan, as SSMS does. */
+/** Whether the grid may check a set: Manual Selection is on, and the planner could use the set (not striped, damaged or of a kind it does not plan). */
+export const checkable = (draft: RestoreDraft, set: BackupSetRow): boolean => !!draft.manual && usableSet(set)
+/** Why the planner never uses a set, or undefined: its problem (not on disk), damage, a copy-only log, or a kind it does not plan. */
+export function setReason(set: BackupSetRow): string | undefined {
+  if (set.problem) return set.problem
+  if (set.damaged) return restoreMessages.damaged
+  if (set.type === 'log' && set.copyOnly) return restoreMessages.copyOnlyLog
+  return usableSet(set) ? undefined : restoreMessages.notPlanned
+}
+/** Manual Selection: checking it starts from the plan the grid shows; unchecking it brings the planner's plan back. */
+export function setManual(draft: RestoreDraft, facts: RestoreFacts, on: boolean): Partial<RestoreDraft> {
+  return on ? { manual: draftPlan(draft, facts).ids } : { manual: undefined }
+}
+/** A grid checkbox under Manual Selection: checking adds a set, unchecking removes it and every set after it in the plan, as SSMS does. */
 export function toggleSet(draft: RestoreDraft, facts: RestoreFacts, id: string, checked: boolean): RestoreDraft {
   const current = draftPlan(draft, facts).ids
   const manual = checked ? [...new Set([...current, id])] : current.filter(item => item !== id && !dependants(current, id).includes(item))
   return { ...draft, manual }
 }
 
+/** "<name> does not exist yet: the restore creates it.", for a valid destination the server does not have (the mockup's note). */
+export function destinationNote(draft: RestoreDraft, facts: RestoreFacts): string | undefined {
+  const name = draft.destination
+  const valid = name.trim() !== '' && name.length <= 128 && !name.includes('\u0000') && !restoreTargetProblem(name)
+  return facts.server && valid && !destinationOf(facts, name) ? `${name} does not exist yet: the restore creates it.` : undefined
+}
+
 /** "The last backup taken (date)", or the point (SSMS's Restore to:, recalled). */
 export function restoreToText(draft: RestoreDraft, facts: RestoreFacts, plan: DraftPlan): string {
   if (draft.stopAt) return draft.stopAt.replace('T', ' ')
-  const last = lastBackupTaken(facts.sets, plan.ids)
+  const last = lastBackupTaken(sourceSets(draft, facts), plan.ids)
   return last ? `The last backup taken (${last.replace('T', ' ')})` : 'The last backup taken'
 }
 
@@ -111,7 +149,9 @@ export interface FileRow { readonly file: BackupFileRow; readonly restoreAs: str
 export function fileRows(draft: RestoreDraft, facts: RestoreFacts): FileRow[] {
   const server = facts.server, separator = server?.separator ?? '\\', source = sourceDatabase(draft, facts)
   const taken = new Map<string, string>()
-  for (const file of server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(file.path.toLowerCase(), file.database)
+  // Paths compare as the server's platform does: without case on Windows, exactly on Linux.
+  const key = (path: string) => separator === '\\' ? path.toLowerCase() : path
+  for (const file of server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(key(file.path), file.database)
   const rows = facts.files.map(file => {
     const typed = draft.restoreAs[file.logical]
     const destination = draft.destination || source
@@ -120,7 +160,7 @@ export function fileRows(draft: RestoreDraft, facts: RestoreFacts): FileRow[] {
     const restoreAs = typed ?? (relocated
       ? folderPath(relocated, separator) + pathFileName(restoreAsPath(file, source, destination, folderPath(relocated, separator), separator))
       : restoreAsPath(file, source, destination, file.type === 'log' ? server?.logPath : server?.dataPath, separator))
-    const other = taken.get(restoreAs.toLowerCase())
+    const other = taken.get(key(restoreAs))
     const problem = serverPathProblem(restoreAs) ?? (other ? `The file is in use by the database ${other}.` : undefined)
     return { file, restoreAs, typed: typed !== undefined, ...problem ? { problem } : {} }
   })
@@ -140,7 +180,9 @@ export function draftProblems(draft: RestoreDraft, facts: RestoreFacts, plan = d
   if (draft.source === 'device' && draft.devices.length === 0) general.push('Add the backup files to restore from.')
   if (facts.sets.length > 0 && plan.problem) general.push(plan.problem)
   if (facts.sets.length > 0 && plan.ids.length === 0 && !plan.problem) general.push(restoreMessages.invalidPlan)
-  if (plan.ids.filter(id => id !== tailSetId).length > restoreLimits.planSets) general.push(`A restore runs at most ${restoreLimits.planSets} backup sets.`)
+  if (plan.ids.length > restoreLimits.planSets) general.push(`A restore runs at most ${restoreLimits.planSets} backup sets.`)
+  // The Files page's rows are the plan's full backup's: until they are read, they are another full's.
+  if (plan.ids.length > 0 && facts.filesFor !== plan.ids[0]) files.push(restoreMessages.filesNotRead)
   for (const row of fileRows(draft, facts)) if (row.problem) files.push(`${row.file.logical}: ${row.problem}`)
   if (draft.relocate) for (const [label, folder] of [['Data file folder', draft.dataFolder], ['Log file folder', draft.logFolder]] as const) {
     const problem = folder ? serverPathProblem(folder) : 'Choose a folder.'
@@ -159,8 +201,9 @@ export function restoreRequest(draft: RestoreDraft, facts: RestoreFacts, ids: { 
   const first = [...problems.general, ...problems.files, ...problems.options][0]
   if (first) return { problem: first }
   if (facts.sets.length === 0) return { problem: draft.source === 'device' ? restoreMessages.noSets : restoreMessages.noHistory }
-  const byId = new Map(facts.sets.map(set => [set.id, set]))
-  const sets: RestorePlanSet[] = plan.ids.filter(id => id !== tailSetId).map(id => {
+  if (plan.ids.length > 0 && facts.filesFor !== plan.ids[0]) return { problem: restoreMessages.filesNotRead }
+  const byId = new Map(sourceSets(draft, facts).map(set => [set.id, set]))
+  const sets: RestorePlanSet[] = plan.ids.map(id => {
     const set = byId.get(id)!
     return { id: set.id, devices: set.devices, file: set.position, type: set.type as RestorePlanSet['type'], ...set.name ? { name: set.name.slice(0, restoreLimits.setName) } : {} }
   })

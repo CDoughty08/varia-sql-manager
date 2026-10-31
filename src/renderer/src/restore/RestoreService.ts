@@ -13,7 +13,7 @@ import type { ScriptContent } from '../kit/ScriptDrawer'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
-import { draftPlan, initialDraft, restoreRequest, sourceDatabase, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
+import { draftPlan, initialDraft, restoreRequest, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
 
 /** loading (the server and msdb's databases) → ready, or loadFailed; the sets and files load beside it as the source changes. */
 export type RestorePhase = 'loading' | 'ready' | 'loadFailed'
@@ -150,8 +150,8 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private async loadFiles(id: string): Promise<void> {
     const state = this.get(id)
     if (!state?.draft) return
-    const plan = draftPlan(state.draft, state.facts)
-    const full = state.facts.sets.find(set => set.id === plan.ids[0] && set.type === 'full') ?? state.facts.sets.find(set => set.type === 'full' && !set.problem)
+    const plan = draftPlan(state.draft, state.facts), sets = sourceSets(state.draft, state.facts)
+    const full = sets.find(set => set.id === plan.ids[0] && set.type === 'full') ?? sets.find(set => set.type === 'full' && !set.problem)
     if (!full || full.id === state.facts.filesFor) return
     const source: RestoreSource = uuid.test(full.id) && restoreSetIdPattern.test(full.id) ? { kind: 'historyFiles', setId: full.id } : { kind: 'mediaFiles', devices: full.devices, file: full.position }
     this.patch(id, { files: 'loading' })
@@ -191,16 +191,20 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     for (const key of Object.keys(patch) as (keyof RestoreDraft)[]) if (patch[key] === undefined) delete (draft as Partial<Record<keyof RestoreDraft, unknown>>)[key]
     const reread = (patch.database !== undefined && patch.database !== state.draft.database) || (patch.source !== undefined && patch.source !== state.draft.source)
       || (patch.devices !== undefined && patch.devices.join('\n') !== state.draft.devices.join('\n'))
-    if (reread) {
+    // Another database on the media: its own sets, so the plan starts again and the destination follows it as it follows a new source.
+    const rechosen = !reread && patch.deviceDatabase !== undefined && patch.deviceDatabase !== sourceDatabase(state.draft, state.facts)
+    if (reread || rechosen) {
       const following = state.draft.destination === sourceDatabase(state.draft, state.facts)
-      draft = { ...draft, manual: undefined, stopAt: undefined, restoreAs: {}, ...following && draft.source === 'database' ? { destination: draft.database } : {} }
+      draft = { ...draft, restoreAs: {}, ...following && draft.source === 'database' ? { destination: draft.database } : {} }
+      if (reread) delete (draft as { deviceDatabase?: unknown }).deviceDatabase
       delete (draft as { manual?: unknown }).manual
       delete (draft as { stopAt?: unknown }).stopAt
+      if (rechosen && following) draft = { ...draft, destination: sourceDatabase(draft, state.facts) }
     }
-    if (patch.destination !== undefined || reread) draft = { ...draft, tailLog: tailLogPossible(draft, state.facts) && (patch.tailLog ?? true) }
+    if (patch.destination !== undefined || reread || rechosen) draft = { ...draft, tailLog: tailLogPossible(draft, state.facts) && (patch.tailLog ?? true) }
     this.patch(id, { draft, revision: state.revision + 1, scriptNotice: undefined })
     if (reread) void this.loadSets(id)
-    else { this.schedulePreview(id); if (patch.manual !== undefined || patch.stopAt !== undefined || 'stopAt' in patch) void this.loadFiles(id) }
+    else { this.schedulePreview(id); void this.loadFiles(id) }
   }
   openDialog(id: string, dialog: RestoreSubDialog | undefined): void {
     const state = this.get(id)
