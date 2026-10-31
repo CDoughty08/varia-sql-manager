@@ -12,7 +12,9 @@ namespace Varia.Backend.Tests;
 
 /// <summary>Offline checks of wave 5's backend seams (PR W5-0b): engine gating per action (critic A1), secrets only on an execute
 /// that takes them (A3), runner v2's steps, compensation and bounds (A4), the shared templates' text and lint (A21), the lint's
-/// refusal of LOGINPROPERTY and password hashes (A15), and the login rules as logins.ts declares them (D4 §4).</summary>
+/// refusal of LOGINPROPERTY, password hashes and a star over sys.sql_logins (A15), the login rules as logins.ts declares them (D4 §4),
+/// secrets bounded and never printed (A3), Script Action without compensation, and where SqlService.FreeDatabase moves each
+/// connection to the server (A5).</summary>
 internal static class SeamChecks
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -31,6 +33,7 @@ internal static class SeamChecks
         SharedTemplates(check);
         SecretLint(check);
         Logins(check);
+        FreeDatabase(check);
         await RunnerAsync(check);
     }
 
@@ -48,7 +51,7 @@ internal static class SeamChecks
         public bool ClearPoolsFor(string connectionId, string database) => false;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
         public bool FreeDatabase(string connectionId, string database) { Freed.Add(database); return false; }
-        public IReadOnlyList<string> PoolPrograms(string connectionId) => [];
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
     }
 
     private static ActionArgs Delete(ObjectRefDto target) => new("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, null, false, false);
@@ -115,6 +118,22 @@ internal static class SeamChecks
         check(Refused(withSecret, script: false) == "INVALID_PARAMS" && Refused(withSecret, script: true) == "INVALID_PARAMS"
             && Refused(Delete(Table) with { Secrets = new(null, secret) }, script: false) == "INVALID_PARAMS" && Refused(Rename(Table, "x"), script: true) == "accepted",
             "secrets are refused on every action that takes none and on every script, without echoing them");
+        // An action that takes secrets (createLogin, D2a) gets their bounds before its own case: past them, the switch answers "action.".
+        string Bounded(LoginSecretsDto secrets)
+        {
+            try { service.Validate(new ActionArgs("createLogin", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new("login", Name: "x"), Secrets: secrets)); return "accepted"; }
+            catch (RequestException error) { return (secrets.Password is { Length: > 0 } password && error.Message.Contains(password, StringComparison.Ordinal)) ? "echoed" : error.Message; }
+        }
+        var longest = new string('p', (int)ActionsCatalog.Current.Logins.Limit("password"));
+        check(Bounded(new(longest + "q")).EndsWith("secrets.password.", StringComparison.Ordinal) && Bounded(new("Pa\0ss")).EndsWith("secrets.password.", StringComparison.Ordinal)
+            && Bounded(new("Pa\uD800ss")).EndsWith("secrets.password.", StringComparison.Ordinal) && Bounded(new("Pass\uDC00")).EndsWith("secrets.password.", StringComparison.Ordinal)
+            && Bounded(new("Zq9x", longest + "q")).EndsWith("secrets.oldPassword.", StringComparison.Ordinal)
+            && Bounded(new(longest, longest)).EndsWith("action.", StringComparison.Ordinal) && Bounded(new("Pa😀ss")).EndsWith("action.", StringComparison.Ordinal),
+            "every action that takes secrets gets a password and old password of at most 128 UTF-16 units, without U+0000 or an unpaired surrogate, refused without echoing it");
+        var printed = (Rename(Table, "x") with { Secrets = new("Pa'ss-" + "Z9q", "Ol'd-" + "Z9q") }).ToString();
+        check(!printed.Contains("Z9q", StringComparison.Ordinal) && printed.Contains("Password = <redacted>, OldPassword = <redacted>", StringComparison.Ordinal)
+            && new LoginSecretsDto().ToString() == "LoginSecretsDto { Password = null, OldPassword = null }",
+            "an ActionArgs never prints its secrets, which its record would otherwise write in clear: " + printed.Replace("Z9q", "***", StringComparison.Ordinal));
         var parsed = JsonSerializer.Deserialize<ActionArgs>("{\"action\":\"rename\",\"connectionId\":\"" + Guid.NewGuid() + "\",\"requestId\":\"" + Guid.NewGuid()
             + "\",\"target\":{\"kind\":\"table\",\"database\":\"AppData\",\"schema\":\"dbo\",\"name\":\"Orders\"},\"newName\":\"x\",\"secrets\":{\"password\":\"" + secret + "\"}}", Json);
         string ScriptRefused()
@@ -162,6 +181,14 @@ internal static class SeamChecks
         check(titles.All(title => title.Length is > 0 and <= ActionSteps.MaxTitle) && titles.Count(title => title == "Drop the object") == 4
             && ActionSteps.MaxTitle == ActionsCatalog.Current.Logins.Limit("stepTitle") && ActionSteps.MaxDetail == ActionsCatalog.Current.Logins.Limit("stepDetail"),
             "every step title fits the 64 characters zod allows, and the new templates have their own titles");
+        List<PlannedStatement> compensated =
+        [
+            new(ActionTemplate.SetSingleUser, "master", ["A"]), new(ActionTemplate.RenameDatabase, "master", ["A", "B"]),
+            new(ActionTemplate.SetMultiUser, "master", ["A"], StepKind.Compensation, Undoes: 0)
+        ];
+        var scripted = ActionService.ScriptText(compensated);
+        check(scripted == ActionSql.ScriptText(ActionSql.Checked(compensated[0])) + ActionSql.ScriptText(ActionSql.Checked(compensated[1])) && !scripted.Contains("MULTI_USER", StringComparison.Ordinal),
+            "Script Action shows a plan's main statements only, as a success runs them, never its compensation: " + scripted);
     }
 
     private static void SecretLint(Action<bool, string> check)
@@ -181,6 +208,17 @@ internal static class SeamChecks
         var missed = lints.Where(lint => Names(lint.Lint(good), "password") || Names(lint.Lint(good), "LOGINPROPERTY") || !Names(lint.Lint(hash), "password_hash") || !Names(lint.Lint(property), "LOGINPROPERTY"))
             .Select(lint => lint.Name).ToList();
         check(missed.Count == 0, "every catalog lint refuses LOGINPROPERTY and sys.sql_logins.password_hash, which no Varia statement may read: " + string.Join(", ", missed));
+        // The hash read without its name: a star over sys.sql_logins, and LOGINPROPERTY with a space before its parenthesis.
+        var counted = "SELECT TOP (@take) l.name, (SELECT COUNT(*) FROM sys.sql_logins AS c) AS logins FROM sys.sql_logins AS l ORDER BY l.name;";
+        var hidden = new[]
+        {
+            ("l.*", good.Replace("SELECT TOP (@take) l.name", "SELECT TOP (@take) l.*", StringComparison.Ordinal), "sql_logins through"),
+            ("SELECT *", good.Replace("SELECT TOP (@take) l.name", "SELECT TOP (@take) *", StringComparison.Ordinal), "sql_logins through"),
+            ("LOGINPROPERTY (", good.Replace("SELECT TOP (@take) l.name", "SELECT TOP (@take) LOGINPROPERTY (l.name, N'IsLocked')", StringComparison.Ordinal), "LOGINPROPERTY")
+        };
+        var unseen = lints.SelectMany(lint => hidden.Where(mutation => !Names(lint.Lint(mutation.Item2), mutation.Item3)).Select(mutation => lint.Name + " (" + mutation.Item1 + ")"))
+            .Concat(lints.Where(lint => Names(lint.Lint(counted), "sql_logins through")).Select(lint => lint.Name + " (COUNT(*))")).ToList();
+        check(unseen.Count == 0, "every catalog lint refuses a star over sys.sql_logins (COUNT(*) aside) and LOGINPROPERTY however it is spaced: " + string.Join(", ", unseen));
         var executable = ActionSql.Executable(ActionTemplate.DropUser);
         var declared = executable.Replace("DECLARE @stmt", "DECLARE @password_hash int;\nDECLARE @stmt", StringComparison.Ordinal);
         var alter = DatabaseAlter.Executable(ActionsCatalog.Current, new(AlterTemplate.Owner, "db", "owner", Name: "x"));
@@ -190,6 +228,65 @@ internal static class SeamChecks
             && Names(ActionSql.LintExecutable(alter + "\nDECLARE @PasswordHash int;", DatabaseAlter.Messages), "PasswordHash")
             && Names(ActionSql.LintExecutable(designer + "\nDECLARE @password_hash int;", rules), "password_hash"),
             "the executable lints (templates, Database Properties' builders and the designer's) refuse a password hash even as a variable name");
+    }
+
+    /// <summary>Critic A5's move, offline: SqlService.Register records a connection as ConnectAsync does, without a server, and the
+    /// server-scope pool's database (Object Explorer's with no database) shows where each connection's pools open.</summary>
+    private static void FreeDatabase(Action<bool, string> check)
+    {
+        static string Settings(string? database) => "Data Source=tcp:127.0.0.1,1;" + (database is null ? "" : "Initial Catalog=" + database + ";") + "Encrypt=false;Application Name=Varia";
+        static ServerProfile On(string server, bool contained = false) => Box2022 with { ServerName = server, Contained = contained };
+        static string ServerScope(SqlService service, string id)
+        {
+            using var connection = ((IExplorerHost)service).Connection(id, null);
+            return new SqlConnectionStringBuilder(connection.ConnectionString).InitialCatalog;
+        }
+        using (var service = new SqlService())
+        {
+            var named = service.Register(Settings("Sales"), On("S1"), "Sales");
+            var other = service.Register(Settings("Sales"), On("S2"), "Sales");
+            var freed = service.FreeDatabase(named, "Sales");
+            check(freed && service.ServerScopeDatabase(named) == "master" && ServerScope(service, named) == "master" && ServerScope(service, other) == "Sales"
+                && !service.FreeDatabase(named, "Other") && ServerScope(service, named) == "master",
+                "freeing the connection's own database moves its server-scope pools to master; another server's connection keeps its own");
+        }
+        using (var service = new SqlService())
+        {
+            // The Connect dialog's <default>: no Initial Catalog, so the pools open in the login's default database, read at connect.
+            var home = service.Register(Settings(null), On("S1"), "Sales");
+            var inSales = service.ClearPoolsFor(home, "Sales");
+            var freed = service.FreeDatabase(home, "Sales");
+            check(inSales && freed && ServerScope(service, home) == "master",
+                "a connection made with Database <default> is in the login's default database: freeing it moves the server-scope pools to master and clears the pools there");
+        }
+        using (var service = new SqlService())
+        {
+            var acting = service.Register(Settings("master"), On("S1"), "master");
+            var inside = service.Register(Settings(null), On("S1"), "Sales");
+            var contained = service.Register(Settings("Sales"), On("S1", contained: true), "Sales");
+            var probeless = service.Register(Settings("Sales"), ServerProfile.Fallback("16.00.4135"), "Sales");
+            var freed = service.FreeDatabase(acting, "Sales");
+            check(freed && ServerScope(service, inside) == "master" && service.ServerScopeDatabase(acting) is null && ServerScope(service, contained) == "Sales"
+                && service.ServerScopeDatabase(contained) is null,
+                "freeing a database moves every connection to the same server whose own database it is, but not a contained database user's, who cannot open master");
+            service.FreeDatabase(probeless, "Sales");
+            check(service.ServerScopeDatabase(probeless) is null && ServerScope(service, probeless) == "Sales",
+                "a connection whose sign-in the profile probe could not check keeps its own database, as a contained user's does");
+        }
+        using (var service = new SqlService())
+        {
+            var acting = service.Register(Settings("master"), On("S1"), "master");
+            var named = service.Register(Settings("Sales"), On("S1"), "Sales");
+            var defaulted = service.Register(Settings(null), On("S1"), "Sales");
+            var other = service.Register(Settings(null), On("S2"), "Sales");
+            service.DatabaseChanged(acting, "Sales", "Sales2");
+            var renamed = new[] { ServerScope(service, named), ServerScope(service, defaulted), ServerScope(service, other) };
+            service.DatabaseChanged(acting, "Sales2", null);
+            var dropped = new[] { ServerScope(service, named), ServerScope(service, defaulted), ServerScope(service, acting) };
+            check(renamed.SequenceEqual(["Sales2", "Sales2", ""]) && dropped.SequenceEqual(["master", "master", "master"]),
+                "a rename or drop moves every connection to the server that was in the database, named or the login's default, to the new name or master: "
+                + string.Join(", ", renamed) + " | " + string.Join(", ", dropped));
+        }
     }
 
     private static LoginFactsDto Facts(string subtype, bool own = false, bool canAlter = true, bool sysadmin = false, bool control = true) =>

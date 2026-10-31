@@ -192,8 +192,15 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
-/// Never logged, echoed or persisted.</summary>
-internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null);
+/// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
+internal sealed record LoginSecretsDto(string? Password = null, string? OldPassword = null)
+{
+    private bool PrintMembers(System.Text.StringBuilder builder)
+    {
+        builder.Append("Password = ").Append(Password is null ? "null" : "<redacted>").Append(", OldPassword = ").Append(OldPassword is null ? "null" : "<redacted>");
+        return true;
+    }
+}
 /// <summary>Which database Database Properties read (database_id and create_date as the describe writes it): its preflight
 /// refuses a database that has taken the name since, after a rename, a drop or a restore.</summary>
 internal sealed record DatabaseIdentityDto(int Id, string Created);

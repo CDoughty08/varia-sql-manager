@@ -122,6 +122,7 @@ internal sealed partial class ActionService
             {
                 budget.Token.ThrowIfCancellationRequested();
                 if (connection.State != ConnectionState.Open) throw new InvalidOperationException("The connection is closed.");
+                if (Options.BeforeCleanup is { } before) await before(step.Title, budget.Token);
                 await step.Run(new(null, budget.Token));
                 Add("done", step);
                 outcomes.Add("\"" + step.Title + "\" completed");

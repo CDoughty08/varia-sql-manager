@@ -244,12 +244,11 @@ internal static partial class ActionSql
         + "SELECT TOP (@take) d.name AS database_name FROM sys.databases AS d JOIN sys.server_principals AS p ON p.sid = d.owner_sid "
         + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY d.name;";
 
-    /// <summary>How many program names <see cref="OwnSessions"/> takes: Object Explorer's, scripting's, SSIS's and the live pools'.</summary>
-    public const int PoolPrograms = 4;
-    /// <summary>The sessions this backend's process (@pid) holds in a database under its pools' program names (@pool1…): what a
-    /// cleared pool leaves for a moment before the server ends it. Without VIEW SERVER STATE only this session is visible: 0.</summary>
-    public const string OwnSessions = "SELECT COUNT(*) AS sessions FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
-        + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID AND es.program_name IN (@pool1, @pool2, @pool3, @pool4);";
+    /// <summary>The sessions this backend's process (@pid) holds in a database, bounded by its own connections: the action keeps
+    /// those its pooled connections were given, which a cleared pool leaves for a moment before the server ends them. Without VIEW
+    /// SERVER STATE only this session is visible: none.</summary>
+    public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
+        + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
 
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
@@ -293,9 +292,8 @@ internal static partial class ActionSql
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
 
-    /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as CatalogSql.Builtins refuses them in catalog statements.</summary>
-    private static IEnumerable<string> SecretUses(string text) =>
-        new[] { "LOGINPROPERTY(", "password_hash", "PasswordHash" }.Where(token => text.Contains(token, StringComparison.OrdinalIgnoreCase)).Select(token => "uses " + token);
+    /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as every catalog lint refuses them.</summary>
+    private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
 
     /// <summary>Problems with one executable batch (empty when it passes): leftover format holes, a name parameter outside
     /// QUOTENAME or a procedure argument, an undeclared variable, and literals beyond the fixed keyword fragments.</summary>
@@ -399,6 +397,7 @@ internal static partial class ActionSql
         var problems = new List<string>();
         var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal);
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        problems.AddRange(CatalogSql.SecretUses(text));
         if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
         if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);

@@ -23,7 +23,7 @@ void Check(bool condition, string name)
     passed++;
 }
 // Focused SQL Server lanes: their scratch and permission checks are required, never an offline-only or skipped success.
-if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live")])
+if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live" or "--seams-live")])
 {
     var focusedServer = Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SERVER");
     if (string.IsNullOrWhiteSpace(focusedServer)) throw new Exception(lane + " requires VARIA_TEST_SQL_SERVER.");
@@ -38,7 +38,12 @@ if (args is [var lane and ("--activity-actions-live" or "--explorer-status-live"
     var focusedInfo = (ConnectionInfo)await focusedService.DispatchAsync("connections.connect", JsonSerializer.SerializeToElement(FocusedLive("master"), json), json);
     try
     {
-        if (lane == "--explorer-status-live")
+        if (lane == "--seams-live")
+        {
+            await SeamLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
+            Console.WriteLine("Passed " + passed + " focused wave 5 seam checks.");
+        }
+        else if (lane == "--explorer-status-live")
         {
             await ExplorerStatusLiveChecks.RunAsync(Check, focusedService, focusedInfo, FocusedLive, json);
             Console.WriteLine("Passed " + passed + " focused Object Explorer status checks.");

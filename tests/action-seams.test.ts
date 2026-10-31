@@ -109,14 +109,21 @@ describe('password hashes', () => {
     for (const file of sources) {
       const name = relative(root, file).replaceAll('\\', '/')
       readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
-        if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const comment = /^\s*(\/\/|\*|\/\*\*)/.test(line)
+        // CatalogSql.SecretUses, the lint every other lint calls.
+        const lint = name === 'backend/Varia.Backend/Explorer/CatalogSql.cs'
+          && /^\s*(if \(LoginFunction\(\)\.IsMatch|foreach \(var token in new\[\] \{ "password_hash", "PasswordHash" \}|\[GeneratedRegex\(@"\\bLOGINPROPERTY|if \(text\.Contains\("sql_logins")/.test(line)
+        // A star over sys.sql_logins reads password_hash without naming it (COUNT(*) aside).
+        if (/sql_logins/i.test(line) && /(?<!\(\s*)\*/.test(line) && !comment && !lint) offending.push(`${name}:${index + 1} (*)`)
+        if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const list = line.includes('"LOGINPROPERTY(", "password_hash", "PasswordHash"')
         const docs = name === 'src/shared/actions/docs.ts' && !/password_?hash/i.test(line)
-        if (!comment && !list && !docs) offending.push(`${name}:${index + 1}`)
+        if (!comment && !list && !docs && !lint) offending.push(`${name}:${index + 1}`)
       })
     }
     expect(offending).toEqual([])
-    expect(readFileSync(join(root, 'backend', 'Varia.Backend', 'Explorer', 'CatalogSql.cs'), 'utf8')).toContain('"LOGINPROPERTY(", "password_hash", "PasswordHash"]')
+    const catalogSql = readFileSync(join(root, 'backend', 'Varia.Backend', 'Explorer', 'CatalogSql.cs'), 'utf8')
+    expect(catalogSql).toContain('"LOGINPROPERTY(", "password_hash", "PasswordHash"]')
+    expect(catalogSql).toContain('[GeneratedRegex(@"\\bLOGINPROPERTY\\s*\\(", RegexOptions.IgnoreCase)]')
   })
 })

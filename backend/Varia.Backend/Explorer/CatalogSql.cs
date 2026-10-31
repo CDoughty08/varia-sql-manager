@@ -108,6 +108,19 @@ internal static partial class CatalogSql
     // PasswordHash and PasswordHashAlgorithm (critic A15; "PasswordHash" covers both). Every lint built on this list refuses them.
     internal static readonly string[] Builtins = ["OBJECT_NAME(", "OBJECT_SCHEMA_NAME(", "SCHEMA_NAME(", "TYPE_NAME(", "USER_NAME(", "SUSER_SNAME(", "SUSER_NAME(",
         "OBJECTPROPERTY", "COL_NAME(", "INDEX_COL(", "DATABASEPROPERTYEX(", "OBJECT_DEFINITION(", "LOGINPROPERTY(", "password_hash", "PasswordHash"];
+    /// <summary>What critic A15 refuses in every statement, whatever its lint: LOGINPROPERTY as a word (a space before its parenthesis
+    /// hides nothing), a password hash by name, and a * in a statement that names sys.sql_logins, which reads password_hash without
+    /// naming it (COUNT(*) aside). Every lint calls it, besides its Contains loop over <see cref="Builtins"/>.</summary>
+    public static IEnumerable<string> SecretUses(string text)
+    {
+        if (LoginFunction().IsMatch(text)) yield return "uses LOGINPROPERTY";
+        foreach (var token in new[] { "password_hash", "PasswordHash" }) if (text.Contains(token, StringComparison.OrdinalIgnoreCase)) yield return "uses " + token;
+        if (text.Contains("sql_logins", StringComparison.OrdinalIgnoreCase) && Star().IsMatch(text)) yield return "reads sys.sql_logins through *";
+    }
+    [GeneratedRegex(@"\bLOGINPROPERTY\s*\(", RegexOptions.IgnoreCase)]
+    private static partial Regex LoginFunction();
+    [GeneratedRegex(@"(?<!\(\s*)\*")]
+    private static partial Regex Star();
     /// <summary>Catalog columns and views that appear only from a version band (B6).</summary>
     public static readonly (string Token, int Since)[] Gates =
     [
@@ -132,6 +145,7 @@ internal static partial class CatalogSql
     {
         var problems = new List<string>();
         foreach (var builtin in Builtins) if (text.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
+        problems.AddRange(SecretUses(text));
         if (!mayCheckAccess && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS outside the database listings");
         if (list && (!text.Contains("SELECT TOP (@take) ", StringComparison.Ordinal) || !text.Contains(" ORDER BY ", StringComparison.Ordinal))) problems.Add("is not a TOP (@take) keyset listing");
         foreach (var (token, since) in Gates) if (render.Band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);

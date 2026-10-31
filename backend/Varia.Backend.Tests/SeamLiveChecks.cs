@@ -8,8 +8,10 @@ namespace Varia.Backend.Tests;
 /// <summary>Live checks of wave 5's backend seams (PR W5-0b). Without scratch databases: the login preflight reads sa and the
 /// connection's own login, and Object Explorer gives logins their subtypes. With VARIA_TEST_SQL_SCRATCH=1, in marked
 /// VariaScratch_…_seam and _seamt databases and the scratch SQL login: runner v2 undoes a completed SET SINGLE_USER after a rename
-/// fails and after Stop (critic A4); the shared templates run for real (A21); and a connection opened in the database moves its
-/// server-scope pools to master, frees the database and still lists databases while it is offline (A5). The hostile-name dry runs of
+/// fails and after Stop, whose reply waits for the cleanup budget, and a compensation past that budget is cancelled (critic A4); the
+/// shared templates run for real (A21); and freeing the database, through another connection to the server or for a login whose
+/// default database it is (Database <default>), moves the server-scope pools to master and ends Varia's pooled sessions there, so it
+/// goes offline at once while Object Explorer still lists databases (A5). The hostile-name dry runs of
 /// the shared templates are ActionLiveChecks' loop over every template.</summary>
 internal static class SeamLiveChecks
 {
@@ -82,23 +84,61 @@ internal static class SeamLiveChecks
             && error.Message.EndsWith(" Then \"Restore multi-user access\" completed.", StringComparison.Ordinal) && await Access() == "MULTI_USER",
             "a failed rename after SET SINGLE_USER runs the compensation, which restores multi-user access and says so: " + Steps(failed) + " | " + failed.Error?.Message);
 
-        // And on Stop: the hook stops the request before the rename starts, as the dialog's Stop would while it waits.
+        // And on Stop: the hook stops the request before the rename starts, as the dialog's Stop would while it waits. StopGrace is cut
+        // to a millisecond and the compensation held for 1.5 s, so only the cleanup budget the reply also waits for (critic A4) lets
+        // it list the compensation rather than answer an unknown outcome.
+        var grace = actions.Options.StopGrace;
         using (var stop = new CancellationTokenSource())
         {
             actions.Options.BeforeStep = (title, _) => { if (title == "Rename") stop.Cancel(); return Task.CompletedTask; };
+            actions.Options.BeforeCleanup = (_, token) => Task.Delay(1500, token);
+            actions.Options.StopGrace = TimeSpan.FromMilliseconds(1);
             try
             {
-                var stopped = await actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete", Plan(db + "x"), stop.Token);
-                check(Steps(stopped) == "done:Close existing connections, cancelled:Rename, done:Restore multi-user access*" && stopped.Error is { Code: "CANCELLED" } cancelled
+                ActionExecuteResult? stopped = null;
+                try { stopped = await actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete", Plan(db + "x"), stop.Token); }
+                catch (OperationCanceledException) { }
+                check(stopped is not null && Steps(stopped) == "done:Close existing connections, cancelled:Rename, done:Restore multi-user access*" && stopped.Error is { Code: "CANCELLED" } cancelled
                     && cancelled.Message.Contains("Completed before Stop: Close existing connections.", StringComparison.Ordinal) && cancelled.Message.EndsWith(" Then \"Restore multi-user access\" completed.", StringComparison.Ordinal)
                     && await Access() == "MULTI_USER" && (await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db + "x") + ";")).Scalar == "0",
-                    "Stop after SET SINGLE_USER still undoes it before the reply, which lists the compensation: " + Steps(stopped));
+                    "Stop after SET SINGLE_USER still undoes it before the reply, which waits for the cleanup budget and lists the compensation: "
+                    + (stopped is null ? "the reply answered an unknown outcome" : Steps(stopped)));
             }
-            finally { actions.Options.BeforeStep = null; }
+            finally
+            {
+                actions.Options.BeforeStep = null;
+                actions.Options.BeforeCleanup = null;
+                actions.Options.StopGrace = grace;
+            }
+        }
+
+        // A compensation that outlives its cleanup budget is cancelled under that budget's own token (not the job's, which no Stop
+        // cancelled here), and the reply says it did not finish.
+        await using (var connection = ((IActionHost)service).Connection(info.Id))
+        {
+            await ((IActionHost)service).OpenAsync(connection, CancellationToken.None);
+            RunStep Batch(string title, string sql, StepKind kind = StepKind.Main, int? undoes = null) => new(title, async context =>
+            {
+                await using var command = new SqlCommand(sql, connection) { CommandTimeout = 0 };
+                await command.ExecuteNonQueryAsync(context.Token);
+            }, kind, undoes);
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var outcome = await actions.RunStepsAsync(connection,
+                [Batch("Prepare", "SELECT 1;"), Batch("Fail", "THROW 50000, N'Forced failure.', 1;"), Batch("Undo", "WAITFOR DELAY '00:00:30';", StepKind.Compensation, 0)],
+                null, CancellationToken.None, TimeSpan.FromSeconds(1));
+            var seconds = watch.Elapsed.TotalSeconds;
+            check(outcome.Steps.Select(step => step.Status + ":" + step.Title + (step.Compensates == true ? "*" : "")).SequenceEqual(["done:Prepare", "failed:Fail", "cancelled:Undo*"])
+                && outcome.Failure is { } expired && expired.Message.EndsWith(" Then \"Undo\" did not finish within 1 seconds.", StringComparison.Ordinal) && seconds < 20,
+                "a compensation past its cleanup budget is cancelled by that budget and listed as not finished ("
+                + string.Join(", ", outcome.Steps.Select(step => step.Status + ":" + step.Title)) + ", " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s)");
         }
 
         // The shared templates for real: restricted user and back, and a login's DISABLE, ENABLE, DENY and GRANT CONNECT SQL, DROP USER.
         async Task<ActionExecuteResult> Run(params PlannedStatement[] plan) => await actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "delete", plan, CancellationToken.None);
+        // The sessions of this process in the database (query tabs here run in master).
+        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string Ours(string suffix) => "SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(" + Literal(db) + ") AND host_process_id = " + pid
+            + (suffix.Length == 0 ? "" : " AND program_name LIKE N'%" + suffix + "'") + ";";
         var restricted = await Run(new PlannedStatement(ActionTemplate.SetRestrictedUser, "master", [db]));
         var restrictedAccess = await Access();
         var multi = await Run(new PlannedStatement(ActionTemplate.SetMultiUser, "master", [db]));
@@ -123,13 +163,39 @@ internal static class SeamLiveChecks
             check(user.Status == "completed" && Steps(dropped) == "done:Drop the database user"
                 && (await Sql("SELECT COUNT(*) FROM sys.database_principals WHERE name = " + Literal(login) + ";", db)).Scalar == "0",
                 "DROP USER runs in its own database");
+
+            // Critic A5 with the Connect dialog's <default>: the login's default database is the seam database, so the connect's pool
+            // and Object Explorer's server-scope pool open there with no Initial Catalog to say so. This login lacks VIEW SERVER STATE,
+            // so its action sees no sessions to wait for; the check waits (up to 5 s) for the cleared ones to end.
+            await Sql("ALTER LOGIN " + Bracket(login) + " WITH DEFAULT_DATABASE = " + Bracket(db) + ";");
+            await Sql("CREATE USER " + Bracket(login) + " FOR LOGIN " + Bracket(login) + ";", db);
+            var home = await Call<ConnectionInfo>("connections.connect", live("") with { Authentication = "sql", Username = login, Password = scratch.Password });
+            var homeOffline = false;
+            try
+            {
+                var listed = await Listing(home.Id, "databases");
+                var held = (await Sql(Ours(""))).Scalar;
+                await actions.FreeDatabaseAsync(home.Id, db, CancellationToken.None);
+                var settling = System.Diagnostics.Stopwatch.StartNew();
+                string? left;
+                while ((left = (await Sql(Ours(""))).Scalar) != "0" && settling.Elapsed < TimeSpan.FromSeconds(5)) await Task.Delay(50);
+                var taking = await Sql("ALTER DATABASE " + Bracket(db) + " SET OFFLINE WITH NO_WAIT;");
+                homeOffline = taking.Status == "completed";
+                var after = homeOffline ? await Listing(home.Id, "databases") : [];
+                check(home.Database == db && listed.Any(node => node.Label == db) && held is not (null or "0") && left == "0" && homeOffline && after.Any(node => node.Label == db),
+                    "a connection made with Database <default> is in the login's default database: freeing it moves its server-scope pools to master and ends its pooled sessions there, so SET OFFLINE needs no wait ("
+                    + home.Database + ", " + held + " then " + left + ", " + taking.Error + ")");
+            }
+            finally
+            {
+                if (homeOffline) await Sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;");
+                await Call<object>("connections.disconnect", new ConnectionArgs(home.Id));
+                await Sql("ALTER LOGIN " + Bracket(login) + " WITH DEFAULT_DATABASE = [master];");
+            }
         }
         else Console.WriteLine("Login template checks skipped: the server accepts Windows logins only.");
 
         // Critic A5: a connection opened in the database keeps an idle Object Explorer session there, which blocks taking it offline.
-        var pid = Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        string Ours(string suffix) => "SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE database_id = DB_ID(" + Literal(db) + ") AND host_process_id = " + pid
-            + (suffix.Length == 0 ? "" : " AND program_name LIKE N'%" + suffix + "'") + ";";
         var inside = await Call<ConnectionInfo>("connections.connect", live(db));
         var offline = false;
         try
@@ -146,13 +212,15 @@ internal static class SeamLiveChecks
                     "before the move, Object Explorer's idle session sits in the connection's own database and SET OFFLINE WITH NO_WAIT is refused; Activity Monitor's pool is in master ("
                     + explorerInside + ", " + monitorDatabase + ")");
             }
-            await actions.FreeDatabaseAsync(inside.Id, db, CancellationToken.None);
+            // Freed through another connection to the server (the one the action runs on), whose action waits for every pooled
+            // session of this backend there, the connect's own plain one included.
+            await actions.FreeDatabaseAsync(info.Id, db, CancellationToken.None);
             var left = (await Sql(Ours(""))).Scalar;
             var taking = await Sql("ALTER DATABASE " + Bracket(db) + " SET OFFLINE WITH NO_WAIT;");
             offline = taking.Status == "completed";
             var after = offline ? await Listing(inside.Id, "databases") : [];
             check(left == "0" && offline && after.Any(node => node.Label == db),
-                "freeing the database moves the connection's server-scope pools to master: no session of this process stays in it, SET OFFLINE needs no wait, and Object Explorer still lists databases while it is offline ("
+                "an action on one connection frees the database of every connection of this backend to the server: their server-scope pools move to master, it waits until no pooled session of this process stays in it, SET OFFLINE needs no wait, and Object Explorer still lists databases while it is offline ("
                 + left + ", " + taking.Error + ")");
         }
         finally

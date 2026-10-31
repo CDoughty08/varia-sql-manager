@@ -207,7 +207,7 @@ internal static class ActionChecks
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
         public bool FreeDatabase(string connectionId, string database) { Cleared.Add("free " + database); return true; }
-        public IReadOnlyList<string> PoolPrograms(string connectionId) => ["Varia - Object Explorer", "Varia - Scripting", "Varia - Integration Services", "Varia - Activity Monitor"];
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

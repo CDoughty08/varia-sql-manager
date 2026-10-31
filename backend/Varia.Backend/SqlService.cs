@@ -53,9 +53,15 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private readonly ConcurrentDictionary<string, ServerProfile> profiles = new();
     /// <summary>Connections whose server-scope pools open in master since an object action freed their own database (critic A5).</summary>
     private readonly ConcurrentDictionary<string, byte> serverScopeInMaster = new();
+    /// <summary>The database each connection's session landed in at connect: where its pools whose settings name no database (the
+    /// Connect dialog's &lt;default&gt;) open, the login's default database.</summary>
+    private readonly ConcurrentDictionary<string, string> homes = new();
     /// <summary>The connection id each pooled or Object Actions connection was made for, so opening it records its session.</summary>
     private readonly ConditionalWeakTable<SqlConnection, Owner> owners = [];
     private readonly OwnSessionLedger ownSessions = new();
+    /// <summary>The session ids of every pooled connection the backend made, its plain pool (the connect's own, databases.list,
+    /// tables.columns) included: what freeing a database waits for (critic A5). The Activity Monitor trusts ownSessions only.</summary>
+    private readonly OwnSessionLedger poolSessions = new();
     private readonly ExplorerService explorer;
     private readonly ScriptingService scripting;
     private readonly ActionService actions;
@@ -198,13 +204,16 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     /// <summary>Varia's own session ids (the checks record and read them).</summary>
     internal OwnSessionLedger OwnSessions => ownSessions;
 
-    private sealed record Owner(string ConnectionId, bool Pooled);
+    /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
+    /// pooled connection is recorded only for freeing a database.</summary>
+    private sealed record Owner(string ConnectionId, bool Pooled, bool Own);
 
     /// <summary>Marks a connection made for a connection id under one of Varia's own program names (a pool's, Object
-    /// Actions'), so <see cref="Open"/> records the session it is given. Every such connection must be made through here.</summary>
-    private SqlConnection Owned(SqlConnection connection, string connectionId)
+    /// Actions'), or a plain pooled one (<paramref name="own"/> false), so <see cref="Open"/> records the session it is given.
+    /// Every such connection must be made through here.</summary>
+    private SqlConnection Owned(SqlConnection connection, string connectionId, bool own = true)
     {
-        owners.AddOrUpdate(connection, new(connectionId, new SqlConnectionStringBuilder(connection.ConnectionString).Pooling));
+        owners.AddOrUpdate(connection, new(connectionId, new SqlConnectionStringBuilder(connection.ConnectionString).Pooling, own));
         return connection;
     }
 
@@ -215,14 +224,16 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     private void Record(SqlConnection connection)
     {
         if (!owners.TryGetValue(connection, out var owner) || connection.State != System.Data.ConnectionState.Open || !connections.ContainsKey(owner.ConnectionId)) return;
+        OwnSessionLedger[] ledgers = owner.Own ? owner.Pooled ? [ownSessions, poolSessions] : [ownSessions] : owner.Pooled ? [poolSessions] : [];
+        if (ledgers.Length == 0) return;
         var session = connection.ServerProcessId;
-        ownSessions.Opened(owner.ConnectionId, session, owner.Pooled);
+        foreach (var ledger in ledgers) ledger.Opened(owner.ConnectionId, session, owner.Pooled);
         System.Data.StateChangeEventHandler? closed = null;
         closed = (_, change) =>
         {
             if (change.CurrentState == System.Data.ConnectionState.Open) return;
             connection.StateChange -= closed;
-            ownSessions.Closed(owner.ConnectionId, session);
+            foreach (var ledger in ledgers) ledger.Closed(owner.ConnectionId, session);
         };
         connection.StateChange += closed;
         // A connection that closed before the handler was in place said so to nobody.
@@ -347,13 +358,28 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var (opened, connectionString) = await OpenForUserAsync(builder.ConnectionString, options, null, token);
         await using var connection = opened;
         var profile = await ServerProfile.ProbeAsync(connection, token);
-        var id = Guid.NewGuid().ToString();
-        profiles[id] = profile;
-        connections[id] = connectionString;
-        pools[id] = new() { [connectionString] = 0 };
+        var id = Register(connectionString, profile, connection.Database);
+        // The connect's own session waits in the plain pool, in the connection's database, until the pool prunes it.
+        if (new SqlConnectionStringBuilder(connectionString).Pooling)
+        {
+            poolSessions.Opened(id, connection.ServerProcessId, pooled: true);
+            poolSessions.Closed(id, connection.ServerProcessId);
+        }
         var probed = profile.ProductVersion is not null;
         return new(id, options.Server, connection.Database, connection.ServerVersion, options.DisplayName, options.Color, builder.CommandTimeout,
             profile.ProductVersion, profile.Login, probed ? profile.EngineEdition : null);
+    }
+
+    /// <summary>Records a connected profile under a new id: its settings, the server's profile, and the database its session
+    /// landed in (the login's default when the settings name none). ConnectAsync's, and the offline checks', which have no server.</summary>
+    internal string Register(string connectionString, ServerProfile profile, string database)
+    {
+        var id = Guid.NewGuid().ToString();
+        profiles[id] = profile;
+        homes[id] = database;
+        connections[id] = connectionString;
+        pools[id] = new() { [connectionString] = 0 };
+        return id;
     }
 
     /// <summary>The connection's settings, which its other pools derive from. SqlClient's pool blocking (Auto blocks for every
@@ -499,7 +525,9 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         var removed = connections.TryRemove(args.ConnectionId, out var connectionString);
         profiles.TryRemove(args.ConnectionId, out _);
         serverScopeInMaster.TryRemove(args.ConnectionId, out _);
+        homes.TryRemove(args.ConnectionId, out _);
         ownSessions.Forget(args.ConnectionId);
+        poolSessions.Forget(args.ConnectionId);
         explorer.Forget(args.ConnectionId);
         scripting.Forget(args.ConnectionId);
         actions.Forget(args.ConnectionId);
@@ -537,7 +565,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
             builder.Pooling = false;
         }
         else if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
-        return new SqlConnection(builder.ConnectionString);
+        return stateful ? new SqlConnection(builder.ConnectionString) : Owned(new SqlConnection(builder.ConnectionString), id, own: false);
     }
 
     ServerProfile IExplorerHost.Profile(string connectionId) => Profile(connectionId);
@@ -558,24 +586,26 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
 
     Task IActionHost.OpenAsync(SqlConnection connection, CancellationToken token) => Open(connection, token);
 
-    /// <summary>Critic A5: when the connection's own database (the Connect dialog's Database, or the login's default) is the one an
-    /// action needs to itself, its server-scope pools open in master from now on, unless the login cannot open master (a contained
-    /// database user, or a sign-in the probe could not check); then its idle pools in the database are cleared.</summary>
+    /// <summary>Critic A5, for every connection of this backend to the same server: when its own database (the Connect dialog's
+    /// Database, or the login's default) is the one an action needs to itself, its server-scope pools open in master from now on,
+    /// unless its login cannot open master (a contained database user, or a sign-in the probe could not check); then its idle
+    /// pools in the database are cleared. True when it cleared a pool.</summary>
     public bool FreeDatabase(string connectionId, string database)
     {
-        if (connections.TryGetValue(connectionId, out var current) && string.Equals(new SqlConnectionStringBuilder(current).InitialCatalog, database, StringComparison.OrdinalIgnoreCase)
-            && profiles.TryGetValue(connectionId, out var profile) && profile.ServerScopeInMaster)
-            serverScopeInMaster.TryAdd(connectionId, 0);
-        return ClearPoolsFor(connectionId, database);
+        var cleared = false;
+        foreach (var id in SameServer(connectionId))
+        {
+            if (connections.TryGetValue(id, out var current) && string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)
+                && profiles.TryGetValue(id, out var profile) && profile.ServerScopeInMaster)
+                serverScopeInMaster.TryAdd(id, 0);
+            cleared |= ClearPoolsFor(id, database);
+        }
+        return cleared;
     }
 
-    /// <summary>The program names of the connection's pools, as PoolConnection writes them.</summary>
-    public IReadOnlyList<string> PoolPrograms(string connectionId)
-    {
-        if (!connections.TryGetValue(connectionId, out var connectionString)) return [];
-        var application = new SqlConnectionStringBuilder(connectionString).ApplicationName;
-        return [.. new[] { ExplorerPool, ScriptingPool, SsisPool, LiveConnections.ServerSuffix }.Select(suffix => Program(application, suffix))];
-    }
+    /// <summary>The session ids of the pooled connections of every connection to the server: those still in a database a moment
+    /// after FreeDatabase cleared its pools are the backend's own, which the server is ending.</summary>
+    public IReadOnlySet<int> PoolSessions(string connectionId) => poolSessions.Sessions(connectionId, ServerOf);
 
     private static string Program(string application, string suffix)
     {
@@ -583,19 +613,31 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return name.Length > 128 ? name[..128] : name;
     }
 
+    /// <summary>The connection itself, then every other connection of this backend that reaches its server (ServerOf).</summary>
+    private List<string> SameServer(string connectionId)
+    {
+        if (ServerOf(connectionId) is not { } server) return [];
+        return [connectionId, .. connections.Keys.Where(id => id != connectionId && ServerOf(id) == server)];
+    }
+
+    /// <summary>The database a connection string's sessions open in: its Initial Catalog, or the connection's home (the login's
+    /// default, read at connect) when it names none.</summary>
+    private string? DatabaseOf(string connectionId, string connectionString) =>
+        new SqlConnectionStringBuilder(connectionString).InitialCatalog is { Length: > 0 } catalog ? catalog : homes.TryGetValue(connectionId, out var home) ? home : null;
+
     /// <summary>Where a connection's server-scope pools open: null (its own database) until an action freed that database, then master.</summary>
     internal string? ServerScopeDatabase(string connectionId) => serverScopeInMaster.ContainsKey(connectionId) ? "master" : null;
 
-    /// <summary>Idle pooled connections whose initial catalog is the database (Object Explorer's and scripting's per-database
-    /// pools, and before PR17 tables.columns) keep it in use: DROP DATABASE and MODIFY NAME would fail while the server
-    /// stays connected. Clearing them closes the idle ones; busy ones are discarded when they return. True when it cleared a pool.</summary>
+    /// <summary>Idle pooled connections in the database (Object Explorer's and scripting's per-database pools, and a server-scope
+    /// pool whose database it is, named or the login's default) keep it in use: DROP DATABASE and MODIFY NAME would fail while the
+    /// server stays connected. Clearing them closes the idle ones; busy ones are discarded when they return. True when it cleared a pool.</summary>
     public bool ClearPoolsFor(string connectionId, string database)
     {
         if (!pools.TryGetValue(connectionId, out var used)) return false;
         var cleared = false;
         foreach (var pooled in used.Keys)
         {
-            if (!string.Equals(new SqlConnectionStringBuilder(pooled).InitialCatalog, database, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(DatabaseOf(connectionId, pooled), database, StringComparison.OrdinalIgnoreCase)) continue;
             using var connection = new SqlConnection(pooled);
             SqlConnection.ClearPool(connection);
             cleared = true;
@@ -603,18 +645,21 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         return cleared;
     }
 
-    /// <summary>After a rename or drop of the database a connection was opened in (the Connect dialog's Database), every
-    /// connection derived from it would fail with 4060: it moves to the new name, or to master after a drop, and the old
-    /// database's pools are cleared.</summary>
+    /// <summary>After a rename or drop of a database that a connection to this server was opened in (the Connect dialog's Database,
+    /// or the login's default), every connection derived from it would fail to open: each such connection moves to the new name,
+    /// or to master after a drop, and the old database's pools are cleared.</summary>
     public void DatabaseChanged(string connectionId, string database, string? newName)
     {
-        if (connections.TryGetValue(connectionId, out var current) && new SqlConnectionStringBuilder(current) is var builder
-            && string.Equals(builder.InitialCatalog, database, StringComparison.OrdinalIgnoreCase))
+        foreach (var id in SameServer(connectionId))
         {
-            builder.InitialCatalog = newName ?? "master";
-            if (connections.TryUpdate(connectionId, builder.ConnectionString, current) && pools.TryGetValue(connectionId, out var used)) used.TryAdd(builder.ConnectionString, 0);
+            // First: a pool whose settings name no database is in the home, which changes below.
+            ClearPoolsFor(id, database);
+            if (!connections.TryGetValue(id, out var current) || !string.Equals(DatabaseOf(id, current), database, StringComparison.OrdinalIgnoreCase)) continue;
+            var builder = new SqlConnectionStringBuilder(current) { InitialCatalog = newName ?? "master" };
+            if (!connections.TryUpdate(id, builder.ConnectionString, current)) continue;
+            homes[id] = builder.InitialCatalog;
+            if (pools.TryGetValue(id, out var used)) used.TryAdd(builder.ConnectionString, 0);
         }
-        ClearPoolsFor(connectionId, database);
     }
 
     private ServerProfile Profile(string connectionId) =>
@@ -1534,6 +1579,7 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         pools.Clear();
         profiles.Clear();
         serverScopeInMaster.Clear();
+        homes.Clear();
         connections.Clear();
         store.ReleaseAll();
         SqlConnection.ClearAllPools();

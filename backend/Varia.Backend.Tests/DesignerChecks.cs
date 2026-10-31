@@ -197,7 +197,7 @@ internal static class DesignerChecks
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => Task.CompletedTask;
         public bool ClearPoolsFor(string connectionId, string database) => false;
         public bool FreeDatabase(string connectionId, string database) => false;
-        public IReadOnlyList<string> PoolPrograms(string connectionId) => [];
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

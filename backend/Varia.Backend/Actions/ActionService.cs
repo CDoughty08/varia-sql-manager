@@ -27,13 +27,15 @@ internal interface IActionHost
     /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
     /// it was moves to the new name, or to master, so its later connections can still open.</summary>
     void DatabaseChanged(string connectionId, string database, string? newName);
-    /// <summary>Before a statement that needs the database to itself (critic A5): when the connection's own database is that one,
-    /// its server-scope pools (Object Explorer, scripting, SSIS, live, databases.list) open in master from now on, unless the
-    /// login is a contained database user; then the idle pools in the database are cleared, as ClearPoolsFor does.</summary>
+    /// <summary>Before a statement that needs the database to itself (critic A5), for every connection of the backend to the same
+    /// server: when its own database (named, or the login's default) is that one, its server-scope pools (Object Explorer, scripting,
+    /// SSIS, live, databases.list) open in master from now on, unless the login is a contained database user; then its idle pools
+    /// in the database are cleared, as ClearPoolsFor does. True when it cleared a pool.</summary>
     bool FreeDatabase(string connectionId, string database);
-    /// <summary>The program names of the connection's pools (Object Explorer, scripting, SSIS and live): the sessions this process
-    /// opened under them in a database are Varia's own, which a cleared pool ends within moments.</summary>
-    IReadOnlyList<string> PoolPrograms(string connectionId);
+    /// <summary>The session ids the pooled connections of every connection to the server were given (the plain pool's included):
+    /// those still in a database just after FreeDatabase are Varia's own, which a cleared pool ends within moments. Query tabs
+    /// are unpooled and never among them.</summary>
+    IReadOnlySet<int> PoolSessions(string connectionId);
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -54,6 +56,8 @@ internal sealed class ActionServiceOptions
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
+    /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
+    internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
 }
 
 /// <summary>The object's identity and facts the preflight read: its subtype, row, and what refers to it; a login's facts too.</summary>
@@ -149,8 +153,15 @@ internal sealed partial class ActionService : IDisposable
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
-    /// <summary>The actions whose actions.execute may carry passwords (New Login and Login Properties, later PRs); none exists yet.</summary>
+    /// <summary>The actions whose actions.execute may carry passwords (New Login and Login Properties, later PRs); none is in the switch yet.</summary>
     private static readonly HashSet<string> SecretActions = new(["createLogin", "loginProperties"], StringComparer.Ordinal);
+
+    /// <summary>A password of at most loginLimits.password UTF-16 units, without U+0000 or an unpaired surrogate, here for every
+    /// action that takes one, so none can forget it. The message names the member, never the value.</summary>
+    private void Secret(string? value, string member)
+    {
+        if (value is not null && (value.Length > catalog.Logins.Limit("password") || value.Contains('\0') || ScriptingErrors.UnpairedSurrogate(value) >= 0)) throw Invalid("secrets." + member + ".");
+    }
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, the delete flags only for
@@ -160,6 +171,7 @@ internal sealed partial class ActionService : IDisposable
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
+        if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         switch (args.Action)
         {
             case "rename":
@@ -559,26 +571,35 @@ internal sealed partial class ActionService : IDisposable
         return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action));
     }
 
-    /// <summary>Frees a database of the backend's own sessions (critic A5): the connection's server-scope pools move to master when
-    /// it is their database (host.FreeDatabase) and its idle pools in it are cleared; then, for up to FreeWait, the action counts
-    /// this process's pool sessions still in it, which the server ends a moment after a clear. Query tabs are the user's own.</summary>
+    /// <summary>Frees a database of the backend's own sessions (critic A5): the server-scope pools of every connection to the server
+    /// move to master when it is their database (host.FreeDatabase) and their idle pools in it are cleared; then, for up to FreeWait,
+    /// the action counts the sessions of this process still in it that the backend's pooled connections were given
+    /// (host.PoolSessions), which the server ends a moment after a clear. Query tabs are the user's own.</summary>
     private async Task FreeDatabaseAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
     {
         if (!host.FreeDatabase(connectionId, database)) return;
-        var programs = host.PoolPrograms(connectionId);
         var watch = Stopwatch.StartNew();
         while (true)
         {
-            await using var command = connection.CreateCommand();
-            command.CommandText = ActionSql.OwnSessions;
-            command.CommandTimeout = 0;
-            Add(command, "@name", SqlDbType.NVarChar, 128, database);
-            Add(command, "@pid", SqlDbType.Int, 0, Environment.ProcessId);
-            for (var index = 0; index < ActionSql.PoolPrograms; index++) Add(command, "@pool" + (index + 1), SqlDbType.NVarChar, 128, index < programs.Count ? programs[index] : null);
-            var left = Convert.ToInt32(await command.ExecuteScalarAsync(token), System.Globalization.CultureInfo.InvariantCulture);
+            var left = await PoolSessionsInAsync(connection, connectionId, database, token);
             if (left == 0 || watch.Elapsed >= Options.FreeWait) return;
             await Task.Delay(50, token);
         }
+    }
+
+    /// <summary>How many sessions of this process in the database the backend's pooled connections were given (ActionSql.OwnSessions).</summary>
+    private async Task<int> PoolSessionsInAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    {
+        var pooled = host.PoolSessions(connectionId);
+        var left = 0;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.OwnSessions;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@pid", SqlDbType.Int, 0, Environment.ProcessId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token)) if (pooled.Contains(Convert.ToInt32(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture))) left++;
+        return left;
     }
 
     /// <summary>The live checks' way to free a database as an action does before its DDL (FreeDatabaseAsync), on the action's own connection.</summary>
@@ -622,10 +643,15 @@ internal sealed partial class ActionService : IDisposable
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = string.Concat(Plan(args, target).Where(statement => statement.Kind == StepKind.Main).Select(ActionSql.Checked).Select(ActionSql.ScriptText));
+        var text = ScriptText(Plan(args, target));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
+
+    /// <summary>Script Action's text of a plan: its main statements only, as a success runs them. Compensation and cleanup run only
+    /// after a failure or Stop, so they are never scripted.</summary>
+    internal static string ScriptText(IEnumerable<PlannedStatement> plan) =>
+        string.Concat(plan.Where(statement => statement.Kind == StepKind.Main).Select(ActionSql.Checked).Select(ActionSql.ScriptText));
 
     private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
