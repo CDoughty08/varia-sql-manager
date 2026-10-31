@@ -580,6 +580,12 @@ try {
   const databaseRow = dialog => dialog.getByRole('grid', { name: 'Databases', exact: true }).locator('tbody td')
   const dropBox = () => offlineDialog().getByLabel('Drop All Active Connections', { exact: true })
   const okButton = dialog => dialog.getByRole('button', { name: 'OK', exact: true })
+  /** The row's Status chip shows its whole label: its width is the column's CSS share, never the font's. */
+  const statusChipFits = async dialog => {
+    const label = databaseRow(dialog).nth(2).locator(part.statusPillLabel)
+    await expect(label).toHaveCount(1)
+    return label.evaluate(element => element.scrollWidth <= element.clientWidth)
+  }
   /** Tasks › an item on AppData; Databases may be reloading, so the press repeats until the row's menu opens. */
   const task = async (name, states) => {
     await expect(async () => {
@@ -600,6 +606,12 @@ try {
   await expect(offlineDialog().getByRole('note').first()).toHaveText('Drop All Active Connections rolls back the open transaction of 1 session.')
   await expect(okButton(offlineDialog())).toBeDisabled()
   await expect(okButton(offlineDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop All Active Connections, or Check Again once they leave.')
+  // The chip fits its column, with the border forced colours add too; a session's names are in full on hover.
+  expect(await statusChipFits(offlineDialog()), 'the Not ready chip fits').toBe(true)
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await statusChipFits(offlineDialog()), 'the Not ready chip fits under forced colours').toBe(true)
+  await page.emulateMedia({ forcedColors: 'none' })
+  await expect(offlineDialog().getByRole('grid', { name: 'Sessions', exact: true }).getByRole('gridcell', { name: stubSessions[0].program, exact: true })).toHaveAttribute('title', stubSessions[0].program)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-dark.png') })
   // Script Action shows the statement OK would run, with ROLLBACK IMMEDIATE only once the box is checked.
   await dropBox().check()
@@ -616,10 +628,21 @@ try {
   await offlineDialog().getByRole('button', { name: 'Check Again', exact: true }).click()
   await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Ready', 'No active connections.'])
   await expect(dropBox()).toBeDisabled()
-  await okButton(offlineDialog()).click()
+  // Enter on OK: OK disables itself as the run starts, so focus moves to Stop, the only way out of a wait.
+  await okButton(offlineDialog()).focus()
+  await page.keyboard.press('Enter')
+  await expect(offlineDialog().getByRole('button', { name: 'Stop', exact: true })).toBeFocused()
   await expect(databaseRow(offlineDialog()).nth(3)).toHaveText('Waiting for other connections to leave the database. Stop to give up.')
+  expect(await databaseRow(offlineDialog()).nth(3).evaluate(cell => cell.firstElementChild?.getAttribute('aria-live')), 'the waiting message is announced').toBe('polite')
+  await expect(databaseRow(offlineDialog()).nth(2)).toHaveText('In progress')
+  expect(await statusChipFits(offlineDialog()), 'the In progress chip fits').toBe(true)
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await statusChipFits(offlineDialog()), 'the In progress chip fits under forced colours').toBe(true)
+  await page.emulateMedia({ forcedColors: 'none' })
   await offlineDialog().getByRole('button', { name: 'Stop', exact: true }).click()
   await expect(objectDialogProgress(offlineDialog())).toHaveText('Stopped')
+  // The count read before OK no longer holds: a session held the database.
+  await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Stopped', 'Stopped. Check Again to see who is connected now.'])
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'takeOffline', dropConnections: false, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
   // OK again once nothing holds it: Success, the steps, and Close as the one button, focused.
   await application.evaluate(() => { globalThis.variaStub.holding = false })
@@ -628,6 +651,9 @@ try {
   await expect(databaseRow(offlineDialog())).toHaveText(['AppData', '', 'Success', 'The database is offline.'])
   await expect(okButton(offlineDialog())).toHaveCount(0)
   await expect(offlineDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  // Only Close is left to act: Script and its options are greyed.
+  await expect(offlineDialog().getByRole('button', { name: 'Script', exact: true })).toBeDisabled()
+  await expect(offlineDialog().getByRole('button', { name: 'Script options', exact: true })).toBeDisabled()
   await page.screenshot({ path: resolve('artifacts', 'object-actions-take-offline-success-dark.png') })
   await page.keyboard.press('Enter')
   await expect(offlineDialog()).toHaveCount(0)

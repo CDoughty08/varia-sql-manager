@@ -60,6 +60,12 @@ function ScriptButton({ disabled, onScript }: { disabled: boolean; onScript(dest
   </div>
 }
 
+/** Whether Script can run in a phase: never while something runs, and not once a dialog that stays open has succeeded (only
+ *  Close is left then, as in SSMS's progress dialogs). */
+export function scriptAvailable(phase: DialogPhase, usable: boolean): boolean {
+  return usable && phase !== 'executing' && phase !== 'loading' && phase !== 'scripting' && phase !== 'confirming' && phase !== 'succeeded'
+}
+
 /**
  * SSMS's object dialog frame: "Select a page" with the Connection and Progress boxes on the left (a row of tabs above
  * them in a dialog under 720 px), the Script button and a message bar above the page, the run's steps when the dialog's
@@ -153,11 +159,18 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const components: Partial<Record<PageId, ComponentType<PageProps>>> = dialogPages[open.dialog]
   const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
   const succeeded = open.phase === 'succeeded', blocked = dialogs.blockedReason(open)
-  const closeButton = useRef<HTMLButtonElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null), stopButton = useRef<HTMLButtonElement>(null)
   // A run that succeeded leaves Close as the one button, focused, as SSMS's progress dialogs do.
   useEffect(() => { if (succeeded) closeButton.current?.focus() }, [succeeded])
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
+  // OK disables itself as the run starts, which drops focus to the page; Stop is then the way out (Escape does nothing while
+  // it runs, and SET OFFLINE can wait indefinitely), so focus moves there unless it is on a control that can still be used.
+  useEffect(() => {
+    if (!executing) return
+    const active = document.activeElement
+    if (!active || active === document.body || !form.current?.contains(active) || (active as HTMLButtonElement).disabled) stopButton.current?.focus()
+  }, [executing])
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
@@ -201,7 +214,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         </section>
       </div>
       <div className="object-dialog-main">
-        <div className="object-dialog-toolbar"><ScriptButton disabled={busy || !usable} onScript={destination => void dialogs.script(destination)} /></div>
+        <div className="object-dialog-toolbar"><ScriptButton disabled={!scriptAvailable(open.phase, usable)} onScript={destination => void dialogs.script(destination)} /></div>
         {open.error && <div className={'object-dialog-message' + (open.phase === 'stopped' ? ' info' : '')} role={open.phase === 'stopped' ? 'status' : 'alert'}>
           <Icon name={open.phase === 'stopped' ? 'info' : 'error'} /><span>{open.error.message}</span></div>}
         {!open.error && open.notice && <div className="object-dialog-message info" role="status"><Icon name="info" /><span>{open.notice}</span></div>}
@@ -219,7 +232,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
         ? <button ref={closeButton} className="primary" type="button" onClick={close}>Close</button>
         : <><button className="primary" type="submit" aria-describedby={blocked && !busy ? 'object-dialog-blocked' : undefined}
           disabled={busy || !!blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
-          {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}</>}
+          {executing ? <button ref={stopButton} type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}</>}
     </div>
   </form></div>
 }

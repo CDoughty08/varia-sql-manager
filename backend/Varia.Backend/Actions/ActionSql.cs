@@ -217,9 +217,12 @@ internal static partial class ActionSql
 
     /// <summary>A database's row in master: its identity (database_id, create_date), state, user access, read-only and standby,
     /// subtype, what blocks a DROP or SET OFFLINE (replication, an availability group, mirroring), owner, sessions in it and those
-    /// with an open transaction (with VIEW SERVER STATE), permissions (can_alter_state also for a database that is not online, where
-    /// HAS_PERMS_BY_NAME answers 0 even to sysadmin: ALTER ANY DATABASE or ownership) and whether @new is another database's name. The owner falls
-    /// back to SUSER_SNAME(d.owner_sid): a Windows group's member owns it with no server principal of its own.</summary>
+    /// with an open transaction (with VIEW SERVER STATE), permissions and whether @new is another database's name. can_alter_state is
+    /// what SET OFFLINE and SET ONLINE need, which HAS_PERMS_BY_NAME on the database does not answer: it says 0 to a login with no user
+    /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
+    /// on a database that is not online (probed on SQL Server 2025). So ALTER ANY DATABASE, dbcreator (sys.login_token) or ownership
+    /// grant it in any state, and ALTER on the database while it is online. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
+    /// group's member owns it with no server principal of its own.</summary>
     public const string Database = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
         + "d.user_access AS user_access, d.is_read_only AS is_read_only, d.is_in_standby AS is_in_standby, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
@@ -231,8 +234,9 @@ internal static partial class ActionSql
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND es.open_transaction_count > 0) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
-        + "CONVERT(bit, CASE WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) "
-        + "WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() THEN 1 ELSE 0 END) AS can_alter_state, "
+        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
+        + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
+        + "WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) ELSE 0 END) AS can_alter_state, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
         + "FROM sys.databases AS d LEFT JOIN sys.database_mirroring AS dm ON dm.database_id = d.database_id LEFT JOIN sys.server_principals AS sp ON sp.sid = d.owner_sid "
@@ -266,14 +270,11 @@ internal static partial class ActionSql
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
 
     /// <summary>The sessions in a database (in master, with VIEW SERVER STATE; without it only this session, which is not in it,
-    /// is visible): first this process's (@pid), whose pooled ones the action leaves out and closes itself, at most @take; then at
-    /// most @take of all of them by session id, this process's last. Names are clipped in C#.</summary>
+    /// is visible), at most @take by session id, this process's query windows among them. Names are clipped in C#.</summary>
     public const string DatabaseSessions = "DECLARE @id int = (SELECT d.database_id FROM sys.databases AS d WHERE d.name = @name);\n"
-        + "SELECT TOP (@take) es.session_id AS session_id, es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es "
-        + "WHERE es.database_id = @id AND es.host_process_id = @pid AND es.session_id <> @@SPID ORDER BY es.session_id;\n"
         + "SELECT TOP (@take) es.session_id AS session_id, es.login_name AS login_name, es.program_name AS program_name, es.host_name AS host_name, "
         + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
-        + "ORDER BY CASE WHEN es.host_process_id = @pid THEN 1 ELSE 0 END, es.session_id;";
+        + "ORDER BY es.session_id;";
 
     /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
     public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
@@ -291,6 +292,8 @@ internal static partial class ActionSql
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // The login preflight (Login).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
+        // Take Offline's and Bring Online's permission (Database's can_alter_state).
+        "N'SERVER ROLE'", "N'dbcreator'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",

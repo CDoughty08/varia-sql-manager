@@ -9,11 +9,12 @@ namespace Varia.Backend.Tests;
 
 /// <summary>Live checks of Tasks › Take Offline and Bring Online (PR D3a). Without scratch databases: SQL Server's own databases
 /// are refused before any connection reads them. With VARIA_TEST_SQL_SCRATCH=1, in a marked VariaScratch_…_dbs database: the
-/// describe reads the database's identity, state and the sessions in it without the backend's own pooled ones, and the session
-/// holding an open transaction (critic A7); SET OFFLINE waits for that session until Stop, which leaves the database online and
+/// describe reads the database's identity, state and the sessions in it once it has freed the backend's own pooled ones, and the
+/// session holding an open transaction (critic A7), even when its id is one a cleared pool's session had; a sysadmin is not refused
+/// while another session holds the database SINGLE_USER, nor a dbcreator that has no user in it; SET OFFLINE waits for that session until Stop, which leaves the database online and
 /// the transaction open; with Drop All Active Connections it rolls the session back and goes offline; the state rules refuse
 /// what the menu greys; a database replaced since the dialog read it is refused; Script runs nothing; and Bring Online brings it
-/// back, saying when it is still SINGLE_USER. The hostile-name dry runs of the three templates are ActionLiveChecks' loop.</summary>
+/// back, saying when it is still SINGLE_USER, and stays a success when Stop arrives just after SET ONLINE. The hostile-name dry runs of the three templates are ActionLiveChecks' loop.</summary>
 internal static class DatabaseStateLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -44,7 +45,8 @@ internal static class DatabaseStateLiveChecks
             Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(connectionId ?? info.Id, Guid.NewGuid().ToString(), dialog, Database(name)));
         ActionArgs TakeOffline(string name, bool drop, DatabaseIdentityDto? identity = null, string? connectionId = null) =>
             new("takeOffline", connectionId ?? info.Id, Guid.NewGuid().ToString(), Database(name), Identity: identity, DropConnections: drop);
-        ActionArgs BringOnline(string name, DatabaseIdentityDto? identity = null) => new("bringOnline", info.Id, Guid.NewGuid().ToString(), Database(name), Identity: identity);
+        ActionArgs BringOnline(string name, DatabaseIdentityDto? identity = null, string? connectionId = null) =>
+            new("bringOnline", connectionId ?? info.Id, Guid.NewGuid().ToString(), Database(name), Identity: identity);
         Task<ActionExecuteResult> Execute(ActionArgs args, RequestContext? context = null) => Call<ActionExecuteResult>("actions.execute", args, context);
 
         // SQL Server's own databases never reach a connection.
@@ -75,8 +77,10 @@ internal static class DatabaseStateLiveChecks
             "Take Database Offline reads the database's identity (database_id, create_date), state and its sessions; Bring Online refuses an online database as the menu greys it ("
             + quiet.Error?.Message + ")");
 
-        // A connection opened in the database leaves Object Explorer's idle pooled session there, which the describe leaves out (the
-        // action frees it), and a query tab with an open transaction, which it lists (critic A7).
+        // A connection opened in the database leaves Object Explorer's idle pooled session there, which the describe frees first (as
+        // the action does), and a query tab with an open transaction, which it lists (critic A7). The tab's session id is also recorded
+        // as one a pooled connection was given and gave back (on a connection of its own, forgotten as it disconnects): SQL Server
+        // hands a cleared pool's freed id to the next client, so an id the backend's pools once had is no proof a session is theirs.
         await Sql("CREATE TABLE dbo.Held (id int);", db);
         var inside = await Call<ConnectionInfo>("connections.connect", live(db));
         var holder = Guid.NewGuid().ToString();
@@ -89,11 +93,19 @@ internal static class DatabaseStateLiveChecks
                 + " AND program_name LIKE N'% - Object Explorer';")).Scalar;
             var held = await Sql("BEGIN TRANSACTION; INSERT dbo.Held VALUES (1); SELECT @@SPID;", db, holder);
             var spid = int.Parse(held.Scalar!, CultureInfo.InvariantCulture);
-            var busy = await Describe("takeOffline", db);
+            var stale = await Call<ConnectionInfo>("connections.connect", live("master"));
+            ActionDescribeResult busy;
+            try
+            {
+                service.PoolSessionLedger.Opened(stale.Id, spid, pooled: true);
+                service.PoolSessionLedger.Closed(stale.Id, spid);
+                busy = await Describe("takeOffline", db);
+            }
+            finally { await Call<object>("connections.disconnect", new ConnectionArgs(stale.Id)); }
             var listedSession = busy.DatabaseState?.SessionList.FirstOrDefault(session => session.SessionId == spid);
             check(listed.Error is null && explorerSessions is not (null or "0") && busy is { Error: null, DatabaseState: { Sessions: 1, WithTransaction: 1, SessionsTruncated: false } }
                 && busy.DatabaseState.SessionList.Count == 1 && listedSession is { OpenTransactions: 1, Program: not null, Login: not null },
-                "the describe lists the session with an open transaction and leaves out the backend's own pooled Object Explorer session (" + explorerSessions + ", "
+                "the describe lists the session with an open transaction, whose id the backend's pools once had, and frees the backend's own pooled Object Explorer session first (" + explorerSessions + ", "
                 + busy.DatabaseState?.Sessions + ", " + busy.Error?.Message + ")");
 
             // Without Drop All Active Connections, SET OFFLINE waits for the session as SSMS's does, until Stop cancels it in SQL Server.
@@ -151,11 +163,32 @@ internal static class DatabaseStateLiveChecks
             check(single.Status == "completed" && online.Error is null && Steps(online) == "done:Bring database online" && !offline
                 && online.Messages.Any(message => message.Contains("SINGLE_USER", StringComparison.Ordinal)),
                 "Bring Online runs SET ONLINE and says when the database is still SINGLE_USER (" + online.Error?.Message + ", " + string.Join(" | ", online.Messages) + ")");
+            // Another session in the SINGLE_USER database: HAS_PERMS_BY_NAME on it answers 0 even to sysadmin, which still may take it offline.
+            var occupant = Guid.NewGuid().ToString();
+            try
+            {
+                var inSingle = await Sql("SELECT @@SPID;", db, occupant);
+                var occupied = await Describe("takeOffline", db);
+                check(inSingle.Status == "completed" && occupied is { Error: null, DatabaseState: { UserAccess: 1, Sessions: >= 1 } }
+                    && occupied.DatabaseState.SessionList.Any(session => session.SessionId.ToString(CultureInfo.InvariantCulture) == inSingle.Scalar),
+                    "a sysadmin's Take Offline describe reads a SINGLE_USER database another session holds, and lists that session (" + occupied.Error?.Code + ": " + occupied.Error?.Message + ")");
+            }
+            finally { await Call<object>("query.session.close", new SessionArgs(occupant)); }
             await Sql("ALTER DATABASE " + Bracket(db) + " SET MULTI_USER;");
             var plain = await Execute(TakeOffline(db, drop: false, identity));
-            var back = await Execute(BringOnline(db));
-            check(plain.Error is null && Steps(plain) == "done:Take database offline" && back.Error is null && back.Messages.Count == 0 && await State() == "ONLINE MULTI_USER",
-                "with no other session, SET OFFLINE needs no Drop All Active Connections, and Bring Online of a multi-user database says nothing more");
+            // Stop as SET ONLINE completes: the database is online, so the reply is the success, not "stopped before it changed anything".
+            ActionExecuteResult? back = null;
+            using (var late = new RequestContext(1, "actions.execute", RequestLane.Actions, 0))
+            {
+                service.Actions.Options.AfterStep = title => { if (title == "Bring database online") late.Cancel(CancelReason.User); };
+                try { back = await Execute(BringOnline(db), late); }
+                catch (OperationCanceledException) { }
+                finally { service.Actions.Options.AfterStep = null; }
+            }
+            check(plain.Error is null && Steps(plain) == "done:Take database offline" && back is { Error: null, Messages.Count: 0 } && Steps(back) == "done:Bring database online"
+                && await State() == "ONLINE MULTI_USER",
+                "with no other session, SET OFFLINE needs no Drop All Active Connections, and Bring Online of a multi-user database says nothing more, even when Stop arrives just after SET ONLINE ("
+                + (back is null ? "unknown outcome" : Steps(back) + ", " + back.Error?.Message) + ")");
         }
         finally
         {
@@ -177,6 +210,31 @@ internal static class DatabaseStateLiveChecks
                     "a login without ALTER on the database cannot take it offline, and sees no session counts without VIEW SERVER STATE (" + described.Error?.Code + ", " + executed.Error?.Message + ")");
             }
             finally { await Call<object>("connections.disconnect", new ConnectionArgs(low.Id)); }
+
+            // A dbcreator member with no user in the database: HAS_PERMS_BY_NAME on the database answers 0 (online) and ALTER ANY DATABASE
+            // 0 (offline), yet SQL Server lets it take the database offline and bring it online.
+            var granted = await Sql("ALTER SERVER ROLE [dbcreator] ADD MEMBER " + Bracket(scratch.Login!) + ";");
+            var creator = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = scratch.Login, Password = scratch.Password });
+            var creatorOffline = false;
+            try
+            {
+                var described = await Describe("takeOffline", db, creator.Id);
+                var taken = await Execute(TakeOffline(db, drop: true, connectionId: creator.Id));
+                creatorOffline = await State() == "OFFLINE MULTI_USER";
+                var describedOnline = await Describe("bringOnline", db, creator.Id);
+                var brought = await Execute(BringOnline(db, connectionId: creator.Id));
+                creatorOffline = await State() != "ONLINE MULTI_USER";
+                check(granted.Status == "completed" && described.Error is null && taken.Error is null && Steps(taken) == "done:Close connections and take database offline"
+                    && describedOnline.Error is null && brought.Error is null && Steps(brought) == "done:Bring database online" && !creatorOffline,
+                    "a dbcreator member with no user in the database takes it offline and brings it online (" + described.Error?.Message + " | " + taken.Error?.Message + " | "
+                    + describedOnline.Error?.Message + " | " + brought.Error?.Message + ")");
+            }
+            finally
+            {
+                await Call<object>("connections.disconnect", new ConnectionArgs(creator.Id));
+                if (creatorOffline) await Sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;");
+                await Sql("ALTER SERVER ROLE [dbcreator] DROP MEMBER " + Bracket(scratch.Login!) + ";");
+            }
         }
         else Console.WriteLine("Take Offline permission checks skipped: the server accepts Windows logins only.");
     }

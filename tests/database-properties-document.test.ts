@@ -9,6 +9,7 @@ import { setOption } from '../src/renderer/src/dialogs/database-properties'
 import { selectSection, setScriptOpen } from '../src/renderer/src/kit/document-frame'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { previewDelayMs, propertiesMessages } from '../src/renderer/src/properties/DatabasePropertiesService'
+import { databaseStatusPill, shownModel } from '../src/renderer/src/properties/fields'
 import type { ConnectionService } from '../src/renderer/src/services/connections'
 import { databaseModel } from './fixtures/database-properties'
 import { deferred } from './fixtures/documents'
@@ -547,7 +548,7 @@ describe('Database Properties as a document', () => {
     expect(documents.get(id)).toBeUndefined()
   })
   it('follows Take Offline and Bring Online: a clean document reads the database again, one with changes keeps them until it is back', async () => {
-    const { properties, id, state, edit, api, dialogs } = opened()
+    const { properties, id, state, edit, api, dialogs, connections } = opened()
     await settled()
     const identity = { id: 7, created: '2026-01-02T03:04:05.678' }
     api.describeObject.mockImplementation(async params => ({ ok: true, value: (params.dialog === 'databaseProperties'
@@ -564,19 +565,27 @@ describe('Database Properties as a document', () => {
     expect(state()).toMatchObject({ phase: 'ready', model: { readOnlyReason: 'The database is offline.' } })
     expect(state().offline).toBeUndefined()
     dialogs.close()
-    // A document with changes keeps them, and Apply waits until the database is online again; other databases are not touched.
+    // A document with changes keeps them, marked offline (its status reads Offline, as its banner says); other databases and
+    // other servers are not touched.
     api.describeObject.mockImplementation(async params => ({ ok: true, value: { databaseProperties: { ...databaseModel(), general: { ...databaseModel().general, name: params.target.name ?? '' } }, elapsedMs: 1 } as ActionDescribeResult }))
     properties.refresh(id)
     await settled()
     edit('recoveryModel', 'SIMPLE')
     properties.databaseStateChanged('c1', 'AppData', true)
     expect(state()).toMatchObject({ changed: true, offline: true })
-    expect(properties.canApply(id)).toBe(false)
+    expect(databaseStatusPill(shownModel(state().model!, state().offline))).toEqual({ tone: 'critical', label: 'Offline' })
+    expect(databaseStatusPill(shownModel(state().model!, undefined))).toEqual({ tone: 'success', label: 'Normal' })
+    expect(propertiesMessages.offline).toBe('The database was taken offline. Bring it online before you apply these changes, or discard them.')
+    // Apply is not held back by the mark: the database can come online another way (a query, another tool), and Apply's
+    // preflight refuses one that is still offline.
+    expect(properties.canApply(id)).toBe(true)
+    connectionsAdd(connections, 'c2', 'c2.example')
     properties.databaseStateChanged('c1', 'Sales', false)
     properties.databaseStateChanged('c2', 'AppData', false)
     expect(state().offline).toBe(true)
-    expect(propertiesMessages.offline).toBe('The database is offline. Bring it online to apply these changes, or discard them.')
-    properties.databaseStateChanged('c1', 'AppData', false)
+    // Bring Online through another connection to the same server clears it.
+    connectionsAdd(connections, 'c3', 'c1.example')
+    properties.databaseStateChanged('c3', 'AppData', false)
     expect(state()).toMatchObject({ changed: true })
     expect(state().offline).toBeUndefined()
     expect(properties.canApply(id)).toBe(true)

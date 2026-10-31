@@ -100,27 +100,33 @@ Tasks › Take Offline opens Take Database Offline - <name>: a grid of Database 
 (cleared), Status and Message, as SSMS 18 and later lay it out (recalled). The Message counts the sessions in the
 database and those with an open transaction; a disclosure lists them (session id, login, program, host and open
 transactions, at most 8, with VIEW SERVER STATE), and the page names Varia's own query windows on the database
-whose session holds an open transaction, which Drop All Active Connections rolls back (A7). The counts leave out the
-backend's own pooled connections, which the action closes itself. Without VIEW SERVER STATE the Message says the sessions
-are unknown, and OK runs.
+whose session holds an open transaction, which Drop All Active Connections rolls back (A7). Before it counts, the
+describe closes the backend's own idle pooled connections in the database, as the action does before SET OFFLINE, and
+waits up to a second for SQL Server to end their sessions; every session left is listed, Varia's query windows and busy
+pooled connections included (a session id alone never marks a session as Varia's: SQL Server reuses freed ids). Without
+VIEW SERVER STATE the Message says the sessions are unknown, and OK runs.
 
 `SET OFFLINE` without a termination clause waits for every other session to leave, so while sessions are connected and
 the box is cleared the Status is Not ready and OK is disabled, with the reason beside it; Check Again counts them again.
 Checked, OK runs `SET OFFLINE WITH ROLLBACK IMMEDIATE` (about 3 s even on an idle database, probed). Either way the run
-can wait for locks, so Stop cancels it in SQL Server and the database stays online. A success keeps the dialog open on
-its steps with Close focused, as SSMS's progress dialog does.
+can wait for locks, so Stop (focused once OK starts the run) cancels it in SQL Server and the database stays online; the
+row then asks to Check Again. A success keeps the dialog open on its steps with Close focused and Script greyed, as
+SSMS's progress dialog does.
 
 Tasks › Bring Online opens Bring Database Online - <name> and runs `SET ONLINE` at once, with nothing to confirm; Stop
 cancels a recovery that waits. The menu offers it on any state SQL Server lets `SET ONLINE` act on (offline, recovery
 pending, suspect, emergency) and greys it while the database is online, restoring, recovering or copying. A database left
-SINGLE_USER (or RESTRICTED_USER) while it was offline comes back so, and the reply says so in a message.
+SINGLE_USER (or RESTRICTED_USER) while it was offline comes back so, and the reply says so in a message (read after
+SET ONLINE under a budget of its own, so a Stop that arrives just then leaves the success a success).
 
 Both are offered on box SQL Server only (Managed Instance cannot set OFFLINE or ONLINE), greyed on SQL Server's own
 databases and absent on a snapshot. The backend re-derives the state rules above from `sys.databases` before it runs
-anything, refuses a database whose identity changed since the dialog read it, and needs ALTER on the database (for one that
-is not online, ALTER ANY DATABASE or ownership; SQL Server's 5011 is PERMISSION_DENIED too). After either, the Databases folder is
-listed again ("(Offline)" in the sublabel), and the database's Database Properties documents on that connection read
-it again, or, while they hold changes, keep them with Apply disabled until it is online.
+anything, refuses a database whose identity changed since the dialog read it, and needs ALTER ANY DATABASE, dbcreator,
+ownership, or (while it is online) ALTER on the database: `HAS_PERMS_BY_NAME` on the database answers 0 to a login with no
+user in it, to sysadmin while another session holds it SINGLE_USER, and to everyone once it is offline (probed). SQL
+Server's 5011 is PERMISSION_DENIED too. After either, the Databases folder is listed again ("(Offline)" in the sublabel),
+and the database's Database Properties documents on that server read it again, or, while they hold changes, keep them
+with an Offline status and a banner; Apply still runs, and its preflight refuses a database that is not online.
 
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and

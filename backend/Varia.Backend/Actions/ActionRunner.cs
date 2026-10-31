@@ -78,6 +78,7 @@ internal sealed partial class ActionService
                     await step.Run(new(open, token));
                     Add("done", step);
                     completed++;
+                    Options.AfterStep?.Invoke(step.Title);
                 }
                 catch (Exception exception) when (token.IsCancellationRequested && exception is SqlException or OperationCanceledException)
                 {

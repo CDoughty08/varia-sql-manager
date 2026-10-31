@@ -108,4 +108,14 @@ describe('Take Database Offline and Bring Database Online page', () => {
     expect(databaseStateStatus({ phase: 'succeeded', model: undefined }, false).tone).toBe('success')
     expect(databaseStateStatus({ phase: 'ready', model: undefined }, true).tone).toBe('warning')
   })
+  it('offers Script before OK and after a failure or Stop, never while it runs or once a dialog that stays open has succeeded', async () => {
+    const { scriptAvailable } = await import('../src/renderer/src/dialogs/ObjectDialog')
+    const phases = ['ready', 'failed', 'stopped', 'loading', 'scripting', 'confirming', 'executing', 'succeeded'] as const
+    expect(phases.filter(phase => scriptAvailable(phase, true))).toEqual(['ready', 'failed', 'stopped'])
+    expect(scriptAvailable('ready', false)).toBe(false)
+  })
+  it('says after Stop that the count read before OK no longer holds', async () => {
+    const { stoppedMessage } = await import('../src/renderer/src/dialogs/pages/DatabaseStatePage')
+    expect(stoppedMessage).toBe('Stopped. Check Again to see who is connected now.')
+  })
 })

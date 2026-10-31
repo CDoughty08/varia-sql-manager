@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics;
-using System.Globalization;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Common;
 using Varia.Backend.Designer;
@@ -55,8 +54,12 @@ internal sealed class ActionServiceOptions
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How long Bring Online reads the access a database came back with, after SET ONLINE completed (the reply's note).</summary>
+    public TimeSpan AccessNoteBudget { get; set; } = TimeSpan.FromSeconds(5);
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
+    /// <summary>Test seam: called after each main step that completed, with its title (a Stop that arrives just after the statement).</summary>
+    internal Action<string>? AfterStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
 }
@@ -609,15 +612,15 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>Frees a database of the backend's own sessions (critic A5): the server-scope pools of every connection to the server
     /// move to master when it is their database (host.FreeDatabase) and their idle pools in it are cleared; then, for up to FreeWait,
     /// the action counts the sessions of this process still in it that the backend's pooled connections were given
-    /// (host.PoolSessions), which the server ends a moment after a clear. Query tabs are the user's own.</summary>
-    private async Task FreeDatabaseAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    /// (host.PoolSessions), which the server ends a moment after a clear. Query tabs are the user's own. True when it cleared a pool.</summary>
+    private async Task<bool> FreeDatabaseAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
     {
-        if (!host.FreeDatabase(connectionId, database)) return;
+        if (!host.FreeDatabase(connectionId, database)) return false;
         var watch = Stopwatch.StartNew();
         while (true)
         {
             var left = await PoolSessionsInAsync(connection, connectionId, database, token);
-            if (left == 0 || watch.Elapsed >= Options.FreeWait) return;
+            if (left == 0 || watch.Elapsed >= Options.FreeWait) return true;
             await Task.Delay(50, token);
         }
     }
@@ -705,7 +708,7 @@ internal sealed partial class ActionService : IDisposable
         var collected = messages.Collected();
         // SET ONLINE keeps the access a database was left in (SINGLE_USER set while it was offline stays), which SSMS does not say.
         // It takes the last place when SQL Server's messages fill the list (main refuses more than infoMessages).
-        if (args.Action == "bringOnline" && failure is null && await AccessNoteAsync(connection, target.Name!, token) is { } note)
+        if (args.Action == "bringOnline" && failure is null && await AccessNoteAsync(connection, target.Name!) is { } note)
         {
             if (collected.Count >= catalog.Limit("infoMessages")) collected.RemoveAt(collected.Count - 1);
             collected.Add(note);
@@ -713,31 +716,47 @@ internal sealed partial class ActionService : IDisposable
         return new(steps, collected, 0, failure);
     }
 
-    /// <summary>What a database brought online still restricts: SINGLE_USER or RESTRICTED_USER access, or null.</summary>
-    private static async Task<string?> AccessNoteAsync(SqlConnection connection, string database, CancellationToken token)
+    /// <summary>What a database brought online still restricts: SINGLE_USER or RESTRICTED_USER access, or null. SET ONLINE has
+    /// completed, so a Stop that arrives now, or a read that fails, must not make the success a failure: the note has a budget of
+    /// its own (AccessNoteBudget), not the request's token, and is left out when it cannot be read.</summary>
+    private async Task<string?> AccessNoteAsync(SqlConnection connection, string database)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = ActionSql.DatabaseAccess;
-        command.CommandTimeout = 0;
-        Add(command, "@name", SqlDbType.NVarChar, 128, database);
-        await using var reader = await command.ExecuteReaderAsync(token);
-        if (!await reader.ReadAsync(token)) return null;
-        return ActionsCatalog.DatabaseAccessOf(ReadRow(reader).Int("user_access")) switch
+        using var budget = new CancellationTokenSource(Options.AccessNoteBudget);
+        try
         {
-            "single" => "The database is online in SINGLE_USER mode: only one connection at a time can use it.",
-            "restricted" => "The database is online in RESTRICTED_USER mode: only members of db_owner, dbcreator and sysadmin can use it.",
-            _ => null
-        };
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.DatabaseAccess;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, database);
+            await using var reader = await command.ExecuteReaderAsync(budget.Token);
+            if (!await reader.ReadAsync(budget.Token)) return null;
+            return ActionsCatalog.DatabaseAccessOf(ReadRow(reader).Int("user_access")) switch
+            {
+                "single" => "The database is online in SINGLE_USER mode: only one connection at a time can use it.",
+                "restricted" => "The database is online in RESTRICTED_USER mode: only members of db_owner, dbcreator and sysadmin can use it.",
+                _ => null
+            };
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException or InvalidOperationException) { return null; }
     }
 
     /// <summary>Take Database Offline's and Bring Database Online's model: the database's identity and state, the preflight's
-    /// verdict, what blocks SET OFFLINE, and the sessions in it (VIEW SERVER STATE) without the backend's own pooled ones, which
-    /// the action frees itself; their open transactions are what WITH ROLLBACK IMMEDIATE rolls back (critic A7).</summary>
+    /// verdict, what blocks SET OFFLINE, and the sessions in it (VIEW SERVER STATE); their open transactions are what WITH ROLLBACK
+    /// IMMEDIATE rolls back (critic A7). The backend's own idle pooled connections are no one's work: as SET OFFLINE does, Take
+    /// Offline's describe first frees the database of them (spec 3.6) and reads it again, then lists every session left, this
+    /// process's query windows included. No session is left out by its id, which SQL Server gives the next client once a cleared
+    /// pool's session has ended.</summary>
     private async Task<ActionDescribeResult> DescribeStateJobAsync(SqlConnection connection, string connectionId, ObjectRefDto target, string action, int band, CancellationToken token)
     {
         var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
         if (subject is null) return new(null, 0, error);
         if (StateRefusal(subject, action, null) is { } refused) return new(null, 0, refused);
+        if (action == "takeOffline" && subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
+        {
+            (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+            if (subject is null) return new(null, 0, error);
+            if (StateRefusal(subject, action, null) is { } changed) return new(null, 0, changed);
+        }
         var row = subject.Row;
         var warnings = new List<ActionWarningDto>();
         if (action == "takeOffline")
@@ -752,37 +771,21 @@ internal sealed partial class ActionService : IDisposable
         {
             var limit = (int)catalog.Limit("sessions");
             var chars = (int)catalog.Limit("sessionText");
-            var pooled = host.PoolSessions(connectionId);
             await using var command = connection.CreateCommand();
             command.CommandText = ActionSql.DatabaseSessions;
             command.CommandTimeout = 0;
             Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
-            Add(command, "@pid", SqlDbType.Int, 0, Environment.ProcessId);
-            // The list puts this process's sessions last, so it reads past the pooled ones it leaves out.
-            Add(command, "@take", SqlDbType.Int, 0, limit + Math.Min(pooled.Count, 1000));
+            Add(command, "@take", SqlDbType.Int, 0, limit);
             await using var reader = await command.ExecuteReaderAsync(token);
-            var own = new HashSet<int>();
-            var ownOpen = 0;
             while (await reader.ReadAsync(token))
             {
-                var id = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
-                if (!pooled.Contains(id)) continue;
-                own.Add(id);
-                if (Convert.ToInt32(reader.GetValue(1), CultureInfo.InvariantCulture) > 0) ownOpen++;
+                var session = ReadRow(reader);
+                string? Clip(string name) => session.Text(name) is { Length: > 0 } text ? ScriptingErrors.Detail(text, chars) : null;
+                list.Add(new(session.Int("session_id"), Clip("login_name"), Clip("program_name"), Clip("host_name"), session.Int("open_transactions")));
             }
-            sessions = Math.Max(0, sessions.Value - own.Count);
-            withTransaction = Math.Max(0, (withTransaction ?? 0) - ownOpen);
-            if (await reader.NextResultAsync(token))
-                while (await reader.ReadAsync(token) && list.Count < limit)
-                {
-                    var session = ReadRow(reader);
-                    var id = session.Int("session_id");
-                    if (own.Contains(id)) continue;
-                    string? Clip(string name) => session.Text(name) is { Length: > 0 } text ? ScriptingErrors.Detail(text, chars) : null;
-                    list.Add(new(id, Clip("login_name"), Clip("program_name"), Clip("host_name"), session.Int("open_transactions")));
-                }
-            // Sessions that came or went between the count and the list leave the counts as the list found them at least.
+            // Sessions that came between the count and the list leave the counts as the list found them at least.
             sessions = Math.Max(sessions.Value, list.Count);
+            withTransaction = Math.Max(withTransaction ?? 0, list.Count(session => session.OpenTransactions > 0));
         }
         var identity = new DatabaseIdentityDto(row.Int("database_id"), DatabaseProperties.Iso(row.Raw("create_date")) ?? "");
         var model = new DatabaseStateDto(subject.Display, identity, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby"), sessions, withTransaction,

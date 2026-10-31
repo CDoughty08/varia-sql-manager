@@ -11,6 +11,8 @@ import type { TakeOfflineDraft } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
 import type { OpenObjectDialog } from '../ObjectDialogService'
 
+/** The row's Message after Stop on Take Offline, whose describe from before OK no longer says who is connected. */
+export const stoppedMessage = 'Stopped. Check Again to see who is connected now.'
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 /** At most this many of Varia's own query windows on the database have their open transaction read when the dialog opens. */
 const ownTabReads = 16
@@ -56,6 +58,12 @@ function useOwnTransactions(open: OpenObjectDialog): readonly string[] {
   return names
 }
 
+/** A session's login, program or host: clipped to its column, in full on hover. */
+function SessionText({ value }: { value: string | undefined }) {
+  const text = value ? displayText(value) : ''
+  return <td title={text || undefined}><bdi>{text}</bdi></td>
+}
+
 /**
  * Take Database Offline's and Bring Database Online's General page, as SSMS lays them out (recalled): the database grid
  * (Database Name, Drop All Active Connections for Take Offline, Status, Message), then, for Take Offline, the sessions in
@@ -83,6 +91,8 @@ export default function DatabaseStatePage({ open, editable }: PageProps) {
       : 'Bringing the database online…'
     : open.phase === 'succeeded' ? offline ? 'The database is offline.' : 'The database is online.'
     : open.phase === 'failed' ? failed?.message ?? open.error?.message ?? ''
+    // The count read before OK is out of date once a run was stopped: a session held the database, or the outcome is unknown.
+    : open.phase === 'stopped' ? offline ? stoppedMessage : 'Stopped.'
     : model && offline ? sessionsMessage(model) : ''
   const sessions = model?.sessions ?? 0
   const facts = promptTabFacts(ownTransactions)
@@ -91,28 +101,29 @@ export default function DatabaseStatePage({ open, editable }: PageProps) {
     <div className="object-dialog-caption" id="database-state-grid">Databases</div>
     <table className="object-dialog-grid" role="grid" aria-labelledby="database-state-grid">
       <thead><tr>
-        <th scope="col">Database Name</th>
-        {offline && <th scope="col">Drop All Active Connections</th>}
-        <th scope="col">Status</th><th scope="col" className="object-dialog-col-message">Message</th>
+        <th scope="col" className="object-dialog-col-name">Database Name</th>
+        {offline && <th scope="col" className="object-dialog-col-drop">Drop All Active Connections</th>}
+        <th scope="col" className="object-dialog-col-status">Status</th><th scope="col">Message</th>
       </tr></thead>
       <tbody><tr>
         <td><bdi>{name}</bdi></td>
         {offline && <td className="object-dialog-cell-check">{draft && <input type="checkbox" aria-label="Drop All Active Connections" checked={draft.dropConnections}
           disabled={!editable || !model || model.sessions === 0} onChange={event => dialogs.updateDraft({ dropConnections: event.target.checked })} />}</td>}
         <td><StatusPill tone={status.tone} label={status.label} size="small" /></td>
-        <td className="object-dialog-cell-message">{message}</td>
+        <td className="object-dialog-cell-message"><span aria-live="polite">{message}</span></td>
       </tr></tbody>
     </table>
     {model && model.warnings.length > 0 && <ul className="object-dialog-warnings" aria-label="Warnings">
       {model.warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
     </ul>}
     {offline && model && model.sessionList.length > 0 && <details className="object-dialog-sessions" open>
-      <summary>Sessions in <bdi>{name}</bdi> ({sessions.toLocaleString('en-US')})</summary>
+      <summary><Icon name="chevron-right" className="object-dialog-twisty" />Sessions in <bdi>{name}</bdi> ({sessions.toLocaleString('en-US')})</summary>
       <table className="object-dialog-grid" role="grid" aria-label="Sessions">
-        <thead><tr><th scope="col">Session</th><th scope="col">Login</th><th scope="col">Program</th><th scope="col">Host</th><th scope="col">Open transactions</th></tr></thead>
+        <thead><tr><th scope="col" className="object-dialog-col-session">Session</th><th scope="col">Login</th><th scope="col">Program</th><th scope="col">Host</th>
+          <th scope="col" className="object-dialog-col-count">Open transactions</th></tr></thead>
         <tbody>{model.sessionList.map(session => <tr key={session.sessionId}>
-          <td>{session.sessionId}</td><td><bdi>{session.login ? displayText(session.login) : ''}</bdi></td><td><bdi>{session.program ? displayText(session.program) : ''}</bdi></td>
-          <td><bdi>{session.host ? displayText(session.host) : ''}</bdi></td><td>{session.openTransactions}</td>
+          <td>{session.sessionId}</td><SessionText value={session.login} /><SessionText value={session.program} /><SessionText value={session.host} />
+          <td className="object-dialog-cell-count">{session.openTransactions}</td>
         </tr>)}</tbody>
       </table>
       {model.sessionsTruncated && <p className="field-note">Only the first {model.sessionList.length} sessions are listed.</p>}
