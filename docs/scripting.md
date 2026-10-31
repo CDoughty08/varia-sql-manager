@@ -53,7 +53,7 @@ CREATE, S = SELECT, I = INSERT, U = UPDATE, Del = DELETE, E = EXECUTE, Mod = Mod
 
 | Kind | Subtypes | Title | C | A | CoA | D | DC | S | I | U | Del | E | Mod | SMO URN | Preflight |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `login` | — | Script Login as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Login` | `serverObject` |
+| `login` | none, `sa`, `system`, `sql`, `windowsUser`, `windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | Script Login as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Login` | `serverObject` |
 | `serverRole` | — | Script Server Role as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Role` | `serverObject` |
 | `credential` | — | Script Credential as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Credential` | `serverObject` |
 | `audit` | — | Script Audit as | ✓ | – | – | ✓ | ✓ | – | – | – | – | – | – | `Audit` | `serverObject` |

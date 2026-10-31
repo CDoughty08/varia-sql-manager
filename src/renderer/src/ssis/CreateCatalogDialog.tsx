@@ -85,7 +85,7 @@ function CreateCatalogForm({ open, close }: { open: OpenCreateCatalog; close(): 
         </fieldset>
         <section className="property-section create-catalog-plan" aria-labelledby="create-catalog-plan">
           <div className="create-catalog-caption" id="create-catalog-plan">This changes the server</div>
-          <StepList labelledBy="create-catalog-plan" steps={steps.length ? steps.map(step => ({ state: step.status, text: step.message ?? '' })) : plannedSteps(open).map(text => ({ state: 'pending', text }))} />
+          <StepList labelledBy="create-catalog-plan" steps={steps.length ? steps.map(step => ({ state: step.status, text: step.message ?? step.title })) : plannedSteps(open).map(text => ({ state: 'pending', text }))} />
           <dl className="create-catalog-files">
             <dt>Backup</dt><dd className="create-catalog-path">{open.setup.backupFile}</dd>
             <dt>Data file</dt><dd className="create-catalog-path">{open.setup.dataFile}</dd>
