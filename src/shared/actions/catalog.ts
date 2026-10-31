@@ -1,9 +1,9 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete and Properties, which kinds and subtypes offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties and the Databases folder's Attach, which kinds, subtypes and folders offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type FolderId, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
 import type { DatabaseRuntime } from '../explorer/status.ts'
 import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
@@ -15,14 +15,16 @@ export const objectActions = [
   'selectTop',
   'rename',
   'delete',
-  'properties'
+  'properties',
+  'attach'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog. */
 export type ActionClass = 'query' | 'inline' | 'dialog'
 export const dialogIds = [
   'deleteObject',
-  'databaseProperties'
+  'databaseProperties',
+  'attachDatabase'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -43,6 +45,9 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
+  /** Offered on this Object Explorer folder rather than on object rows (SSMS's Databases › Attach…): its target is the folder's
+   *  server, and its request names the server (`{ kind: 'server' }`). */
+  readonly folder?: FolderId
   /** The servers it runs on (critic A1). On another, the menu hides the item, and the backend refuses it before opening a
    *  connection (W5-0b's engine gate reads this list from actions-catalog.json). */
   readonly engines: readonly ServerEngine[]
@@ -59,7 +64,12 @@ const actionSpecData = {
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
   // SSMS 22's access key for Properties is unverified; P is free in Varia's Object Explorer menu.
-  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true, engines: onServers }
+  properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true, engines: onServers },
+  // SSMS: right-click Databases › Attach… (access key A, recalled). Box editions only: Managed Instance and Azure SQL Database have no attach.
+  attach: {
+    title: 'Attach Database…', menuTitle: 'Attach…', mnemonic: 'a', group: '0_new', order: 2, class: 'dialog', dialog: 'attachDatabase', command: 'explorer.attachDatabase', folder: 'databases',
+    engines: ['box']
+  }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
@@ -166,6 +176,8 @@ export function databaseActionState(row: ActionRow, runtime: DatabaseRuntime | u
  */
 export interface ActionTarget {
   readonly kind: NodeKind | 'folder'
+  /** A folder's id: the folder actions (`ObjectActionSpec.folder`) are offered on it. */
+  readonly folder?: FolderId
   readonly subtype?: NodeSubtype
   readonly status?: NodeStatus
   readonly database?: DatabaseRuntime
@@ -177,21 +189,26 @@ export const offeredOnEngine = (engines: readonly ServerEngine[] | undefined, en
 /** What `actionMenuState` reads, for tests until the catalogue declares engines, overlays and database rules. */
 export interface ActionMenuSources {
   readonly kinds?: { readonly [K in NodeKind]?: ActionKindSpec }
-  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> }
+  readonly actions?: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder'> }
   readonly rules?: readonly DatabaseActionRule[]
 }
 /**
  * Each action's state for a node: 'enabled', 'disabled' (greyed) or '' (not offered). The kind's row with its status
  * overlay, narrowed for a database by its runtime state, then hidden on a server whose engine the action does not serve.
+ * A folder offers the actions declared on it (`ObjectActionSpec.folder`), on the engines they serve; rows never offer them.
  */
 export function actionMenuState(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Readonly<Record<ObjectAction, ActionState>> {
-  if (!target || target.kind === 'folder') return noActions
+  if (!target) return noActions
+  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines' | 'folder'> } = sources.actions ?? objectActionSpecs
+  if (target.kind === 'folder') {
+    if (!target.folder || !objectActions.some(action => specs[action]?.folder === target.folder)) return noActions
+    return Object.fromEntries(objectActions.map(action => [action, specs[action]?.folder === target.folder && offeredOnEngine(specs[action]?.engines, target.engine) ? 'enabled' : ''])) as Record<ObjectAction, ActionState>
+  }
   const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
   const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
   if (!listed) return noActions
   const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
-  const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> } = sources.actions ?? objectActionSpecs
-  return Object.fromEntries(objectActions.map(action => [action, offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
+  return Object.fromEntries(objectActions.map(action => [action, specs[action]?.folder === undefined && offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
@@ -247,7 +264,9 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   properties: {
     icon: 'settings-gear', keywords: ['options', 'files', 'filegroups', 'recovery', 'compatibility', 'collation', 'settings'], documentTask: false,
     unavailableHint: 'Select a database in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
-  }
+  },
+  // No default key, as in SSMS.
+  attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -354,7 +373,10 @@ const dialogSpecData = {
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
-  }
+  },
+  // SSMS's Attach Databases: one General page with the databases to attach and the selected one's files. Each row's Status
+  // says how its run went, so the dialog lists no separate steps.
+  attachDatabase: { title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [page('general', 'General')] }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
@@ -403,6 +425,9 @@ export const actionErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
   // The server file picker's folder does not exist, or the server's account cannot see it.
   PATH_NOT_FOUND: false,
+  // SQL Server could not open a database file (5120, 5123): missing, used by another database, or denied to its service
+  // account; fixing the file and trying again can help.
+  FILE_ACCESS: true,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,
@@ -435,7 +460,9 @@ export const actionLimits = {
    *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
    *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
    *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
-  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1
+  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1,
+  /** Attach Databases: the databases one OK attaches, and the files one database lists (each a server path). */
+  attachDatabases: 16, attachFiles: 1_000
 } as const
 
 /** Whether an action runs on a server of this engine. */
@@ -471,7 +498,7 @@ export function actionsCatalogJson(): string {
     : [])
   const actionJson = (action: ObjectAction) => {
     const spec: ObjectActionSpec = objectActionSpecs[action]
-    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs }
+    return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, folder: spec.folder }
   }
   return [
     '{',

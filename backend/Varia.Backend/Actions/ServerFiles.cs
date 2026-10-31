@@ -39,6 +39,11 @@ internal static partial class ServerPath
         return text.EndsWith('\\') ? text : text + "\\";
     }
 
+    /// <summary>A valid path on one of the server's own disks: a drive (C:\ or C:/) or a Linux path, never a share or a device
+    /// path (\\host\share, //host/share, \\?\, \\.\), which SQL Server's service account would reach over the network.</summary>
+    public static bool Local(string? path, long max) =>
+        Valid(path, max) && (char.IsAsciiLetter(path![0]) || path[0] == '/' && (path.Length == 1 || path[1] is not ('/' or '\\')));
+
     public static bool Same(string a, string b, bool linux) => string.Equals(a, b, linux ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase);
 }
 
@@ -139,6 +144,27 @@ internal static partial class ServerFiles
         if (truncated) entries.RemoveRange(take, entries.Count - take);
         var notice = !modern && !facts.Sysadmin && entries.Count == 0 ? "legacyEmpty" : null;
         return (new(separator, folder, [], entries, truncated, notice), null);
+    }
+
+    /// <summary>Whether a file (not a folder) is at each path, as Exists checks one: true or false, or null where SQL Server 2016
+    /// will not tell a login outside sysadmin, and for a path that is not on the server's own disks (Attach Databases' details).
+    /// These paths come from a file, not the user: a share it names is never probed, since the service account would sign in to
+    /// that host to answer; the user can check one by choosing it, and SQL Server opens it only at OK. <paramref name="legacy"/>
+    /// as for ListAsync.</summary>
+    public static async Task<List<bool?>> FilesExistAsync(SqlConnection connection, IReadOnlyList<string> paths, CancellationToken token, bool legacy = false)
+    {
+        var found = new List<bool?>(paths.Count);
+        if (!paths.Any(path => ServerPath.Local(path, 260))) return [.. paths.Select(path => ServerPath.Valid(path, 260) ? (bool?)null : false)];
+        var facts = await FactsAsync(connection, token);
+        var modern = !legacy && facts.Views;
+        foreach (var path in paths)
+        {
+            if (!ServerPath.Valid(path, 260)) { found.Add(false); continue; }
+            if (!ServerPath.Local(path, 260) || !modern && !facts.Sysadmin) { found.Add(null); continue; }
+            var (exists, directory) = await ExistsAsync(connection, modern ? Exists : LegacyExists, path, token);
+            found.Add(exists && !directory);
+        }
+        return found;
     }
 
     private static string Time(object value) => value switch

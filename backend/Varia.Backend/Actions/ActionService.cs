@@ -64,6 +64,8 @@ internal sealed class ActionServiceOptions
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
+    /// <summary>Test seam: the newest database version Attach Databases takes the server to open, in place of master's.</summary>
+    internal int? AttachServerVersion { get; set; }
 }
 
 /// <summary>The object's identity and facts the preflight read: its subtype, row, and what refers to it; a login's facts too.</summary>
@@ -141,11 +143,15 @@ internal sealed partial class ActionService : IDisposable
         if (target is null) throw Invalid("target.");
         try { ExplorerRefs.Object(target, explorer); }
         catch (RequestException) { throw Invalid("target."); }
+        // A folder's action (Attach) acts on the server alone.
+        if (catalog.FolderOf(action) is not null) return target == ServerRef ? target : throw Invalid("target.");
         if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
         if (catalog.ServesSystemObjects(action)) return target;
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
         return target;
     }
+
+    private static readonly ObjectRefDto ServerRef = new("server");
 
     private static void Ids(string? connectionId, string? requestId)
     {
@@ -160,6 +166,7 @@ internal sealed partial class ActionService : IDisposable
     {
         Ids(args.ConnectionId, args.RequestId);
         if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        if (args.Attach is { } attach && (args.Dialog != AttachDialog || !ServerPath.Valid(attach.Mdf, catalog.Limit("serverPath")))) throw Invalid("attach.");
         if (args.Files is { } files)
         {
             if (!catalog.ServerFilePurposes.ContainsKey(files.Purpose ?? "")) throw Invalid("purpose.");
@@ -198,24 +205,32 @@ internal sealed partial class ActionService : IDisposable
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("rename takes no delete options or changes.");
+                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null)
+                    throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
                 return deleted;
             case "properties":
-                if (args.Design is not null) throw Invalid("properties takes no design.");
+                if (args.Design is not null || args.Databases is not null) throw Invalid("properties takes no design or databases.");
                 var target = Target(args.Target, "properties");
                 DatabaseAlter.Validate(catalog, args);
                 return target;
+            case "attach":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
+                    throw Invalid("attach takes only databases.");
+                var server = Target(args.Target, "attach");
+                ValidateAttach(args.Databases);
+                return server;
             case "createTable":
-                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null || args.Databases is not null)
+                    throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
                 TableDesignValidator.Validate(designer, args.Design);
                 return database;
@@ -232,6 +247,11 @@ internal sealed partial class ActionService : IDisposable
     };
 
     // --- Requests ---------------------------------------------------------------------------------------------------------
+
+    /// <summary>Whether a describe other than a listing waits on the file system: Attach's Add reads a file the user chose (DBCC
+    /// CHECKPRIMARYFILE) and checks the files it records, so it takes the picker's gate, never one Database Properties or Delete
+    /// Object waits for.</summary>
+    internal static bool OnBrowseGate(ActionDescribeArgs args) => args.Dialog == AttachDialog && args.Attach is not null;
 
     public Task<ActionDescribeResult> DescribeAsync(ActionDescribeArgs args, CancellationToken token)
     {
@@ -252,26 +272,29 @@ internal sealed partial class ActionService : IDisposable
                 error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
         }
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
+        var reading = OnBrowseGate(args);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                AttachDialog => DescribeAttachJobAsync(connection, args.Attach, profile.Linux, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
-            error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
+            error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", browse: reading);
     }
 
     public Task<ActionScriptResult> ScriptAsync(ActionArgs args, CancellationToken token)
     {
         var target = Validate(args, script: true);
-        // A new table's script runs in its database; a database's or a server object's action in master.
-        var database = args.Action == "createTable" ? target.Name! : ScriptDatabase(target);
+        // A new table's script runs in its database; a database's, a server object's or the server's action in master.
+        var database = args.Action == "createTable" ? target.Name! : args.Action == "attach" ? "master" : ScriptDatabase(target);
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: true, Options.ScriptBudget, token,
             (connection, profile, band, job) => args.Action switch
             {
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                "attach" => Task.FromResult(ScriptAttach(args)),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -286,6 +309,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                "attach" => ExecuteAttachJobAsync(connection, args, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));

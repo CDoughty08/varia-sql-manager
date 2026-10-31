@@ -23,7 +23,9 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual([...objectActions])
+    // Attach is SQL Server's box editions' alone (decision 10).
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'attach'))
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach'])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(3)
     for (const row of json.actions) {

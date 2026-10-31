@@ -187,8 +187,21 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// what the table designer needs of a database (tableDesigner), or the server's folders (serverFiles, the server as Target, with Files).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null);
+/// what the table designer needs of a database (tableDesigner), the server's folders (serverFiles, the server as Target, with Files),
+/// or Attach Databases' server facts and, with Attach, one primary data file's database (attachDatabase, the server as Target).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null, AttachDescribeArgsDto? Attach = null);
+/// <summary>Attach Databases' Add: the primary data file to read (a server path of at most 260 UTF-16 units).</summary>
+internal sealed record AttachDescribeArgsDto(string Mdf);
+/// <summary>One database to attach (src/shared/actions/schema.ts AttachDatabaseSpec): Attach As, the owner's login (null: the
+/// attaching login), its files in order (the primary data file first), and whether SQL Server rebuilds the log.</summary>
+internal sealed record AttachDatabaseDto(string Name, List<string> Files, bool RebuildLog, string? Owner = null);
+/// <summary>The server facts Attach Databases opens with (the Owner list, the path separator, the default data folder) and, for
+/// an Add, the primary file's database: its name, version and files as DBCC CHECKPRIMARYFILE records them.</summary>
+internal sealed record AttachServerDto(List<string> Logins, bool LoginsTruncated, string Separator, string? DataPath = null);
+/// <summary>Type data or log; Current is where the file is now (the .mdf as added); Found null when SQL Server 2016 will not tell.</summary>
+internal sealed record AttachFileDto(string Original, string Type, string Current, bool? Found = null);
+internal sealed record AttachDatabaseInfoDto(string Mdf, string DatabaseName, List<AttachFileDto> Files, int? Version = null);
+internal sealed record AttachDescribeDto(AttachServerDto Server, AttachDatabaseInfoDto? Database = null);
 /// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
 /// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
 /// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
@@ -202,9 +215,9 @@ internal sealed record ServerFileEntryDto(string Name, bool Directory, long? Siz
 /// SQL Server 2016 will not tell a login outside sysadmin).</summary>
 internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, createTable (Target the database) Design, attach (Target the server) Databases; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, List<AttachDatabaseDto>? Databases = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -240,7 +253,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null);
+    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, AttachDescribeDto? AttachDatabase = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

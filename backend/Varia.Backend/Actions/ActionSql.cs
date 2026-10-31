@@ -265,7 +265,9 @@ internal static partial class ActionSql
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
         // The table designer's master facts and its describe's collation probes (Designer/DesignerSql).
-        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'"
+        "N'CREATE TABLE'", "N'a'", "N'A'", "N'e'",
+        // Attach Databases' facts and preflight (AttachSql).
+        "'InstanceDefaultDataPath'", "N'CREATE ANY DATABASE'"
     ];
     [GeneratedRegex(@"N?'(?:[^']|'')*'")]
     private static partial Regex LiteralPattern();
@@ -291,6 +293,10 @@ internal static partial class ActionSql
     private static partial Regex BuilderUse();
     /// <summary>The one metadata function the catalog statements use, for the owner of a database a Windows group's member made.</summary>
     private const string OwnerFallback = "SUSER_SNAME(d.owner_sid)";
+    /// <summary>The other: master's database version, the newest an attach can open (Attach Databases compares a primary file's
+    /// with it, since SQL Server's own refusal, 948, is severity 20 and ends the session). Its literals are constant, and master
+    /// takes no lock a waiting attach or restore holds.</summary>
+    public const string MasterVersion = "CONVERT(int, DATABASEPROPERTYEX(N'master', 'Version'))";
 
     /// <summary>LOGINPROPERTY and password hashes, which no batch may name (critic A15), as every catalog lint refuses them.</summary>
     private static IEnumerable<string> SecretUses(string text) => CatalogSql.SecretUses(text);
@@ -395,13 +401,13 @@ internal static partial class ActionSql
     public static List<string> LintCatalog(string text, int band, bool database)
     {
         var problems = new List<string>();
-        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal);
+        var stripped = text.Replace(OwnerFallback, "", StringComparison.Ordinal).Replace(MasterVersion, "", StringComparison.Ordinal);
         foreach (var builtin in CatalogSql.Builtins) if (stripped.Contains(builtin, StringComparison.OrdinalIgnoreCase)) problems.Add("uses " + builtin);
         problems.AddRange(CatalogSql.SecretUses(text));
         if (stripped.Contains("DB_NAME(", StringComparison.OrdinalIgnoreCase) || stripped.Contains("OBJECT_ID(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses a metadata function");
         if (database && text.Contains("HAS_DBACCESS(", StringComparison.OrdinalIgnoreCase)) problems.Add("uses HAS_DBACCESS inside a database");
         foreach (var (token, since) in CatalogSql.Gates) if (band < since && text.Contains(token, StringComparison.Ordinal)) problems.Add("uses " + token + " below band " + since);
-        foreach (Match literal in LiteralPattern().Matches(text))
+        foreach (Match literal in LiteralPattern().Matches(stripped))
             if (!Literals.Contains(literal.Value) && !TypeLetters().IsMatch(literal.Value)) problems.Add("has the literal " + literal.Value);
         if (database && text.Contains("@db", StringComparison.Ordinal)) problems.Add("names @db inside a statement");
         if (Placeholder().IsMatch(text)) problems.Add("uses a DDL name parameter");
@@ -442,6 +448,7 @@ internal static partial class ActionSql
         yield return ("properties call", LintCatalog(DatabaseProperties.InsideCall, ExplorerCatalog.MaxBand, database: false));
         yield return ("properties preflight", LintCatalog(ActionService.DatabasePropertiesPreflight, ExplorerCatalog.MaxBand, database: false));
         foreach (var item in DatabaseAlter.Lint(ActionsCatalog.Current)) yield return item;
+        foreach (var item in AttachSql.LintAll()) yield return item;
     }
 }
 

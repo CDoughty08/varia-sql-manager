@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (184)
+## Commands (185)
 
 ### File
 
@@ -142,6 +142,7 @@ keys it uses are listed below.
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| Attach Database… | `explorer.attachDatabase` | — | — | — | `backendReady && explorerActionAttach == 'enabled'` | Object Explorer context menu › Attach… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
@@ -475,6 +476,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
+| `0_new` | **A**ttach… | `explorer.attachDatabase` | `explorerActionAttach != '' && explorerNode != 'background'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -692,7 +694,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (101)
+## Context keys (102)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -783,6 +785,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionRename` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Rename: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionAttach` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Attach Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

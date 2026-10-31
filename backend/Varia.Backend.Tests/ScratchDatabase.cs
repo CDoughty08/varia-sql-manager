@@ -75,6 +75,15 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
     public string Files => Name + "_files";
+    /// <summary>Attach Databases' database: three files the attach checks detach and attach again (created on demand, by
+    /// CreateAttachAsync). A run that crashes while it is detached leaves its files; the next dispose of the same run attaches
+    /// them again to drop them, but the sweep cannot see a detached database.</summary>
+    public string Attach => Name + "_at";
+    /// <summary>The hostile name the attach checks attach <see cref="Attach"/>'s files as.</summary>
+    public string AttachAs => Name + "_at']";
+    /// <summary>The name of the attach checks' second database, whose file is missing (never created, unless an attach goes wrong).</summary>
+    public string AttachMissing => Name + "_at2";
+    private string[]? attachFiles;
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -85,8 +94,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files)?$")]
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's,
+    // and _at, _at'] and _at2 Attach Databases'.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_at|_at'\]|_at2)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -357,6 +367,28 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked server file picker database.</summary>
     public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
 
+    /// <summary>Creates the marked <see cref="Attach"/> database with a primary data file and a second data file in
+    /// <paramref name="dataFolder"/> and its log in <paramref name="logFolder"/> (each ending with the server's separator), named
+    /// after it; returns the three paths. Dispose attaches them again if they are left detached, so dropping deletes them.</summary>
+    public async Task<string[]> CreateAttachAsync(string dataFolder, string logFolder)
+    {
+        string[] files = [dataFolder + Attach + ".mdf", dataFolder + Attach + "_2.ndf", logFolder + Attach + "_log.ldf"];
+        created.Add(Attach);
+        created.Add(AttachAs);
+        created.Add(AttachMissing);
+        attachFiles = files;
+        await Exec("CREATE DATABASE " + Bracket(Attach) + " ON PRIMARY (NAME = " + Quote(Attach) + ", FILENAME = " + Quote(files[0]) + "), (NAME = " + Quote(Attach + "_2") + ", FILENAME = " + Quote(files[1])
+            + ") LOG ON (NAME = " + Quote(Attach + "_log") + ", FILENAME = " + Quote(files[2]) + ");\nALTER DATABASE " + Bracket(Attach) + " SET RECOVERY SIMPLE;");
+        await Exec("EXEC sys.sp_addextendedproperty @name = N'varia.scratch', @value = 1;", Attach);
+        return files;
+    }
+
+    /// <summary>The attach checks' own SQL for <see cref="Attach"/>'s files: detach the database of <paramref name="name"/>.</summary>
+    public Task<SqlRun> DetachAsync(string name) => Exec("EXEC master.dbo.sp_detach_db @dbname = " + Quote(name) + ", @skipchecks = 'true';");
+
+    /// <summary>The files <see cref="Attach"/> has now (a rebuilt log has a name of SQL Server's choosing), which Dispose attaches.</summary>
+    public void AttachFilesAre(string[] files) => attachFiles = files;
+
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
 
@@ -423,6 +455,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
+        // Attach's files left detached are attached again under their own name, so the drop below deletes them.
+        if (attachFiles is { } files)
+            await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "
+                + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;", "master");
         foreach (var name in created) await Drop(run, name, name != Offline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);

@@ -5,8 +5,8 @@ import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
-  addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  addObjectDialogSteps, attachFileNameShown, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
+  explorerLabel, fieldHint, frameSection, inputShowsEnd, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -691,6 +691,120 @@ try {
   await expect(folderPicker()).toHaveCount(0)
   await expect(explorerTree(page)).toBeFocused()
   console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
+
+  // 5c. Attach Databases (D1d) on the Databases folder: Add… reads an .mdf chosen in Locate Database Files, a data file that
+  // is not found blocks OK until its path is corrected, Script sends the rows, a log file can be removed (the log is then
+  // rebuilt), a database that fails rolls the first back, and OK attaches it and selects it in the folder.
+  const attachDialog = () => page.getByRole('dialog', { name: 'Attach Databases', exact: true })
+  const attachOk = () => attachDialog().getByRole('button', { name: 'OK', exact: true })
+  const databasesGrid = () => attachDialog().getByRole('table', { name: 'Databases to attach:', exact: true })
+  const databaseRow = index => databasesGrid().getByRole('row').nth(index + 1)
+  const detailsGrid = name => attachDialog().getByRole('table', { name: `"${name}" database details:`, exact: true })
+  const dataPicker = () => page.getByRole('dialog', { name: 'Locate Database Files - server-a', exact: true })
+  const salesMdf = stubServerFiles.dataFolder + 'Sales.mdf'
+  const addButton = () => attachDialog().getByRole('button', { name: 'Add…', exact: true })
+  /** Add… through Locate Database Files: typing the file name and Enter, double-clicking it, or Escape (nothing added). */
+  async function addDatabase(file, how = 'enter') {
+    await addButton().click()
+    await expect(dataPicker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.dataFolder)
+    await expect(dataPicker().getByRole('treeitem', { name: file, exact: true })).toBeVisible()
+    if (how === 'double') await dataPicker().getByRole('treeitem', { name: file, exact: true }).dblclick()
+    else if (how === 'escape') await dataPicker().getByLabel('File name', { exact: true }).press('Escape')
+    else {
+      await dataPicker().getByLabel('File name', { exact: true }).fill(file)
+      await dataPicker().getByLabel('File name', { exact: true }).press('Enter')
+    }
+    await expect(dataPicker()).toHaveCount(0)
+    // Focus comes back to Add…, which stays enabled while the file is read, so it never falls out of the modal.
+    await expect(addButton()).toBeFocused()
+  }
+  const openAttach = async () => {
+    expect(await menuOf('server-a', 'Databases')).toEqual(['Attach…', 'Filter Settings…', 'Refresh'])
+    await explorerMenu().getByRole('menuitem', { name: 'Attach…', exact: true }).click(fast)
+    await expect(objectDialogProgress(attachDialog())).toHaveText('Ready')
+  }
+  await openAttach()
+  await expect(attachDialog().getByText('Add a primary data file (.mdf) to attach its database.', { exact: true })).toBeVisible()
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'attachDatabase').map(call => [call.target, call.attach])).toEqual([[{ kind: 'server' }, undefined]])
+  // Escape in the picker returns to Add…, and Escape there closes the dialog.
+  await addDatabase('Sales.mdf', 'escape')
+  await page.keyboard.press('Escape')
+  await expect(attachDialog()).toHaveCount(0)
+  await openAttach()
+  await addDatabase('Sales.mdf', 'double')
+  // Only .mdf files are listed; the database's name comes from the file, and Attach As starts as it.
+  await expect(databaseRow(0).getByRole('cell')).toHaveText([salesMdf, 'Sales', '', /<default>/, '', ''])
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toHaveValue('Sales')
+  await expect(attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true })).toHaveValue('')
+  await expect(detailsGrid('Sales').getByRole('row')).toHaveCount(4)
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell')).toHaveText(['D:\\Old\\Sales_2.ndf', 'Data', /…/, 'Not found'])
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('A data file of Sales is not found. Correct its Current File Path, or remove the database.', { exact: true })).toBeVisible()
+  // Paths keep their file names in view: Sales.mdf and Sales_log.ldf share a long folder, which gives way instead.
+  await expect.poll(() => attachFileNameShown(databaseRow(0).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(1).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => attachFileNameShown(detailsGrid('Sales').getByRole('row').nth(3).getByRole('cell').first())).toBe(true)
+  await expect.poll(() => inputShowsEnd(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Sales_log.ldf', { exact: true }))).toBe(true)
+  // Owner lines up with Attach As: both take the row height.
+  const cellHeights = await Promise.all(['Attach As for ', 'Owner for '].map(async label => (await attachDialog().getByLabel(label + salesMdf, { exact: true }).boundingBox())?.height))
+  expect(cellHeights[0]).toBeGreaterThan(0)
+  expect(cellHeights[1]).toBe(cellHeights[0])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-dark.png') })
+  // A corrected Current File Path waits for its check (OK stays disabled and says why); Enter asks the server whether the file is there.
+  const secondFile = attachDialog().getByLabel('Current File Path for D:\\Old\\Sales_2.ndf', { exact: true })
+  await secondFile.fill(stubServerFiles.dataFolder + 'Sales_2.ndf')
+  await expect(attachOk()).toBeDisabled()
+  await expect(attachDialog().getByText('Press Enter in a Current File Path of Sales, or leave it, to check the file.', { exact: true })).toBeVisible()
+  await secondFile.press('Enter')
+  await expect(detailsGrid('Sales').getByRole('row').nth(2).getByRole('cell').nth(3)).toHaveText('')
+  await expect(attachOk()).toBeEnabled()
+  await expect(secondFile).toBeFocused()
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).at(-1)?.files).toEqual({ purpose: 'database', path: stubServerFiles.dataFolder + 'Sales_2.ndf', exists: true })
+  await attachDialog().getByLabel('Owner for ' + salesMdf, { exact: true }).selectOption('app_owner')
+  await attachDialog().getByRole('button', { name: 'Script', exact: true }).click()
+  const salesFiles = ['Sales.mdf', 'Sales_2.ndf', 'Sales_log.ldf'].map(name => stubServerFiles.dataFolder + name)
+  await expect.poll(async () => (await stubCalls('actions.script')).filter(call => call.action === 'attach').map(call => call.databases))
+    .toEqual([[{ name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }]])
+  await expect(attachDialog()).toBeVisible()
+  // A second database whose log is not found: removing the log rebuilds it, and OK fails at Hr, so Sales is rolled back.
+  await addDatabase('Hr.mdf')
+  await expect(databasesGrid().getByRole('row')).toHaveCount(3)
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(3)
+  // Under forced colours the selected row (Hr, which Remove acts on) is Highlight, and a file that is not found keeps a mark.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const cellBackground = row => row.getByRole('cell').first().evaluate(cell => getComputedStyle(cell).backgroundColor)
+  await expect.poll(async () => await cellBackground(databaseRow(1)) !== await cellBackground(databaseRow(0))).toBe(true)
+  expect(await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).evaluate(input => getComputedStyle(input).outlineStyle)).toBe('dashed')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-forced.png') })
+  await page.emulateMedia({ forcedColors: 'none' })
+  await attachDialog().getByLabel('Current File Path for D:\\Old\\Hr_log.ldf', { exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(attachDialog().getByRole('button', { name: 'Remove the selected log file', exact: true })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(detailsGrid('Hr').getByRole('row')).toHaveCount(2)
+  // The removed row's place is taken, and so is focus: it never drops out of the modal.
+  await expect(attachDialog().getByLabel('Current File Path for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true })).toBeFocused()
+  await expect(attachDialog().getByText(/^No log file is listed, so SQL Server will rebuild the log \(FOR ATTACH_REBUILD_LOG\)\./)).toBeVisible()
+  await attachOk().click()
+  await expect(objectDialogProgress(attachDialog())).toHaveText('Error')
+  await expect(databaseRow(0).getByRole('cell').nth(4)).toHaveText('Rolled Back')
+  await expect(databaseRow(1).getByRole('cell').nth(4)).toHaveText('Error')
+  await expect(databaseRow(1).getByRole('cell').nth(5)).toHaveText(/^Msg 5120: Unable to open the physical file/)
+  // The whole Rolled Back explanation is shown (it wraps), not only a tooltip.
+  await expect(databaseRow(0).getByRole('cell').nth(5)).toHaveText('The attach succeeded but was rolled back because another database failed to attach.')
+  expect(await databaseRow(0).getByRole('cell').nth(5).evaluate(cell => cell.scrollWidth <= cell.clientWidth && cell.scrollHeight <= cell.clientHeight)).toBe(true)
+  expect((await stubCalls('actions.execute')).filter(call => call.action === 'attach').at(-1)?.databases).toEqual([
+    { name: 'Sales', owner: 'app_owner', files: salesFiles, rebuildLog: false }, { name: 'Hr', files: [stubServerFiles.dataFolder + 'Hr.mdf'], rebuildLog: true }])
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-attach-failed-dark.png') })
+  await attachDialog().getByLabel('Attach As for ' + stubServerFiles.dataFolder + 'Hr.mdf', { exact: true }).focus()
+  await attachDialog().getByRole('button', { name: 'Remove the selected database', exact: true }).click()
+  await expect(databasesGrid().getByRole('row')).toHaveCount(2)
+  await expect(attachDialog().getByLabel('Attach As for ' + salesMdf, { exact: true })).toBeFocused()
+  await attachOk().click()
+  await expect(attachDialog()).toHaveCount(0)
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
+  console.log('Object action checks: Attach Databases reads an .mdf chosen in Locate Database Files (Enter, double-click or Escape, focus back on Add…), keeps file names in view, blocks OK while a data file is not found or a typed one unchecked, checks a corrected path on Enter, marks the selection under forced colours, keeps focus in the dialog after Remove, scripts its rows, rebuilds a removed log, shows a rolled-back attach per row, and selects the attached database.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

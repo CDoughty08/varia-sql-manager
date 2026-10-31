@@ -26,7 +26,8 @@ import { kindSpecs, nodeKinds, type NodeKind, type NodeSubtype } from '../src/sh
 import { scriptDestinations } from '../src/shared/scripting/catalog'
 
 const every = (kind: NodeKind) => [undefined, ...kindSpecs[kind].subtypes ?? []] as (NodeSubtype | undefined)[]
-const states = (kind: NodeKind, subtype?: NodeSubtype) => objectActions.map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
+// The row actions' states (a folder's actions, Attach, are never a row's).
+const states = (kind: NodeKind, subtype?: NodeSubtype) => objectActions.filter(action => !objectActionSpecs[action].folder).map(action => actionMenuState({ kind, subtype })[action] || '-').join(' ')
 
 describe('object action catalogue', () => {
   it('declares rows only for kinds and subtypes Object Explorer has', () => {
@@ -37,8 +38,8 @@ describe('object action catalogue', () => {
     }
     expect(Object.keys(actionKindSpecs).sort()).toEqual(['database', 'function', 'procedure', 'table', 'view'])
     expect(actionRow('table', 'clr' as NodeSubtype)).toBeUndefined()
-    expect(actionMenuState({ kind: 'folder' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '' })
-    expect(actionMenuState({ kind: 'login' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '' })
+    expect(actionMenuState({ kind: 'folder' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '', attach: '' })
+    expect(actionMenuState({ kind: 'login' })).toEqual({ selectTop: '', rename: '', delete: '', properties: '', attach: '' })
   })
   it('offers SSMS\'s actions per kind, greying SQL Server\'s own objects and the subtypes that need more handling', () => {
     expect(states('table')).toBe('enabled enabled enabled -')
@@ -60,8 +61,8 @@ describe('object action catalogue', () => {
     expect(actionOffered('database', 'rename') && actionOffered('function', 'delete') && !actionOffered('login', 'delete') && !actionOffered('procedure', 'selectTop')).toBe(true)
   })
   it('publishes one context key per action', () => {
-    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties'])
-    expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({ explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled' })
+    expect(objectActions.map(actionContextKey)).toEqual(['explorerActionSelectTop', 'explorerActionRename', 'explorerActionDelete', 'explorerActionProperties', 'explorerActionAttach'])
+    expect(actionContextValues(actionMenuState({ kind: 'database', subtype: 'snapshot' }))).toEqual({ explorerActionSelectTop: '', explorerActionRename: 'disabled', explorerActionDelete: 'enabled', explorerActionProperties: 'enabled', explorerActionAttach: '' })
   })
   it('generates the four commands, keeping explorer.selectTopRows, with valid keys, preconditions and placements', () => {
     const entries = actionCommandEntries()
@@ -129,7 +130,7 @@ describe('object action catalogue', () => {
     expect(ids.slice(at('explorer.refresh'))).toEqual(['explorer.refresh', '---', 'explorer.properties', 'ssis.folderProperties', 'ssis.projectProperties', 'ssis.packageProperties', 'ssis.environmentProperties'])
   })
   it('declares Delete Object and Database Properties with SSMS\'s titles, pages and Script button wording', () => {
-    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties'])
+    expect(dialogIds).toEqual(['deleteObject', 'databaseProperties', 'attachDatabase'])
     expect(dialogSpecs.deleteObject).toEqual({ title: 'Delete Object', surface: 'modal', titleFormat: 'plain', size: 'compact', action: 'delete', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
     expect(dialogSpecs.databaseProperties).toMatchObject({ title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties' })
     expect(dialogSpecs.databaseProperties.pages.map(page => [page.id, page.title, page.icon])).toEqual([['general', 'General', 'settings-gear'], ['files', 'Files', 'settings-gear'],
@@ -137,13 +138,13 @@ describe('object action catalogue', () => {
     expect([dialogTitle('databaseProperties', 'AppData'), dialogTitle('deleteObject', 'dbo.Orders')]).toEqual(['Database Properties - AppData', 'Delete Object'])
     for (const dialog of dialogIds) expect(objectActionSpecs[dialogSpecs[dialog].action].dialog).toBe(dialog)
     // Delete Object is a confirmation, so it stays modal; Database Properties opens as a document (U1 D2).
-    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject'])
+    expect(dialogIds.filter(isModalDialog)).toEqual(['deleteObject', 'attachDatabase'])
     expect(scriptDestinations.map(destination => scriptActionTitles[destination])).toEqual(['Script Action to New Query Window', 'Script Action to File', 'Script Action to Clipboard'])
     expect(unknownOutcomeMessage).toBe('The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check.')
   })
   it('derives the action command, modal dialog and page ids from the catalogue, with registry icons on every page', () => {
-    expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties'>()
-    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject'>()
+    expectTypeOf<ActionCommandId>().toEqualTypeOf<'explorer.selectTopRows' | 'explorer.rename' | 'explorer.delete' | 'explorer.properties' | 'explorer.attachDatabase'>()
+    expectTypeOf<ModalDialogId>().toEqualTypeOf<'deleteObject' | 'attachDatabase'>()
     expectTypeOf<PageId>().toEqualTypeOf<'general' | 'files' | 'filegroups' | 'options'>()
     expect(pageIds).toEqual(['general', 'files', 'filegroups', 'options'])
     for (const dialog of dialogIds) for (const page of dialogSpecs[dialog].pages) {
@@ -199,6 +200,23 @@ describe('object action catalogue', () => {
     for (const engine of ['box', 'managedInstance'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
     expect(actionMenuState({ kind: 'table', engine: 'cloud' })).toEqual({ ...actionMenuState({ kind: 'table' }), rename: '', delete: '' })
   })
+  it('offers the actions of a folder on that folder alone, on the engines they serve, and never on rows', () => {
+    const none = actionMenuState(undefined)
+    // SSMS: Databases › Attach…, on SQL Server's box editions only (decision 10: not on Managed Instance or Azure SQL Database).
+    expect(objectActionSpecs.attach).toMatchObject({ title: 'Attach Database…', menuTitle: 'Attach…', mnemonic: 'a', group: '0_new', order: 2, folder: 'databases', engines: ['box'], dialog: 'attachDatabase' })
+    expect(actionMenuState({ kind: 'folder', folder: 'databases', engine: 'box' })).toEqual({ ...none, attach: 'enabled' })
+    expect(actionMenuState({ kind: 'folder', folder: 'databases' })).toEqual({ ...none, attach: 'enabled' })
+    for (const engine of ['managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'folder', folder: 'databases', engine }), engine).toEqual(none)
+    for (const folder of ['tables', 'systemDatabases', 'logins'] as const) expect(actionMenuState({ kind: 'folder', folder, engine: 'box' }), folder).toEqual(none)
+    // A database row never offers the folder's action, whatever its engine.
+    expect(actionMenuState({ kind: 'database', engine: 'box' }).attach).toBe('')
+    expect(actionMenuState({ kind: 'server', engine: 'box' }).attach).toBe('')
+    // A test folder action follows its own engines.
+    expect(actionMenuState({ kind: 'folder', folder: 'tables', engine: 'cloud' }, { actions: { attach: { folder: 'tables', engines: ['cloud'] } } }).attach).toBe('enabled')
+    expect(actionCommandEntries()['explorer.attachDatabase']).toMatchObject({ title: 'Attach Database…', icon: 'plug', precondition: "backendReady && explorerActionAttach == 'enabled'",
+      menus: [{ menu: 'explorer.context', group: '0_new', order: 2, title: 'Attach…', mnemonic: 'a', when: "explorerActionAttach != '' && explorerNode != 'background'" }] })
+    expect(dialogSpecs.attachDatabase).toEqual({ title: 'Attach Databases', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'attach', pages: [{ id: 'general', title: 'General', icon: 'settings-gear' }] })
+  })
   it('composes the menu state from the status overlay, the database rules and the engine gate, in that order', () => {
     // As D1b and D3a will declare them: Delete for box servers only, an overlay for unavailable databases, and a rule.
     const actions = { delete: { engines: ['box'] } } as const
@@ -206,7 +224,7 @@ describe('object action catalogue', () => {
     const rules: DatabaseActionRule[] = [{ action: 'properties', states: ['offline'], hide: true, reason: 'Offline.' }, { action: 'delete', states: ['restoring'], reason: 'Restoring.' }]
     const sources = { actions, kinds, rules }
     const online = { state: 0, userAccess: 0, readOnly: false, standby: false }
-    expect(actionMenuState({ kind: 'database' }, sources)).toEqual({ selectTop: '', rename: 'enabled', delete: 'enabled', properties: 'enabled' })
+    expect(actionMenuState({ kind: 'database' }, sources)).toEqual({ selectTop: '', rename: 'enabled', delete: 'enabled', properties: 'enabled', attach: '' })
     // The engine gate: hidden on Managed Instance and Azure SQL Database, kept on a box and where the engine is unknown.
     expect(actionMenuState({ kind: 'database', engine: 'managedInstance' }, sources).delete).toBe('')
     expect(actionMenuState({ kind: 'database', engine: 'cloud' }, sources).delete).toBe('')
@@ -219,7 +237,7 @@ describe('object action catalogue', () => {
     // The rules read only a database's runtime; another kind's is ignored.
     expect(actionMenuState({ kind: 'table', database: { ...online, state: 6 } }, { rules })).toEqual(actionMenuState({ kind: 'table' }))
     // The status overlay applies before the rules and the gate.
-    expect(actionMenuState({ kind: 'database', status: 'readOnly', engine: 'cloud', database: { ...online, state: 6 } }, sources)).toEqual({ selectTop: '', rename: 'disabled', delete: '', properties: '' })
+    expect(actionMenuState({ kind: 'database', status: 'readOnly', engine: 'cloud', database: { ...online, state: 6 } }, sources)).toEqual({ selectTop: '', rename: 'disabled', delete: '', properties: '', attach: '' })
   })
   it('takes a live sample over the listing only when it is newer, and reads a newer complete sample without a row as plainly online', () => {
     const listed = { state: 6, userAccess: 0, readOnly: false, standby: false }

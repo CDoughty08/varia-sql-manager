@@ -47,7 +47,9 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
   browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
   browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
-  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates'
+  browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
+  attachDatabases: 'Databases one Attach Databases OK attaches',
+  attachFiles: 'Files one database to attach lists (a primary file that records more is refused)'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -145,7 +147,7 @@ function longRunDocs(): string[] {
     '',
     table(['Kind', 'Named as'], longRunKinds.map(kind => [code(kind), longRunSubjects[kind]])),
     '',
-    'Create Catalog is the only long run so far; the others are reserved for the actions that will use them.',
+    'Create Catalog and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.',
     '',
     'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
     'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
@@ -154,13 +156,16 @@ function longRunDocs(): string[] {
   ]
 }
 
+/** The actions object rows offer; a folder's (Attach) are listed under Folder actions. */
+const rowActions = objectActions.filter(action => !objectActionSpecs[action].folder)
+const folderActions = objectActions.filter(action => objectActionSpecs[action].folder)
 /** One line per kind and run of subtypes that act alike. */
 function kindRows(): string[][] {
   return nodeKinds.flatMap(kind => {
     if (!actionKindSpecs[kind]) return []
     const groups = new Map<string, string[]>()
     for (const subtype of [undefined, ...kindSpecs[kind].subtypes ?? []] as (NodeSubtype | undefined)[]) {
-      const states = objectActions.map(action => mark(actionRow(kind, subtype)?.[action])).join('\n')
+      const states = rowActions.map(action => mark(actionRow(kind, subtype)?.[action])).join('\n')
       groups.set(states, [...groups.get(states) ?? [], subtype ? code(subtype) : 'none'])
     }
     return [...groups].map(([states, subtypes]) => [code(kind), subtypes.join(', '), ...states.split('\n')])
@@ -180,7 +185,7 @@ export function renderObjectActionsDocs(): string {
     '',
     '<!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->',
     '',
-    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete and Properties. Which kinds and subtypes offer each is',
+    'Object Explorer\'s actions on objects: Select Top 1000 Rows, Rename, Delete and Properties, and the Databases folder\'s Attach. Which kinds, subtypes and folders offer each is',
     'data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`',
     'and re-derives the subtype in the action\'s own connection before any DDL runs.',
     '',
@@ -207,7 +212,15 @@ export function renderObjectActionsDocs(): string {
     '',
     '✓ enabled, ○ shown greyed, – not offered.',
     '',
-    table(['Kind', 'Subtypes', ...objectActions.map(action => objectActionSpecs[action].title)], kindRows()),
+    table(['Kind', 'Subtypes', ...rowActions.map(action => objectActionSpecs[action].title)], kindRows()),
+    '',
+    '## Folder actions',
+    '',
+    'These are offered on an Object Explorer folder instead of object rows; their target is the folder\'s server (`{ kind: \'server\' }`),',
+    'and the backend refuses any other target.',
+    '',
+    table(['Action', 'Folder', 'Runs on'], folderActions.map(action => [objectActionSpecs[action].title, code(objectActionSpecs[action].folder ?? ''),
+      objectActionSpecs[action].engines.map(engine => engineNames[engine]).join(', ')])),
     '',
     ...narrowingDocs(),
     '## Dialogs',
@@ -242,6 +255,7 @@ export function renderObjectActionsDocs(): string {
     ...promptDocs(),
     ...longRunDocs(),
     ...serverFilesDocs(),
+    ...attachDocs(),
     ...databasePropertiesDocs(),
     '## SQL',
     '',
@@ -367,6 +381,52 @@ function serverFilesDocs(): string[] {
     '',
     'The picker\'s titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of',
     'type, File name, Folder name) are SSMS\'s as recalled, not yet checked against SSMS 22.',
+    ''
+  ]
+}
+
+/** Attach Databases (D1d): what Add reads, what OK runs, and how a later failure rolls back. */
+function attachDocs(): string[] {
+  return [
+    '## Attach Databases',
+    '',
+    `Databases › Attach… opens ${dialogSpecs.attachDatabase.title}, a modal dialog, on SQL Server's box editions only (Managed Instance and Azure SQL`,
+    'Database have no attach). It opens with the server\'s logins for Owner and its default data folder; Add… opens the server',
+    `file picker (Locate Database Files, ${serverFileTypesLabel('database')}), then \`actions.describe\` with \`attachDatabase\` and \`attach: { mdf }\``,
+    'reads the file with `DBCC CHECKPRIMARYFILE (@mdf, 0)`, `(@mdf, 2)` and `(@mdf, 3)`: whether it is a primary data file, its',
+    'database\'s name and version, and the files it records (a log by status 0x40). The path is a bound parameter; nothing',
+    'is built as text, and the result sets are read in the backend. Each recorded file on the server\'s own disks is checked as',
+    'the picker checks a path (`sys.dm_os_file_exists`, or `xp_fileexist` on SQL Server 2016, which answers only sysadmin); a',
+    'share or device path the file records is never probed, since SQL Server\'s service account would sign in to that host, so',
+    'its existence is unknown until the user checks it or OK runs. The .mdf\'s own row takes the path that was added. A file',
+    'that is in use (an attached database\'s) cannot be read, and the error says so. A database newer than the server (its',
+    'version above master\'s, `DATABASEPROPERTYEX(N\'master\', \'Version\')`, the catalog lint\'s one exception) is refused with',
+    '`NOT_SUPPORTED`: SQL Server\'s own refusal, 948, is severity 20 and ends the session. Add\'s read waits on the file system,',
+    'so it takes the picker\'s gate, not the describe gates.',
+    '',
+    'Each database row has Attach As (its database name by default), Owner (`<default>`: the attaching login), Status and',
+    'Message; its details list Original File Name, File Type, Current File Path (typed, or chosen with "…", and checked again',
+    'on Enter or when the field is left) and Message ("Not found"). OK is disabled while a data file is not found or a typed',
+    'one is not yet checked, and while Add… reads a file or a path is checked. Remove takes a log file out: with every log file',
+    'removed, SQL Server rebuilds the log (`FOR ATTACH_REBUILD_LOG`), which breaks the log backup chain, needs the database to',
+    'have been shut down cleanly, and needs every data file.',
+    '',
+    'OK first checks, in the action\'s connection, that no database has the name, that the owner\'s login exists, that the login',
+    'may create databases, that master\'s compatibility level is 130 or more (OPENJSON), and that the primary file is not newer',
+    'than the server (its version read again). Then, per database, "Attach the',
+    'database" (`CREATE DATABASE [name] ON ( FILENAME = N\'…\' ), … FOR ATTACH`, or `FOR ATTACH_REBUILD_LOG`), and with an owner',
+    '"Set the database owner" (`ALTER AUTHORIZATION ON DATABASE::[name] TO [login]` in the database, as Database Properties',
+    'writes it; SSMS uses the deprecated `sp_changedbowner`). SQL Server builds the CREATE DATABASE from two parameters:',
+    'the name, through `QUOTENAME`, and one JSON array of paths, each quoted on the server (`REPLACE` of `\'` in a binary collation), joined in order',
+    'without `STRING_AGG` (SQL Server 2016), and the keyword chosen from two constant batches. When a later step fails or Stop',
+    'ends one, "Detach the database again" (`sp_detach_db` with `@skipchecks = \'true\'`) undoes each attach this OK made',
+    '(and one Stop reached after SQL Server finished it, found by its name and primary file),',
+    'newest first, so its row reads Rolled Back, as SSMS\'s does. Script Action writes the same statements and runs nothing.',
+    'An attach is a long run: while it runs, closing the window, disconnecting its server and Restart SQL Backend are refused.',
+    '',
+    'Its labels (Databases to attach, MDF File Location, Database Name, Attach As, Owner, Status, Message, Add…, Remove,',
+    '"<name>" database details, Original File Name, File Type, Current File Path, Not found) are SSMS\'s as recalled, not yet',
+    'checked against SSMS 22.',
     ''
   ]
 }
