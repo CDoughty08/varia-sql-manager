@@ -14,6 +14,7 @@ import { contextRecord } from '../src/shared/commands/context-keys'
 import { resolveMenu, type ResolvedMenuItem } from '../src/renderer/src/menus/resolve'
 import type { MenuEntry, MenuId } from '../src/shared/commands/menus'
 import { maxScriptCharacters } from '../src/main/validation'
+import { serverFilesDeadlineMs } from '../src/shared/ipc/methods'
 import { renderObjectActionsDocs } from '../src/shared/actions/docs'
 import { commandDescriptor, commandIds, isCommandId } from '../src/shared/commands/catalog'
 import { isIconId } from '../src/shared/icons'
@@ -255,15 +256,18 @@ describe('object action catalogue', () => {
       files: 1_024, filegroups: 256, logins: 1_024, collations: 8_192, statements: 512, scriptChars: 1_000_000 })
     // A scripted action always fits a query window, so Script Action to New Query Window can always run it.
     expect(actionLimits.scriptChars).toBeLessThanOrEqual(maxScriptCharacters)
-    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE'])
+    expect(actionErrorCodes.filter(code => !actionErrorRetryable[code])).toEqual(['NOT_FOUND', 'NOT_SUPPORTED', 'DEPENDENTS', 'NAME_IN_USE', 'PATH_NOT_FOUND'])
+    // The server file picker: a path fits sys.master_files.physical_name, and main's 15 s deadline outlasts the backend's budget.
+    expect([actionLimits.serverPath, actionLimits.browseEntries, actionLimits.browseMs]).toEqual([260, 2_000, 10_000])
+    expect(actionLimits.browseMs).toBeLessThan(serverFilesDeadlineMs)
   })
   it('lists only error codes the backend produces, so a renderer branch on one can be reached', () => {
-    const backend = ['ActionService.cs', 'ActionErrors.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
+    const backend = ['ActionService.cs', 'ActionErrors.cs', 'ServerFiles.cs'].map(name => readFileSync(join('backend', 'Varia.Backend', 'Actions', name), 'utf8')).join('\n')
     // Each code appears as a C# string literal: ActionErrors.Numbers, an Error(...) or Create(...) call, or (AUTH_*) the sign-in's codes.
     expect(actionErrorCodes.filter(code => !backend.includes(`"${code}"`))).toEqual([])
   })
   it('loads in plain Node 24, as the fake backend and scripts load the other catalogues', () => {
-    const files = ['catalog.ts', 'database.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))
+    const files = ['catalog.ts', 'database.ts', 'files.ts', 'schema.ts', 'docs.ts'].map(name => join('src', 'shared', 'actions', name))
     for (const file of files) expect(() => stripTypeScriptTypes(readFileSync(file, 'utf8'), { mode: 'strip' }), file).not.toThrow()
     const script = files.map(file => `await import(${JSON.stringify(pathToFileURL(file).href)})`).join(';')
     const result = spawnSync(process.execPath, ['--input-type=module', '--disable-warning=ExperimentalWarning', '-e', script], { encoding: 'utf8' })

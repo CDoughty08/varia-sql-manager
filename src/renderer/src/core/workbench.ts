@@ -50,6 +50,7 @@ import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
+import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
 import { actionsContribution } from '../contributions/actions'
@@ -138,6 +139,8 @@ export interface Workbench extends Disposable {
   readonly actions: ObjectActionService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
+  /** The server file picker (Locate Backup File, Locate Database Files, Locate Folder) that a dialog's "…" button opens. */
+  readonly serverFiles: ServerFilePickerService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
   /** The long runs (Create Catalog, later a restore): they refuse a window close, a Disconnect of their server and Restart. */
@@ -213,6 +216,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const longRuns = new LongRunService({ api })
+  const serverFiles = new ServerFilePickerService({ api, connections })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
@@ -321,6 +325,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     scripting,
     actions,
     dialogs,
+    serverFiles,
     ssisCatalog,
     longRuns,
     designers,
@@ -368,6 +373,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       actions.dispose()
       dialogs.dispose()
+      serverFiles.dispose()
       ssisCatalog.dispose()
       longRuns.dispose()
       connections.dispose()

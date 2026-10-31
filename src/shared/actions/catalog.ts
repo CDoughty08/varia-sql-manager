@@ -368,9 +368,41 @@ export const scriptActionTitles: { readonly [D in ScriptDestination]: string } =
   newQuery: 'Script Action to New Query Window', file: 'Script Action to File', clipboard: 'Script Action to Clipboard'
 }
 
+/**
+ * The server file picker (SSMS's Locate Backup File, Locate Database Files and Locate Folder): `actions.describe` with this
+ * id, the server as the target and a `files` member lists the server's drives and default folders, or one folder. Paths
+ * are the server's, never the client's, and the listing's type filter runs in the backend over constant SQL.
+ */
+export const serverFilesDescribeId = 'serverFiles'
+export const serverFilePurposes = ['backup', 'database', 'log', 'folder'] as const
+export type ServerFilePurpose = typeof serverFilePurposes[number]
+export interface ServerFilePurposeSpec {
+  /** The picker's title, before " - <server>" (SSMS's, recalled). */
+  readonly title: string
+  /** Files of type's first entry, with the extensions in brackets; a folder picker lists folders only. */
+  readonly types?: string
+  /** Lower-case extensions, dot included, that the type filter keeps (at most two: the listing's SQL binds @e1 and @e2). */
+  readonly extensions: readonly string[]
+}
+export const serverFilePurposeSpecs: { readonly [P in ServerFilePurpose]: ServerFilePurposeSpec } = {
+  backup: { title: 'Locate Backup File', types: 'Backup Files', extensions: ['.bak', '.trn'] },
+  database: { title: 'Locate Database Files', types: 'Database Data Files', extensions: ['.mdf'] },
+  log: { title: 'Locate Database Files', types: 'Database Log Files', extensions: ['.ldf'] },
+  folder: { title: 'Locate Folder', extensions: [] }
+}
+/** Files of type's second entry, which lists every file. */
+export const allFilesType = 'All Files(*.*)'
+/** Files of type's entry for a purpose, as SSMS words it: "Backup Files(*.bak;*.trn)". */
+export const serverFileTypesLabel = (purpose: ServerFilePurpose): string | undefined => {
+  const spec = serverFilePurposeSpecs[purpose]
+  return spec.types && `${spec.types}(${spec.extensions.map(extension => '*' + extension).join(';')})`
+}
+
 /** Why an action failed, as a value; `retryable` says whether trying again can help. */
 export const actionErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
+  // The server file picker's folder does not exist, or the server's account cannot see it.
+  PATH_NOT_FOUND: false,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,
@@ -398,7 +430,12 @@ export const actionLimits = {
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
-  cleanupMs: 10_000
+  cleanupMs: 10_000,
+  /** The server file picker: UTF-16 units in a server path (sys.master_files.physical_name is nvarchar(260)), entries one folder
+   *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
+   *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
+   *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
+  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1
 } as const
 
 /** Whether an action runs on a server of this engine. */
@@ -448,6 +485,7 @@ export function actionsCatalogJson(): string {
     `  "ownerNotOn": ${line(ownerNotOn)},`,
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
+    `  "serverFiles": ${block(serverFilePurposes.map(purpose => ({ purpose, extensions: serverFilePurposeSpecs[purpose].extensions })))},`,
     '  "version": 3',
     '}',
     ''
