@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineScript, propertiesScript, scriptText, stubSessions } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, detachFiles, detachScript, installActionsStub, offlineScript, propertiesScript, scriptText, stubSessions } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
-  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
+  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -101,9 +101,9 @@ try {
   await closeMenu()
   expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
-  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' Take Offline and Bring Online are greyed.
+  // SSMS offers Properties on its own databases too: only Rename, Delete and Tasks' Detach, Take Offline and Bring Online are greyed.
   expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Tasks', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  // Tasks holds only Take Offline and Bring Online so far, both greyed there, so the submenu is greyed too.
+  // Tasks holds only Detach, Take Offline and Bring Online so far, all greyed there, so the submenu is greyed too.
   expect(await disabled()).toEqual(['Tasks', 'Rename', 'Delete'])
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
@@ -667,6 +667,66 @@ try {
   await expect(onlineDialog()).toHaveCount(0)
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(0)
   console.log('Object action checks: Tasks › Take Offline lists the sessions and open transactions, holds OK until Drop All Active Connections or Check Again, scripts SET OFFLINE, Stops a wait and stays open on Success; Bring Online runs as it opens.')
+
+  // 9. Tasks › Detach… (D3b). Detach Database lists AppData with Drop Connections and Update Statistics (both unchecked, as SSMS
+  // opens it) and the files that stay on the server; OK waits for Drop Connections while sessions are connected. Script Action
+  // shows SINGLE_USER and sp_detach_db's @skipchecks; Success stays open on its steps, AppData leaves Databases, and a toast says
+  // its files stay on the server, with Copy paths.
+  const detachDialog = () => page.getByRole('dialog', { name: 'Detach Database - AppData', exact: true })
+  const detachRow = () => detachDialog().getByRole('grid', { name: 'Databases to detach', exact: true }).locator('tbody td')
+  const detachDrop = () => detachDialog().getByLabel('Drop Connections', { exact: true })
+  const detachStatistics = () => detachDialog().getByLabel('Update Statistics', { exact: true })
+  const filePaths = detachFiles.map(file => file.path)
+  await application.evaluate((_electron, sessions) => { globalThis.variaStub.sessions = sessions }, stubSessions)
+  await task('Detach…', ['Bring Online'])
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Ready')
+  await expect(detachRow()).toHaveText(['AppData', '', '', 'Not ready', '2 active connections (1 with an open transaction)'])
+  await expect(detachDrop()).not.toBeChecked()
+  await expect(detachStatistics()).not.toBeChecked()
+  await expect(detachDialog().getByRole('note').first()).toHaveText('Drop Connections rolls back the open transaction of 1 session.')
+  await expect(detachDialog().getByRole('grid', { name: 'Files that stay on the server', exact: true }).locator('tbody tr'))
+    .toHaveText(detachFiles.map(file => file.name + { rows: 'ROWS Data', log: 'LOG' }[file.type] + file.path))
+  await expect(okButton(detachDialog())).toBeDisabled()
+  await expect(okButton(detachDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop Connections, or Check Again once they leave.')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-detach-dark.png') })
+  await detachDrop().check()
+  await detachStatistics().check()
+  await expect(okButton(detachDialog())).toBeEnabled()
+  await expect(detachRow().nth(3)).toHaveText('Ready')
+  await detachDialog().getByRole('button', { name: 'Script options', exact: true }).click()
+  await detachDialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
+  await expect.poll(clipboard).toBe(detachScript(true, true))
+  expect((await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'detach', target: { kind: 'database', name: 'AppData' }, dropConnections: true, updateStatistics: true })
+  // The dialog's Copy paths copies one path per line.
+  await detachDialog().getByRole('button', { name: 'Copy paths', exact: true }).click()
+  await expect.poll(clipboard).toBe(filePaths.join('\n'))
+  await detachStatistics().uncheck()
+  await okButton(detachDialog()).click()
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Success')
+  await expect(detachRow()).toHaveText(['AppData', '', '', 'Success', 'The database was detached.'])
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'detach', dropConnections: true, updateStatistics: false, identity: { id: 7, created: '2026-01-02T03:04:05.000' } })
+  expect((await stubCalls('actions.execute')).at(-1)).not.toHaveProperty('detachOffline')
+  await expect(okButton(detachDialog())).toHaveCount(0)
+  await expect(detachDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  const detachedToast = toasts(page).filter({ hasText: 'AppData was detached.' })
+  await expect(toastMessage(detachedToast)).toContainText('AppData was detached. Its 2 files stay on the server.')
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-detach-success-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(detachDialog()).toHaveCount(0)
+  await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(0)
+  await application.evaluate(({ clipboard }) => clipboard.writeText(''))
+  await detachedToast.getByRole('button', { name: 'Copy paths', exact: true }).click()
+  await expect.poll(clipboard).toBe(filePaths.join('\n'))
+  // Attached again (as another tool would): Refresh on Databases lists it once more for the checks below.
+  await application.evaluate(() => { globalThis.variaStub.detached = false })
+  await expect(async () => {
+    if (await openMenus().count()) await closeMenu()
+    await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
+    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+    await explorerMenu().getByRole('menuitem', { name: 'Refresh', exact: true }).click(fast)
+    await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b/ })).toHaveCount(1, { timeout: 2000 })
+  }).toPass()
+  console.log('Object action checks: Tasks › Detach… lists the sessions and the files that stay, holds OK until Drop Connections, scripts SINGLE_USER and sp_detach_db, stays open on Success, removes AppData and toasts with Copy paths.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

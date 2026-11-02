@@ -190,9 +190,11 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// or what the table designer needs of a database (tableDesigner).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, takeOffline DropConnections, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, takeOffline DropConnections, detach DropConnections, UpdateStatistics and DetachOffline, createTable
+/// (Target the database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, bool? DropConnections = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, bool? DropConnections = null,
+    bool? UpdateStatistics = null, bool? DetachOffline = null);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -231,9 +233,15 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
 internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? Program, string? Host, int OpenTransactions);
 /// <summary>Take Database Offline's and Bring Database Online's row (src/shared/actions/schema.ts DatabaseStateModel): the database read,
 /// its sys.databases state, user_access, is_read_only and is_in_standby, and the sessions in it without the backend's own pooled
-/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.</summary>
+/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.
+/// Detach adds the files that stay on the server (at most the catalogue's detachFiles) and ConfirmOffline: the database is offline on
+/// a Windows server, so OK waits for Detach while offline.</summary>
 internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
-    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
+    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings, List<DatabaseFileRefDto>? Files = null, bool? FilesTruncated = null,
+    bool? ConfirmOffline = null);
+/// <summary>A database file by id (src/shared/actions/schema.ts DatabaseFileRef): Type rows, log or filestream; Path as the server
+/// names it (at most the catalogue's filePath characters), never logged.</summary>
+internal sealed record DatabaseFileRefDto(int FileId, string Name, string Type, string Path);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
@@ -251,7 +259,8 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 /// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
 /// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
 internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+/// <summary>FilesKept: Detach's files left on the server once the database was detached (at most the catalogue's detachFiles).</summary>
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, List<DatabaseFileRefDto>? FilesKept = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

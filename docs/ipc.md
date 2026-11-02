@@ -502,6 +502,26 @@ adds a message when the database is still SINGLE_USER or RESTRICTED_USER, read u
 completed (left out if it cannot be read, so a late Stop never turns the success into `CANCELLED`). SQL Server's error 5011 (no ALTER on the database)
 answers `PERMISSION_DENIED`.
 
+**Detach Database** (D3b) uses the same three methods, with no new method. `actions.describe { …, dialog: 'detachDatabase',
+target: { kind: 'database', name } }` (a user database, SQL Server only: Azure SQL Database and Managed Instance answer
+`NOT_SUPPORTED` before any connection opens) answers the same `databaseState` as Take Offline's, read after closing the
+backend's own idle pooled connections in it, plus `files: [{ fileId, name, type: 'rows' | 'log' | 'filestream', path }]`
+(≤ 256 files, `detachFiles`; names clipped to 128 and paths to 260, `filePath`; absent without CREATE DATABASE, ALTER ANY
+DATABASE or VIEW ANY DEFINITION), `filesTruncated`, and `confirmOffline: true` for an offline database on Windows. Its
+`warnings` are blocking for what makes `sp_detach_db` fail (replication, a database snapshot of it, an availability group,
+mirroring); on Linux an offline database adds a non-blocking note instead of `confirmOffline`. `actions.script` and
+`actions.execute` take `{ action: 'detach', connectionId, requestId, target, dropConnections, updateStatistics,
+detachOffline?, identity? }` (both booleans required; `detachOffline` only for an offline database on Windows, which execute
+refuses as `NOT_SUPPORTED` without it; `updateStatistics` and `detachOffline` are refused on every other action). Execute
+repeats the describe's refusals and runs `Close existing connections` (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with
+`dropConnections`) and `Detach the database` (`sp_detach_db @dbname, @skipchecks`, `'false'` when Update Statistics is
+checked); when the detach fails or is stopped after SINGLE_USER, a compensation step gives the database back the access it
+had (`Restore multi-user access` or `Restore restricted user access`, `compensates: true`). Once `Detach the database` is
+done, the result carries `filesKept`, the files read before it (≤ 256), and the backend forgets its pooled connections to the
+database. SQL Server's error 3703 (in use) answers `IN_USE` with the advice to close its connections or check Drop
+Connections, 3709 (a snapshot of it) `DEPENDENTS`, and 3707 (suspect or recovery pending) `NOT_SUPPORTED`. When Update
+Statistics is cleared, Script adds a comment line, because SSMS's script leaves `@skipchecks` out.
+
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
 `src/shared/actions/prompts.ts`): `renameDatabase { database: 1–128, sessions?: 0–1,000,000, transactions, tabs (the same

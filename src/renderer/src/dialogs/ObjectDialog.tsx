@@ -11,6 +11,7 @@ import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DatabaseStatePage from './pages/DatabaseStatePage'
 import DeleteObjectPage from './pages/DeleteObjectPage'
+import DetachDatabasePage from './pages/DetachDatabasePage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -19,7 +20,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
   takeOffline: { general: DatabaseStatePage },
-  bringOnline: { general: DatabaseStatePage }
+  bringOnline: { general: DatabaseStatePage },
+  detachDatabase: { general: DetachDatabasePage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {

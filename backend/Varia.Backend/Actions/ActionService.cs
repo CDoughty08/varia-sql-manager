@@ -176,6 +176,7 @@ internal sealed partial class ActionService : IDisposable
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        if (args.Action != "detach" && (args.UpdateStatistics is not null || args.DetachOffline is not null)) throw Invalid("only detach takes updateStatistics and detachOffline.");
         switch (args.Action)
         {
             case "rename":
@@ -211,6 +212,13 @@ internal sealed partial class ActionService : IDisposable
                     throw Invalid(args.Action == "takeOffline" ? "dropConnections is required." : "bringOnline takes no dropConnections.");
                 if (args.Identity is { } identity && !DatabaseAlter.IdentityValid(identity)) throw Invalid("identity.");
                 return Target(args.Target, args.Action);
+            case "detach":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null)
+                    throw Invalid("detach takes no new name, delete options or changes.");
+                // Drop Connections and Update Statistics are the grid's two boxes; Detach while offline is asked only of an offline database.
+                if (args.DropConnections is null || args.UpdateStatistics is null) throw Invalid("dropConnections and updateStatistics are required.");
+                if (args.Identity is { } detached && !DatabaseAlter.IdentityValid(detached)) throw Invalid("identity.");
+                return Target(args.Target, "detach");
             default:
                 throw Invalid("action.");
         }
@@ -235,7 +243,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
-                "takeOffline" or "bringOnline" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job),
+                "takeOffline" or "bringOnline" or "detachDatabase" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job, profile.Linux),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -265,6 +273,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
+                "detach" => ExecuteDetachJobAsync(connection, args, target, profile.Linux, band, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -535,24 +544,57 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
-    /// <summary>Take Offline's and Bring Online's verdict: a database other than the one the dialog read (<paramref name="read"/>),
-    /// SQL Server's own, a snapshot, a state the catalogue's database rules grey the action in (as the menu does), and ALTER on it.</summary>
+    /// <summary>Take Offline's, Bring Online's and Detach's verdict: a database other than the one the dialog read (<paramref name="read"/>),
+    /// SQL Server's own, a snapshot, a state the catalogue's database rules grey the action in (as the menu does), and ALTER on it
+    /// (sp_detach_db needs membership in db_owner, which ALTER ANY DATABASE, dbcreator and ownership imply; SQL Server has the last word).</summary>
     private ActionError? StateRefusal(ActionSubject subject, string action, DatabaseIdentityDto? read)
     {
         var row = subject.Row;
         if (read is not null && (row.Int("database_id") != read.Id || DatabaseProperties.Iso(row.Raw("create_date")) != read.Created))
             return Error("NOT_FOUND", "The database " + subject.Display + " is not the one this dialog read: it was renamed, dropped or replaced since. Close the dialog and open it again.");
-        var verb = action == "takeOffline" ? "taken offline" : "brought online";
+        var verb = action switch { "takeOffline" => "taken offline", "detach" => "detached", _ => "brought online" };
         if (row.Bool("is_system")) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + verb + ".");
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, action)) return Error("NOT_SUPPORTED", "A database snapshot cannot be " + verb + ".");
         if (catalog.DatabaseRefusal(action, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby")) is { } reason) return Error("NOT_SUPPORTED", reason);
-        if (!row.Bool("can_alter_state")) return Error("PERMISSION_DENIED", "You do not have permission to change the state of " + subject.Display + " (ALTER on it).");
+        if (!row.Bool("can_alter_state"))
+            return Error("PERMISSION_DENIED", action == "detach" ? "You do not have permission to detach " + subject.Display + " (db_owner, dbcreator or ALTER ANY DATABASE)."
+                : "You do not have permission to change the state of " + subject.Display + " (ALTER on it).");
         return null;
     }
 
-    /// <summary>The statements an action runs, in order.</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
+    /// <summary>What blocks sp_detach_db besides StateRefusal (spec D3 §6): replication, a snapshot of the database, an availability
+    /// group and mirroring, which SQL Server refuses too, as blocking warnings.</summary>
+    internal static List<ActionWarningDto> DetachBlockers(ScriptPreflight.Row row)
     {
+        var warnings = new List<ActionWarningDto>();
+        if (row.Bool("replicated")) warnings.Add(new("The database is used for replication; it cannot be detached until replication is removed.", true));
+        if (row.Bool("has_snapshots")) warnings.Add(new("A database snapshot of this database exists; drop the snapshot before you detach it.", true));
+        if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; remove it from the group before you detach it.", true));
+        if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; remove mirroring before you detach it.", true));
+        return warnings;
+    }
+
+    /// <summary>Detach's note for an offline database on Linux, where it is advice only (critic A27).</summary>
+    public const string DetachOfflineNote = "This database is offline. On Windows, SQL Server may restrict access to its files when it is detached offline; bring it online first if you will attach it again.";
+
+    /// <summary>Detach's verdict at execute: StateRefusal, then DetachBlockers, then an offline database on a Windows server without
+    /// Detach while offline: SQL Server may leave its files with restricted access after the detach (critic A27).</summary>
+    internal ActionError? DetachRefusal(ActionSubject subject, DatabaseIdentityDto? read, bool linux, bool detachOffline)
+    {
+        if (StateRefusal(subject, "detach", read) is { } refused) return refused;
+        if (DetachBlockers(subject.Row).FirstOrDefault() is { } blocker) return Error("NOT_SUPPORTED", blocker.Text);
+        if (OfflineOnWindows(subject.Row, linux) && !detachOffline)
+            return Error("NOT_SUPPORTED", "The database " + subject.Display + " is offline. Bring it online first, or check Detach while offline.");
+        return null;
+    }
+
+    private bool OfflineOnWindows(ScriptPreflight.Row row, bool linux) => !linux && catalog.DatabaseStateOf(row.Int("state")) == "offline";
+
+    /// <summary>The statements an action runs, in order. <paramref name="userAccess"/>: the database's sys.databases.user_access the
+    /// preflight read, which Detach's compensation restores.</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, int userAccess = 0)
+    {
+        if (args.Action == "detach") return DetachPlan(target.Name!, args.DropConnections == true, args.UpdateStatistics == true, userAccess);
         // SSMS's Take Offline rolls other connections back only when Drop All Active Connections is checked; without it SET OFFLINE
         // waits for them to leave until Stop.
         if (args.Action == "takeOffline") return [new(args.DropConnections == true ? ActionTemplate.SetOfflineRollback : ActionTemplate.SetOffline, "master", [target.Name!])];
@@ -569,6 +611,28 @@ internal sealed partial class ActionService : IDisposable
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
         return plan;
     }
+
+    /// <summary>SSMS's Detach: Drop Connections sets SINGLE_USER WITH ROLLBACK IMMEDIATE first (as SSMS does whether or not sessions
+    /// remain), then sp_detach_db, with @skipchecks from Update Statistics. When the detach fails or is stopped after SINGLE_USER,
+    /// Varia gives the database back the access it had (owner decision): MULTI_USER, or RESTRICTED_USER; a database that was
+    /// SINGLE_USER already is left so. Attach (D1d) can share the compensation (RestoreAccess).</summary>
+    internal static List<PlannedStatement> DetachPlan(string database, bool dropConnections, bool updateStatistics, int userAccess)
+    {
+        var plan = new List<PlannedStatement>();
+        if (dropConnections) plan.Add(new(ActionTemplate.SetSingleUser, "master", [database]));
+        plan.Add(ActionSql.Detach(database, updateStatistics));
+        if (dropConnections && RestoreAccess(database, userAccess, 0) is { } restore) plan.Add(restore);
+        return plan;
+    }
+
+    /// <summary>The compensation that restores a database's access after main step <paramref name="undoes"/> set SINGLE_USER: SET
+    /// MULTI_USER, or SET RESTRICTED_USER for a database that was restricted, or none for one that was single-user already.</summary>
+    internal static PlannedStatement? RestoreAccess(string database, int userAccess, int undoes) => ActionsCatalog.DatabaseAccessOf(userAccess) switch
+    {
+        "single" => null,
+        "restricted" => new(ActionTemplate.SetRestrictedUser, "master", [database], StepKind.Compensation, undoes),
+        _ => new(ActionTemplate.SetMultiUser, "master", [database], StepKind.Compensation, undoes)
+    };
 
     /// <summary>A step's title in the reply (at most 64 characters).</summary>
     internal static string StepTitle(ActionTemplate template) => template switch
@@ -681,10 +745,14 @@ internal sealed partial class ActionService : IDisposable
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = ScriptText(Plan(args, target));
+        var text = (args.Action == "detach" && args.UpdateStatistics == false ? DetachSkipChecksComment : "") + ScriptText(Plan(args, target));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
+
+    /// <summary>SSMS's script leaves @skipchecks out when Update Statistics is cleared, so sp_detach_db's default runs UPDATE STATISTICS
+    /// anyway; Varia writes 'true' so the script does what the dialog does (owner decision, D3 spec §6). It names no object.</summary>
+    internal static string DetachSkipChecksComment => "-- Update Statistics is cleared: @skipchecks = 'true' skips UPDATE STATISTICS (SSMS's script leaves it out)." + ActionSql.NL;
 
     /// <summary>Script Action's text of a plan: its main statements only, as a success runs them. Compensation and cleanup run only
     /// after a failure or Stop, so they are never scripted.</summary>
@@ -746,12 +814,13 @@ internal sealed partial class ActionService : IDisposable
     /// Offline's describe first frees the database of them (spec 3.6) and reads it again, then lists every session left, this
     /// process's query windows included. No session is left out by its id, which SQL Server gives the next client once a cleared
     /// pool's session has ended.</summary>
-    private async Task<ActionDescribeResult> DescribeStateJobAsync(SqlConnection connection, string connectionId, ObjectRefDto target, string action, int band, CancellationToken token)
+    private async Task<ActionDescribeResult> DescribeStateJobAsync(SqlConnection connection, string connectionId, ObjectRefDto target, string action, int band, CancellationToken token,
+        bool linux = false)
     {
         var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
         if (subject is null) return new(null, 0, error);
         if (StateRefusal(subject, action, null) is { } refused) return new(null, 0, refused);
-        if (action == "takeOffline" && subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
+        if (action is "takeOffline" or "detach" && subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
         {
             (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
             if (subject is null) return new(null, 0, error);
@@ -763,6 +832,17 @@ internal sealed partial class ActionService : IDisposable
         {
             if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; SET OFFLINE fails until it is removed from the group.", true));
             if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; SET OFFLINE fails until mirroring is removed.", true));
+        }
+        List<DatabaseFileRefDto>? files = null;
+        bool? filesTruncated = null, confirmOffline = null;
+        if (action == "detach")
+        {
+            warnings.AddRange(DetachBlockers(row));
+            // An offline database on Windows waits for Detach while offline (critic A27); on Linux the dialog only says so.
+            if (OfflineOnWindows(row, linux)) confirmOffline = true;
+            else if (catalog.DatabaseStateOf(row.Int("state")) == "offline") warnings.Add(new(DetachOfflineNote, false));
+            (files, var more) = await FilesAsync(connection, target.Name!, token);
+            filesTruncated = more;
         }
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
@@ -789,8 +869,49 @@ internal sealed partial class ActionService : IDisposable
         }
         var identity = new DatabaseIdentityDto(row.Int("database_id"), DatabaseProperties.Iso(row.Raw("create_date")) ?? "");
         var model = new DatabaseStateDto(subject.Display, identity, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby"), sessions, withTransaction,
-            list, sessions is { } total && total > list.Count, warnings);
+            list, sessions is { } total && total > list.Count, warnings, files, filesTruncated, confirmOffline);
         return new(null, 0, DatabaseState: model);
+    }
+
+    /// <summary>The files a detach leaves on the server (ActionSql.DatabaseFiles), at most the catalogue's detachFiles, and whether
+    /// there were more. Names and paths are clipped to the catalogue's bounds (sysname, filePath).</summary>
+    private async Task<(List<DatabaseFileRefDto> Files, bool Truncated)> FilesAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        var limit = (int)catalog.Limit("detachFiles");
+        var path = (int)catalog.Limit("filePath");
+        var files = new List<DatabaseFileRefDto>();
+        var more = false;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.DatabaseFiles;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@take", SqlDbType.Int, 0, limit + 1);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+        {
+            if (files.Count == limit) { more = true; break; }
+            var file = ReadRow(reader);
+            var type = file.Int("file_type") switch { 1 => "log", 2 => "filestream", _ => "rows" };
+            files.Add(new(file.Int("file_id"), ScriptingErrors.Clip(file.Name("file_name"), 128), type, ScriptingErrors.Clip(file.Name("physical_name"), path)));
+        }
+        return (files, more);
+    }
+
+    /// <summary>Detach Database (spec D3 §6): the preflight and DetachRefusal, the files the database has, then SINGLE_USER (with Drop
+    /// Connections), sp_detach_db and, after a failure or Stop past SINGLE_USER, the access it had (DetachPlan). Once detached, the
+    /// connection forgets the name, as for a dropped database, and the reply lists the files left on the server.</summary>
+    private async Task<ActionExecuteResult> ExecuteDetachJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, bool linux, int band, CancellationToken token)
+    {
+        var messages = CollectMessages(connection);
+        var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+        if (subject is null) return new([], [], 0, error);
+        if (DetachRefusal(subject, args.Identity, linux, args.DetachOffline == true) is { } refused) return new([], [], 0, refused);
+        var (files, _) = await FilesAsync(connection, target.Name!, token);
+        var plan = Plan(args, target, subject.Row.Int("user_access"));
+        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, ActionErrors.DropConnectionsAdvice, token);
+        var detached = plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template == ActionTemplate.DetachDatabase);
+        if (detached) host.DatabaseChanged(args.ConnectionId, target.Name!, null);
+        return new(steps, messages.Collected(), 0, failure, detached ? files : null);
     }
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>

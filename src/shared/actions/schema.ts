@@ -44,8 +44,17 @@ export interface TakeOfflineRequest {
 }
 /** Tasks › Bring Online: SET ONLINE. */
 export interface BringOnlineRequest { readonly action: 'bringOnline'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly identity?: DatabaseIdentity }
+/**
+ * Tasks › Detach…'s OK: sp_detach_db, after SET SINGLE_USER WITH ROLLBACK IMMEDIATE with `dropConnections` (Drop Connections).
+ * `updateStatistics` runs UPDATE STATISTICS first (@skipchecks 'false'); cleared, it is skipped ('true'). `detachOffline` (Detach
+ * while offline) is the answer to the warning about an offline database on Windows, whose files may not attach again.
+ */
+export interface DetachRequest {
+  readonly action: 'detach'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly dropConnections: boolean; readonly updateStatistics: boolean
+  readonly detachOffline?: boolean; readonly identity?: DatabaseIdentity
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | TakeOfflineRequest | BringOnlineRequest | CreateTableRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | TakeOfflineRequest | BringOnlineRequest | DetachRequest | CreateTableRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -159,7 +168,14 @@ export interface DatabaseStateModel {
   readonly sessionsTruncated: boolean
   /** Facts that make the statement fail or matter (an availability group, mirroring). */
   readonly warnings: readonly ActionWarning[]
+  /** Detach: the database's files, which stay on the server (sys.master_files; none without CREATE DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION). */
+  readonly files?: readonly DatabaseFileRef[]
+  readonly filesTruncated?: boolean
+  /** Detach: the database is offline on a Windows server, whose files may not attach again once detached offline; OK waits for Detach while offline. */
+  readonly confirmOffline?: boolean
 }
+/** A database file by its id: the logical name, its type and its path on the server (never logged). */
+export interface DatabaseFileRef { readonly fileId: number; readonly name: string; readonly type: FileType; readonly path: string }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
   readonly databaseState?: DatabaseStateModel
@@ -194,13 +210,17 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /** Detach: the files it left on the server, at most `actionLimits.detachFiles`, once the database was detached. */
+  readonly filesKept?: readonly DatabaseFileRef[]
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', takeOffline: 'taken offline', bringOnline: 'brought online' }
+/** The step sp_detach_db runs as (C#: ActionService.StepTitle): done, the database is gone, whatever came after it. */
+export const detachDatabaseStepTitle = 'Detach the database'
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', takeOffline: 'taken offline', bringOnline: 'brought online', detach: 'detached' }
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
@@ -246,12 +266,17 @@ const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647)
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
 const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
+const detachSchema = z.object({
+  action: z.literal('detach'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), updateStatistics: z.boolean(), detachOffline: z.boolean().optional(),
+  identity: identitySchema.optional()
+}).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
   takeOfflineSchema,
   bringOnlineSchema,
+  detachSchema,
   createTableSchema
 ]).superRefine((request, context) => {
   // A new table is not an object row's action: its target is the database, SQL Server's own included.
@@ -283,11 +308,14 @@ export const actionStepSchema = z.object({
   detail: z.string().max(loginLimits.stepDetail).optional(), compensates: z.boolean().optional(), progress: z.number().int().min(0).max(100).optional()
 }).strict() satisfies z.ZodType<ActionStep>
 const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.string().max(actionLimits.messageChars), retryable: z.boolean() }).strict() satisfies z.ZodType<ActionError>
+const fileRefSchema = z.object({
+  fileId: z.number().int().min(1).max(32_767), name: z.string().max(128), type: z.enum(['rows', 'log', 'filestream']), path: z.string().max(actionLimits.filePath)
+}).strict() satisfies z.ZodType<DatabaseFileRef>
 /** actions.execute's answer, which main checks before the renderer sees it: one step per planned statement, the commit, and
- *  compensation and cleanup steps, at most statements + 8; bounded messages. */
+ *  compensation and cleanup steps, at most statements + 8; bounded messages; Detach's files kept. */
 export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(), filesKept: z.array(fileRefSchema).max(actionLimits.detachFiles).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 export const actionCancelSchema = z.object({

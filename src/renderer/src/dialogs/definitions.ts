@@ -6,7 +6,7 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import type { ActionDescribeResult, ActionError, ActionRequest, DatabasePropertiesModel, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import { detachDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
 
@@ -29,6 +29,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly modelOf: (result: ActionDescribeResult) => Model | undefined
   readonly initialDraft: (model: Model, target: ObjectRef) => Draft
   readonly request: (target: ObjectRef, model: Model, draft: Draft) => DialogRequest
+  /**
+   * Whether the action's reply says the database it ran on is gone (Detach: a success, or a reply whose sp_detach_db completed
+   * before a Stop answered), so its Properties documents turn orphan and the query windows that used it are counted (D3 §8).
+   */
+  readonly removesDatabase?: (target: ObjectRef, steps: readonly ActionStep[], succeeded: boolean) => boolean
   /** A question to ask before OK sends `request` (never before Script). */
   readonly confirm?: (model: Model, request: BuiltRequest) => DialogConfirmation | undefined
   /** The request once the user answered Yes. */
@@ -103,15 +108,51 @@ export const bringOnlineDefinition: ObjectDialogDefinition<DatabaseStateModel, B
   afterSuccess: effects => { effects.refreshListing(); effects.databaseState(false) }
 }
 
-export interface DialogModels { readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel }
-export interface DialogDrafts { readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft }
+/** Detach Database's choices: the grid's Drop Connections and Update Statistics (cleared, as in SSMS), and Detach while offline,
+ *  asked only of an offline database on a Windows server (critic A27). */
+export interface DetachDraft { readonly dropConnections: boolean; readonly updateStatistics: boolean; readonly detachOffline: boolean }
+/**
+ * Why OK waits (SSMS's Not ready): sp_detach_db refuses a database other sessions use (3703), so sessions with Drop Connections
+ * cleared block it, as SSMS's Message counts them; so do what SQL Server refuses anyway (replication, a snapshot, an availability
+ * group, mirroring), and an offline database on Windows until Detach while offline is checked. Unknown sessions do not block.
+ */
+export function detachBlocked(model: DatabaseStateModel, draft: DetachDraft): string | undefined {
+  const blocking = model.warnings.find(warning => warning.blocking)
+  if (blocking) return blocking.text
+  if (model.confirmOffline && !draft.detachOffline) return 'The database is offline: check Detach while offline, or bring it online first.'
+  if (draft.dropConnections || !model.sessions) return undefined
+  return `${count(model.sessions, 'session is', 'sessions are')} connected: check Drop Connections, or Check Again once ${model.sessions === 1 ? 'it leaves' : 'they leave'}.`
+}
+export const detachDatabaseDefinition: ObjectDialogDefinition<DatabaseStateModel, DetachDraft> = {
+  dialog: 'detachDatabase',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({ dropConnections: false, updateStatistics: false, detachOffline: false }),
+  request: (target, model, draft) => ({
+    action: 'detach', target, dropConnections: draft.dropConnections, updateStatistics: draft.updateStatistics, identity: model.identity,
+    ...model.confirmOffline ? { detachOffline: draft.detachOffline } : {}
+  }),
+  blocked: detachBlocked,
+  keepOpen: true,
+  removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === detachDatabaseStepTitle)),
+  // The Databases listing loses the database; its Properties documents are orphaned (removesDatabase).
+  afterSuccess: effects => effects.refreshListing()
+}
+
+export interface DialogModels {
+  readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel
+  readonly detachDatabase: DatabaseStateModel
+}
+export interface DialogDrafts {
+  readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft; readonly detachDatabase: DetachDraft
+}
 export type DialogModel = DialogModels[DialogId]
 export type DialogDraft = DialogDrafts[DialogId]
 export const dialogDefinitions: { readonly [D in DialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
   deleteObject: deleteObjectDefinition,
   databaseProperties: databasePropertiesDefinition,
   takeOffline: takeOfflineDefinition,
-  bringOnline: bringOnlineDefinition
+  bringOnline: bringOnlineDefinition,
+  detachDatabase: detachDatabaseDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

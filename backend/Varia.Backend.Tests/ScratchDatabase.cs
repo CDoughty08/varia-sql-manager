@@ -18,6 +18,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
 {
     private readonly Func<string, string, Task<SqlRun>> run;
     private readonly List<string> created = [];
+    /// <summary>The files of a database the Detach checks detached, until it is attached again: disposal attaches it, then drops it.</summary>
+    private readonly Dictionary<string, List<string>> detachedFiles = new(StringComparer.Ordinal);
     private bool loginCreated;
     private Backup? restoringBackup;
 
@@ -75,6 +77,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string SeamTaken => Name + "_seamt";
     /// <summary>Where the Take Offline and Bring Online checks take a database offline and back (created on demand).</summary>
     public string DatabaseState => Name + "_dbs";
+    /// <summary>Where the Detach checks detach a database and attach it again (created on demand).</summary>
+    public string Detached => Name + "_det";
+    /// <summary>A snapshot of <see cref="Detached"/>, which makes sp_detach_db fail (created on demand).</summary>
+    public string DetachedSnapshot => Name + "_dets";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -86,8 +92,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', and
-    // _dbs Take Offline's and Bring Online's (a crashed run can leave it offline, which the sweep drops by state).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_dbs)?$")]
+    // _dbs Take Offline's and Bring Online's (a crashed run can leave it offline, which the sweep drops by state); _det Detach's and
+    // _dets its snapshot (a run that crashes while _det is detached leaves only its files, which disposal attaches again when it can).
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_dbs|_det|_dets)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -395,6 +402,26 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return true;
     }
 
+    /// <summary>Creates the marked database the Detach checks detach (<see cref="Detached"/>).</summary>
+    public Task<string> CreateDetachedAsync() => CreateMarkedAsync(Detached);
+
+    /// <summary>A snapshot of <see cref="Detached"/> (<see cref="DetachedSnapshot"/>), dropped before it; false when this server cannot create one.</summary>
+    public async Task<bool> CreateDetachedSnapshotAsync()
+    {
+        if (!await CreateSnapshotAsync(Detached, DetachedSnapshot)) return false;
+        created.Insert(0, DetachedSnapshot);
+        return true;
+    }
+
+    /// <summary>The statement that attaches a detached database again from its files (FOR ATTACH).</summary>
+    public static string AttachSql(string name, IEnumerable<string> files) =>
+        "CREATE DATABASE " + Bracket(name) + " ON " + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;";
+
+    /// <summary>A database was detached: until <see cref="Attached"/>, disposal attaches it from these files before it drops it, so
+    /// its files are deleted with it.</summary>
+    public void Detaching(string name, IEnumerable<string> files) => detachedFiles[name] = [.. files];
+    public void Attached(string name) => detachedFiles.Remove(name);
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {
@@ -425,6 +452,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Drops the snapshot first, brings the offline database online so its files are deleted, then drops the rest and the login.</summary>
     public async ValueTask DisposeAsync()
     {
+        // A failed Detach check can leave _det detached: attached again, the DROP deletes its files.
+        foreach (var (name, files) in detachedFiles)
+            if (files.Count > 0) await run("IF DB_ID(" + Quote(name) + ") IS NULL " + AttachSql(name, files), "master");
         // A failed state check can leave _dbs offline; SET ONLINE first lets the DROP delete its files.
         foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState);
         // The restoring database's backup file (Linux) goes, then its history.

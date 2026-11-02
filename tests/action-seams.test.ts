@@ -23,9 +23,9 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    // Managed Instance cannot SET OFFLINE or ONLINE: Take Offline and Bring Online run on box servers only.
+    // Managed Instance cannot SET OFFLINE or ONLINE, nor run sp_detach_db: Take Offline, Bring Online and Detach run on box servers only.
     expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties'])
-    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['takeOffline', 'bringOnline'])
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['takeOffline', 'bringOnline', 'detach'])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(3)
     for (const row of json.actions) {

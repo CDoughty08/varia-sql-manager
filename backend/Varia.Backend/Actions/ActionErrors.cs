@@ -11,6 +11,8 @@ internal static class ActionErrors
     public const int MaxMessage = 2048;
     /// <summary>Delete Object's advice for a database other connections use.</summary>
     public const string CloseConnectionsAdvice = "Close its connections, or check Close existing connections.";
+    /// <summary>Detach Database's advice when sp_detach_db finds the database in use (3703).</summary>
+    public const string DropConnectionsAdvice = "Close its connections, or check Drop Connections.";
     /// <summary>Database Properties' advice when other connections are in the way of an option it asks Open Connections for:
     /// WITH NO_WAIT finds them (5061, 5070), or the preflight counts them.</summary>
     public const string OpenConnectionsAdvice = "Other connections use the database. Choose Yes when asked to close them, or close them first.";
@@ -21,16 +23,17 @@ internal static class ActionErrors
     public static readonly IReadOnlyDictionary<string, int[]> Numbers = new Dictionary<string, int[]>(StringComparer.Ordinal)
     {
         ["BLOCKED"] = [1222],
-        // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user.
-        ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
-        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
+        // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user, 3703 sp_detach_db.
+        ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 3703],
+        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
+        // 3709 a database snapshot of the database being detached or dropped.
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709],
         // 1828 and 5170: a logical file name or a physical file is taken.
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170],
         // 15007: the login is not valid.
         ["NOT_FOUND"] = [15225, 15007],
-        // 5058: the option cannot be set in this database (SQL Server's own).
-        ["NOT_SUPPORTED"] = [5058],
+        // 5058: the option cannot be set in this database (SQL Server's own); 3707: sp_detach_db on a suspect or recovery pending database.
+        ["NOT_SUPPORTED"] = [5058, 3707],
         // 5011: ALTER DATABASE without ALTER on it (Take Offline and Bring Online refused in SQL Server).
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 5011],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],

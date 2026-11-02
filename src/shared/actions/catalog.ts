@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline and Bring Online, which kinds and subtypes offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online and Detach, which kinds and subtypes offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -17,7 +17,8 @@ export const objectActions = [
   'delete',
   'properties',
   'takeOffline',
-  'bringOnline'
+  'bringOnline',
+  'detach'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog. */
@@ -26,7 +27,8 @@ export const dialogIds = [
   'deleteObject',
   'databaseProperties',
   'takeOffline',
-  'bringOnline'
+  'bringOnline',
+  'detachDatabase'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -64,10 +66,12 @@ const actionSpecData = {
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
   // SSMS 22's access key for Properties is unverified; P is free in Varia's Object Explorer menu.
   properties: { title: 'Properties', mnemonic: 'p', group: '9_properties', order: 1, class: 'dialog', dialog: 'databaseProperties', command: 'explorer.properties', systemObjects: true, engines: onServers },
-  // Tasks › Take Offline and Bring Online (SSMS's Tasks order, recalled: Detach…, Take Offline, Bring Online). Managed Instance
-  // cannot set OFFLINE or ONLINE (Learn, T-SQL differences), so they are box-only.
+  // Tasks › Detach…, then Take Offline and Bring Online in a group of their own (SSMS 17 and 19 screenshots on Learn show the
+  // separator; SSMS 22's is unverified). Managed Instance cannot set OFFLINE or ONLINE, nor run sp_detach_db (Learn, T-SQL
+  // differences), so all three are box-only.
   takeOffline: { title: 'Take Database Offline', menuTitle: 'Take Offline', mnemonic: 't', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'takeOffline', command: 'explorer.takeOffline', engines: ['box'] },
-  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 3, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] }
+  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 3, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] },
+  detach: { title: 'Detach Database…', menuTitle: 'Detach…', mnemonic: 'd', menu: 'explorer.tasks', group: '0_detach', order: 1, class: 'dialog', dialog: 'detachDatabase', command: 'explorer.detachDatabase', engines: ['box'] }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
@@ -104,10 +108,11 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   // DROP AGGREGATE is a follow-up; sp_rename renames an aggregate like any object.
   function: { row: editable, subtypes: { aggregate: { rename: 'enabled', delete: 'disabled' } } },
   // Properties opens for every database, SQL Server's own included; a snapshot's opens read-only. SQL Server's own databases
-  // cannot be taken offline (Learn: not master or tempdb; Varia greys all four, as SSMS does), and a snapshot never can.
+  // cannot be taken offline (Learn: not master or tempdb; Varia greys all four, as SSMS does) nor detached (Learn), and a
+  // snapshot can be neither.
   database: {
-    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled' },
-    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
+    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled', detach: 'enabled' },
+    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled', detach: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
   }
 }
 
@@ -156,7 +161,10 @@ export const databaseActionRules: readonly DatabaseActionRule[] = [
   // Learn (database states): a database that is restoring cannot be set OFFLINE, ONLINE or EMERGENCY.
   { action: 'takeOffline', states: ['restoring', 'recovering', 'copying', 'offlineSecondary'], reason: 'A database that is restoring or recovering cannot be taken offline.' },
   { action: 'bringOnline', states: ['online'], reason: 'The database is online.' },
-  { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' }
+  { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' },
+  { action: 'detach', states: ['restoring', 'recovering', 'copying'], reason: 'Wait until it finishes restoring or recovering.' },
+  // Learn (sp_detach_db): a suspect database must be put into EMERGENCY mode before it can be detached.
+  { action: 'detach', states: ['suspect', 'recoveryPending'], reason: 'Set the database to EMERGENCY with T-SQL before you detach it.' }
 ]
 const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
   !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
@@ -268,7 +276,9 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   },
   // No keys, as in SSMS.
   takeOffline: { icon: 'debug-disconnect', keywords: ['offline', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an online user database in Object Explorer.' },
-  bringOnline: { icon: 'plug', keywords: ['online', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an offline user database in Object Explorer.' }
+  bringOnline: { icon: 'plug', keywords: ['online', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an offline user database in Object Explorer.' },
+  // There is no eject codicon; export reads as "take it out of the server".
+  detach: { icon: 'export', keywords: ['detach', 'database', 'tasks', 'files'], documentTask: false, unavailableHint: 'Select a user database in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -379,7 +389,10 @@ const dialogSpecData = {
   // SSMS's Take Database Offline dialog (recalled, SSMS 18+): a grid of Database Name, Drop All Active Connections, Status
   // and Message. Bring Online runs as it opens and shows the same grid with its outcome.
   takeOffline: { title: 'Take Database Offline', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'takeOffline', pages: [page('general', 'General')], steps: true },
-  bringOnline: { title: 'Bring Database Online', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'bringOnline', pages: [page('general', 'General')], steps: true }
+  bringOnline: { title: 'Bring Database Online', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'bringOnline', pages: [page('general', 'General')], steps: true },
+  // Learn's Detach Database dialog: "Databases to detach" (Database Name, Drop Connections, Update Statistics, Status, Message).
+  // Keep Full-Text Catalogs applies only to databases upgraded from SQL Server 2005, which Varia does not reach, so it is left out.
+  detachDatabase: { title: 'Detach Database', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'detach', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
@@ -425,7 +438,10 @@ export const actionLimits = {
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
   cleanupMs: 10_000,
   /** Take Offline's sessions list: the sessions it shows, and the characters of each login, program and host name. */
-  sessions: 8, sessionText: 128
+  sessions: 8, sessionText: 128,
+  /** Detach's files that stay on the server (the describe's list and the reply's filesKept; more set a truncation flag), and the
+   *  characters of a path (sys.master_files.physical_name is nvarchar(260)). */
+  detachFiles: 256, filePath: 260
 } as const
 
 /** Whether an action runs on a server of this engine. */

@@ -841,6 +841,16 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* The Sessions grid: a narrow id, the names that say who is disconnected, and the count right-aligned. */
 .object-dialog-state .object-dialog-col-session { width: 12%; }
 .object-dialog-state .object-dialog-col-count { width: 16%; }
+/* D3b: Detach Database's grid has two check columns, then the files that stay on the server. */
+.object-dialog-detach .object-dialog-col-name { width: 22%; }
+.object-dialog-detach .object-dialog-col-check { width: 14%; }
+.object-dialog-detach .object-dialog-col-status { width: 16%; }
+.object-dialog-detach .object-dialog-col-file { width: 26%; }
+.object-dialog-detach .object-dialog-col-type { width: 20%; }
+.object-dialog-files-caption { padding: 10px 0 4px; }
+.object-dialog-grid td.object-dialog-cell-path { white-space: normal; overflow-wrap: anywhere; }
+.object-dialog-note-body { display: flex; flex-direction: column; gap: 6px; }
+.object-dialog-note-body .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-cell-count { text-align: right; font-variant-numeric: tabular-nums; }
 .object-dialog-cell-check { text-align: center; }
 .object-dialog-cell-check > input { margin: 0; }

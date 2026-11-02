@@ -53,6 +53,11 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
       when: args => actions.canRun('bringOnline', nodeOf(args)) && !dialogs.current,
       run: args => { const node = nodeOf(args); if (node) dialogs.open('bringOnline', node) }
     }),
+    // Tasks › Detach… (D3b): a modal dialog that stays open on its steps.
+    commands.register('explorer.detachDatabase', {
+      when: args => actions.canRun('detach', nodeOf(args)) && !dialogs.current,
+      run: args => { const node = nodeOf(args); if (node) dialogs.open('detachDatabase', node) }
+    }),
     commands.register('explorer.createCatalog', {
       when: args => catalogs(nodeOf(args)) && !dialogs.current && !ssisCatalog.current,
       run: args => { const node = nodeOf(args); if (catalogs(node)) ssisCatalog.open(node) }

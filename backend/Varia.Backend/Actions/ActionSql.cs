@@ -216,7 +216,7 @@ internal static partial class ActionSql
     }
 
     /// <summary>A database's row in master: its identity (database_id, create_date), state, user access, read-only and standby,
-    /// subtype, what blocks a DROP or SET OFFLINE (replication, an availability group, mirroring), owner, sessions in it and those
+    /// subtype, what blocks a DROP, SET OFFLINE or sp_detach_db (replication, an availability group, mirroring, a snapshot of it), owner, sessions in it and those
     /// with an open transaction (with VIEW SERVER STATE), permissions and whether @new is another database's name. can_alter_state is
     /// what SET OFFLINE and SET ONLINE need, which HAS_PERMS_BY_NAME on the database does not answer: it says 0 to a login with no user
     /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
@@ -230,6 +230,7 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN d.is_published = 1 OR d.is_subscribed = 1 OR d.is_merge_published = 1 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS replicated, "
         + "CONVERT(bit, CASE WHEN d.replica_id IS NULL THEN 0 ELSE 1 END) AS in_availability_group, "
         + "CONVERT(bit, CASE WHEN dm.mirroring_guid IS NULL THEN 0 ELSE 1 END) AS mirrored, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS s WHERE s.source_database_id = d.database_id) THEN 1 ELSE 0 END) AS has_snapshots, "
         + "COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND es.open_transaction_count > 0) END AS with_transaction, "
@@ -275,6 +276,11 @@ internal static partial class ActionSql
         + "SELECT TOP (@take) es.session_id AS session_id, es.login_name AS login_name, es.program_name AS program_name, es.host_name AS host_name, "
         + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
         + "ORDER BY es.session_id;";
+
+    /// <summary>Detach's files that stay on the server (sys.master_files, in master): at most @take by file id, as the database had them
+    /// when the dialog or the action read it. Paths are never logged.</summary>
+    public const string DatabaseFiles = "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name "
+        + "FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id WHERE d.name = @name ORDER BY f.file_id;";
 
     /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
     public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
@@ -466,6 +472,7 @@ internal static partial class ActionSql
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database files", LintCatalog(DatabaseFiles, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.

@@ -49,6 +49,7 @@ import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
+import { databaseGoneHandler } from '../dialogs/database-gone'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
@@ -68,6 +69,7 @@ import { QuickInputService } from '../quickinput/QuickInputService'
 import { CommandService } from './commands'
 import { NotificationService } from './notifications'
 import { ContextKeyService } from './contextkeys'
+import { onUnexpectedError } from './errors'
 import { EventBus } from './events'
 import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
@@ -216,7 +218,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
     // Database Properties documents of a database a dialog took offline or brought online follow it.
-    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline)
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
+    databaseGone: gone => databaseGone(gone)
   })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
@@ -232,9 +235,15 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }), close: id => { void files.close(id) },
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
+  // A database Delete or Detach removed: its Properties documents turn orphan and a toast counts the query windows left on it
+  // (D3 §8); a detached one's toast offers Copy paths for its files.
+  const databaseGone = databaseGoneHandler({
+    documents, properties, notify: toast => { notifications.notify(toast) },
+    copy: text => { void api.writeClipboardText(text).then(result => { if (!result.ok) commands.reportWarning(result.error) }, onUnexpectedError) }
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,

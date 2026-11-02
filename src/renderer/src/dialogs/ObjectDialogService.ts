@@ -1,6 +1,6 @@
 import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
+import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseFileRef, DatabaseStateModel } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
@@ -11,6 +11,7 @@ import type { ExplorerMenuNode } from '../menus/targets'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
+import { filePathsText } from './database-gone'
 import { definitionOf, type DialogDraft, type DialogModel } from './definitions'
 
 /**
@@ -42,6 +43,11 @@ export interface OpenObjectDialog {
   /** An info line for the message bar (a script delivered, informational messages). */
   readonly notice?: string
 }
+/**
+ * A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. A
+ * detached one (D3b) carries the files it left on the server (`filesKept`, possibly none listed), which a deleted one never has.
+ */
+export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string; readonly filesKept?: readonly DatabaseFileRef[] }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
@@ -53,6 +59,8 @@ export interface ObjectDialogServiceOptions {
   /** A database a dialog took offline or brought online (DatabasePropertiesService follows it). */
   readonly databaseState?: (connectionId: string, database: string, offline: boolean) => void
   readonly newId?: () => string
+  /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
+  readonly databaseGone?: (gone: DatabaseGone) => void
 }
 
 export const dialogMessages = {
@@ -166,6 +174,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const result = await this.call(() => this.options.api.executeObjectAction({ ...built, connectionId: open.connectionId, requestId } as ActionRequest))
     if (!this.end(open, requestId)) return
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
+    if (value && definition.removesDatabase?.(open.target, value.steps, !value.error) && open.target.name !== undefined) {
+      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name, ...open.dialog === 'detachDatabase' ? { filesKept: value.filesKept ?? [] } : {} }
+      try { this.options.databaseGone?.(gone) } catch (failure) { onUnexpectedError(failure) }
+    }
     if (value && !value.error) {
       // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
       if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
@@ -189,6 +201,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
     if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
+  }
+
+  /** Detach Database's Copy paths: the files that stay on the server, one path per line, to the clipboard; the message bar says how it went. */
+  async copyPaths(): Promise<void> {
+    const open = this.current
+    const files = open?.dialog === 'detachDatabase' ? (open.model as DatabaseStateModel | undefined)?.files ?? [] : []
+    if (!open || files.length === 0) return
+    const result = await this.call(() => this.options.api.writeClipboardText(filePathsText(files)))
+    if (this.disposed || this.current?.id !== open.id) return
+    if (result.ok) this.update(open, { notice: files.length === 1 ? 'Copied 1 path.' : `Copied ${files.length.toLocaleString('en-US')} paths.` })
+    else this.update(open, { error: error('SQL_ERROR', result.error) })
   }
 
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */

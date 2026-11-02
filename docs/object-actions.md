@@ -2,8 +2,8 @@
 
 <!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->
 
-Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, and a database's Tasks › Take Offline
-and Bring Online. Which kinds and subtypes offer each is
+Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, and a database's Tasks › Detach…,
+Take Offline and Bring Online. Which kinds and subtypes offer each is
 data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`
 and re-derives the subtype in the action's own connection before any DDL runs.
 
@@ -17,6 +17,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
 | `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 2 | t | — | — | `explorerActionTakeOffline` | SQL Server |
 | `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 3 | o | — | — | `explorerActionBringOnline` | SQL Server |
+| `detach` | Detach… | `explorer.detachDatabase` | dialog (`detachDatabase`) | `explorer.tasks` | `0_detach` 1 | d | — | — | `explorerActionDetach` | SQL Server |
 
 "Runs on" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -33,21 +34,21 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online | Detach Database… |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ | ○ |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – | – |
 
 ## Menus, statuses, database states and servers
 
@@ -64,6 +65,8 @@ Rules narrow a database's actions by it, each with the reason a greyed item show
 | Take Database Offline | restoring, recovering, copying, offlineSecondary | Any | Any | Greyed | A database that is restoring or recovering cannot be taken offline. |
 | Bring Database Online | online | Any | Any | Greyed | The database is online. |
 | Bring Database Online | restoring, recovering, copying | Any | Any | Greyed | A database that is restoring or recovering cannot be brought online. |
+| Detach Database… | restoring, recovering, copying | Any | Any | Greyed | Wait until it finishes restoring or recovering. |
+| Detach Database… | suspect, recoveryPending | Any | Any | Greyed | Set the database to EMERGENCY with T-SQL before you detach it. |
 
 An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
 the Runs on column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
@@ -76,6 +79,7 @@ the Runs on column above says which. Menus read the server through `explorerServ
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
 | `takeOffline` | Take Database Offline - <name> | Modal dialog | `takeOffline` | General (`settings-gear`) | Yes |
 | `bringOnline` | Bring Database Online - <name> | Modal dialog | `bringOnline` | General (`settings-gear`) | Yes |
+| `detachDatabase` | Detach Database - <name> | Modal dialog | `detach` | General (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -127,6 +131,40 @@ user in it, to sysadmin while another session holds it SINGLE_USER, and to every
 Server's 5011 is PERMISSION_DENIED too. After either, the Databases folder is listed again ("(Offline)" in the sublabel),
 and the database's Database Properties documents on that server read it again, or, while they hold changes, keep them
 with an Offline status and a banner; Apply still runs, and its preflight refuses a database that is not online.
+
+### Detach
+
+Tasks › Detach… opens Detach Database - <name>, a modal laid out as Learn describes SSMS's dialog: a "Databases to detach"
+grid of Database Name, Drop Connections and Update Statistics (both cleared), Status and Message. Keep Full-Text Catalogs is
+left out: SSMS shows it only for a database upgraded from SQL Server 2005. The Message counts the sessions in the database
+(after the describe closes the backend's own idle pooled connections in it, as Take Offline's does); a closed disclosure
+lists them, and the page says what Drop Connections rolls back, naming Varia's query windows with an open transaction (A7).
+Below the grid, "Files that stay on the server" lists the database's files (`sys.master_files`, at most 256: logical name, type
+and path), which Copy paths copies one per line, for an Attach later.
+
+`sp_detach_db` refuses a database other sessions use (3703, `IN_USE`), so while sessions are connected and Drop Connections
+is cleared the Status is Not ready and OK is disabled; Check Again counts them again. So is a database SQL Server would refuse:
+one used for replication, one with a database snapshot (3709, `DEPENDENTS`), in an availability group, or mirrored, each a
+blocking warning. The menu greys Detach… while the database is restoring, recovering or copying, and while it is suspect or
+recovery pending (SQL Server's 3707 asks for EMERGENCY first). An offline database on a Windows server is Not ready until
+Detach while offline is checked: SQL Server may leave a database detached offline with files it cannot attach again (critic
+A27). On Linux the dialog only says so.
+
+OK runs Close existing connections (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with Drop Connections), then Detach the
+database (`sp_detach_db`, with `@skipchecks = 'false'` when Update Statistics is checked and `'true'` when it is not).
+When the detach fails or is stopped after SINGLE_USER, a compensation step gives the database back the access it had:
+Restore multi-user access, or Restore restricted user access for one that was RESTRICTED_USER; one already SINGLE_USER is
+left so. SSMS's script leaves `@skipchecks` out when Update Statistics is cleared, which runs UPDATE STATISTICS anyway
+(the procedure's default); Varia's Script Action writes `'true'`, with a comment saying why, so the script does what the
+dialog does.
+
+A success keeps the dialog open on its steps with Close focused. The reply lists the files left on the server (`filesKept`),
+the Databases folder is listed again, so the node goes, the database's Database Properties documents on that connection
+turn orphan ("This database no longer exists on <server>." with only Close), and a toast says "<name> was detached. Its
+files stay on the server.", counts the query windows that were using it, and offers Copy paths. The connection forgets
+the name as it does for a dropped database. Detach is offered on box SQL Server only (Managed Instance cannot run
+`sp_detach_db`), greyed on SQL Server's own databases and absent on a snapshot; the backend re-derives every rule above
+before it runs anything and refuses a database whose identity changed since the dialog read it.
 
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
@@ -343,7 +381,7 @@ If the backend stops while an action runs: "The SQL backend stopped while the ac
 
 ### Shared statements
 
-Take Offline and Bring Online plan the first three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile
+Take Offline and Bring Online plan the first three, Detach the next three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile
 names by a live dry run:
 
 | Step | As Script Action writes it |
@@ -460,3 +498,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
 | `sessions` | 8 | Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so |
 | `sessionText` | 128 | Characters of each login, program and host name in that list |
+| `detachFiles` | 256 | Files Detach Database lists as staying on the server, and the reply's `filesKept`; more make the dialog say so |
+| `filePath` | 260 | Characters of a file's path in that list (`sys.master_files.physical_name` is nvarchar(260)) |
