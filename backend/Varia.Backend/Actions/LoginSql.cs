@@ -38,12 +38,13 @@ internal static partial class LoginSql
     // --- Catalog statements -----------------------------------------------------------------------------------------------
 
     /// <summary>New Login's describe, in master: whether the server takes Windows authentication only and whether this login may
-    /// create logins (advisory: NULL does not warn), then at most @databases databases with their state and this login's access,
+    /// create logins (advisory: NULL does not warn), then at most @databases databases with their state, this login's access and
+    /// whether they are read-only (ActionSql.ReadOnlyFact),
     /// @languages languages and @roles server roles (each one more than listed, so a truncation shows).</summary>
     public const string Describe = "SELECT CONVERT(bit, CASE WHEN CONVERT(int, SERVERPROPERTY('IsIntegratedSecurityOnly')) = 1 THEN 1 ELSE 0 END) AS windows_only, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 1)) AS can_create;\n"
-        + "SELECT TOP (@databases) d.name AS name, d.state AS state, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access "
-        + "FROM sys.databases AS d ORDER BY d.name;\n"
+        + "SELECT TOP (@databases) d.name AS name, d.state AS state, CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, "
+        + ActionSql.ReadOnlyFact + " AS read_only FROM sys.databases AS d ORDER BY d.name;\n"
         + "SELECT TOP (@languages) l.name AS name, l.alias AS alias FROM sys.syslanguages AS l ORDER BY l.name;\n"
         + "SELECT TOP (@roles) p.name AS name, p.is_fixed_role AS is_fixed FROM sys.server_principals AS p WHERE p.type = 'R' ORDER BY p.name;";
 

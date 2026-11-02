@@ -176,8 +176,10 @@ export interface LoginStatusChoice { readonly connect: 'grant' | 'deny'; readonl
 /** Passwords, only ever on actions.execute (sensitive as a whole); at most loginLimits.password UTF-16 units, no U+0000, well formed. */
 export interface LoginSecrets { readonly password?: string; readonly oldPassword?: string }
 
-/** A database as New Login's Default database list shows it. */
-export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean }
+/** A database as New Login's Default database list and User Mapping show it: its sys.databases state, whether this login can
+ *  open it, and whether it is read-only (set READ_ONLY, a log-shipping standby or a database snapshot), where no user can be
+ *  created. */
+export interface NewLoginDatabase { readonly name: string; readonly state: number; readonly accessible: boolean; readonly readOnly: boolean }
 /** A language from sys.syslanguages: SSMS lists names; the alias is secondary text. */
 export interface NewLoginLanguage { readonly name: string; readonly alias: string }
 /** A server role from sys.server_principals (type R): fixed roles, SQL Server 2022's ##MS_…## roles, and user-defined ones. */
@@ -281,7 +283,7 @@ export const tooManyStatementsMessage = (limit: number) => `This login would nee
 export const userMappingMessages = {
   rolesLoading: 'Reading the database roles…',
   notMapped: 'Check Map to choose roles for this database.',
-  unavailable: 'This database is not online or not accessible to you, so it cannot be mapped.',
+  unavailable: 'This database is not online, not accessible to you, or read-only, so it cannot be mapped.',
   mappingsLimit: `At most ${loginLimits.mappings} databases can be mapped at once.`,
   noSchemas: 'This database lists no schemas.'
 } as const

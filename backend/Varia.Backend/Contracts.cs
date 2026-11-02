@@ -247,7 +247,9 @@ internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTrunc
 internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,
     List<NewLoginServerRoleDto> ServerRoles, bool ServerRolesTruncated);
 internal sealed record NewLoginServerDto(int Level, bool Linux, bool WindowsOnly, bool CanCreate);
-internal sealed record NewLoginDatabaseDto(string Name, int State, bool Accessible);
+/// <summary>A database User Mapping lists: its sys.databases state, whether this login can open it, and whether it is read-only (set
+/// READ_ONLY, a standby or a snapshot), where no user can be created.</summary>
+internal sealed record NewLoginDatabaseDto(string Name, int State, bool Accessible, bool ReadOnly);
 internal sealed record NewLoginLanguageDto(string Name, string Alias);
 internal sealed record NewLoginServerRoleDto(string Name, bool Fixed);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>

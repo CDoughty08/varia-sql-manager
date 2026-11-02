@@ -169,9 +169,14 @@ internal static partial class ActionSql
 
     // --- Catalog statements ---------------------------------------------------------------------------------------------
 
-    /// <summary>The object's database as master sees it: whether it exists, is online, and the login can open it.</summary>
+    /// <summary>Whether sys.databases' row d cannot be written to: set READ_ONLY, a log-shipping standby, or a database snapshot. An
+    /// availability group's readable secondary is not caught: its role is only in a DMV that needs VIEW SERVER STATE.</summary>
+    public const string ReadOnlyFact = "CONVERT(bit, CASE WHEN d.is_read_only = 1 OR d.is_in_standby = 1 OR d.source_database_id IS NOT NULL THEN 1 ELSE 0 END)";
+
+    /// <summary>The object's database as master sees it: whether it exists, is online, the login can open it, and it is read-only
+    /// (<see cref="ReadOnlyFact"/>).</summary>
     public const string DatabaseState = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
-        + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access FROM sys.databases AS d WHERE d.name = @db;";
+        + "CONVERT(bit, ISNULL(CASE WHEN d.user_access = 1 THEN 1 ELSE HAS_DBACCESS(d.name) END, 0)) AS has_access, " + ReadOnlyFact + " AS read_only FROM sys.databases AS d WHERE d.name = @db;";
 
     /// <summary>The sys.objects types a kind's object is found by.</summary>
     public static string Types(string kind) => kind switch

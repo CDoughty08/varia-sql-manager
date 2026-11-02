@@ -386,9 +386,11 @@ SQL Server (Managed Instance follows); its target is the server.
   takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.
 - **Server Roles**: every server role, public checked and greyed (every login is a member).
 - **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login
-  listed, virtualized; a database that is not online or not open to this login shows its state chip (or NO ACCESS) and cannot
-  be mapped. Map fills User with the login name (which a rename follows while they match); a blank User is the login name and a
-  blank Default Schema leaves the clause out. The … button (and Alt+Down) opens Select Schema, the database's schemas. Below it,
+  listed, virtualized; a database that is not online, not open to this login, or read-only (set READ_ONLY, a log-shipping
+  standby or a database snapshot, where CREATE USER would fail after CREATE LOGIN had run) shows its state chip (or NO ACCESS,
+  READ-ONLY) and cannot be mapped. Map fills User with the login name; a User or Default Schema that equals the login name
+  follows a rename, on unmapped rows too, but a blank one stays blank: a blank User shows and sends the login name, and a blank
+  Default Schema leaves the clause out (typing the name after checking Map never sets one). The … button (and Alt+Down) opens Select Schema, the database's schemas. Below it,
   "Guest account enabled for:" the selected database (read-only, as in SSMS) and "Database role membership for:" it: public
   checked and greyed, the others enabled once its row is mapped. The keys are the grid's: arrows, Home/End, Page Up/Down,
   Space toggles Map, F2 or Enter or typing edits User or Default Schema, Enter or Tab commits, Escape ends the edit only.
@@ -431,9 +433,13 @@ at the message limit cuts the list of completed steps, never that. When Stop rea
 backend looks for the login within the cleanup budget; if it exists, that step is done and the message says so. Either way the
 dialog reloads Logins and selects the login, as after OK, and stays open with the error.
 Before anything runs, the preflight refuses a name a login or server role already has (`NAME_IN_USE`) and a
-login without ALTER ANY LOGIN (`PERMISSION_DENIED`); then, per mapped database, one that is gone (`NOT_FOUND`), not online or
-not open to this login (`DATABASE_UNAVAILABLE`), a user name a user or role there already has (`NAME_IN_USE`) and a role it lacks
-(`NOT_FOUND`). The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
+login without ALTER ANY LOGIN (`PERMISSION_DENIED`); then, per mapped database, one that is gone (`NOT_FOUND`), not online,
+not open to this login or read-only (`DATABASE_UNAVAILABLE`), a user name a user or role there already has (`NAME_IN_USE`) and a
+role it lacks (`NOT_FOUND`). Two cases are not caught before `CREATE LOGIN` runs, so they end as a partial run: an availability
+group's readable secondary (its role is only in a DMV that needs VIEW SERVER STATE), which fails `CREATE USER` as read-only, and a
+Windows login whose SID already has a user under another name in the database (an orphan, often after a restore from another
+server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain
+from the preflight. The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
 which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
 15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
 and each mapped database's Users folder that Object Explorer has listed reloads (after a partial run too).

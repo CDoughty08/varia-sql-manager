@@ -24,8 +24,8 @@ const ids = () => ({ connectionId: crypto.randomUUID(), requestId: crypto.random
 const model = (): NewLoginModel => ({
   server: { level: 17, linux: false, windowsOnly: false, canCreate: true },
   databases: [
-    { name: 'AppData', state: 0, accessible: true }, { name: 'Closed', state: 0, accessible: false }, { name: 'master', state: 0, accessible: true },
-    { name: 'Old', state: 6, accessible: false }, { name: 'Sales', state: 0, accessible: true }
+    { name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Closed', state: 0, accessible: false, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false },
+    { name: 'Old', state: 6, accessible: false, readOnly: false }, { name: 'Sales', state: 0, accessible: true, readOnly: false }, { name: 'Shelf', state: 0, accessible: true, readOnly: true }
   ],
   databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false
 })
@@ -108,12 +108,28 @@ describe('User Mapping\'s draft and request', () => {
     expect(current.name).toBe('new')
     expect(mappingOf(current, 'Sales')).toMatchObject({ user: 'new', defaultSchema: 'new' })
     expect(mappingOf(current, 'AppData').user).toBe('kept')
-    // An unmapped row keeps what it had; checking Map again restores it.
-    expect(mappingOf(current, 'master').user).toBe('old')
+    // An unmapped row's User named after the login follows it too, so checking Map again never maps a user named after an
+    // earlier login name.
+    expect(mappingOf(current, 'master')).toMatchObject({ map: false, user: 'new' })
+    current = { ...current, ...setMapped(current, 'master', true) }
+    expect(userMappings(model(), current).find(mapping => mapping.database === 'master')).toEqual({ database: 'master', user: 'new', rolesAdd: [] })
+  })
+  it('never fills a blank Default Schema with the login name: Map checked before the name is typed, or the name cleared and typed again', () => {
+    const typing = (from: NewLoginDraft, ...names: string[]) => names.reduce<NewLoginDraft>((current, name) => ({ ...current, ...renameLogin(current, name) }), from)
+    let first = draft({ name: '' })
+    first = { ...first, ...setMapped(first, 'AppData', true) }
+    first = typing(first, 'D', 'DO', 'DOM\\u')
+    expect(mappingOf(first, 'AppData')).toMatchObject({ map: true, user: '', defaultSchema: '' })
+    expect(userMappings(model(), first)).toEqual([{ database: 'AppData', user: 'DOM\\u', rolesAdd: [] }])
+    let again = draft({ name: 'bob' })
+    again = { ...again, ...setMapped(again, 'Sales', true) }
+    again = typing(again, 'bo', 'b', '', 'a', 'al')
+    expect(mappingOf(again, 'Sales')).toMatchObject({ map: true, defaultSchema: '' })
+    expect(userMappings(model(), again)).toEqual([{ database: 'Sales', user: 'al', rolesAdd: [] }])
   })
   it('sends mapped databases the server can map, in the describe\'s order: a blank User is the login, a blank schema none, roles by name', () => {
     let current = draft()
-    for (const database of ['Sales', 'Old', 'Closed', 'AppData', 'Gone']) current = { ...current, mappings: [...current.mappings, { database, map: true, user: '', defaultSchema: '', roles: [] }] }
+    for (const database of ['Sales', 'Old', 'Closed', 'Shelf', 'AppData', 'Gone']) current = { ...current, mappings: [...current.mappings, { database, map: true, user: '', defaultSchema: '', roles: [] }] }
     current = { ...current, ...setMappingSchema(current, 'Sales', 'reporting') }
     current = { ...current, ...setMappingRole(current, 'Sales', 'db_owner', true) }
     current = { ...current, ...setMappingRole(current, 'Sales', 'Readers', true) }
@@ -127,9 +143,12 @@ describe('User Mapping\'s draft and request', () => {
     expect(valid({ ...built, ...ids() })).toBe(true)
     expect(mappable(model().databases[1])).toBe(false)
     expect(mappable(model().databases[3])).toBe(false)
+    // A read-only database (set READ_ONLY, a standby or a snapshot) would fail CREATE USER after CREATE LOGIN had run.
+    expect(mappable(model().databases[5])).toBe(false)
+    expect(mappable(model().databases[4])).toBe(true)
   })
   it('names a plan too large for one request before anything is sent', () => {
-    const many = { ...model(), databases: Array.from({ length: loginLimits.mappings + 1 }, (_, index) => ({ name: `d${index}`, state: 0, accessible: true })) }
+    const many = { ...model(), databases: Array.from({ length: loginLimits.mappings + 1 }, (_, index) => ({ name: `d${index}`, state: 0, accessible: true, readOnly: false })) }
     const mapped = draft({ defaultDatabase: 'd0', mappings: many.databases.map(database => ({ database: database.name, map: true, user: '', defaultSchema: '', roles: [] })) })
     expect(newLoginRequest(server, many, mapped, set)).toEqual({ problem: userMappingMessages.mappingsLimit })
     const heavy = draft({ mappings: ['AppData', 'Sales'].map(database => ({ database, map: true, user: '', defaultSchema: '', roles: roles(256) })) })
@@ -139,10 +158,12 @@ describe('User Mapping\'s draft and request', () => {
 
 describe('User Mapping\'s grid helpers', () => {
   it('greys databases SSMS cannot map with their state, and renders only the rows in view', () => {
-    expect(unavailableChip({ name: 'Old', state: 6, accessible: false })).toMatchObject({ label: 'OFFLINE', tone: 'warning' })
-    expect(unavailableChip({ name: 'R', state: 1, accessible: false })).toMatchObject({ label: 'RESTORING' })
-    expect(unavailableChip({ name: 'Closed', state: 0, accessible: false })).toMatchObject({ label: 'NO ACCESS' })
-    expect(unavailableChip({ name: 'Open', state: 0, accessible: true })).toBeUndefined()
+    expect(unavailableChip({ name: 'Old', state: 6, accessible: false, readOnly: false })).toMatchObject({ label: 'OFFLINE', tone: 'warning' })
+    expect(unavailableChip({ name: 'R', state: 1, accessible: false, readOnly: false })).toMatchObject({ label: 'RESTORING' })
+    expect(unavailableChip({ name: 'Closed', state: 0, accessible: false, readOnly: false })).toMatchObject({ label: 'NO ACCESS' })
+    expect(unavailableChip({ name: 'Open', state: 0, accessible: true, readOnly: false })).toBeUndefined()
+    expect(unavailableChip({ name: 'Shelf', state: 0, accessible: true, readOnly: true })).toMatchObject({ label: 'READ-ONLY', tone: 'warning' })
+    expect(unavailableChip({ name: 'Old', state: 6, accessible: false, readOnly: true })).toMatchObject({ label: 'OFFLINE' })
     expect(userMappingRowHeight).toBe(22)
     expect(mappingRange(0, 198, 4_096)).toEqual({ first: 0, last: 15 })
     expect(mappingRange(22 * 1_000, 198, 4_096)).toEqual({ first: 994, last: 1_015 })
@@ -201,11 +222,12 @@ describe('User Mapping in the object dialog service', () => {
     dialogs.loadDatabaseRoles('Sales')
     expect(api.describeObject).toHaveBeenCalledTimes(2)
   })
-  it('never reads a database that cannot be mapped (offline, or closed to this login)', async () => {
+  it('never reads a database that cannot be mapped (offline, closed to this login, or read-only)', async () => {
     const { dialogs, api, open } = setup()
     await open()
     dialogs.loadDatabaseRoles('Old')
     dialogs.loadDatabaseRoles('Closed')
+    dialogs.loadDatabaseRoles('Shelf')
     expect(api.describeObject).toHaveBeenCalledTimes(1)
     expect(dialogs.current?.databaseRoles?.size ?? 0).toBe(0)
   })

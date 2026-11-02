@@ -3,10 +3,10 @@ using Varia.Backend.Actions;
 namespace Varia.Backend.Tests;
 
 /// <summary>Live checks of PR D2b, New Login's User Mapping, with VARIA_TEST_SQL_SCRATCH=1 and a sysadmin connection, in the scratch
-/// databases VariaScratch_…_lgm and _lgmo (offline) with logins named VariaScratch_…_l…: the roles describe (roles, guest, schemas)
+/// databases VariaScratch_…_lgm, _lgmo (offline) and _lgmr (read-only) with logins named VariaScratch_…_l…: the roles describe (roles, guest, schemas)
 /// and its refusals; a real create mapping a user with hostile names, a missing default schema (created, owned by the user) and two
-/// roles; an existing default schema (no CREATE SCHEMA); the per-database preflight refusing a name in use, a missing role, a missing
-/// and an offline database before anything runs; a role that vanishes mid-plan and Stop before CREATE USER, each reply starting with
+/// roles; an existing default schema (no CREATE SCHEMA); the per-database preflight refusing a name in use, a missing role, a missing,
+/// an offline and a read-only database before anything runs (New Login's describe marks the read-only one); a role that vanishes mid-plan and Stop before CREATE USER, each reply starting with
 /// the login's real state; and the script: unedited it runs nothing, edited it creates all of it, and edited with a role that does
 /// not exist it rolls back whole (XACT_ABORT), the login included. Passwords are throwaway and never printed.</summary>
 internal static class LoginMappingLiveChecks
@@ -21,7 +21,7 @@ internal static class LoginMappingLiveChecks
             LoginChecks.Create(LoginChecks.Sql(login, false, false, false), password, mappings: [.. mappings]) with { ConnectionId = info.Id };
         var password = ScratchDatabase.Throwaway();
 
-        var (database, offline) = await scratch.CreateMappingDatabasesAsync();
+        var (database, offline, readOnly) = await scratch.CreateMappingDatabasesAsync();
         const string role = "Varia]r'ole", gone = "VariaGone", taken = "taken";
         var setUp = await Sql("CREATE ROLE " + B(role) + ";\nCREATE ROLE " + B(gone) + ";\nCREATE USER " + B(taken) + " WITHOUT LOGIN;", database);
         check(setUp.Status == "completed", "the User Mapping database's roles and user are created: " + setUp.Error);
@@ -39,12 +39,20 @@ internal static class LoginMappingLiveChecks
         var described = await Describe(database);
         var master = await Describe("master");
         var offlineDescribed = await Describe(offline);
+        var readOnlyDescribed = await Describe(readOnly);
         var missingDescribed = await Describe(scratch.Name + "_none");
         check(described.LoginDatabaseRoles is { Guest: false, RolesTruncated: false, SchemasTruncated: false } roles
             && new[] { "public", "db_owner", "db_datareader", role, gone }.All(roles.Roles.Contains) && !roles.Roles.Contains(taken) && roles.Schemas.Contains("dbo")
-            && master.LoginDatabaseRoles is { Guest: true } && offlineDescribed is { Error.Code: "DATABASE_UNAVAILABLE", LoginDatabaseRoles: null } && missingDescribed.Error?.Code == "NOT_FOUND",
-            "User Mapping's describe lists a database's roles and schemas and whether guest may connect (master's may), and refuses an offline or missing database: "
-            + string.Join(",", described.LoginDatabaseRoles?.Roles ?? []) + " | " + offlineDescribed.Error?.Code + " " + missingDescribed.Error?.Code);
+            && master.LoginDatabaseRoles is { Guest: true } && offlineDescribed is { Error.Code: "DATABASE_UNAVAILABLE", LoginDatabaseRoles: null }
+            && readOnlyDescribed is { Error.Code: "DATABASE_UNAVAILABLE", LoginDatabaseRoles: null } && readOnlyDescribed.Error.Message.EndsWith(" is read-only, so it cannot be mapped.", StringComparison.Ordinal)
+            && missingDescribed.Error?.Code == "NOT_FOUND",
+            "User Mapping's describe lists a database's roles and schemas and whether guest may connect (master's may), and refuses an offline, read-only or missing database: "
+            + string.Join(",", described.LoginDatabaseRoles?.Roles ?? []) + " | " + offlineDescribed.Error?.Code + " " + readOnlyDescribed.Error?.Message + " " + missingDescribed.Error?.Code);
+        // New Login's describe marks the read-only database, which the page greys, and only it.
+        var listed = (await actions.DescribeAsync(new ActionDescribeArgs(info.Id, Guid.NewGuid().ToString(), "newLogin", new ObjectRefDto("server")), CancellationToken.None)).NewLogin?.Databases ?? [];
+        check(listed.Any(item => item.Name == readOnly && item is { State: 0, Accessible: true, ReadOnly: true }) && listed.Any(item => item.Name == database && item is { State: 0, Accessible: true, ReadOnly: false })
+            && listed.Any(item => item is { Name: "master", ReadOnly: false }),
+            "New Login's describe says which databases are read-only (" + readOnly + "), so User Mapping greys them: " + string.Join(", ", listed.Where(item => item.ReadOnly).Select(item => item.Name)));
 
         // A real create: a user with a hostile name, a default schema that does not exist (SSMS creates it, owned by the user), two roles.
         var login = scratch.OwnLogin("map");
@@ -69,11 +77,14 @@ internal static class LoginMappingLiveChecks
         var noRole = await actions.ExecuteAsync(Create(refusedLogin, password, LoginMappingChecks.Map(database, "u", null, "VariaNoRole")), CancellationToken.None);
         var noDatabase = await actions.ExecuteAsync(Create(refusedLogin, password, LoginMappingChecks.Map(scratch.Name + "_none", "u")), CancellationToken.None);
         var offlineRun = await actions.ExecuteAsync(Create(refusedLogin, password, LoginMappingChecks.Map(database, "u2"), LoginMappingChecks.Map(offline, "u")), CancellationToken.None);
-        var refusals = new[] { inUse, roleName, noRole, noDatabase, offlineRun };
-        check(refusals.Select(result => result.Error?.Code).SequenceEqual(["NAME_IN_USE", "NAME_IN_USE", "NOT_FOUND", "NOT_FOUND", "DATABASE_UNAVAILABLE"]) && refusals.All(result => result.Steps.Count == 0)
-            && await Logins(refusedLogin) == "0" && await Users("u", "u2") == "0"
+        // A read-only database would fail CREATE USER (3906) after CREATE LOGIN had run, so the preflight refuses it first.
+        var readOnlyRun = await actions.ExecuteAsync(Create(refusedLogin, password, LoginMappingChecks.Map(database, "u3"), LoginMappingChecks.Map(readOnly, "u")), CancellationToken.None);
+        var refusals = new[] { inUse, roleName, noRole, noDatabase, offlineRun, readOnlyRun };
+        check(refusals.Select(result => result.Error?.Code).SequenceEqual(["NAME_IN_USE", "NAME_IN_USE", "NOT_FOUND", "NOT_FOUND", "DATABASE_UNAVAILABLE", "DATABASE_UNAVAILABLE"]) && refusals.All(result => result.Steps.Count == 0)
+            && readOnlyRun.Error!.Message.EndsWith(" is read-only, so it cannot be mapped.", StringComparison.Ordinal)
+            && await Logins(refusedLogin) == "0" && await Users("u", "u2", "u3") == "0"
             && !refusals.Any(result => System.Text.Json.JsonSerializer.Serialize(result).Contains(password, StringComparison.Ordinal)),
-            "User Mapping's preflight refuses a user or role name in use, a missing role, and a missing or offline database before anything runs, so no login is created: "
+            "User Mapping's preflight refuses a user or role name in use, a missing role, and a missing, offline or read-only database before anything runs, so no login is created: "
             + string.Join(", ", refusals.Select(result => result.Error?.Code ?? "ok")));
 
         // A role that vanishes after the preflight fails its step: the login and user stay, and the reply says so first.

@@ -107,7 +107,7 @@ internal sealed partial class ActionService
         if (await reader.ReadAsync(token)) { windowsOnly = reader.GetBoolean(0); canCreate = reader.GetBoolean(1); }
         var listed = new List<NewLoginDatabaseDto>();
         if (await reader.NextResultAsync(token))
-            while (await reader.ReadAsync(token)) listed.Add(new(reader.GetString(0), Convert.ToInt32(reader.GetValue(1), System.Globalization.CultureInfo.InvariantCulture), reader.GetBoolean(2)));
+            while (await reader.ReadAsync(token)) listed.Add(new(reader.GetString(0), Convert.ToInt32(reader.GetValue(1), System.Globalization.CultureInfo.InvariantCulture), reader.GetBoolean(2), reader.GetBoolean(3)));
         var names = new List<NewLoginLanguageDto>();
         if (await reader.NextResultAsync(token))
             while (await reader.ReadAsync(token)) names.Add(new(reader.GetString(0), reader.IsDBNull(1) ? "" : reader.GetString(1)));
@@ -155,8 +155,8 @@ internal sealed partial class ActionService
         return command;
     }
 
-    /// <summary>Why a database cannot be mapped or read, as master sees it (ActionSql.DatabaseState): gone, not online, or not open
-    /// to this login; null when it can.</summary>
+    /// <summary>Why a database cannot be mapped or read, as master sees it (ActionSql.DatabaseState): gone, not online, not open to
+    /// this login, or read-only (CREATE USER would fail with 3906 after CREATE LOGIN had run); null when it can.</summary>
     private async Task<ActionError?> DatabaseUnavailableAsync(SqlConnection connection, string database, CancellationToken token)
     {
         await using var state = connection.CreateCommand();
@@ -168,6 +168,7 @@ internal sealed partial class ActionService
         var facts = ReadRow(reader);
         if (facts.Int("state") != 0 || !facts.Bool("has_access"))
             return Error("DATABASE_UNAVAILABLE", "The database " + ScriptingErrors.Display(database) + " is " + (facts.Int("state") != 0 ? (facts.Text("state_desc") ?? "unavailable").ToLowerInvariant() : "not accessible to this login") + ", so it cannot be mapped.");
+        if (facts.Bool("read_only")) return Error("DATABASE_UNAVAILABLE", "The database " + ScriptingErrors.Display(database) + " is read-only, so it cannot be mapped.");
         return null;
     }
 

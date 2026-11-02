@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, longDatabase, longRole, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, editorTextbox, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, passwordField, propertyFact, propertyRow,
@@ -574,7 +574,8 @@ try {
   // and keep what was typed across pages; Script (clipboard and a query window, so AutoRecover too) never carries the password,
   // which goes only with OK; PASSWORD_POLICY keeps the dialog and its password; Stop answers Stopped with the steps; OK adds the
   // login, and Logins shows and selects it. New Login… on the Logins folder opens the same dialog. User Mapping (D2b) maps
-  // AppData with the login's name, a schema chosen in Select Schema and a role, by pointer and by keys, never the offline Archive.
+  // AppData with the login's name, a schema chosen in Select Schema and a role, by pointer and by keys, never the offline Archive
+  // or the read-only Ledger.
   const loginDialog = () => page.getByRole('dialog', { name: 'Login - New', exact: true })
   const typed = 'Typed-Z9q-' + Date.now().toString(36)
   // Logins listed first: OK reloads that folder and selects the new login (a folder Object Explorer has not listed stays so).
@@ -644,13 +645,26 @@ try {
   await expect(mappingGrid.getByRole('columnheader')).toHaveText(['Map', 'Database', 'User', 'Default Schema'])
   await expect(mappingGrid.getByRole('checkbox', { name: 'Map Archive', exact: true }), 'an offline database cannot be mapped').toBeDisabled()
   await expect(mappingRow('Archive')).toContainText('OFFLINE')
+  await expect(mappingGrid.getByRole('checkbox', { name: 'Map Ledger', exact: true }), 'a read-only database cannot be mapped').toBeDisabled()
+  await expect(mappingRow('Ledger')).toContainText('READ-ONLY')
+  // Thirteen databases, so the rows scroll: the header's columns still sit over the cells (both keep the scroll bar's gutter).
+  const columnLefts = locator => locator.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().left))
+  const [heads, cells] = [await columnLefts(mappingGrid.getByRole('columnheader')), await columnLefts(mappingRow('AppData').getByRole('gridcell'))]
+  expect(heads.map((left, index) => Math.abs(left - cells[index]) <= 1), `header lefts ${heads} over cell lefts ${cells}`).toEqual([true, true, true, true])
+  // A long database name ends in an ellipsis inside its cell and shows whole in its tooltip.
+  const clipped = locator => locator.evaluate(text => { const style = getComputedStyle(text); return [style.overflowX, style.textOverflow, text.getBoundingClientRect().right <= text.parentElement.getBoundingClientRect().right + 0.5] })
+  expect(await clipped(mappingRow(longDatabase).getByTitle(longDatabase, { exact: true }))).toEqual(['hidden', 'ellipsis', true])
   await mappingGrid.getByRole('checkbox', { name: 'Map AppData', exact: true }).check()
   expect(await mappingCells('AppData')).toEqual(['', 'AppData', 'app_reader', ''])
   const databaseRoles = loginDialog().getByRole('group', { name: 'Database role membership for: AppData', exact: true })
   await expect(databaseRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeChecked()
   await expect(databaseRoles.getByRole('checkbox', { name: 'public', exact: true })).toBeDisabled()
   await expect(loginDialog().getByRole('checkbox', { name: 'Guest account enabled for: AppData', exact: true })).not.toBeChecked()
+  // The database's name runs on inline from the label's words (not as a flex item of its own), so no gap widens the space before it.
+  expect(await loginDialog().getByRole('checkbox', { name: 'Guest account enabled for: AppData', exact: true }).evaluate(input => getComputedStyle(input.closest('label').querySelector('bdi')).display)).toBe('inline')
   await databaseRoles.getByRole('checkbox', { name: 'db_datareader', exact: true }).check()
+  // So does a long role name, within its column.
+  expect(await clipped(databaseRoles.getByTitle(longRole, { exact: true }))).toEqual(['hidden', 'ellipsis', true])
   // Select Schema (the cell's … button) lists the database's schemas; OK puts the one chosen in Default Schema.
   await mappingGrid.getByRole('button', { name: 'Select Schema for AppData', exact: true }).click()
   const selectSchema = page.getByRole('dialog', { name: 'Select Schema', exact: true })
@@ -659,10 +673,27 @@ try {
   await selectSchema.getByRole('button', { name: 'OK', exact: true }).click()
   await expect(selectSchema).toHaveCount(0)
   expect(await mappingCells('AppData')).toEqual(['', 'AppData', 'app_reader', 'sales'])
+  // Select Schema hands focus back to the grid, not to the … button the pointer pressed, so the keys move a cell that shows.
+  await expect(mappingGrid).toBeFocused()
   await page.screenshot({ path: resolve('artifacts', 'object-actions-new-login-user-mapping-dark.png') })
-  // By keys: Down moves to Archive and master, Space maps and unmaps master (whose guest may connect), Home and Right reach User, F2 edits it, and
-  // Escape ends the edit, never the dialog.
-  await mappingGrid.focus()
+  // Tab leaves the grid for the next control (the first role it may check), never for the grid's unnamed scrolling box.
+  await page.keyboard.press('Tab')
+  await expect(databaseRoles.getByRole('checkbox', { name: 'db_datareader', exact: true })).toBeFocused()
+  await page.keyboard.press('Shift+Tab')
+  await expect(mappingGrid).toBeFocused()
+  // In forced colours the selected row is Highlight, and everything in it HighlightText: the active cell's outline, the … button,
+  // and a greyed database's name.
+  await page.emulateMedia({ forcedColors: 'active' })
+  expect(await mappingGrid.getByRole('gridcell', { selected: true }).evaluate(cell => { const style = getComputedStyle(cell); return [style.outlineStyle, style.outlineColor === style.color] })).toEqual(['solid', true])
+  expect(await mappingGrid.getByRole('button', { name: 'Select Schema for AppData', exact: true }).evaluate(button => {
+    const style = getComputedStyle(button), cell = getComputedStyle(button.parentElement)
+    return [style.color === cell.color, style.borderTopColor === cell.color, style.backgroundColor === cell.backgroundColor]
+  })).toEqual([true, true, true])
+  // By keys: Down moves to Archive, Ledger and master, Space maps and unmaps master (whose guest may connect), Home and Right reach User,
+  // F2 edits it, and Escape ends the edit, never the dialog.
+  await page.keyboard.press('ArrowDown')
+  expect(await mappingRow('Archive').getByTitle('Archive', { exact: true }).evaluate(text => getComputedStyle(text).color === getComputedStyle(text.parentElement).color)).toBe(true)
+  await page.emulateMedia({ forcedColors: null })
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('ArrowDown')
   await expect(loginDialog().getByRole('checkbox', { name: 'Guest account enabled for: master', exact: true })).toBeChecked()

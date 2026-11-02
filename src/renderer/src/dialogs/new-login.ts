@@ -73,8 +73,9 @@ export function mappingOf(draft: Pick<NewLoginDraft, 'mappings'>, database: stri
 }
 const withMapping = (draft: NewLoginDraft, next: MappingDraft): Pick<NewLoginDraft, 'mappings'> =>
   ({ mappings: draft.mappings.some(mapping => mapping.database === next.database) ? draft.mappings.map(mapping => mapping.database === next.database ? next : mapping) : [...draft.mappings, next] })
-/** Whether a database can be mapped: online and open to this login (SSMS greys the others, checking Status & Normal). */
-export const mappable = (database: NewLoginModel['databases'][number]) => database.state === 0 && database.accessible
+/** Whether a database can be mapped: online and open to this login (SSMS greys the others, checking Status & Normal), and not
+ *  read-only, where CREATE USER fails (3906) after CREATE LOGIN has already run. */
+export const mappable = (database: NewLoginModel['databases'][number]) => database.state === 0 && database.accessible && !database.readOnly
 /** Map checked or cleared. Checking it fills a blank User with the login name, as SSMS does ("By default, the database user has
  *  the same name as the login"). */
 export function setMapped(draft: NewLoginDraft, database: string, map: boolean): Pick<NewLoginDraft, 'mappings'> {
@@ -87,12 +88,16 @@ export function setMappingRole(draft: NewLoginDraft, database: string, role: str
   const current = mappingOf(draft, database), roles = current.roles.filter(name => name !== role)
   return withMapping(draft, { ...current, roles: checked && role !== publicRole ? [...roles, role] : roles })
 }
-/** The login name changed: as SSMS's UpdateDefaultSchemaAndUserNames does, a mapped row whose User or Default Schema was the old
- *  name follows the new one. */
+/** The login name changed: as SSMS's UpdateDefaultSchemaAndUserNames does, a row whose User or Default Schema was the old name
+ *  follows the new one, an unmapped row too, so checking Map again never maps a user named after an earlier login name. A blank
+ *  field stays blank: a blank User already means the login name, and a blank Default Schema means none (no ALTER USER, no
+ *  CREATE SCHEMA), even while the name is typed after Map was checked or after it was cleared. */
 export function renameLogin(draft: NewLoginDraft, name: string): Pick<NewLoginDraft, 'name' | 'mappings'> {
-  const follow = (value: string) => value === draft.name ? name : value
-  return { name, mappings: draft.name === name ? draft.mappings : draft.mappings.map(mapping => mapping.map ? { ...mapping, user: follow(mapping.user), defaultSchema: follow(mapping.defaultSchema) } : mapping) }
+  const follow = (value: string) => value !== '' && value === draft.name ? name : value
+  return { name, mappings: draft.name === name ? draft.mappings : draft.mappings.map(mapping => ({ ...mapping, user: follow(mapping.user), defaultSchema: follow(mapping.defaultSchema) })) }
 }
+/** The User a mapped row shows and OK sends: a blank one is the login name. */
+export const mappedUser = (draft: Pick<NewLoginDraft, 'name'>, mapping: MappingDraft) => mapping.user || draft.name
 /** The mappings OK sends: mapped rows of databases the describe lists and that can be mapped, in its order (by name); a blank User
  *  is the login name and a blank Default Schema none; roles by name. */
 export function userMappings(model: NewLoginModel, draft: NewLoginDraft): UserMappingChoice[] {
@@ -100,7 +105,7 @@ export function userMappings(model: NewLoginModel, draft: NewLoginDraft): UserMa
   return model.databases.filter(database => mappable(database) && byName.has(database.name)).map(database => {
     const mapping = byName.get(database.name)!
     const roles = [...new Set(mapping.roles)].filter(role => role !== publicRole).sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
-    return { database: database.name, user: mapping.user || draft.name, ...(mapping.defaultSchema ? { defaultSchema: mapping.defaultSchema } : {}), rolesAdd: roles }
+    return { database: database.name, user: mappedUser(draft, mapping), ...(mapping.defaultSchema ? { defaultSchema: mapping.defaultSchema } : {}), rolesAdd: roles }
   })
 }
 

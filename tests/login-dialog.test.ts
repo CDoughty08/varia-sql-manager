@@ -22,7 +22,7 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const server: ObjectRef = { kind: 'server' }
 const model = (changes: Partial<NewLoginModel['server']> = {}): NewLoginModel => ({
   server: { level: 17, linux: false, windowsOnly: false, canCreate: true, ...changes },
-  databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+  databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false }], databasesTruncated: false,
   languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
   serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false
 })

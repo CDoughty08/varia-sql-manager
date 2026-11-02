@@ -15,7 +15,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
  * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master, AppData and the
- * offline Archive, two languages, three server roles); User Mapping's roles describe answers `databaseRoles` (guest only in
+ * offline Archive, the read-only Ledger, `longDatabase` and eight Warehouse databases, so User Mapping's grid scrolls; two
+ * languages, three server roles); User Mapping's roles describe answers `databaseRoles` (with `longRole`; guest only in
  * master); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at "Create the login", "Held"
  * waits until its Stop arrives, and anything else adds the login.
  */
@@ -30,7 +31,9 @@ export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId i
 export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
 /** User Mapping's roles describe of a database: its roles and schemas, and guest's CONNECT (master's only). */
-export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers'], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
+export const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+export const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+export const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics }) {
@@ -43,7 +46,9 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
-  const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers'], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
+  const longDatabase = 'Reports_a_very_long_database_name_that_should_overflow_its_column_width_in_any_window'
+  const longRole = 'reporting_readers_with_a_rather_long_role_name_that_cannot_fit_in_one_column_of_the_role_list'
+  const databaseRoles = database => ({ roles: ['db_datareader', 'db_owner', 'public', 'Readers', longRole], rolesTruncated: false, guest: database === 'master', schemas: ['dbo', 'sales'], schemasTruncated: false })
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -182,7 +187,9 @@ export function installActionsStub({ ipcMain }, { statics }) {
           case 'databaseProperties': return properties(params)
           case 'loginDatabaseRoles': return ok({ loginDatabaseRoles: databaseRoles(params.target.name), elapsedMs: 1 })
           case 'newLogin': return ok({ newLogin: { server: { level: 16, linux: false, windowsOnly: false, canCreate: true },
-            databases: [{ name: 'AppData', state: 0, accessible: true }, { name: 'Archive', state: 6, accessible: false }, { name: 'master', state: 0, accessible: true }], databasesTruncated: false,
+            databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Archive', state: 6, accessible: false, readOnly: false }, { name: 'Ledger', state: 0, accessible: true, readOnly: true },
+              { name: 'master', state: 0, accessible: true, readOnly: false }, { name: longDatabase, state: 0, accessible: true, readOnly: false },
+              ...Array.from({ length: 8 }, (_, index) => ({ name: `Warehouse0${index + 1}`, state: 0, accessible: true, readOnly: false }))], databasesTruncated: false,
             languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
             serverRoles: [{ name: 'dbcreator', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false }, elapsedMs: 1 })
           default: return describe(params)

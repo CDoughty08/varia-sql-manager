@@ -3,28 +3,30 @@ import { actionLimits } from '../../../../shared/actions/catalog.ts'
 import { loginLimits, publicRole, userMappingMessages, type NewLoginDatabase, type NewLoginModel } from '../../../../shared/actions/logins.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import { databaseChips } from '../../../../shared/explorer/status.ts'
+import { defaultDensity, densities } from '../../../../shared/theme/metrics.ts'
 import type { StatusTone } from '../../../../shared/theme/tones.ts'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import StatusPill from '../../kit/StatusPill'
-import { mappable, mappingOf, setMapped, setMappingRole, setMappingSchema, setMappingUser, type MappingDraft, type NewLoginDraft } from '../new-login'
+import { mappable, mappedUser, mappingOf, setMapped, setMappingRole, setMappingSchema, setMappingUser, type MappingDraft, type NewLoginDraft } from '../new-login'
 import type { PageProps } from '../ObjectDialog'
 import type { DatabaseRolesLookup } from '../ObjectDialogService'
 import SubDialog from '../SubDialog'
 
-/** Every row has one height, so only the rows in view (and a few more) render: a server lists up to 4,096 databases. */
-export const userMappingRowHeight = 22
+/** Every row has one height, the density's row token (`--varia-row`, which the editor and … button are sized from), so only the
+ *  rows in view (and a few more) render: a server lists up to 4,096 databases. */
+export const userMappingRowHeight = densities[defaultDensity].row
 /** The grid shows this many rows before it scrolls, as SSMS's upper grid does in its dialog. */
 const shownRows = 9
 const overscan = 6
 export const userMappingColumns = ['map', 'database', 'user', 'schema'] as const
 export type UserMappingColumn = typeof userMappingColumns[number]
 const headers: Readonly<Record<UserMappingColumn, string>> = { map: 'Map', database: 'Database', user: 'User', schema: 'Default Schema' }
-/** The chip of a row that cannot be mapped: its state (OFFLINE, RESTORING…) as Object Explorer shows it, or no access. */
+/** The chip of a row that cannot be mapped: its state (OFFLINE, RESTORING…) as Object Explorer shows it, no access, or read-only. */
 const noAccess = { tone: 'warning', label: 'NO ACCESS', title: 'This login cannot open the database.' } as const
 export function unavailableChip(database: NewLoginDatabase): { readonly tone: StatusTone; readonly label: string; readonly title: string } | undefined {
   if (mappable(database)) return undefined
-  if (database.state === 0) return noAccess
-  const chip = databaseChips({ name: database.name, state: database.state, userAccess: 0, readOnly: false, standby: false })[0]
+  if (database.state === 0 && !database.accessible) return noAccess
+  const chip = databaseChips({ name: database.name, state: database.state, userAccess: 0, readOnly: database.readOnly, standby: false })[0]
   return chip ? { tone: chip.tone, label: chip.label, title: chip.title } : noAccess
 }
 
@@ -83,7 +85,7 @@ function UserMappingGrid({ model, draft, editable, onSchema }: { model: NewLogin
     if (!database || !editable || (to !== 'user' && to !== 'schema') || !mappable(database) || !mappingOf(draft, database.name).map) return
     select(index, to)
     const mapping = mappingOf(draft, database.name)
-    setEditing({ database: database.name, column: to, text: text ?? (to === 'user' ? mapping.user : mapping.defaultSchema) })
+    setEditing({ database: database.name, column: to, text: text ?? (to === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) })
   }
   const commit = () => {
     const value = live.current
@@ -140,7 +142,9 @@ function UserMappingGrid({ model, draft, editable, onSchema }: { model: NewLogin
     <div className="user-mapping-head" role="row" aria-rowindex={1}>
       {userMappingColumns.map(of => <span key={of} className="user-mapping-cell" role="columnheader">{headers[of]}</span>)}
     </div>
-    <div ref={body} className="user-mapping-body" style={{ height }} onScroll={scroll}>
+    {/* Out of the tab order: Chromium makes a scrolling box a tab stop of its own, which here has no role or name. A click there
+        focuses the grid, whose active cell the keys move. */}
+    <div ref={body} className="user-mapping-body" style={{ height }} tabIndex={-1} onScroll={scroll} onFocus={event => { if (event.target === event.currentTarget) focusGrid() }}>
       <div style={{ height: count * userMappingRowHeight, position: 'relative' }}>
         {databases.slice(first, last).map((database, offset) => {
           const index = first + offset, mapping: MappingDraft = mappingOf(draft, database.name), chip = unavailableChip(database), usable = !chip
@@ -152,7 +156,7 @@ function UserMappingGrid({ model, draft, editable, onSchema }: { model: NewLogin
           const field = (of: 'user' | 'schema') => editing?.database === database.name && editing.column === of
             ? <input className="user-mapping-editor" autoFocus aria-label={`${headers[of]} in ${database.name}`} maxLength={actionLimits.newName} spellCheck={false} value={editing.text}
               onChange={event => setEditing({ ...editing, text: event.target.value })} onBlur={() => commit()} onFocus={event => { const end = event.currentTarget.value.length; event.currentTarget.setSelectionRange(end, end) }} />
-            : <span className="user-mapping-text"><bdi>{mapped ? displayText(of === 'user' ? mapping.user : mapping.defaultSchema) : ''}</bdi></span>
+            : <span className="user-mapping-text"><bdi>{mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) : ''}</bdi></span>
           return <div key={database.name} className="user-mapping-row" role="row" aria-rowindex={index + 2} aria-selected={selected} aria-disabled={!usable || undefined}
             data-selected={selected || undefined} data-unavailable={!usable || undefined} style={{ top: index * userMappingRowHeight, height: userMappingRowHeight }}>
             <span {...cell('map')} className="user-mapping-cell user-mapping-map">
@@ -160,14 +164,15 @@ function UserMappingGrid({ model, draft, editable, onSchema }: { model: NewLogin
                 onChange={() => { select(index, 'map'); toggle(index); focusGrid() }} />
             </span>
             <span {...cell('database')} className="user-mapping-cell user-mapping-database">
-              <span className="user-mapping-text"><bdi>{displayText(database.name)}</bdi></span>
+              <span className="user-mapping-text" title={displayText(database.name)}><bdi>{displayText(database.name)}</bdi></span>
               {chip && <StatusPill tone={chip.tone} label={chip.label} title={chip.title} size="small" icon={null} />}
             </span>
             <span {...cell('user')} className="user-mapping-cell" onDoubleClick={() => begin(index, 'user')}>{field('user')}</span>
             <span {...cell('schema')} className="user-mapping-cell user-mapping-schema" onDoubleClick={() => begin(index, 'schema')}>
               {field('schema')}
               {mapped && editing?.database !== database.name && <button type="button" className="user-mapping-browse" tabIndex={-1} aria-label={`Select Schema for ${database.name}`} title="Select Schema"
-                disabled={!editable} onPointerDown={event => event.stopPropagation()} onClick={() => { select(index, 'schema'); onSchema(database.name) }}>…</button>}
+                disabled={!editable} onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.preventDefault()}
+                onClick={() => { focusGrid(); select(index, 'schema'); onSchema(database.name) }}>…</button>}
             </span>
           </div>
         })}
@@ -220,7 +225,8 @@ export default function UserMappingPage({ open, editable }: PageProps) {
       {model.databasesTruncated && <li><span>{`Only the first ${model.databases.length.toLocaleString('en-US')} databases are listed.`}</span></li>}
       {mappedCount > loginLimits.mappings && <li><span>{userMappingMessages.mappingsLimit}</span></li>}
     </ul>}
-    <label className="checkbox-label"><input type="checkbox" checked={!!ready?.guest} disabled />Guest account enabled for: {name}</label>
+    {/* One span, so the label's flex gap does not widen the space before the name. */}
+    <label className="checkbox-label"><input type="checkbox" checked={!!ready?.guest} disabled /><span>Guest account enabled for: {name}</span></label>
     <p className="user-mapping-label" id="user-mapping-roles-label">Database role membership for: {name}</p>
     <div className="user-mapping-roles-box">
       {selected === undefined ? <p className="field-note">Select a database above to see its roles.</p>
@@ -230,9 +236,9 @@ export default function UserMappingPage({ open, editable }: PageProps) {
               <button type="button" onClick={() => dialogs.loadDatabaseRoles(selected)}>Retry</button></div>
               : <fieldset className="user-mapping-roles" role="group" aria-labelledby="user-mapping-roles-label" aria-describedby={mapped ? undefined : 'user-mapping-roles-note'} disabled={!editable}>
                 {lookup.value.roles.map(role => role === publicRole
-                  ? <label key={role} className="checkbox-label"><input type="checkbox" checked disabled /><bdi>{role}</bdi></label>
+                  ? <label key={role} className="checkbox-label"><input type="checkbox" checked disabled /><bdi className="user-mapping-role">{role}</bdi></label>
                   : <label key={role} className="checkbox-label"><input type="checkbox" checked={mapped && chosen.has(role)} disabled={!mapped}
-                    onChange={event => dialogs.updateDraft(setMappingRole(draft, selected, role, event.target.checked))} /><bdi>{displayText(role)}</bdi></label>)}
+                    onChange={event => dialogs.updateDraft(setMappingRole(draft, selected, role, event.target.checked))} /><bdi className="user-mapping-role" title={displayText(role)}>{displayText(role)}</bdi></label>)}
               </fieldset>}
       {ready && !mapped && database && mappable(database) && <p className="field-note" id="user-mapping-roles-note">{userMappingMessages.notMapped}</p>}
       {ready?.rolesTruncated && <p className="field-note">{`Only the first ${loginLimits.roles.toLocaleString('en-US')} roles are listed.`}</p>}

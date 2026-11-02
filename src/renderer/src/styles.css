@@ -861,9 +861,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .user-mapping-grid { display: flex; flex-direction: column; flex: none; font-size: var(--varia-size-sm); background: var(--varia-resultsGrid-background); color: var(--varia-resultsGrid-foreground); border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); overflow: hidden; outline: none; }
 .user-mapping-grid:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .user-mapping-head, .user-mapping-row { display: grid; grid-template-columns: 56px minmax(120px, 1fr) minmax(110px, 1fr) minmax(130px, 1fr); }
-.user-mapping-head { background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); font-weight: 600; }
-.user-mapping-head > .user-mapping-cell { padding: 4px 8px; }
-.user-mapping-body { flex: none; overflow: auto; }
+/* Both reserve the scroll bar's gutter, so the header's columns stay over the cells once the rows scroll (more than nine). */
+.user-mapping-head { height: var(--varia-row); overflow: hidden; scrollbar-gutter: stable; background: var(--varia-resultsGrid-headerBackground); color: var(--varia-resultsGrid-headerForeground); border-bottom: 1px solid var(--varia-panel-border); font-size: var(--varia-size-xs); font-weight: 600; }
+.user-mapping-body { flex: none; overflow: auto; scrollbar-gutter: stable; outline: none; }
 .user-mapping-row { position: absolute; left: 0; right: 0; box-sizing: border-box; border-bottom: 1px solid var(--varia-resultsGrid-gridlines); }
 .user-mapping-cell { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; overflow: hidden; white-space: nowrap; }
 .user-mapping-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -872,16 +872,23 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .user-mapping-row[data-selected] > .user-mapping-map { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
 .user-mapping-grid:focus .user-mapping-cell[data-active] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .user-mapping-row[data-unavailable] .user-mapping-text { color: var(--varia-disabledForeground); }
-.user-mapping-editor { flex: 1; min-width: 0; height: 20px; padding: 0 4px; border-radius: 0; }
-.user-mapping-browse { flex: none; height: 18px; padding: 0 6px; border-color: var(--varia-button-border); line-height: 1; }
+.user-mapping-editor { flex: 1; min-width: 0; height: calc(var(--varia-row) - 2px); padding: 0 4px; border-radius: 0; }
+.user-mapping-browse { flex: none; height: calc(var(--varia-row) - 4px); padding: 0 6px; border-color: var(--varia-button-border); line-height: 1; }
 .user-mapping-roles-box { display: flex; flex-direction: column; gap: 4px; min-height: 92px; padding: 6px 10px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
 .user-mapping-roles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 16px; margin: 0; padding: 0; border: 0; min-width: 0; }
-.user-mapping-roles > .checkbox-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.user-mapping-roles > .checkbox-label { min-width: 0; overflow: hidden; white-space: nowrap; }
+/* The label is a flex box, so the ellipsis goes on the name itself. */
+.user-mapping-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .user-mapping-failed { display: flex; align-items: center; gap: 8px; color: var(--varia-errorForeground); overflow-wrap: anywhere; }
 .object-dialog.narrow .user-mapping-roles { grid-template-columns: minmax(0, 1fr); }
 @media (forced-colors: active) {
   .user-mapping-row[data-selected] > .user-mapping-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .user-mapping-row[data-unavailable] .user-mapping-text { color: GrayText; }
+  /* Inside the selected row, which adjusts no colours itself, everything takes HighlightText: the active cell's outline, the …
+     button and a greyed database's name. */
+  .user-mapping-grid:focus .user-mapping-row[data-selected] > .user-mapping-cell[data-active] { outline-color: HighlightText; }
+  .user-mapping-row[data-selected] .user-mapping-browse { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: HighlightText; }
+  .user-mapping-row[data-selected][data-unavailable] .user-mapping-text { color: HighlightText; }
 }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */
 .create-catalog-dialog .property-section { display: flex; flex-direction: column; gap: 6px; }
