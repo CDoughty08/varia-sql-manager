@@ -173,7 +173,7 @@ internal static class ExplorerQueries
             var kind = subtype ?? (row.B(9) ? "snapshot" : null);
             return Node(row.Context, new ObjectRefDto("database", Name: row.Key(0)), row.Key(0), kind, sublabel,
                 ExplorerLabels.Join([Owner(row.S(8)), "Compatibility level " + row.I(6).ToString(CultureInfo.InvariantCulture), row.S(7) is { } model ? "Recovery model " + model : null]),
-                status, row.D(5), hasChildren: hasChildren);
+                status, row.D(5), hasChildren: hasChildren) with { Database = new(row.I(0), row.I(1), row.B(2), row.B(3)) };
         }
     };
 
@@ -337,8 +337,10 @@ internal static class ExplorerQueries
         Databases("systemDatabases", "(d.database_id <= 4 OR d.is_distributor = 1)", "system"),
         Databases("databaseSnapshots", "d.source_database_id IS NOT NULL", "snapshot"),
         ServerList("logins", "login", "sys.server_principals AS p", "p.name",
-            "p.is_disabled, CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END), p.create_date",
-            row => ServerObject(row, "login", status: Disabled(row.B(0) || row.B(1)), created: row.D(2)), "p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')", new(Name: "p.name", Created: "p.create_date")),
+            "p.is_disabled, CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END), p.create_date, "
+                + "p.principal_id, p.type",
+            // The subtype the login rules (src/shared/actions/logins.ts) give it, which the menus grey by and the preflight re-derives.
+            row => ServerObject(row, "login", Actions.ActionsCatalog.Current.Logins.SubtypeOf(row.I(3), row.Code(4), row.Key(0)), status: Disabled(row.B(0) || row.B(1)), created: row.D(2)), "p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')", new(Name: "p.name", Created: "p.create_date")),
         ServerList("serverRoles", "serverRole", "sys.server_principals AS p", "p.name", "p.is_fixed_role, p.create_date",
             row => ServerObject(row, "serverRole", detail: row.B(0) ? "Fixed server role" : null, created: row.D(1)), "p.type = 'R'"),
         ServerList("credentials", "credential", "sys.credentials AS c", "c.name", "c.create_date", row => ServerObject(row, "credential", created: row.D(0))),

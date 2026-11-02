@@ -266,7 +266,7 @@ internal static class DesignerLiveChecks
             var (stillWaiting, stopped) = await StopAfterWaitAsync(client, db, "Held", () => Sql("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id = " + (locked.Scalar ?? "0") + ";"));
             await sql("IF @@TRANCOUNT > 0 ROLLBACK;", db, gate);
             var left = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.Held') IS NULL AND OBJECT_ID(N'dbo.PK_Held') IS NULL THEN 0 ELSE 1 END;")).Scalar;
-            check(locked.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED" } && stopped.Steps.Select(step => step.Status + ":" + step.Message)
+            check(locked.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED" } && stopped.Steps.Select(step => step.Status + ":" + step.Title)
                 .SequenceEqual(["cancelled:Create the table", "skipped:Add the primary key", "skipped:Set lock escalation", "skipped:Commit"])
                 && stopped.Error.Message.EndsWith(ActionService.RolledBack, StringComparison.Ordinal) && left == "0",
                 "Stop during CREATE TABLE cancels that statement and rolls the transaction back: the steps say so and nothing is left (" + stopped?.Error?.Message + ")");

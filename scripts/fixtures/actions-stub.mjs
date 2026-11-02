@@ -114,10 +114,10 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   function createTable({ design, requestId }) {
     const titles = ['Create the table', ...design.primaryKey.length ? ['Add the primary key'] : [], 'Set lock escalation', 'Commit']
     if (design.name === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'An object named Taken already exists in schema dbo.', retryable: false } })
-    if (design.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: titles.map((message, index) => ({ status: index === 0 ? 'cancelled' : 'skipped', message })), messages: [], elapsedMs: 1,
+    if (design.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: titles.map((title, index) => ({ status: index === 0 ? 'cancelled' : 'skipped', title })), messages: [], elapsedMs: 1,
       error: { code: 'CANCELLED', message: 'The action was stopped at "Create the table"; SQL Server cancelled that statement. SQL Server rolled back the transaction; the table was not created.', retryable: true } }))))
     if (design.schema === 'dbo') stub.tables = [...stub.tables, design.name]
-    return ok({ steps: titles.map(message => ({ status: 'done', message })), messages: [], elapsedMs: 1 })
+    return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1 })
   }
   /** Create Catalog's dialog read: a 2025 server without the catalog, CLR off; or the catalog's refusal once it exists. */
   function catalogSetup() {
@@ -128,31 +128,31 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   /** Create Catalog: "Weak" fails at the master key and removes what it made, "Held" waits for Stop, anything else creates SSISDB. */
   function createCatalog({ action, requestId }) {
     const titles = ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
-    if (action.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', message: titles[0] }], elapsedMs: 1,
+    if (action.password === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: titles[0] }], elapsedMs: 1,
       error: { code: 'CANCELLED', message: 'Create Catalog was stopped at "Enable CLR integration"; SQL Server cancelled that statement, so CLR integration may or may not be enabled. Nothing else changed.', retryable: true } }))))
     if (action.password === 'Weak') {
       const message = 'Msg 15118: Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
-      return ok({ steps: [{ status: 'done', message: titles[0] }, { status: 'done', message: titles[1] }, { status: 'failed', message }, { status: 'skipped', message: titles[3] }, { status: 'skipped', message: titles[4] },
-        { status: 'done', message: 'Remove the incomplete catalog' }], elapsedMs: 1,
+      return ok({ steps: [{ status: 'done', title: titles[0] }, { status: 'done', title: titles[1] }, { status: 'failed', title: titles[2], message }, { status: 'skipped', title: titles[3] }, { status: 'skipped', title: titles[4] },
+        { status: 'done', title: 'Remove the incomplete catalog', compensates: true }], elapsedMs: 1,
         error: { code: 'SQL_ERROR', message: message + ' Varia removed what Create Catalog had created, so the catalog does not exist. CLR integration stays enabled.', retryable: true } })
     }
     stub.catalog = true
-    return ok({ steps: titles.map(message => ({ status: 'done', message })), elapsedMs: 1 })
+    return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
   function execute(params) {
     const { target } = params
     if (params.action === 'createTable') return createTable(params)
-    if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', message: key })), messages: [], elapsedMs: 1 })
+    if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
-      if (params.newName === 'Blocked') return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', message: 'Rename' }], messages: [], elapsedMs: 1,
+      if (params.newName === 'Blocked') return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Rename' }], messages: [], elapsedMs: 1,
         error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } }))))
       stub.tables = stub.tables.map(name => name === target.name ? params.newName : name)
-      return ok({ steps: [{ status: 'done', message: 'Rename' }], messages: [caution], elapsedMs: 1 })
+      return ok({ steps: [{ status: 'done', title: 'Rename' }], messages: [caution], elapsedMs: 1 })
     }
-    if (target.name === 'Lines') return ok({ steps: [{ status: 'failed', message: dependentsMessage }], messages: [], elapsedMs: 1, error: { code: 'DEPENDENTS', message: dependentsMessage, retryable: false } })
+    if (target.name === 'Lines') return ok({ steps: [{ status: 'failed', title: 'Drop the object', message: dependentsMessage }], messages: [], elapsedMs: 1, error: { code: 'DEPENDENTS', message: dependentsMessage, retryable: false } })
     stub.tables = stub.tables.filter(name => name !== target.name)
-    return ok({ steps: [{ status: 'done', message: 'Drop the object' }], messages: [], elapsedMs: 1 })
+    return ok({ steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
   }
   /** One folder of `serverFiles`, filtered by the purpose's extensions as the backend filters; Slow waits 1.5 s (or its cancel). */
   function listServerFiles({ files, requestId }) {

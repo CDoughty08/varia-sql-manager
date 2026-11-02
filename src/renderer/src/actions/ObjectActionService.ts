@@ -31,21 +31,48 @@ export interface ObjectActionServiceOptions {
   readonly newId?: () => string
 }
 
-/** A running rename, shown in the status bar with Stop once it has run for `actionLimits.statusDelayMs`. */
-export interface RenameJob { readonly id: string; readonly label: string; readonly newName: string; readonly visible: boolean; readonly stopping: boolean }
-export interface ObjectActionSnapshot { readonly renames: readonly RenameJob[] }
+/** The actions that run on a tree node as a status-bar job: a rename, and a login's Disable and Enable. */
+export type StateVerb = 'rename' | 'disable' | 'enable'
+/**
+ * A running state action, shown in the status bar with Stop once it has run for `actionLimits.statusDelayMs`: its verb,
+ * the object as the tree names it, a rename's new name, and the step it is on when it has several (a rename that closes
+ * connections first says "Closing connections").
+ */
+export interface StateJob { readonly id: string; readonly verb: StateVerb; readonly label: string; readonly newName?: string; readonly step?: string; readonly visible: boolean; readonly stopping: boolean }
+export interface ObjectActionSnapshot { readonly jobs: readonly StateJob[] }
+const verbText: { readonly [V in StateVerb]: { readonly running: string; readonly noun: string } } = {
+  rename: { running: 'Renaming', noun: 'rename' }, disable: { running: 'Disabling', noun: 'disable' }, enable: { running: 'Enabling', noun: 'enable' }
+}
+/** What the status bar says for a job, and its Stop button's accessible name. */
+export function stateJobText(job: Pick<StateJob, 'verb' | 'label' | 'newName' | 'step' | 'stopping'>): { readonly text: string; readonly stop: string } {
+  const { running, noun } = verbText[job.verb], what = job.label + (job.newName !== undefined ? ` to ${job.newName}` : '')
+  return { text: job.stopping ? `Stopping the ${noun} of ${what}…` : job.step ? `${running} ${what}: ${job.step}…` : `${running} ${what}…`, stop: `Stop ${noun}` }
+}
+/**
+ * The status bar's segment for the visible state jobs: the first job's text, and the name of the one Stop, which stops
+ * them all, so it names them all: "Stop rename" for one, "Stop 2 renames", or "Stop 2 actions" when their verbs differ.
+ */
+export function stateJobsText(jobs: readonly Pick<StateJob, 'verb' | 'label' | 'newName' | 'step' | 'stopping'>[]): { readonly text: string; readonly stop: string } | undefined {
+  const first = jobs[0]
+  if (!first) return undefined
+  const { text, stop } = stateJobText({ ...first, stopping: jobs.every(job => job.stopping) })
+  if (jobs.length === 1) return { text, stop }
+  return { text, stop: jobs.every(job => job.verb === first.verb) ? `Stop ${jobs.length} ${verbText[first.verb].noun}s` : `Stop ${jobs.length} actions` }
+}
 
 /** sp_rename leaves a module's definition text with its old name, as SQL Server does. */
 export const moduleRenameNote = 'The definition text keeps the old name; script the object with CREATE OR ALTER to update it.'
 export const renameMessages = {
-  running: (label: string) => `A rename of ${label} is already running. Wait for it, or stop it in the status bar.`,
+  running: (label: string, verb: StateVerb = 'rename') => `${verb === 'rename' ? 'A rename of' : 'An action on'} ${label} is already running. Wait for it, or stop it in the status bar.`,
   stoppedUnknown: 'The rename was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.'
 } as const
 const maxNewName = 400
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const objectOf = (node: Pick<ExplorerMenuNode, 'ref'>): ObjectRef | undefined => node.ref.type === 'object' ? node.ref.object : undefined
 
-interface Job { readonly connectionId: string; readonly requestId: string; readonly label: string; readonly newName: string; dropped: boolean; stopped: boolean; visible: boolean; timer?: unknown }
+interface Job { readonly connectionId: string; readonly requestId: string; readonly verb: StateVerb; readonly label: string; readonly newName?: string; step?: string; dropped: boolean; stopped: boolean; visible: boolean; timer?: unknown }
+/** How a state job ended: the backend's answer, unless the job was dropped (its server went) or the call threw. */
+export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResult>; readonly thrown?: unknown; readonly dropped: boolean; readonly stopped: boolean }
 
 /**
  * Object Explorer's actions in the renderer: Select Top 1000 Rows for tables and views, and inline Rename (Delete and
@@ -55,14 +82,14 @@ interface Job { readonly connectionId: string; readonly requestId: string; reado
  * At most one rename is in flight per node; a server that disconnects drops its renames and cancels them in the backend.
  */
 export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> implements Disposable {
-  private readonly renames = new Map<number, Job>()
+  private readonly jobs = new Map<number, Job>()
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly unsubscribe: () => void
   private disposed = false
 
   constructor(private readonly options: ObjectActionServiceOptions) {
-    super({ renames: [] })
+    super({ jobs: [] })
     this.timers = options.timers ?? browserTimers
     this.newId = options.newId ?? (() => crypto.randomUUID())
     this.unsubscribe = options.connections.subscribe(() => { try { this.connectionsChanged() } catch (error) { onUnexpectedError(error) } })
@@ -105,28 +132,17 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (!parsed.success) { this.options.report.error(parsed.error.issues[0]?.message ?? 'The name is not valid.'); return false }
     this.cancelRename()
     if (this.disposed || !this.isLive(node.connectionId)) return true
-    const running = this.renames.get(node.id)
-    if (running) { this.options.report.error(renameMessages.running(running.label)); return true }
     const characters = [...displayText(text)]
-    const job: Job = {
-      connectionId: node.connectionId, requestId: this.newId(), label: scriptObjectLabel(object), dropped: false, stopped: false, visible: false,
-      newName: characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
-    }
-    job.timer = this.timers.setTimeout(() => { if (this.renames.get(node.id) === job) { job.visible = true; this.changed() } }, actionLimits.statusDelayMs)
-    this.renames.set(node.id, job)
-    this.changed()
+    const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
     const folder = this.options.explorer.listingFolderOf(node.id)
-    let result: ApiResult<ActionExecuteResult>
-    try {
-      result = await this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId: job.requestId, target: object, newName: text })
-    } catch (error) {
-      if (!job.dropped) this.options.report.error(error instanceof Error ? error.message : 'The rename failed.')
-      return true
-    } finally { this.finish(node.id, job) }
-    if (job.dropped || this.disposed) return true
+    const outcome = await this.runStateJob(node, 'rename', newName, requestId => this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text }))
+    if (!outcome) return true
+    const { result, thrown, dropped, stopped } = outcome
+    if (thrown !== undefined) { if (!dropped) this.options.report.error(thrown instanceof Error ? thrown.message : 'The rename failed.'); return true }
+    if (dropped || this.disposed || !result) return true
     if (!result.ok) {
       // A Stop the backend could not confirm in time; otherwise CANCELLED is a disconnect, which drops the job first.
-      if (result.code === 'CANCELLED') { if (job.stopped) this.options.report.error(renameMessages.stoppedUnknown); return true }
+      if (result.code === 'CANCELLED') { if (stopped) this.options.report.error(renameMessages.stoppedUnknown); return true }
       this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? unknownOutcomeMessage : `Rename failed for ${node.label}: ${result.error}`)
       return true
     }
@@ -140,10 +156,34 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     return true
   }
 
-  /** The status bar's Stop: cancels the renames in SQL Server; each answers when its statement has ended. */
-  stopRenames(requestIds: readonly string[]): void {
+  /**
+   * Runs a state action on a node as a status-bar job: at most one per node (a second is refused with a message, and
+   * undefined), shown with Stop after `statusDelayMs`, and dropped (cancelled in the backend) if its server goes. `run`
+   * sends the request with the job's request id. A rename (and D3c's rename after its Open Connections prompt) and a
+   * login's Disable and Enable (D4b) run through it; `setJobStep` names a later step.
+   */
+  async runStateJob(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, run: (requestId: string) => Promise<ApiResult<ActionExecuteResult>>): Promise<StateJobOutcome | undefined> {
+    const object = objectOf(node)
+    if (this.disposed || !object || !this.isLive(node.connectionId)) return undefined
+    const running = this.jobs.get(node.id)
+    if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return undefined }
+    const job: Job = { connectionId: node.connectionId, requestId: this.newId(), verb, label: scriptObjectLabel(object), ...newName !== undefined ? { newName } : {}, dropped: false, stopped: false, visible: false }
+    job.timer = this.timers.setTimeout(() => { if (this.jobs.get(node.id) === job) { job.visible = true; this.changed() } }, actionLimits.statusDelayMs)
+    this.jobs.set(node.id, job)
+    this.changed()
+    try { return { result: await run(job.requestId), dropped: job.dropped, stopped: job.stopped } }
+    catch (thrown) { return { thrown: thrown ?? new Error('The action failed.'), dropped: job.dropped, stopped: job.stopped } }
+    finally { this.finish(node.id, job) }
+  }
+  /** The step a running job is on, as the status bar says it ("Closing connections"); undefined goes back to the verb alone. */
+  setJobStep(requestId: string, step: string | undefined): void {
+    for (const job of this.jobs.values()) if (job.requestId === requestId && job.step !== step) { job.step = step; this.changed() }
+  }
+
+  /** The status bar's Stop: cancels the jobs in SQL Server; each answers when its statement has ended. */
+  stopJobs(requestIds: readonly string[]): void {
     const wanted = new Set(requestIds), ids: string[] = []
-    for (const job of this.renames.values()) {
+    for (const job of this.jobs.values()) {
       if (!wanted.has(job.requestId) || job.stopped || job.dropped) continue
       job.stopped = true
       ids.push(job.requestId)
@@ -157,31 +197,31 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (this.disposed) return
     this.disposed = true
     this.unsubscribe()
-    this.drop([...this.renames.keys()])
+    this.drop([...this.jobs.keys()])
     this.clearListeners()
   }
 
   private isLive(connectionId: string): boolean {
     return this.options.connections.getSnapshot().some(connection => connection.id === connectionId && !connection.lost)
   }
-  /** A disconnected or lost server's renames: their outcome is dropped, and the backend is told to stop them. */
+  /** A disconnected or lost server's jobs: their outcome is dropped, and the backend is told to stop them. */
   private connectionsChanged(): void {
-    this.drop([...this.renames].filter(([, job]) => !this.isLive(job.connectionId)).map(([key]) => key))
+    this.drop([...this.jobs].filter(([, job]) => !this.isLive(job.connectionId)).map(([key]) => key))
   }
   private finish(key: number, job: Job): void {
     this.timers.clearTimeout(job.timer)
-    if (this.renames.get(key) !== job) return
-    this.renames.delete(key)
+    if (this.jobs.get(key) !== job) return
+    this.jobs.delete(key)
     this.changed()
   }
   private drop(keys: readonly number[]): void {
     const ids: string[] = []
     for (const key of keys) {
-      const job = this.renames.get(key)
+      const job = this.jobs.get(key)
       if (!job || job.dropped) continue
       job.dropped = true
       this.timers.clearTimeout(job.timer)
-      this.renames.delete(key)
+      this.jobs.delete(key)
       if (!job.stopped) ids.push(job.requestId)
     }
     if (keys.length && !this.disposed) this.changed()
@@ -193,6 +233,6 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     }
   }
   private changed(): void {
-    this.publish({ renames: [...this.renames.values()].map(job => ({ id: job.requestId, label: job.label, newName: job.newName, visible: job.visible, stopping: job.stopped })) })
+    this.publish({ jobs: [...this.jobs.values()].map(job => ({ id: job.requestId, verb: job.verb, label: job.label, ...job.newName !== undefined ? { newName: job.newName } : {}, ...job.step ? { step: job.step } : {}, visible: job.visible, stopping: job.stopped })) })
   }
 }

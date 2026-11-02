@@ -121,7 +121,7 @@ internal static class SsisActionLiveChecks
         var running = await ExecutionAsync(exec, start: true);
         var stopped = await StopAsync(service, info.Id, running);
         var stop = (await exec("SELECT TOP (1) CONCAT(operation_id, ' ', status, ' ', object_id) FROM [catalog].[operations] WHERE operation_type = 202 ORDER BY operation_id DESC;", null)).Scalar!.Split(' ');
-        check(stopped is { Error: null, Steps: [{ Status: "done", Message: "Stop the operation" }] } && await StatusAsync(exec, running) == "8 8" && stop[1] == "7" && stop[2].Length > 0,
+        check(stopped is { Error: null, Steps: [{ Status: "done", Title: "Stop the operation" }] } && await StatusAsync(exec, running) == "8 8" && stop[1] == "7" && stop[2].Length > 0,
             "Stop Operation stops a running execution: one step done, the execution Stopping (8), and the catalog's own stop operation Succeeded: " + Dump(stopped));
 
         // A second stop, and a stop of an ended operation, are answered from the preflight: the catalog records no failed stop.
@@ -236,7 +236,7 @@ internal static class SsisActionLiveChecks
             + (facts is null ? "never seen blocked" : string.Join(", ", facts)));
         // An answer at all proves Stop ended it within the grace: past it, the request throws instead of answering.
         var orphans = await StopOperationsAsync(exec, "2") - running;
-        check(stopped is { Steps: [{ Status: "cancelled", Message: "Stop the operation" }], Error: { Code: "CANCELLED", Retryable: true } }
+        check(stopped is { Steps: [{ Status: "cancelled", Title: "Stop the operation" }], Error: { Code: "CANCELLED", Retryable: true } }
             && stopped.Error.Message == "The action was stopped at \"Stop the operation\"; SQL Server cancelled that statement." + SsisActionService.StoppedStopNote
             && status == "2 2" && service.SsisActions.RunningCount == 0 && orphans == 1,
             "Stop ends a write waiting on a lock within its grace, with its step cancelled, the operation left as it was, and the catalog's own Stop operation left Running, "

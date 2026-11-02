@@ -23,6 +23,8 @@ export const submenuIds = [
   'theme',
   'query.connection',
   'explorer.new',
+  'explorer.tasks',
+  'explorer.tasks.restore',
   ...scriptSubmenuIds
 ] as const
 export type SubmenuId = typeof submenuIds[number]
@@ -31,8 +33,8 @@ export type MenuId = MenubarId | SubmenuId | ContextMenuId
  * Every menu in native-id order: a submenu follows the menu it first appears in, and context menus come last. One id a
  * line, so menus added later merge line by line. The planned order, where each new menu goes: 'file', 'file.recent',
  * 'edit', 'edit.findReplace', 'edit.advanced', 'edit.bookmarks', 'edit.intellisense', 'view', 'theme', 'query',
- * 'query.connection', 'tools', 'window', 'help', 'editor.context', 'explorer.context', 'explorer.new', ...scriptSubmenuIds, then
- * the remaining context menus.
+ * 'query.connection', 'tools', 'window', 'help', 'editor.context', 'explorer.context', 'explorer.new', 'explorer.tasks',
+ * 'explorer.tasks.restore', ...scriptSubmenuIds, then the remaining context menus.
  */
 export const menuIds: readonly MenuId[] = [
   'file',
@@ -52,6 +54,8 @@ export const menuIds: readonly MenuId[] = [
   'editor.context',
   'explorer.context',
   'explorer.new',
+  'explorer.tasks',
+  'explorer.tasks.restore',
   ...scriptSubmenuIds,
   'tableDesigner.context',
   'documentTab.context',
@@ -101,6 +105,10 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
   },
   // SSMS's New on the Tables folder (learn.microsoft.com: Create tables); its Table… is src/shared/designer/catalog.ts'.
   'explorer.new': { title: 'New', nativeId: 'explorer.new', placements: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "explorerFolder == 'tables'" }] },
+  // SSMS's Tasks on a database node and its Restore submenu. Both stay hidden until a database action is placed in them
+  // (src/shared/actions/catalog.ts), since a submenu with nothing visible is left out.
+  'explorer.tasks': { title: 'Tasks', nativeId: 'explorer.tasks', placements: [{ menu: 'explorer.context', group: '4_tasks', order: 1, mnemonic: 't', when: "explorerNode == 'database' && !explorerServerLost" }] },
+  'explorer.tasks.restore': { title: 'Restore', nativeId: 'explorer.tasks.restore', placements: [{ menu: 'explorer.tasks', group: '4_backup', order: 2, mnemonic: 'r' }] },
   // Script as › <verb> To, from src/shared/scripting/catalog.ts.
   ...scriptSubmenuEntries()
 }

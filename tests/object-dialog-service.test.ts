@@ -16,7 +16,7 @@ const ordersRef: ObjectRef = { kind: 'table', database: 'AppData', schema: 'dbo'
 const databaseRef: ObjectRef = { kind: 'database', name: 'AppData' }
 const node = (object: ObjectRef, id = 7): ExplorerMenuNode => ({ id, connectionId: 'server-a', ref: { type: 'object', object }, kind: object.kind, label: object.name ?? '', lost: false })
 const row = (changes: Partial<DeleteTarget> = {}): ApiResult<ActionDescribeResult> => ({ ok: true, value: { deleteTarget: { name: 'dbo.Orders', type: 'Table', owner: 'dbo', warnings: [], dependentsTruncated: false, ...changes }, elapsedMs: 1 } })
-const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done' }], messages: [], elapsedMs: 1 } }
+const done: ApiResult<ActionExecuteResult> = { ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } }
 
 /** The service over fakes: describe answers at once unless a test holds it, and every request is recorded. */
 function setup() {
@@ -101,11 +101,11 @@ describe('ObjectDialogService', () => {
     dialogs.open('deleteObject', node(databaseRef))
     await settle()
     const ok = dialogs.ok()
-    execute.resolve({ ok: true, value: { steps: [{ status: 'done', message: 'Delete backup and restore history' }, { status: 'failed', message: 'Cannot drop database "AppData" because it is currently in use.' }],
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Delete backup and restore history' }, { status: 'failed', title: 'Drop the database', message: 'Cannot drop database "AppData" because it is currently in use.' }],
       messages: [], elapsedMs: 1, error: { code: 'IN_USE', message: 'Cannot drop database "AppData" because it is currently in use. Completed before the failure: Delete backup and restore history.', retryable: true } } })
     await ok
     expect(dialogs.current).toMatchObject({ phase: 'failed', error: { code: 'IN_USE' }, steps: [{ status: 'done' }, { status: 'failed' }] })
-    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'failed', message: 'Could not drop object' }], messages: [], elapsedMs: 1, error: { code: 'DEPENDENTS', message: 'Could not drop object', retryable: false } } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'failed', title: 'Drop the object', message: 'Could not drop object' }], messages: [], elapsedMs: 1, error: { code: 'DEPENDENTS', message: 'Could not drop object', retryable: false } } })
     await dialogs.ok()
     expect(dialogs.current).toMatchObject({ phase: 'failed', error: { code: 'DEPENDENTS' } })
   })
@@ -129,7 +129,7 @@ describe('ObjectDialogService', () => {
     dialogs.stop()
     expect(api.cancelObjectActions).toHaveBeenCalledTimes(1)
     const stopped = { code: 'CANCELLED' as const, message: 'The action was stopped at "Delete backup and restore history"; SQL Server cancelled that statement. Completed before Stop: Close existing connections, Drop the database.', retryable: true }
-    execute.resolve({ ok: true, value: { steps: [{ status: 'done', message: 'Close existing connections' }, { status: 'done', message: 'Drop the database' }, { status: 'cancelled', message: 'Delete backup and restore history' }], messages: [], elapsedMs: 1, error: stopped } })
+    execute.resolve({ ok: true, value: { steps: [{ status: 'done', title: 'Close existing connections' }, { status: 'done', title: 'Drop the database' }, { status: 'cancelled', title: 'Delete backup and restore history' }], messages: [], elapsedMs: 1, error: stopped } })
     await ok
     expect(dialogs.current).toMatchObject({ phase: 'stopped', error: stopped, steps: [{ status: 'done' }, { status: 'done' }, { status: 'cancelled' }] })
     expect(explorer.reconcile).toHaveBeenCalledTimes(1)

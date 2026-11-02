@@ -109,7 +109,7 @@ internal static class ExplorerChecks
         string Names(IEnumerable<string> ids) => string.Join(",", ids);
         check(catalog.Profile(12, 5, 16) == new ExplorerProfile(16, true) && catalog.Profile(12, 5) == new ExplorerProfile(12, true) && catalog.Profile(15, 9, 14) == new ExplorerProfile(15, true)
             && catalog.Profile(12, 3) == new ExplorerProfile(12, false) && catalog.Profile(16, 3, 13) == new ExplorerProfile(16, false) && catalog.Profile(17, 3, 16) == new ExplorerProfile(17, false)
-            && catalog.Profile(12, 8, 16) == new ExplorerProfile(16, false) && catalog.Profile(16, 8, 16) == new ExplorerProfile(16, false)
+            && catalog.Profile(12, 8, 16) == new ExplorerProfile(16, false, ManagedInstance: true) && catalog.Profile(16, 8, 16) == new ExplorerProfile(16, false, ManagedInstance: true)
             && new ServerProfile(12, "12.0.2000.8", 5, "sa", false, false, true, 16).Explorer(catalog) == new ExplorerProfile(16, true),
             "a server's band is its version's, raised to that of the catalog columns it has (Azure SQL Database and Managed Instance report 12)");
         var box12 = new ExplorerProfile(12, false);
@@ -620,6 +620,10 @@ internal static class ExplorerChecks
         var node = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("column", new string('d', 128), Name: new string('c', 128), Parent: new ParentRefDto("table", new string('s', 128), new string('t', 128)))),
             new string('c', 128), "symbol-field", false, "(nvarchar(128), not null)");
         check(ExplorerService.Estimate(node) * 2000 > new ExplorerOptions().SizeCut, "a page of 2,000 rows with 128-character names passes the size cut, so it is split");
+        var database = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("database", Name: new string('d', 128))), new string('d', 128), "database", true) { Database = new(6, 2, true, true) };
+        var databaseBytes = JsonBridge.Encode(database, Json).Length;
+        check(JsonBridge.Encode(database with { Database = null }, Json).Length + ExplorerService.DatabaseEstimate >= databaseBytes && ExplorerService.Estimate(database) >= databaseBytes,
+            "a database row's runtime state counts toward the size cut at least as much as it adds to the page");
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>

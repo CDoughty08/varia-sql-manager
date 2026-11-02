@@ -491,6 +491,7 @@ internal static partial class ActivitySql
         foreach (var token in Forbidden)
             if (code.Contains(token, StringComparison.OrdinalIgnoreCase) && !(capabilities && CapabilityTokens.Contains(token)) && !(token == "dm_tran_locks" && IsLocks(statement)))
                 problems.Add("uses " + token);
+        problems.AddRange(CatalogSql.SecretUses(code));
         if (code.Contains('#')) problems.Add("names a temporary object");
         // Only Kill runs dynamic SQL: once, and only KILL with the session id an int parameter gives it. @kill_text appears only
         // where it is declared and run, so no assignment (SELECT @kill_text = ...) can feed EXEC other text.

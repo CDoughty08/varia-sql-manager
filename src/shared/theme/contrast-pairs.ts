@@ -176,6 +176,10 @@ export const contrastPairs: readonly ContrastPair[] = [
   // Monaco's widgets: suggestions (editor text; the focused row and its matches) and the find widget's No results.
   ...text(['editor.foreground', 'errorForeground'], widget),
   ...text(['quickInputList.focusForeground', 'list.focusHighlightForeground'], suggestFocus),
+  // An object dialog's selected page tab, where the dialog is narrow: its text on the plain dialog, under its focusBorder bar.
+  ...text(['list.inactiveSelectionForeground'], widget),
+  // StepList (kit/StepList.tsx): a running step's progress fill on its track, in dialogs and in documents' and panels' run views.
+  ...graphic(['focusBorder'], ...[widget, editor, panel].map(surface => [...surface, 'badge.background'] as ColorKey[])),
 
   // On the active quick input row it is the edge that marks the row.
   ...graphic(['focusBorder'], editor, sideBar, panel, toolbar, widget, hover, activeSelection, inactiveSelection, strip, input, quickInputActive, ...dockTabBackgrounds.map(dockTabs)),

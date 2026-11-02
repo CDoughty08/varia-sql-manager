@@ -86,6 +86,7 @@ internal static class ExplorerLiveChecks
             linux = major >= 14 && await platform.ExecuteScalarAsync() is "Linux";
             check(profile.Linux == linux, "the profile says whether SQL Server runs on Linux, as sys.dm_os_host_info does (" + (linux ? "Linux" : "Windows") + ")");
         }
+        check(info.Linux == linux, "connect reports whether SQL Server runs on Linux, for the explorerServerLinux context key");
         check((await client.Labels(Object(Server))).SequenceEqual(["Databases", "Security", "Server Objects", "Integration Services Catalogs"]), "the server's folders, in SSMS order");
         // Without a catalog the folder is empty on Windows; SQL Server on Linux cannot have one, and the folder says so.
         if (!(await client.Labels(Folder(Server, "databases"))).Contains("SSISDB"))
@@ -314,6 +315,8 @@ internal static class ExplorerLiveChecks
         check(databases.Select(node => (Show(node), node.Status, node.HasChildren)).SequenceEqual([(scratch.Name, null, true), (scratch.Offline + " (Offline)", "unavailable", false),
             (scratch.ReadOnly + " (Read-Only)", "readOnly", true), (scratch.SingleUser + " (Single User)", null, true)]),
             "scratch databases: offline ones do not expand, read-only and single-user ones say so: " + string.Join(", ", databases.Select(Show)));
+        check(databases.Select(node => node.Database).SequenceEqual([new ExplorerDatabase(0, 0, false, false), new(6, 0, false, false), new(0, 0, true, false), new(0, 1, false, false)]),
+            "database nodes carry their runtime state (state, user access, read-only, standby) for the action rules");
         check((await client.Children(Object(Database(scratch.Offline)))).Error?.Code == "DATABASE_UNAVAILABLE", "expanding an offline database explains why");
         // Another session in a single-user database makes HAS_DBACCESS wait about 2 s and then deny access.
         await using (var holder = new SqlConnection(new SqlConnectionStringBuilder(ConnectionSettings.Build(live(scratch.SingleUser)).ConnectionString) { Pooling = false }.ConnectionString))

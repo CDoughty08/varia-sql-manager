@@ -8,9 +8,12 @@ namespace Varia.Backend.Explorer;
 /// the highest version band whose catalog columns exist, which raises the band because Azure SQL Database and Managed
 /// Instance report ProductMajorVersion 12 while running the newest engine. Linux: SQL Server runs on Linux (PathSeparator '/',
 /// 2017 and later), where the SSIS Catalog cannot exist. ServerName (machineinstance) identifies the server whatever name,
-/// address, login or database a connection used, for the live views' per-server cap.</summary>
+/// address, login or database a connection used, for the live views' per-server cap. Contained: the session signed in as a
+/// contained database user (sys.dm_exec_sessions.authenticating_database_id above 1, its own session needing no permission),
+/// who cannot open master, so the backend's server-scope pools keep the connection's database (critic A5); unknown counts as
+/// contained.</summary>
 internal sealed record ServerProfile(int Major, string? ProductVersion, int EngineEdition, string? Login, bool Hadr, bool ViewServerState, bool VectorDimensions,
-    int CatalogBand = ExplorerCatalog.MinBand, bool Linux = false, string? ServerName = null)
+    int CatalogBand = ExplorerCatalog.MinBand, bool Linux = false, string? ServerName = null, bool Contained = false)
 {
     public const string ProbeSql = "SELECT CONVERT(int, SERVERPROPERTY('ProductMajorVersion')), CONVERT(nvarchar(32), SERVERPROPERTY('ProductVersion')),"
         + " CONVERT(int, SERVERPROPERTY('EngineEdition')), SUSER_SNAME(), CONVERT(int, ISNULL(SERVERPROPERTY('IsHadrEnabled'), 0)),"
@@ -18,7 +21,8 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
         + " CASE WHEN COL_LENGTH('sys.tables', 'ledger_type') IS NOT NULL THEN 16 WHEN OBJECT_ID('sys.edge_constraints') IS NOT NULL THEN 15"
         + " WHEN COL_LENGTH('sys.tables', 'is_node') IS NOT NULL THEN 14 WHEN COL_LENGTH('sys.tables', 'temporal_type') IS NOT NULL THEN 13 ELSE 12 END,"
         + " CONVERT(bit, CASE WHEN CONVERT(nvarchar(4), SERVERPROPERTY('PathSeparator')) = N'/' THEN 1 ELSE 0 END),"
-        + " CONVERT(nvarchar(128), SERVERPROPERTY('ServerName'));";
+        + " CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')),"
+        + " CONVERT(bit, CASE WHEN (SELECT s.authenticating_database_id FROM sys.dm_exec_sessions AS s WHERE s.session_id = @@SPID) = 1 THEN 0 ELSE 1 END);";
 
     public ExplorerProfile Explorer(ExplorerCatalog catalog) => catalog.Profile(Major, EngineEdition, CatalogBand) with { Linux = Linux };
 
@@ -35,7 +39,8 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
             if (await reader.ReadAsync(token) && !reader.IsDBNull(0))
                 return new(reader.GetInt32(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.IsDBNull(2) ? 3 : reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetString(3),
                     !reader.IsDBNull(4) && reader.GetInt32(4) == 1, !reader.IsDBNull(5) && Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture) == 1, !reader.IsDBNull(6) && reader.GetBoolean(6),
-                    reader.IsDBNull(7) ? ExplorerCatalog.MinBand : reader.GetInt32(7), !reader.IsDBNull(8) && reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetString(9));
+                    reader.IsDBNull(7) ? ExplorerCatalog.MinBand : reader.GetInt32(7), !reader.IsDBNull(8) && reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetString(9),
+                    reader.IsDBNull(10) || reader.GetBoolean(10));
         }
         catch (SqlException) { }
         catch (InvalidCastException) { }
@@ -43,7 +48,11 @@ internal sealed record ServerProfile(int Major, string? ProductVersion, int Engi
         return Fallback(connection.ServerVersion);
     }
 
-    /// <summary>The major version from the provider's "16.00.4135" form.</summary>
+    /// <summary>The major version from the provider's "16.00.4135" form; a sign-in it could not check counts as contained.</summary>
     public static ServerProfile Fallback(string? serverVersion) =>
-        new(int.TryParse(serverVersion?.Split('.')[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major) ? major : 0, null, 3, null, false, false, false);
+        new(int.TryParse(serverVersion?.Split('.')[0], NumberStyles.None, CultureInfo.InvariantCulture, out var major) ? major : 0, null, 3, null, false, false, false, Contained: true);
+
+    /// <summary>Whether the backend's server-scope pools may open in master rather than the connection's database: box editions
+    /// and Managed Instance (EngineEdition 1-4 and 8), never a contained database user, who cannot open master.</summary>
+    public bool ServerScopeInMaster => EngineEdition is 1 or 2 or 3 or 4 or 8 && !Contained;
 }

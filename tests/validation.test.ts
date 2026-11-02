@@ -121,7 +121,7 @@ describe('IPC validation', () => {
       ['actions.describe', { ...ids, dialog: 'tableDesigner', target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
-    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0 })
+    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true })
     expect(methodPolicies['actions.describe']).toMatchObject({ kind: 'unary', lane: 'metadata' })
     expect(deadlineFor('actions.describe', describe as ActionDescribeRequest).deadlineMs).toBe(45_000)
     // The server file picker: one folder of the server, typed paths verbatim, a 15 s deadline around the backend's 10 s budget.

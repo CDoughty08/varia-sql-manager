@@ -151,6 +151,8 @@ internal static class ServerFilesChecks
         }
         public bool ClearPoolsFor(string connectionId, string database) => true;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
+        public bool FreeDatabase(string connectionId, string database) => false;
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
     }
 
     private sealed class FakeHost(int edition = 3) : IActionHost
@@ -165,5 +167,7 @@ internal static class ServerFilesChecks
         public Task OpenAsync(SqlConnection connection, CancellationToken token) => connection.OpenAsync(token);
         public bool ClearPoolsFor(string connectionId, string database) => true;
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
+        public bool FreeDatabase(string connectionId, string database) => false;
+        public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
     }
 }

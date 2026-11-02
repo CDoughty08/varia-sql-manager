@@ -4,6 +4,8 @@ import type { SsisCatalogSetup, SsisCatalogSetupResult, SsisExecuteResult } from
 import { createCatalogMessages, CreateCatalogService } from '../src/renderer/src/ssis/CreateCatalogService'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
+import { LongRunService } from '../src/renderer/src/services/long-runs'
+import { longRunMessages } from '../src/shared/long-runs'
 import { deferred } from './fixtures/documents'
 import { contextRecord } from '../src/shared/commands/context-keys'
 import { resolveMenu } from '../src/renderer/src/menus/resolve'
@@ -19,7 +21,7 @@ const setupOf = (changes: Partial<SsisCatalogSetup> = {}): ApiResult<SsisCatalog
   ok: true, value: { setup: { catalog: 'SSISDB', clrEnabled: false, startupDefault: true, backupFile: 'C:\\DTS\\Binn\\SSISDBBackup.bak', dataFile: 'C:\\Data\\SSISDB.mdf', logFile: 'C:\\Data\\SSISDB.ldf', ...changes }, elapsedMs: 1 }
 })
 const titles = ['Enable CLR integration', 'Restore the catalog database', 'Create the master key', 'Register the Integration Services assembly and startup procedure', 'Create the maintenance job']
-const created: ApiResult<SsisExecuteResult> = { ok: true, value: { steps: titles.map(message => ({ status: 'done', message })), elapsedMs: 1 } }
+const created: ApiResult<SsisExecuteResult> = { ok: true, value: { steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 } }
 const secret = "Pa'ss]--w0rd-marker"
 
 /** The service over fakes: the setup answers at once unless a test holds it, and Create waits for the test to answer. */
@@ -33,11 +35,12 @@ function setup(answer: ApiResult<SsisCatalogSetupResult> = setupOf()) {
   const connections = new ConnectionService()
   connections.add({ ...connectionInfo('server-a'), login: 'sa' }, connectionOptions)
   const explorer = { refresh: vi.fn() }
+  const longRuns = new LongRunService()
   let ids = 0
-  const service = new CreateCatalogService({ api, connections, explorer, newId: () => `id-${++ids}` })
-  cleanups.push(() => service.dispose())
+  const service = new CreateCatalogService({ api, connections, explorer, longRuns, newId: () => `id-${++ids}` })
+  cleanups.push(() => service.dispose(), () => longRuns.dispose())
   const settle = () => new Promise(resolve => setTimeout(resolve, 0))
-  return { service, api, connections, explorer, execute, settle }
+  return { service, api, connections, explorer, execute, settle, longRuns }
 }
 
 describe('CreateCatalogService', () => {
@@ -136,7 +139,7 @@ describe('CreateCatalogService', () => {
     const running = service.create(secret, secret)
     const message = 'Msg 15118: Password validation failed. Varia removed what Create Catalog had created, so the catalog does not exist.'
     execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'SQL_ERROR', message, retryable: true }, steps: [
-      { status: 'done', message: titles[1] }, { status: 'failed', message }, { status: 'skipped', message: titles[3] }, { status: 'skipped', message: titles[4] }, { status: 'done', message: 'Remove the incomplete catalog' }
+      { status: 'done', title: titles[1] }, { status: 'failed', title: titles[2], message }, { status: 'skipped', title: titles[3] }, { status: 'skipped', title: titles[4] }, { status: 'done', title: 'Remove the incomplete catalog', compensates: true }
     ] } })
     await running
     expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'SQL_ERROR', message } })
@@ -183,24 +186,32 @@ describe('CreateCatalogService', () => {
     service.stop()
     const message = 'Create Catalog was stopped at "Create the maintenance job"; SQL Server cancelled that statement. Removing what Create Catalog had created failed too (Lock request time out period exceeded.): delete the SSISDB database before you try again.'
     execute.resolve({ ok: true, value: { elapsedMs: 1, error: { code: 'CANCELLED', message, retryable: true }, steps: [
-      { status: 'done', message: titles[1] }, { status: 'done', message: titles[2] }, { status: 'done', message: titles[3] }, { status: 'cancelled', message: titles[4] },
-      { status: 'failed', message: 'Remove the incomplete catalog: Lock request time out period exceeded.' }
+      { status: 'done', title: titles[1] }, { status: 'done', title: titles[2] }, { status: 'done', title: titles[3] }, { status: 'cancelled', title: titles[4] },
+      { status: 'failed', title: 'Remove the incomplete catalog', message: 'Remove the incomplete catalog: Lock request time out period exceeded.', compensates: true }
     ] } })
     await running
     expect(service.current).toMatchObject({ phase: 'failed', error: { code: 'CANCELLED', message } })
     expect(service.current?.stopping).toBeUndefined()
   })
-  it('refuses to let the window close while Create Catalog runs, and only then', async () => {
-    const { service, execute, settle } = setup(setupOf({ clrEnabled: true }))
-    expect(service.closeRefusal()).toBeUndefined()
+  it('is a long run while Create Catalog runs, and only then, so the window, its server and the backend stay up', async () => {
+    const { service, execute, settle, longRuns } = setup(setupOf({ clrEnabled: true }))
     service.open(folder())
     await settle()
-    expect(service.closeRefusal()).toBeUndefined()
+    expect(longRuns.getSnapshot().runs).toEqual([])
     const running = service.create(secret, secret)
-    expect(service.closeRefusal()).toBe(createCatalogMessages.closing)
+    expect(longRuns.getSnapshot().runs).toMatchObject([{ kind: 'createCatalog', connectionId: 'server-a', server: 'server-a.example' }])
+    expect(longRuns.closeRefusal()).toBe(longRunMessages.close({ kind: 'createCatalog', server: 'server-a.example' }))
     execute.resolve(created)
     await running
-    expect(service.closeRefusal()).toBeUndefined()
+    expect(longRuns.getSnapshot().runs).toEqual([])
+  })
+  it('ends its long run when the request fails too', async () => {
+    const { service, api, settle, longRuns } = setup(setupOf({ clrEnabled: true }))
+    service.open(folder())
+    await settle()
+    api.executeSsis.mockRejectedValueOnce(new Error('IPC lost'))
+    await service.create(secret, secret)
+    expect(longRuns.getSnapshot().runs).toEqual([])
   })
   it('says the outcome is unknown when the server goes away while it runs, and cancels it', async () => {
     const { service, api, connections, execute, settle } = setup(setupOf({ clrEnabled: true }))
@@ -231,7 +242,7 @@ describe('Create Catalog command', () => {
     expect(fixture.ssisCatalog.current).toMatchObject({ connectionId: 'server-a', nodeId: 4 })
     expect(fixture.commands.canRun('explorer.createCatalog', { target })).toBe(false)
   })
-  it('keeps the window open while Create Catalog runs: File › Exit and closing the window report why, and tell main the close ended', async () => {
+  it('keeps the window open, its server connected and the backend up while Create Catalog runs: each reports why, and main hears of the run', async () => {
     const fixture = workbenchFixture()
     cleanups.push(() => fixture.dispose())
     fixture.api.push(readyBackend())
@@ -246,12 +257,56 @@ describe('Create Catalog command', () => {
     await fixture.commands.execute('window.close', undefined, 'menu')
     expect(fixture.api.closeWindow).not.toHaveBeenCalled()
     expect(fixture.api.closeWindowCancelled).toHaveBeenCalledTimes(1)
-    expect(fixture.files.getSnapshot().error).toBe(createCatalogMessages.closing)
+    const run = { kind: 'createCatalog', server: 'server-a.example' } as const
+    expect(fixture.files.getSnapshot().error).toBe(longRunMessages.close(run))
+    // The modal dialog covers the command banner, so it shows the refusal too.
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.close(run))
+    expect(fixture.api.setLongRuns).toHaveBeenLastCalledWith({ runs: [run], total: 1 })
+    // Disconnect's server picker greys the server, naming the run; asking it is no refusal for the dialog to show.
+    const picker = async () => {
+      await fixture.commands.execute('connection.disconnect', undefined, 'palette')
+      const row = fixture.quickInput.getSnapshot().rows.find(item => item.item.id === 'server-a')?.item
+      fixture.quickInput.hide('cancel')
+      return row
+    }
+    expect(await picker()).toMatchObject({ disabled: true, disabledHint: longRunMessages.stop(run) })
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.close(run))
+    await fixture.commands.execute('backend.restart', undefined, 'menu')
+    expect(fixture.api.restartBackend).not.toHaveBeenCalled()
+    expect(fixture.commands.getSnapshot().error).toBe(longRunMessages.stop(run))
+    expect(fixture.ssisCatalog.current?.refusal).toBe(longRunMessages.stop(run))
     expect(fixture.api.cancelSsis).not.toHaveBeenCalled()
     answer.resolve(created)
     await running
+    expect(fixture.api.setLongRuns).toHaveBeenLastCalledWith({ runs: [], total: 0 })
+    expect((await picker())?.disabled).toBeUndefined()
     await fixture.commands.execute('window.close', undefined, 'menu')
     expect(fixture.api.closeWindow).toHaveBeenCalledOnce()
+    await fixture.commands.execute('backend.restart', undefined, 'menu')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+  })
+  it('lets Restart through while the backend does not answer, as the banner\'s Restart now is then the only way out of a run that cannot stop', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(() => fixture.dispose())
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    // A hung backend: Create Catalog never answers, and neither does its Stop.
+    fixture.api.executeSsis.mockImplementationOnce(() => new Promise(() => {}))
+    fixture.api.cancelSsis.mockImplementation(() => new Promise(() => {}))
+    fixture.ssisCatalog.open(folder())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    fixture.ssisCatalog.setEnableClr(true)
+    void fixture.ssisCatalog.create(secret, secret)
+    fixture.api.push({ status: 'unresponsive', generation: 1, silentMs: 15_000 })
+    fixture.ssisCatalog.stop()
+    await fixture.commands.execute('backend.restart', undefined, 'toolbar')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+    expect(fixture.commands.getSnapshot().error).toBeFalsy()
+    // Answering again, the backend can stop the run, so Restart is refused once more.
+    fixture.api.push(readyBackend())
+    await fixture.commands.execute('backend.restart', undefined, 'toolbar')
+    expect(fixture.api.restartBackend).toHaveBeenCalledOnce()
+    expect(fixture.commands.getSnapshot().error).toBe(longRunMessages.stop({ kind: 'createCatalog', server: 'server-a.example' }))
   })
   it('is hidden from the context menu of a lost server\'s Integration Services Catalogs', () => {
     const fixture = workbenchFixture()
