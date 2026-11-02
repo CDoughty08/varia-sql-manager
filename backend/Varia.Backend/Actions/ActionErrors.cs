@@ -34,8 +34,9 @@ internal static class ActionErrors
         ["NOT_FOUND"] = [15225, 15007],
         // 5058: the option cannot be set in this database (SQL Server's own); 3707: sp_detach_db on a suspect or recovery pending database.
         ["NOT_SUPPORTED"] = [5058, 3707],
-        // 5011: ALTER DATABASE without ALTER on it (Take Offline and Bring Online refused in SQL Server).
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 5011],
+        // 5011: ALTER DATABASE without ALTER on it (Take Offline and Bring Online refused in SQL Server); 7983: sp_detach_db's DBCC DETACHDB
+        // without db_owner or sysadmin.
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 5011, 7983],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]
     };

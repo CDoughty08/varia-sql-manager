@@ -684,7 +684,8 @@ try {
   await expect(detachDrop()).not.toBeChecked()
   await expect(detachStatistics()).not.toBeChecked()
   await expect(detachDialog().getByRole('note').first()).toHaveText('Drop Connections rolls back the open transaction of 1 session.')
-  await expect(detachDialog().getByRole('grid', { name: 'Files that stay on the server', exact: true }).locator('tbody tr'))
+  // A read-only table, not a grid: it has no cells to move between.
+  await expect(detachDialog().getByRole('table', { name: 'Files that stay on the server', exact: true }).locator('tbody tr'))
     .toHaveText(detachFiles.map(file => file.name + { rows: 'ROWS Data', log: 'LOG' }[file.type] + file.path))
   await expect(okButton(detachDialog())).toBeDisabled()
   await expect(okButton(detachDialog())).toHaveAccessibleDescription('2 sessions are connected: check Drop Connections, or Check Again once they leave.')
@@ -693,6 +694,15 @@ try {
   await detachStatistics().check()
   await expect(okButton(detachDialog())).toBeEnabled()
   await expect(detachRow().nth(3)).toHaveText('Ready')
+  // Enter on the closed Sessions list opens it, as a disclosure does, and never runs the detach.
+  const detachSessions = () => detachDialog().getByText(/^Sessions in AppData \(2\)$/)
+  const executesBefore = (await stubCalls('actions.execute')).length
+  await expect(detachDialog().getByRole('grid', { name: 'Sessions', exact: true })).toBeHidden()
+  await detachSessions().focus()
+  await page.keyboard.press('Enter')
+  await expect(detachDialog().getByRole('grid', { name: 'Sessions', exact: true })).toBeVisible()
+  await expect(objectDialogProgress(detachDialog())).toHaveText('Ready')
+  expect((await stubCalls('actions.execute')).length).toBe(executesBefore)
   await detachDialog().getByRole('button', { name: 'Script options', exact: true }).click()
   await detachDialog().getByRole('option', { name: 'Script Action to Clipboard', exact: true }).click()
   await expect.poll(clipboard).toBe(detachScript(true, true))
@@ -708,6 +718,11 @@ try {
   expect((await stubCalls('actions.execute')).at(-1)).not.toHaveProperty('detachOffline')
   await expect(okButton(detachDialog())).toHaveCount(0)
   await expect(detachDialog().getByRole('button', { name: 'Close', exact: true })).toBeFocused()
+  // The database is gone: no word on its sessions or what closing them rolls back, and the boxes change nothing now.
+  await expect(detachSessions()).toHaveCount(0)
+  await expect(detachDialog().getByRole('note')).toHaveCount(0)
+  await expect(detachDrop()).toBeDisabled()
+  await expect(detachStatistics()).toBeDisabled()
   const detachedToast = toasts(page).filter({ hasText: 'AppData was detached.' })
   await expect(toastMessage(detachedToast)).toContainText('AppData was detached. Its 2 files stay on the server.')
   await page.screenshot({ path: resolve('artifacts', 'object-actions-detach-success-dark.png') })

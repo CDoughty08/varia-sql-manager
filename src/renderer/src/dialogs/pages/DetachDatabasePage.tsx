@@ -6,7 +6,7 @@ import { displayText } from '../../../../shared/explorer/refs.ts'
 import { useServiceSnapshot, useWorkbench } from '../../core/WorkbenchContext'
 import Icon from '../../Icon'
 import StatusPill from '../../kit/StatusPill'
-import type { DetachDraft } from '../definitions'
+import { detachConfirmLabel, detachStateWords, detachStatisticsBlocked, type DetachDraft } from '../definitions'
 import type { PageProps } from '../ObjectDialog'
 import type { OpenObjectDialog } from '../ObjectDialogService'
 import { databaseStateStatus, SessionsDisclosure, sessionsMessage, stoppedMessage, TransactionsNote, useOwnTransactions } from './DatabaseStatePage'
@@ -20,14 +20,15 @@ export function detachMessage(open: Pick<OpenObjectDialog, 'phase' | 'model' | '
     case 'succeeded': return 'The database was detached.'
     case 'failed': return open.steps?.find(step => step.status === 'failed' && !step.compensates)?.message ?? open.error?.message ?? ''
     case 'stopped': return stoppedMessage
-    default: return model ? model.confirmOffline ? 'The database is offline.' : sessionsMessage(model) : ''
+    default: return model ? model.confirmOffline ? `The database is ${detachStateWords(model.state)}.` : sessionsMessage(model) : ''
   }
 }
 
 /**
  * Detach Database's General page (Learn's "Databases to detach" grid, recalled for SSMS 22): Database Name, Drop Connections,
- * Update Statistics, Status and Message; the sessions in the database (closed), what Drop Connections rolls back (A7), Detach
- * while offline for an offline database on Windows (A27), and the files that stay on the server, which Copy paths copies.
+ * Update Statistics, Status and Message; the sessions in the database (closed), what Drop Connections rolls back (A7), the box a
+ * database that is not online asks for on Windows (A27), and the files that stay on the server, which Copy paths copies. Once it
+ * succeeded, the database is gone: what the page said about its sessions goes, and the boxes no longer change anything.
  */
 export default function DetachDatabasePage({ open, editable }: PageProps) {
   const { dialogs } = useWorkbench()
@@ -48,6 +49,8 @@ export default function DetachDatabasePage({ open, editable }: PageProps) {
   const files = model?.files ?? []
   const choose = (patch: Partial<DetachDraft>) => dialogs.updateDraft(patch)
   const before = open.phase === 'ready' || open.phase === 'loading' || open.phase === 'failed' || open.phase === 'stopped'
+  const gone = open.phase === 'succeeded'
+  const statisticsBlocked = model ? detachStatisticsBlocked(model) : undefined
   return <div className="object-dialog-state object-dialog-detach">
     <div className="object-dialog-caption" id="detach-database-grid">Databases to detach</div>
     <table className="object-dialog-grid" role="grid" aria-labelledby="detach-database-grid">
@@ -60,9 +63,9 @@ export default function DetachDatabasePage({ open, editable }: PageProps) {
       <tbody><tr>
         <td><bdi>{name}</bdi></td>
         <td className="object-dialog-cell-check">{draft && <input type="checkbox" aria-label="Drop Connections" checked={draft.dropConnections}
-          disabled={!editable || !model || model.sessions === 0} onChange={event => choose({ dropConnections: event.target.checked })} />}</td>
-        <td className="object-dialog-cell-check">{draft && <input type="checkbox" aria-label="Update Statistics" checked={draft.updateStatistics}
-          disabled={!editable || !model} onChange={event => choose({ updateStatistics: event.target.checked })} />}</td>
+          disabled={!editable || !model || gone || model.sessions === 0} onChange={event => choose({ dropConnections: event.target.checked })} />}</td>
+        <td className="object-dialog-cell-check">{draft && <input type="checkbox" aria-label="Update Statistics" checked={draft.updateStatistics && !statisticsBlocked}
+          title={statisticsBlocked} disabled={!editable || !model || gone || !!statisticsBlocked} onChange={event => choose({ updateStatistics: event.target.checked })} />}</td>
         <td><StatusPill tone={status.tone} label={status.label} size="small" /></td>
         <td className="object-dialog-cell-message"><span aria-live="polite">{detachMessage(open, waiting)}</span></td>
       </tr></tbody>
@@ -70,22 +73,22 @@ export default function DetachDatabasePage({ open, editable }: PageProps) {
     {model && model.warnings.length > 0 && <ul className="object-dialog-warnings" aria-label="Warnings">
       {model.warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
     </ul>}
-    {model && <SessionsDisclosure model={model} name={name} defaultOpen={false} />}
-    {model && <TransactionsNote model={model} ownTransactions={ownTransactions} closer="Drop Connections" />}
+    {model && !gone && <SessionsDisclosure model={model} name={name} defaultOpen={false} />}
+    {model && !gone && <TransactionsNote model={model} ownTransactions={ownTransactions} closer="Drop Connections" />}
     {model && sessions > 0 && draft && !draft.dropConnections && open.phase === 'ready' && <p className="object-dialog-note" role="note">
       <Icon name="info" /><span>OK stays disabled while sessions are connected: sp_detach_db refuses a database in use. Check Drop Connections to roll back their
         work and disconnect them (SINGLE_USER WITH ROLLBACK IMMEDIATE), or wait for them to leave and Check Again.</span>
     </p>}
     {model?.confirmOffline && draft && <div className="object-dialog-note warning" role="note">
       <Icon name="warning" /><div className="object-dialog-note-body">
-        <span>This database is offline. SQL Server may restrict access to the files of a database detached while offline, and attaching it again can then fail.
-          Bring it online first if you will attach it again.</span>
-        <label className="checkbox-label"><input type="checkbox" checked={draft.detachOffline} disabled={!editable} onChange={event => choose({ detachOffline: event.target.checked })} />Detach while offline</label>
+        <span>This database is {detachStateWords(model.state)}. SQL Server may restrict access to the files of a database detached in this state, and attaching it
+          again can then fail. Bring it online first if you will attach it again.</span>
+        <label className="checkbox-label"><input type="checkbox" checked={draft.detachOffline} disabled={!editable || gone} onChange={event => choose({ detachOffline: event.target.checked })} />{detachConfirmLabel(model.state)}</label>
       </div>
     </div>}
     {model && files.length > 0 && <>
       <div className="object-dialog-caption object-dialog-files-caption" id="detach-database-files">Files that stay on the server</div>
-      <table className="object-dialog-grid object-dialog-files" role="grid" aria-labelledby="detach-database-files">
+      <table className="object-dialog-grid object-dialog-files" aria-labelledby="detach-database-files">
         <thead><tr><th scope="col" className="object-dialog-col-file">Logical Name</th><th scope="col" className="object-dialog-col-type">File Type</th><th scope="col">Path</th></tr></thead>
         <tbody>{files.map(file => <tr key={file.fileId}>
           <td title={displayText(file.name)}><bdi>{displayText(file.name)}</bdi></td><td>{fileTypeLabel[file.type]}</td>

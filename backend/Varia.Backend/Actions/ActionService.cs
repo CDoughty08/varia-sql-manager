@@ -545,8 +545,9 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Take Offline's, Bring Online's and Detach's verdict: a database other than the one the dialog read (<paramref name="read"/>),
-    /// SQL Server's own, a snapshot, a state the catalogue's database rules grey the action in (as the menu does), and ALTER on it
-    /// (sp_detach_db needs membership in db_owner, which ALTER ANY DATABASE, dbcreator and ownership imply; SQL Server has the last word).</summary>
+    /// SQL Server's own, a snapshot, a state the catalogue's database rules grey the action in (as the menu does), and, for Take Offline
+    /// and Bring Online, ALTER on it. Detach's permission is its own (DetachFactsAsync): DBCC DETACHDB refuses ALTER, CONTROL, ALTER
+    /// ANY DATABASE and dbcreator alike (7983).</summary>
     private ActionError? StateRefusal(ActionSubject subject, string action, DatabaseIdentityDto? read)
     {
         var row = subject.Row;
@@ -556,9 +557,7 @@ internal sealed partial class ActionService : IDisposable
         if (row.Bool("is_system")) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + verb + ".");
         if (!catalog.Allows(subject.Target.Kind, subject.Subtype, action)) return Error("NOT_SUPPORTED", "A database snapshot cannot be " + verb + ".");
         if (catalog.DatabaseRefusal(action, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby")) is { } reason) return Error("NOT_SUPPORTED", reason);
-        if (!row.Bool("can_alter_state"))
-            return Error("PERMISSION_DENIED", action == "detach" ? "You do not have permission to detach " + subject.Display + " (db_owner, dbcreator or ALTER ANY DATABASE)."
-                : "You do not have permission to change the state of " + subject.Display + " (ALTER on it).");
+        if (action != "detach" && !row.Bool("can_alter_state")) return Error("PERMISSION_DENIED", "You do not have permission to change the state of " + subject.Display + " (ALTER on it).");
         return null;
     }
 
@@ -574,21 +573,68 @@ internal sealed partial class ActionService : IDisposable
         return warnings;
     }
 
-    /// <summary>Detach's note for an offline database on Linux, where it is advice only (critic A27).</summary>
-    public const string DetachOfflineNote = "This database is offline. On Windows, SQL Server may restrict access to its files when it is detached offline; bring it online first if you will attach it again.";
+    /// <summary>Detach's note on Linux for a database that is not online, where it is advice only (critic A27); <paramref name="words"/>
+    /// come from DetachStateWords.</summary>
+    public static string DetachStateNote(string words) => "This database is " + words + ". On Windows, SQL Server may restrict access to its files when it is detached "
+        + (words == "offline" ? "offline" : "in this state") + "; bring it online first if you will attach it again.";
+    public static readonly string DetachOfflineNote = DetachStateNote("offline");
 
-    /// <summary>Detach's verdict at execute: StateRefusal, then DetachBlockers, then an offline database on a Windows server without
-    /// Detach while offline: SQL Server may leave its files with restricted access after the detach (critic A27).</summary>
-    internal ActionError? DetachRefusal(ActionSubject subject, DatabaseIdentityDto? read, bool linux, bool detachOffline)
+    /// <summary>Detach's note on Windows for a SQL Server login (probed: files a SQL login detached stayed closed to a Windows
+    /// administrator's attach, OS error 5, and opened to a SQL-authenticated one).</summary>
+    public const string DetachSqlLoginNote = "You are connected with a SQL Server login. SQL Server then lets only its service account open the detached files, so "
+        + "attaching them again with Windows authentication can fail with access denied; attach them with SQL Server authentication.";
+
+    /// <summary>Detach's note when SQL Server showed this login none of the database's files (sys.master_files needs VIEW ANY
+    /// DEFINITION, and a database that is not online cannot be read inside).</summary>
+    public const string DetachFilesHiddenNote = "SQL Server did not show this login the database's files (that needs VIEW ANY DEFINITION), so they are not listed here; "
+        + "note where they are before you detach it.";
+
+    /// <summary>A database state's words in Detach's notes and refusals.</summary>
+    internal string DetachStateWords(int state) => catalog.DatabaseStateOf(state) switch
+    {
+        "offline" => "offline",
+        "emergency" => "in EMERGENCY mode",
+        "offlineSecondary" => "an offline secondary",
+        _ => "not online"
+    };
+
+    /// <summary>The box a database that is not online asks for on Windows (src/shared/actions/database.ts detachConfirmLabel).</summary>
+    internal string DetachConfirmLabel(int state) => catalog.DatabaseStateOf(state) == "offline" ? "Detach while offline" : "Detach anyway";
+
+    /// <summary>Why Update Statistics cannot run: sp_detach_db's sp_updatestats raises 15635 on a read-only, standby or EMERGENCY
+    /// database (and SQL Server detaches it all the same), and 942 on an offline one, which aborts the detach.</summary>
+    internal string? DetachStatisticsRefusal(ScriptPreflight.Row row) =>
+        catalog.DatabaseStateOf(row.Int("state")) != "online" ? "Update Statistics cannot run while the database is " + DetachStateWords(row.Int("state")) + "; clear it."
+        : row.Bool("is_read_only") || row.Bool("is_in_standby") ? "Update Statistics cannot run on a read-only or standby database; clear it."
+        : null;
+
+    /// <summary>Detach's verdict at execute: StateRefusal, the permission (DetachFactsAsync's <paramref name="permission"/>),
+    /// DetachBlockers, Update Statistics where it cannot run, then a database that is not online on a Windows server without its
+    /// box: SQL Server may leave its files with restricted access after the detach (critic A27; probed for OFFLINE and EMERGENCY).</summary>
+    internal ActionError? DetachRefusal(ActionSubject subject, DatabaseIdentityDto? read, bool linux, bool detachOffline, bool updateStatistics = false, ActionError? permission = null)
     {
         if (StateRefusal(subject, "detach", read) is { } refused) return refused;
+        if (permission is not null) return permission;
         if (DetachBlockers(subject.Row).FirstOrDefault() is { } blocker) return Error("NOT_SUPPORTED", blocker.Text);
-        if (OfflineOnWindows(subject.Row, linux) && !detachOffline)
-            return Error("NOT_SUPPORTED", "The database " + subject.Display + " is offline. Bring it online first, or check Detach while offline.");
+        if (updateStatistics && DetachStatisticsRefusal(subject.Row) is { } statistics) return Error("NOT_SUPPORTED", statistics);
+        if (NotOnlineOnWindows(subject.Row, linux) && !detachOffline)
+            return Error("NOT_SUPPORTED", "The database " + subject.Display + " is " + DetachStateWords(subject.Row.Int("state")) + ". Bring it online first, or check "
+                + DetachConfirmLabel(subject.Row.Int("state")) + ".");
         return null;
     }
 
-    private bool OfflineOnWindows(ScriptPreflight.Row row, bool linux) => !linux && catalog.DatabaseStateOf(row.Int("state")) == "offline";
+    /// <summary>Detach's non-blocking notes over the preflight row: a database that is not online on Linux (critic A27 asks for the
+    /// box on Windows instead), a SQL Server login on Windows, and files SQL Server did not show this login.</summary>
+    internal List<ActionWarningDto> DetachNotes(ScriptPreflight.Row row, bool linux, bool filesHidden)
+    {
+        var notes = new List<ActionWarningDto>();
+        if (linux && catalog.DatabaseStateOf(row.Int("state")) != "online") notes.Add(new(DetachStateNote(DetachStateWords(row.Int("state"))), false));
+        if (!linux && row.Bool("sql_login")) notes.Add(new(DetachSqlLoginNote, false));
+        if (filesHidden) notes.Add(new(DetachFilesHiddenNote, false));
+        return notes;
+    }
+
+    private bool NotOnlineOnWindows(ScriptPreflight.Row row, bool linux) => !linux && catalog.DatabaseStateOf(row.Int("state")) != "online";
 
     /// <summary>The statements an action runs, in order. <paramref name="userAccess"/>: the database's sys.databases.user_access the
     /// preflight read, which Detach's compensation restores.</summary>
@@ -660,17 +706,45 @@ internal sealed partial class ActionService : IDisposable
         or ActionTemplate.DetachDatabase or ActionTemplate.SetOffline or ActionTemplate.SetOfflineRollback;
 
     /// <summary>Runs planned statements through runner v2 on the action's connection. Before the first main statement that needs
-    /// a database to itself, the connection's own pools leave it (FreeDatabaseAsync), inside that step, so Stop reaches it.</summary>
-    private async Task<RunOutcome> RunPlannedAsync(SqlConnection connection, string connectionId, string action, IReadOnlyList<PlannedStatement> plan, string? inUseAdvice, CancellationToken token)
+    /// a database to itself, the connection's own pools leave it (FreeDatabaseAsync), inside that step, so Stop reaches it.
+    /// sp_detach_db can fail and still detach: sp_updatestats' 15635 (read-only, standby or EMERGENCY) does not abort it, and a Stop
+    /// can answer after DBCC DETACHDB finished. So a failed or stopped detach whose database is gone is done, with SQL Server's
+    /// errors kept in <paramref name="messages"/>, and no compensation runs on a database that no longer exists.</summary>
+    private async Task<RunOutcome> RunPlannedAsync(SqlConnection connection, string connectionId, string action, IReadOnlyList<PlannedStatement> plan, string? inUseAdvice, CancellationToken token,
+        MessageLog? messages = null)
     {
         var freed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var steps = plan.Select(ActionSql.Checked).Select(statement => new RunStep(StepTitle(statement.Template), async context =>
         {
             if (statement.Kind == StepKind.Main && NeedsFreeDatabase(statement.Template) && freed.Add(statement.Names[0]))
                 await FreeDatabaseAsync(connection, connectionId, statement.Names[0], context.Token);
-            await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction);
+            try { await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction); }
+            catch (Exception error) when (statement is { Template: ActionTemplate.DetachDatabase, Kind: StepKind.Main } && error is SqlException or OperationCanceledException)
+            {
+                if (!await DatabaseGoneAsync(connection, statement.Names[0], CleanupBudget(action))) throw;
+                if (error is SqlException sql) foreach (SqlError item in sql.Errors) { if (item.Class > 10) messages?.Note(item.Message); }
+                else messages?.Note("Stop came after SQL Server had detached the database.");
+            }
         }, statement.Kind, statement.Undoes, statement.When)).ToList();
         return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action));
+    }
+
+    /// <summary>Whether a database is gone from sys.databases (ActionSql.DatabaseAccess), read under a fresh budget because a Stop
+    /// may have cancelled the job's token; false when the read fails, so the step's own failure stands.</summary>
+    private static async Task<bool> DatabaseGoneAsync(SqlConnection connection, string database, TimeSpan budget)
+    {
+        using var source = new CancellationTokenSource(budget);
+        try
+        {
+            if (connection.State != ConnectionState.Open) return false;
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.DatabaseAccess;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, database);
+            await using var reader = await command.ExecuteReaderAsync(source.Token);
+            return !await reader.ReadAsync(source.Token);
+        }
+        catch (Exception error) when (error is SqlException or OperationCanceledException or InvalidOperationException) { return false; }
     }
 
     /// <summary>Frees a database of the backend's own sessions (critic A5): the server-scope pools of every connection to the server
@@ -721,7 +795,7 @@ internal sealed partial class ActionService : IDisposable
         return RunAsync(connectionId, requestId, action, read: false, null, token, async (connection, profile, band, job) =>
         {
             var messages = CollectMessages(connection);
-            var (steps, failure, _) = await RunPlannedAsync(connection, connectionId, action, plan, null, job);
+            var (steps, failure, _) = await RunPlannedAsync(connection, connectionId, action, plan, null, job, messages);
             return new ActionExecuteResult(steps, messages.Collected(), watch.ElapsedMilliseconds, failure);
         }, error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
     }
@@ -820,6 +894,14 @@ internal sealed partial class ActionService : IDisposable
         var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
         if (subject is null) return new(null, 0, error);
         if (StateRefusal(subject, action, null) is { } refused) return new(null, 0, refused);
+        List<DatabaseFileRefDto>? files = null;
+        bool? filesTruncated = null, confirmOffline = null;
+        if (action == "detach")
+        {
+            (var permission, files, var more) = await DetachFactsAsync(connection, subject, token);
+            if (permission is not null) return new(null, 0, permission);
+            filesTruncated = more;
+        }
         if (action is "takeOffline" or "detach" && subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
         {
             (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
@@ -833,16 +915,12 @@ internal sealed partial class ActionService : IDisposable
             if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; SET OFFLINE fails until it is removed from the group.", true));
             if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; SET OFFLINE fails until mirroring is removed.", true));
         }
-        List<DatabaseFileRefDto>? files = null;
-        bool? filesTruncated = null, confirmOffline = null;
         if (action == "detach")
         {
             warnings.AddRange(DetachBlockers(row));
-            // An offline database on Windows waits for Detach while offline (critic A27); on Linux the dialog only says so.
-            if (OfflineOnWindows(row, linux)) confirmOffline = true;
-            else if (catalog.DatabaseStateOf(row.Int("state")) == "offline") warnings.Add(new(DetachOfflineNote, false));
-            (files, var more) = await FilesAsync(connection, target.Name!, token);
-            filesTruncated = more;
+            // A database that is not online on Windows waits for its box (critic A27); on Linux the dialog only says so (DetachNotes).
+            if (NotOnlineOnWindows(row, linux)) confirmOffline = true;
+            warnings.AddRange(DetachNotes(row, linux, filesHidden: files is { Count: 0 }));
         }
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
@@ -874,51 +952,90 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>The files a detach leaves on the server (ActionSql.DatabaseFiles), at most the catalogue's detachFiles, and whether
-    /// there were more. Names and paths are clipped to the catalogue's bounds (sysname, filePath).</summary>
+    /// there were more.</summary>
     private async Task<(List<DatabaseFileRefDto> Files, bool Truncated)> FilesAsync(SqlConnection connection, string database, CancellationToken token)
     {
         var limit = (int)catalog.Limit("detachFiles");
-        var path = (int)catalog.Limit("filePath");
-        var files = new List<DatabaseFileRefDto>();
-        var more = false;
+        var rows = new List<ScriptPreflight.Row>();
         await using var command = connection.CreateCommand();
         command.CommandText = ActionSql.DatabaseFiles;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, database);
         Add(command, "@take", SqlDbType.Int, 0, limit + 1);
         await using var reader = await command.ExecuteReaderAsync(token);
-        while (await reader.ReadAsync(token))
-        {
-            if (files.Count == limit) { more = true; break; }
-            var file = ReadRow(reader);
-            var type = file.Int("file_type") switch { 1 => "log", 2 => "filestream", _ => "rows" };
-            files.Add(new(file.Int("file_id"), ScriptingErrors.Clip(file.Name("file_name"), 128), type, ScriptingErrors.Clip(file.Name("physical_name"), path)));
-        }
-        return (files, more);
+        while (rows.Count <= limit && await reader.ReadAsync(token)) rows.Add(ReadRow(reader));
+        return FilesOf(rows);
     }
 
-    /// <summary>Detach Database (spec D3 §6): the preflight and DetachRefusal, the files the database has, then SINGLE_USER (with Drop
-    /// Connections), sp_detach_db and, after a failure or Stop past SINGLE_USER, the access it had (DetachPlan). Once detached, the
+    /// <summary>File rows (file_id, file_name, file_type, physical_name) as the reply carries them, at most the catalogue's
+    /// detachFiles; names and paths clipped to the catalogue's bounds (sysname, filePath).</summary>
+    private (List<DatabaseFileRefDto> Files, bool Truncated) FilesOf(IReadOnlyList<ScriptPreflight.Row> rows)
+    {
+        var limit = (int)catalog.Limit("detachFiles");
+        var path = (int)catalog.Limit("filePath");
+        var files = rows.Take(limit).Select(file => new DatabaseFileRefDto(file.Int("file_id"), ScriptingErrors.Clip(file.Name("file_name"), 128),
+            file.Int("file_type") switch { 1 => "log", 2 => "filestream", _ => "rows" }, ScriptingErrors.Clip(file.Name("physical_name"), path))).ToList();
+        return (files, rows.Count > limit);
+    }
+
+    /// <summary>Detach's permission and the files it leaves on the server. sysadmin and the owner may detach (the preflight's
+    /// can_detach); otherwise only a member of the online database's db_owner role, read inside it (ActionSql.DetachInside), which
+    /// also lists the files when sys.master_files showed this login none. Permission is null when this login may detach, so a
+    /// login SQL Server would refuse with 7983 is refused before SINGLE_USER rolls anyone back.</summary>
+    private async Task<(ActionError? Permission, List<DatabaseFileRefDto> Files, bool Truncated)> DetachFactsAsync(SqlConnection connection, ActionSubject subject, CancellationToken token)
+    {
+        var database = subject.Target.Name!;
+        var (files, more) = await FilesAsync(connection, database, token);
+        var may = subject.Row.Bool("can_detach");
+        ActionError? unread = null;
+        if (catalog.DatabaseStateOf(subject.Row.Int("state")) == "online" && (!may || files.Count == 0))
+        {
+            try
+            {
+                var (sets, missing) = await InsideAsync(connection, database, ActionSql.DetachInside, null, null, null, (int)catalog.Limit("detachFiles") + 1, token);
+                if (missing is not null) return (missing, files, more);
+                if (sets is [[var role], var inside, ..])
+                {
+                    may |= role.Bool("db_owner");
+                    if (files.Count == 0) (files, more) = FilesOf(inside);
+                }
+            }
+            // No user in the database (916) leaves sysadmin and the owner; another failure, such as a SINGLE_USER database another
+            // session holds, is SQL Server's answer when nothing else says this login may detach.
+            catch (SqlException error) when (!token.IsCancellationRequested)
+            {
+                if (!may && error.Number is not (916 or 4060)) unread = ActionErrors.FromSql(catalog, error, connection, ddl: false, null);
+            }
+        }
+        return (may ? null : unread ?? Error("PERMISSION_DENIED", "You do not have permission to detach " + subject.Display + ": that needs its db_owner role, or sysadmin."), files, more);
+    }
+
+    /// <summary>Detach Database (spec D3 §6): the preflight, the permission and the files the database has (DetachFactsAsync) and
+    /// DetachRefusal, then SINGLE_USER (with Drop Connections), sp_detach_db and, after a failure or Stop past SINGLE_USER, the access
+    /// it had (DetachPlan). Once detached (RunPlannedAsync counts a failed or stopped sp_detach_db whose database is gone), the
     /// connection forgets the name, as for a dropped database, and the reply lists the files left on the server.</summary>
     private async Task<ActionExecuteResult> ExecuteDetachJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, bool linux, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
         var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
         if (subject is null) return new([], [], 0, error);
-        if (DetachRefusal(subject, args.Identity, linux, args.DetachOffline == true) is { } refused) return new([], [], 0, refused);
-        var (files, _) = await FilesAsync(connection, target.Name!, token);
+        if (StateRefusal(subject, "detach", args.Identity) is { } stale) return new([], [], 0, stale);
+        var (permission, files, _) = await DetachFactsAsync(connection, subject, token);
+        if (DetachRefusal(subject, args.Identity, linux, args.DetachOffline == true, args.UpdateStatistics == true, permission) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, target, subject.Row.Int("user_access"));
-        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, ActionErrors.DropConnectionsAdvice, token);
+        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, ActionErrors.DropConnectionsAdvice, token, messages);
         var detached = plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template == ActionTemplate.DetachDatabase);
         if (detached) host.DatabaseChanged(args.ConnectionId, target.Name!, null);
         return new(steps, messages.Collected(), 0, failure, detached ? files : null);
     }
 
-    /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>
+    /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded, and the notes an
+    /// action adds (a detach's errors once the database was detached all the same).</summary>
     private sealed class MessageLog(int max, int chars)
     {
         private readonly List<string> messages = [];
-        public void Add(SqlError item) { lock (messages) if (item.Class <= 10 && messages.Count < max) messages.Add(ScriptingErrors.Clip(item.Message, chars)); }
+        public void Add(SqlError item) { if (item.Class <= 10) Note(item.Message); }
+        public void Note(string text) { lock (messages) if (messages.Count < max) messages.Add(ScriptingErrors.Clip(text, chars)); }
         public List<string> Collected() { lock (messages) return [.. messages]; }
     }
 

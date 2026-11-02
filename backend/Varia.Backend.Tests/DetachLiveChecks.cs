@@ -12,8 +12,11 @@ namespace Varia.Backend.Tests;
 /// database makes sp_detach_db fail IN_USE without Drop Connections, and Drop Connections rolls it back; Stop just before
 /// sp_detach_db restores the access the database had (MULTI_USER or RESTRICTED_USER); Script runs nothing and writes @skipchecks
 /// 'true' when Update Statistics is cleared; a database replaced since the dialog read it is refused; an offline database on Windows
-/// waits for Detach while offline (critic A27) and is never detached offline here; a detach leaves the files the reply lists, which
-/// attach again; and a login without the permission is refused. Every detached database is attached again and dropped, so its files
+/// waits for Detach while offline (critic A27), one in EMERGENCY for Detach anyway, and neither is detached here (a guard fails any
+/// step); Update Statistics is refused where sp_updatestats cannot run, and a read-only database that sp_detach_db detaches despite
+/// 15635 is reported detached; a detach leaves the files the reply lists, which attach again; and a login that is neither sysadmin
+/// nor in db_owner (no permission, ALTER on the database, ALTER ANY DATABASE) is refused before SINGLE_USER, while a db_owner member
+/// and the owner see the files through sys.database_files. Every detached database is attached again and dropped, so its files
 /// go with it. The hostile-name dry runs of the template are ActionLiveChecks' loop.</summary>
 internal static class DetachLiveChecks
 {
@@ -124,7 +127,11 @@ internal static class DetachLiveChecks
 
         // An offline database on Windows waits for Detach while offline (critic A27); on Linux the describe only says so. It is never
         // detached offline here: SQL Server may leave its files where the next attach cannot open them.
+        // A guard for checks that must be refused: no step may run. A refusal that let one through would detach the database, and on
+        // Windows its files would then open to no attach this run can make (probed for EMERGENCY, and for a SQL login's detach).
+        Func<string, CancellationToken, Task> neverDetach = (_, _) => throw new InvalidOperationException("A Detach check that must be refused reached a step.");
         var offline = false;
+        service.Actions.Options.BeforeStep = neverDetach;
         try
         {
             await Sql("ALTER DATABASE " + Bracket(db) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
@@ -141,7 +148,29 @@ internal static class DetachLiveChecks
                     "on Windows, Detach of an offline database waits for Detach while offline and changes nothing without it (" + described.Error?.Message + " | " + refused.Error?.Message + ")");
             }
         }
-        finally { if (offline) await Sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;"); }
+        finally { service.Actions.Options.BeforeStep = null; if (offline) await Sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;"); }
+
+        // EMERGENCY, as the menu's suspect reason advises: on Windows its files end up as an offline detach leaves them (probed), so it
+        // waits for Detach anyway; Update Statistics is refused everywhere (sp_updatestats raises 15635 and SQL Server detaches anyway).
+        // It is never detached here.
+        var emergency = false;
+        service.Actions.Options.BeforeStep = neverDetach;
+        try
+        {
+            emergency = (await Sql("ALTER DATABASE " + Bracket(db) + " SET EMERGENCY;")).Status == "completed";
+            var described = await Describe(db);
+            var statistics = await Execute(Detach(db, false, true, offline: true, identity: identity));
+            var plainRefused = info.Linux == true ? null : await Execute(Detach(db, false, false, identity: identity));
+            var noteOk = info.Linux == true
+                ? described is { Error: null, DatabaseState: { State: 5, ConfirmOffline: null } } && described.DatabaseState.Warnings.Any(warning => !warning.Blocking && warning.Text.StartsWith("This database is in EMERGENCY mode.", StringComparison.Ordinal))
+                : described is { Error: null, DatabaseState: { State: 5, ConfirmOffline: true, Files.Count: 2 } } && plainRefused is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 }
+                    && plainRefused.Error.Message.Contains("Detach anyway", StringComparison.Ordinal);
+            check(emergency && noteOk && statistics is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && statistics.Error.Message.StartsWith("Update Statistics cannot run", StringComparison.Ordinal)
+                && await State() == "EMERGENCY MULTI_USER",
+                "a database in EMERGENCY waits for Detach anyway on Windows (a note on Linux), refuses Update Statistics, and changes nothing (" + described.Error?.Message + " | "
+                + statistics.Error?.Message + " | " + plainRefused?.Error?.Message + ")");
+        }
+        finally { service.Actions.Options.BeforeStep = null; if (emergency) await Sql("ALTER DATABASE " + Bracket(db) + " SET ONLINE;"); }
 
         // A session in the database: without Drop Connections sp_detach_db fails at once (3703) and the session keeps its transaction;
         // with it, the session is rolled back and the database detached, leaving its files, which attach again.
@@ -180,18 +209,84 @@ internal static class DetachLiveChecks
         check(plain.Error is null && Steps(plain) == "done:Detach the database" && plain.FilesKept?.Count == 2 && plainGone == "0" && reattached.Status == "completed" && await State() == "ONLINE MULTI_USER",
             "with no session, Detach runs sp_detach_db alone and the database attaches again (" + plain.Error?.Message + ")");
 
-        // A login without permission: refused before any DDL, and the database stays attached.
+        // Update Statistics on a read-only database: the execute refuses it, cleared it would run. Run anyway (the plan seam), sp_detach_db's
+        // sp_updatestats raises 15635, which aborts nothing, and SQL Server detaches the database all the same: the reply must say so (the
+        // step done, 15635 kept as a message, no compensation on a database that is gone), or, where a server keeps it, the failure with
+        // the access restored.
+        await Sql("ALTER DATABASE " + Bracket(db) + " SET READ_ONLY WITH ROLLBACK IMMEDIATE;");
+        identity = await Identity();
+        var readOnlyRefused = await Execute(Detach(db, drop: true, statistics: true, identity: identity));
+        scratch.Detaching(db, paths);
+        var readOnly = await service.Actions.ExecutePlanAsync(info.Id, Guid.NewGuid().ToString(), "detach", ActionService.Plan(Detach(db, true, true), Database(db), userAccess: 0), CancellationToken.None);
+        var readOnlyGone = (await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar == "0";
+        if (readOnlyGone)
+        {
+            var back = await Sql(ScratchDatabase.AttachSql(db, paths));
+            if (back.Status == "completed") scratch.Attached(db);
+        }
+        else scratch.Attached(db);
+        await Sql("ALTER DATABASE " + Bracket(db) + " SET READ_WRITE WITH ROLLBACK IMMEDIATE;");
+        check(readOnlyRefused is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && readOnlyRefused.Error.Message.StartsWith("Update Statistics cannot run on a read-only", StringComparison.Ordinal)
+            && (readOnlyGone
+                ? readOnly.Error is null && Steps(readOnly) == "done:Close existing connections, done:Detach the database" && readOnly.Messages.Any(message => message.Contains("sp_updatestats", StringComparison.Ordinal))
+                : readOnly.Error is not null && Steps(readOnly) == "done:Close existing connections, failed:Detach the database, done:Restore multi-user access")
+            && await State() == "ONLINE MULTI_USER",
+            "Detach refuses Update Statistics on a read-only database, and when sp_detach_db detaches it despite 15635 the reply says it was detached (" + (readOnlyGone ? "detached" : "kept") + ": "
+            + Steps(readOnly) + ", " + readOnly.Error?.Message + ", " + string.Join(" / ", readOnly.Messages) + ")");
+
+        // Permission: DBCC DETACHDB needs db_owner or sysadmin. ALTER on the database and ALTER ANY DATABASE pass SET OFFLINE's check but
+        // not DETACHDB's (7983), so they are refused before SINGLE_USER rolls back anyone's work; db_owner and ownership may detach, and
+        // see the files through sys.database_files without VIEW ANY DEFINITION. The SQL login never detaches here: on Windows only a
+        // SQL-authenticated attach could open its files again.
         if (await scratch.CreateLoginAsync())
         {
+            var login = Bracket(scratch.Login!);
             var low = await Call<ConnectionInfo>("connections.connect", live("master") with { Authentication = "sql", Username = scratch.Login, Password = scratch.Password });
+            identity = await Identity();
+            var holder2 = Guid.NewGuid().ToString();
+            var owner = (await Sql("SELECT SUSER_SNAME(owner_sid) FROM sys.databases WHERE name = " + Literal(db) + ";")).Scalar!;
+            service.Actions.Options.BeforeStep = neverDetach;
             try
             {
                 var described = await Describe(db, low.Id);
                 var executed = await Execute(Detach(db, drop: true, statistics: false, connectionId: low.Id));
                 check(executed is { Error.Code: "PERMISSION_DENIED" } && executed.Steps.Count == 0 && described.Error?.Code == "PERMISSION_DENIED" && await State() == "ONLINE MULTI_USER",
-                    "a login without db_owner, dbcreator or ALTER ANY DATABASE cannot detach the database (" + described.Error?.Code + ", " + executed.Error?.Message + ")");
+                    "a login with no permission on the database cannot detach it (" + described.Error?.Code + ", " + executed.Error?.Message + ")");
+
+                await Sql("BEGIN TRANSACTION; INSERT dbo.Held VALUES (3);", db, holder2);
+                await Sql("CREATE USER " + login + " FOR LOGIN " + login + "; GRANT ALTER TO " + login + ";", db);
+                foreach (var anyDatabase in new[] { false, true })
+                {
+                    if (anyDatabase) { await Sql("REVOKE ALTER FROM " + login + ";", db); await Sql("GRANT ALTER ANY DATABASE TO " + login + ";"); }
+                    try
+                    {
+                        var deniedDescribe = await Describe(db, low.Id);
+                        var denied = await Execute(Detach(db, drop: true, statistics: false, identity: identity, connectionId: low.Id));
+                        var open = (await Sql("SELECT @@TRANCOUNT;", db, holder2)).Scalar;
+                        check(deniedDescribe.Error?.Code == "PERMISSION_DENIED" && denied is { Error.Code: "PERMISSION_DENIED", Steps.Count: 0 } && open == "1" && await State() == "ONLINE MULTI_USER",
+                            "a login with " + (anyDatabase ? "ALTER ANY DATABASE" : "ALTER on the database") + " but not db_owner is refused Detach before SINGLE_USER, and another session's transaction stays open ("
+                            + deniedDescribe.Error?.Message + " | " + denied.Error?.Message + ")");
+                    }
+                    finally { if (anyDatabase) await Sql("REVOKE ALTER ANY DATABASE FROM " + login + ";"); }
+                }
+                await Sql("ALTER ROLE [db_owner] ADD MEMBER " + login + ";", db);
+                var member = await Describe(db, low.Id);
+                check(member is { Error: null, DatabaseState.Files: { } memberFiles } && memberFiles.Select(file => file.Path).SequenceEqual(paths)
+                    && (info.Linux == true) != member.DatabaseState.Warnings.Any(warning => !warning.Blocking && warning.Text == ActionService.DetachSqlLoginNote),
+                    "a db_owner member without VIEW ANY DEFINITION may detach, sees the files that stay (sys.database_files), and on Windows is told a SQL login's files need SQL authentication (" + member.Error?.Message + ")");
+                await Sql("ALTER ROLE [db_owner] DROP MEMBER " + login + "; DROP USER " + login + ";", db);
+                await Sql("ALTER AUTHORIZATION ON DATABASE::" + Bracket(db) + " TO " + login + ";");
+                var owned = await Describe(db, low.Id);
+                check(owned is { Error: null, DatabaseState.Files: { } ownedFiles } && ownedFiles.Select(file => file.Path).SequenceEqual(paths),
+                    "the database's owner may detach it and sees the files that stay (" + owned.Error?.Message + ")");
             }
-            finally { await Call<object>("connections.disconnect", new ConnectionArgs(low.Id)); }
+            finally
+            {
+                service.Actions.Options.BeforeStep = null;
+                await Call<object>("query.session.close", new SessionArgs(holder2));
+                await Sql("ALTER AUTHORIZATION ON DATABASE::" + Bracket(db) + " TO " + Bracket(owner) + ";");
+                await Call<object>("connections.disconnect", new ConnectionArgs(low.Id));
+            }
         }
         else Console.WriteLine("Detach permission checks skipped: the server accepts Windows logins only.");
     }

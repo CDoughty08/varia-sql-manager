@@ -83,7 +83,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 7 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 8 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -186,7 +186,7 @@ internal static class ActionChecks
             // Take Offline and Bring Online (D3a).
             [5011] = "PERMISSION_DENIED",
             // Detach Database (D3b).
-            [3703] = "IN_USE", [3709] = "DEPENDENTS", [3707] = "NOT_SUPPORTED"
+            [3703] = "IN_USE", [3709] = "DEPENDENTS", [3707] = "NOT_SUPPORTED", [7983] = "PERMISSION_DENIED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
@@ -337,9 +337,11 @@ internal static class ActionChecks
             foreach (var (key, value) in changes) values[key] = value;
             return new(database, "AppData", "Database", subtype, new Varia.Backend.Scripting.ScriptPreflight.Row(values), [], false);
         }
-        string Verdict(Dictionary<string, object?> changes, bool linux = false, bool offline = false, DatabaseIdentityDto? read = null, string subtype = "") =>
-            service.DetachRefusal(Subject(changes, subtype), read, linux, offline) is { } error ? error.Code + ": " + error.Message : "runs";
+        string Verdict(Dictionary<string, object?> changes, bool linux = false, bool offline = false, DatabaseIdentityDto? read = null, string subtype = "", bool statistics = false,
+            ActionError? permission = null) =>
+            service.DetachRefusal(Subject(changes, subtype), read, linux, offline, statistics, permission) is { } error ? error.Code + ": " + error.Message : "runs";
         var offlineMessage = "NOT_SUPPORTED: The database AppData is offline. Bring it online first, or check Detach while offline.";
+        var denied = new ActionError("PERMISSION_DENIED", "You do not have permission to detach AppData: that needs its db_owner role, or sysadmin.", false);
         check(Verdict([]) == "runs" && Verdict([], read: new(7, "2026-01-02T03:04:05.678")) == "runs" && Verdict([], read: new(8, "2026-01-02T03:04:05.678")).StartsWith("NOT_FOUND: ", StringComparison.Ordinal)
             && Verdict(new() { ["state"] = 6 }) == offlineMessage && Verdict(new() { ["state"] = 6 }, offline: true) == "runs" && Verdict(new() { ["state"] = 6 }, linux: true) == "runs"
             && Verdict(new() { ["has_snapshots"] = true }) == "NOT_SUPPORTED: A database snapshot of this database exists; drop the snapshot before you detach it."
@@ -349,8 +351,28 @@ internal static class ActionChecks
             && Verdict(new() { ["is_system"] = true }) == "NOT_SUPPORTED: AppData belongs to SQL Server and cannot be detached."
             && Verdict([], subtype: "snapshot") == "NOT_SUPPORTED: A database snapshot cannot be detached."
             && Verdict(new() { ["state"] = 1 }) == "NOT_SUPPORTED: Wait until it finishes restoring or recovering."
-            && Verdict(new() { ["can_alter_state"] = false }) == "PERMISSION_DENIED: You do not have permission to detach AppData (db_owner, dbcreator or ALTER ANY DATABASE).",
+            && Verdict([], permission: denied) == "PERMISSION_DENIED: " + denied.Message && Verdict(new() { ["has_snapshots"] = true }, permission: denied).StartsWith("PERMISSION_DENIED: ", StringComparison.Ordinal),
             "Detach refuses a replaced database, what SQL Server refuses (replication, a snapshot, an availability group, mirroring), the menu's states, no permission, and an offline database on Windows without Detach while offline");
+        // DBCC DETACHDB needs db_owner or sysadmin, which SET OFFLINE's ALTER (can_alter_state) does not imply: Detach's own permission decides.
+        check(Verdict(new() { ["can_alter_state"] = false }) == "runs" && Verdict(new() { ["can_alter_state"] = true }, permission: denied) == "PERMISSION_DENIED: " + denied.Message,
+            "Detach's permission is db_owner or sysadmin (DetachFactsAsync), not Take Offline's ALTER on the database");
+        // EMERGENCY on Windows leaves files as an offline detach does (probed): it waits for its own box; Linux only notes it.
+        check(Verdict(new() { ["state"] = 5 }) == "NOT_SUPPORTED: The database AppData is in EMERGENCY mode. Bring it online first, or check Detach anyway."
+            && Verdict(new() { ["state"] = 5 }, offline: true) == "runs" && Verdict(new() { ["state"] = 5 }, linux: true) == "runs"
+            && service.DetachConfirmLabel(6) == "Detach while offline" && service.DetachConfirmLabel(5) == "Detach anyway",
+            "Detach of a database in EMERGENCY on Windows waits for Detach anyway, as an offline one waits for Detach while offline (critic A27)");
+        // sp_updatestats cannot run on a read-only, standby, EMERGENCY or offline database: 15635 (and the detach happens anyway) or 942.
+        check(Verdict([], statistics: true) == "runs" && Verdict(new() { ["is_read_only"] = true }, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run on a read-only or standby database; clear it."
+            && Verdict(new() { ["is_in_standby"] = true }, statistics: true) == Verdict(new() { ["is_read_only"] = true }, statistics: true) && Verdict(new() { ["is_read_only"] = true }) == "runs"
+            && Verdict(new() { ["state"] = 6 }, offline: true, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run while the database is offline; clear it."
+            && Verdict(new() { ["state"] = 5 }, linux: true, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run while the database is in EMERGENCY mode; clear it.",
+            "Detach refuses Update Statistics on a database sp_updatestats cannot run in, and runs with it cleared");
+        string Notes(Dictionary<string, object?> changes, bool linux, bool hidden = false) => string.Join(" | ", service.DetachNotes(Subject(changes).Row, linux, hidden).Select(note => (note.Blocking ? "!" : "") + note.Text));
+        check(Notes([], linux: false) == "" && Notes([], linux: true) == "" && Notes(new() { ["state"] = 6 }, linux: true) == ActionService.DetachOfflineNote
+            && Notes(new() { ["state"] = 5 }, linux: true) == "This database is in EMERGENCY mode. On Windows, SQL Server may restrict access to its files when it is detached in this state; bring it online first if you will attach it again."
+            && Notes(new() { ["state"] = 6 }, linux: false) == "" && Notes(new() { ["sql_login"] = true }, linux: false) == ActionService.DetachSqlLoginNote
+            && Notes(new() { ["sql_login"] = true }, linux: true) == "" && Notes([], linux: false, hidden: true) == ActionService.DetachFilesHiddenNote,
+            "Detach notes a database that is not online on Linux, a SQL Server login on Windows (its files open only to the service account) and files SQL Server did not show, never as blocking");
         check(ActionService.DetachBlockers(Subject([]).Row).Count == 0 && ActionService.DetachBlockers(Subject(new() { ["has_snapshots"] = true, ["mirrored"] = true }).Row) is [{ Blocking: true }, { Blocking: true }],
             "the describe's blocking warnings are the execute's refusals");
     }

@@ -5,7 +5,7 @@
 // for later dialogs (Login Properties, Backup and Restore): a dialog id, its surface and pages in
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
-import type { DialogId } from '../../../shared/actions/catalog.ts'
+import { databaseStateOf, type DialogId } from '../../../shared/actions/catalog.ts'
 import { detachDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
@@ -108,18 +108,38 @@ export const bringOnlineDefinition: ObjectDialogDefinition<DatabaseStateModel, B
   afterSuccess: effects => { effects.refreshListing(); effects.databaseState(false) }
 }
 
-/** Detach Database's choices: the grid's Drop Connections and Update Statistics (cleared, as in SSMS), and Detach while offline,
- *  asked only of an offline database on a Windows server (critic A27). */
+/** Detach Database's choices: the grid's Drop Connections and Update Statistics (cleared, as in SSMS), and the box a database that
+ *  is not online asks for on a Windows server (critic A27: Detach while offline, or Detach anyway in EMERGENCY). */
 export interface DetachDraft { readonly dropConnections: boolean; readonly updateStatistics: boolean; readonly detachOffline: boolean }
+/** Detach's words for a database state, as the backend's DetachStateWords writes them in its notes and refusals. */
+export function detachStateWords(state: number): string {
+  switch (databaseStateOf(state)) {
+    case 'offline': return 'offline'
+    case 'emergency': return 'in EMERGENCY mode'
+    case 'offlineSecondary': return 'an offline secondary'
+    default: return 'not online'
+  }
+}
+/** The box a database that is not online asks for on Windows (the backend's DetachConfirmLabel). */
+export const detachConfirmLabel = (state: number): string => databaseStateOf(state) === 'offline' ? 'Detach while offline' : 'Detach anyway'
+/**
+ * Why Update Statistics cannot run (the backend's DetachStatisticsRefusal): sp_detach_db's sp_updatestats raises 15635 on a
+ * read-only, standby or EMERGENCY database, and SQL Server detaches it all the same, and 942 on an offline one, which aborts it.
+ */
+export function detachStatisticsBlocked(model: Pick<DatabaseStateModel, 'state' | 'readOnly' | 'standby'>): string | undefined {
+  if (databaseStateOf(model.state) !== 'online') return `Update Statistics cannot run while the database is ${detachStateWords(model.state)}.`
+  if (model.readOnly || model.standby) return 'Update Statistics cannot run on a read-only or standby database.'
+  return undefined
+}
 /**
  * Why OK waits (SSMS's Not ready): sp_detach_db refuses a database other sessions use (3703), so sessions with Drop Connections
  * cleared block it, as SSMS's Message counts them; so do what SQL Server refuses anyway (replication, a snapshot, an availability
- * group, mirroring), and an offline database on Windows until Detach while offline is checked. Unknown sessions do not block.
+ * group, mirroring), and a database that is not online on Windows until its box is checked. Unknown sessions do not block.
  */
 export function detachBlocked(model: DatabaseStateModel, draft: DetachDraft): string | undefined {
   const blocking = model.warnings.find(warning => warning.blocking)
   if (blocking) return blocking.text
-  if (model.confirmOffline && !draft.detachOffline) return 'The database is offline: check Detach while offline, or bring it online first.'
+  if (model.confirmOffline && !draft.detachOffline) return `The database is ${detachStateWords(model.state)}: check ${detachConfirmLabel(model.state)}, or bring it online first.`
   if (draft.dropConnections || !model.sessions) return undefined
   return `${count(model.sessions, 'session is', 'sessions are')} connected: check Drop Connections, or Check Again once ${model.sessions === 1 ? 'it leaves' : 'they leave'}.`
 }
@@ -127,8 +147,9 @@ export const detachDatabaseDefinition: ObjectDialogDefinition<DatabaseStateModel
   dialog: 'detachDatabase',
   modelOf: result => result.databaseState,
   initialDraft: () => ({ dropConnections: false, updateStatistics: false, detachOffline: false }),
+  // Update Statistics goes cleared where it cannot run, whatever the draft holds (the page disables it there).
   request: (target, model, draft) => ({
-    action: 'detach', target, dropConnections: draft.dropConnections, updateStatistics: draft.updateStatistics, identity: model.identity,
+    action: 'detach', target, dropConnections: draft.dropConnections, updateStatistics: draft.updateStatistics && !detachStatisticsBlocked(model), identity: model.identity,
     ...model.confirmOffline ? { detachOffline: draft.detachOffline } : {}
   }),
   blocked: detachBlocked,

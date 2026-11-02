@@ -8,7 +8,7 @@ import { actionLimits } from '../src/shared/actions/catalog'
 import type { ApiResult } from '../src/shared/contracts'
 import { displayText, type ObjectRef } from '../src/shared/explorer/refs'
 import { databaseGoneHandler, detachedNotice, filePathsText } from '../src/renderer/src/dialogs/database-gone'
-import { detachBlocked, detachDatabaseDefinition } from '../src/renderer/src/dialogs/definitions'
+import { detachBlocked, detachConfirmLabel, detachDatabaseDefinition, detachStateWords, detachStatisticsBlocked } from '../src/renderer/src/dialogs/definitions'
 import { detachMessage } from '../src/renderer/src/dialogs/pages/DetachDatabasePage'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { goneMessage } from '../src/renderer/src/properties/DatabasePropertiesService'
@@ -64,6 +64,28 @@ describe('Detach Database (D3b)', () => {
     expect(detachBlocked(model({ state: 6, warnings: [{ text: 'This database is offline.', blocking: false }] }), draft)).toBeUndefined()
     expect(detachBlocked(model({ state: 6, confirmOffline: true }), draft)).toBe('The database is offline: check Detach while offline, or bring it online first.')
     expect(detachBlocked(model({ state: 6, confirmOffline: true }), { ...draft, detachOffline: true })).toBeUndefined()
+  })
+
+  it('asks for its box of any database that is not online on Windows, worded by state as the backend words its refusal', () => {
+    expect(detachBlocked(model({ state: 5, confirmOffline: true }), draft)).toBe('The database is in EMERGENCY mode: check Detach anyway, or bring it online first.')
+    expect(detachBlocked(model({ state: 5, confirmOffline: true }), { ...draft, detachOffline: true })).toBeUndefined()
+    expect([0, 5, 6, 10].map(detachStateWords)).toEqual(['not online', 'in EMERGENCY mode', 'offline', 'an offline secondary'])
+    expect([5, 6].map(detachConfirmLabel)).toEqual(['Detach anyway', 'Detach while offline'])
+    const service = readFileSync(new URL('../backend/Varia.Backend/Actions/ActionService.cs', import.meta.url), 'utf8')
+    expect(service).toContain('== "offline" ? "Detach while offline" : "Detach anyway"')
+    for (const words of ['"offline" => "offline"', '"emergency" => "in EMERGENCY mode"', '"offlineSecondary" => "an offline secondary"', '_ => "not online"']) expect(service).toContain(words)
+  })
+
+  it('clears Update Statistics where sp_updatestats cannot run, so a read-only, standby, EMERGENCY or offline database is never sent it', () => {
+    expect(detachStatisticsBlocked(model())).toBeUndefined()
+    expect(detachStatisticsBlocked(model({ readOnly: true }))).toBe('Update Statistics cannot run on a read-only or standby database.')
+    expect(detachStatisticsBlocked(model({ standby: true }))).toBe('Update Statistics cannot run on a read-only or standby database.')
+    expect(detachStatisticsBlocked(model({ state: 5 }))).toBe('Update Statistics cannot run while the database is in EMERGENCY mode.')
+    expect(detachStatisticsBlocked(model({ state: 6 }))).toBe('Update Statistics cannot run while the database is offline.')
+    const checked = { ...draft, updateStatistics: true }
+    expect(detachDatabaseDefinition.request(appData, model(), checked)).toMatchObject({ updateStatistics: true })
+    for (const blocked of [model({ readOnly: true }), model({ standby: true }), model({ state: 6, confirmOffline: true }), model({ state: 5, confirmOffline: true })])
+      expect(detachDatabaseDefinition.request(appData, blocked, { ...checked, detachOffline: true })).toMatchObject({ updateStatistics: false })
   })
 
   it('sends the boxes and the identity it read, and Detach while offline only for a database that asked for it, as detachSchema takes them', () => {

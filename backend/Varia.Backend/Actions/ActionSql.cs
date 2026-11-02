@@ -222,8 +222,11 @@ internal static partial class ActionSql
     /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
     /// on a database that is not online (probed on SQL Server 2025). So ALTER ANY DATABASE, dbcreator (sys.login_token) or ownership
     /// grant it in any state, and ALTER on the database while it is online. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
-    /// group's member owns it with no server principal of its own.</summary>
-    public const string Database = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
+    /// group's member owns it with no server principal of its own. can_detach is what sp_detach_db's DBCC DETACHDB needs that master
+    /// can answer, sysadmin or ownership (ALTER, CONTROL, ALTER ANY DATABASE and dbcreator get 7983; probed on SQL Server 2025); a
+    /// member of the database's db_owner role is read inside it (DetachInside). sql_login: this connection's login is SQL Server's
+    /// own, whose detached files only the service account can open again on Windows.</summary>
+    public const string Database ="SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
         + "d.user_access AS user_access, d.is_read_only AS is_read_only, d.is_in_standby AS is_in_standby, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system, "
@@ -238,6 +241,8 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
         + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
         + "WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) ELSE 0 END) AS can_alter_state, "
+        + "CONVERT(bit, CASE WHEN IS_SRVROLEMEMBER(N'sysadmin') = 1 OR d.owner_sid = SUSER_SID() THEN 1 ELSE 0 END) AS can_detach, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SQL LOGIN') THEN 1 ELSE 0 END) AS sql_login, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
         + "FROM sys.databases AS d LEFT JOIN sys.database_mirroring AS dm ON dm.database_id = d.database_id LEFT JOIN sys.server_principals AS sp ON sp.sid = d.owner_sid "
@@ -282,6 +287,13 @@ internal static partial class ActionSql
     public const string DatabaseFiles = "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name "
         + "FROM sys.master_files AS f JOIN sys.databases AS d ON d.database_id = f.database_id WHERE d.name = @name ORDER BY f.file_id;";
 
+    /// <summary>Detach inside an online database (ModuleCall): whether this login is in its db_owner role, which sp_detach_db needs
+    /// besides sysadmin or ownership, then at most @take of its files by file id. sys.master_files shows rows only with CREATE
+    /// DATABASE, ALTER ANY DATABASE or VIEW ANY DEFINITION, which a db_owner member who may detach can lack; sys.database_files
+    /// shows them to every user of the database.</summary>
+    public const string DetachInside = "SELECT CONVERT(bit, ISNULL(IS_ROLEMEMBER(N'db_owner'), 0)) AS db_owner;\n"
+        + "SELECT TOP (@take) f.file_id AS file_id, f.name AS file_name, f.type AS file_type, f.physical_name AS physical_name FROM sys.database_files AS f ORDER BY f.file_id;";
+
     /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
     public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
 
@@ -300,6 +312,8 @@ internal static partial class ActionSql
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
         // Take Offline's and Bring Online's permission (Database's can_alter_state).
         "N'SERVER ROLE'", "N'dbcreator'",
+        // Detach's permission and the login kind its files note reads (Database, DetachInside).
+        "N'db_owner'", "N'SQL LOGIN'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -473,6 +487,7 @@ internal static partial class ActionSql
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
         yield return ("database files", LintCatalog(DatabaseFiles, ExplorerCatalog.MaxBand, database: false));
+        yield return ("detach inside", LintCatalog(DetachInside, ExplorerCatalog.MaxBand, database: true));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.

@@ -847,6 +847,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-detach .object-dialog-col-status { width: 16%; }
 .object-dialog-detach .object-dialog-col-file { width: 26%; }
 .object-dialog-detach .object-dialog-col-type { width: 20%; }
+/* Both of the page's captions sit flush with the grid below them, as the mockup lines them up. */
+.object-dialog-detach > .object-dialog-caption { padding-left: 0; padding-right: 0; }
 .object-dialog-files-caption { padding: 10px 0 4px; }
 .object-dialog-grid td.object-dialog-cell-path { white-space: normal; overflow-wrap: anywhere; }
 .object-dialog-note-body { display: flex; flex-direction: column; gap: 6px; }

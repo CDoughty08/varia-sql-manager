@@ -140,19 +140,33 @@ left out: SSMS shows it only for a database upgraded from SQL Server 2005. The M
 (after the describe closes the backend's own idle pooled connections in it, as Take Offline's does); a closed disclosure
 lists them, and the page says what Drop Connections rolls back, naming Varia's query windows with an open transaction (A7).
 Below the grid, "Files that stay on the server" lists the database's files (`sys.master_files`, at most 256: logical name, type
-and path), which Copy paths copies one per line, for an Attach later.
+and path), which Copy paths copies one per line, for an Attach later. A db_owner member without VIEW ANY DEFINITION sees no
+rows there, so an online database's own `sys.database_files` lists them instead; when neither shows any, a note says the paths
+could not be read. Once the detach succeeded, the sessions and what closing them rolls back are no longer shown, and the
+boxes are disabled. Enter on the closed Sessions list opens it, as on any disclosure or link, and never presses OK.
 
 `sp_detach_db` refuses a database other sessions use (3703, `IN_USE`), so while sessions are connected and Drop Connections
 is cleared the Status is Not ready and OK is disabled; Check Again counts them again. So is a database SQL Server would refuse:
 one used for replication, one with a database snapshot (3709, `DEPENDENTS`), in an availability group, or mirrored, each a
 blocking warning. The menu greys Detach… while the database is restoring, recovering or copying, and while it is suspect or
-recovery pending (SQL Server's 3707 asks for EMERGENCY first). An offline database on a Windows server is Not ready until
-Detach while offline is checked: SQL Server may leave a database detached offline with files it cannot attach again (critic
-A27). On Linux the dialog only says so.
+recovery pending (SQL Server's 3707 asks for EMERGENCY first). A database that is not online on a Windows server is Not ready
+until its box is checked, Detach while offline (OFFLINE) or Detach anyway (EMERGENCY): SQL Server may leave a database
+detached in those states with files no attach can open (critic A27; probed for both, OS error 5). On Linux the dialog only
+says so. On Windows a SQL Server login also gets a note: SQL Server then lets only its service account open the detached
+files (probed), so a Windows-authenticated attach fails and the attach should use SQL Server authentication.
+
+Detach needs sysadmin or membership in the database's db_owner role (its owner is dbo), which DBCC DETACHDB checks: ALTER or
+CONTROL on the database, ALTER ANY DATABASE and dbcreator pass SET OFFLINE's check but get 7983 (`PERMISSION_DENIED`) from
+`sp_detach_db`, after Drop Connections would already have rolled everyone back. So the describe and the execute read the
+permission first (sysadmin or ownership in master, db_owner membership inside an online database) and refuse the rest. Update
+Statistics is greyed and cleared, and refused at execute, while the database is not online, read-only or in standby:
+`sp_updatestats` raises 942 on an offline database, which aborts the detach, and 15635 on the others, which does not.
 
 OK runs Close existing connections (`SET SINGLE_USER WITH ROLLBACK IMMEDIATE`, only with Drop Connections), then Detach the
 database (`sp_detach_db`, with `@skipchecks = 'false'` when Update Statistics is checked and `'true'` when it is not).
-When the detach fails or is stopped after SINGLE_USER, a compensation step gives the database back the access it had:
+SQL Server can raise an error, or answer a Stop, after DBCC DETACHDB has detached the database: when the detach step fails
+or is stopped and the database is gone from `sys.databases`, the step is done and the error is kept as a message. When
+the detach fails or is stopped after SINGLE_USER and the database is still there, a compensation step gives it back the access it had:
 Restore multi-user access, or Restore restricted user access for one that was RESTRICTED_USER; one already SINGLE_USER is
 left so. SSMS's script leaves `@skipchecks` out when Update Statistics is cleared, which runs UPDATE STATISTICS anyway
 (the procedure's default); Varia's Script Action writes `'true'`, with a comment saying why, so the script does what the
