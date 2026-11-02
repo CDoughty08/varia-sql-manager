@@ -27,9 +27,10 @@ internal static class ActionErrors
         // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user.
         // 15434: a login with sessions (DROP LOGIN, D4c).
         ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 15434],
-        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
+        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
+        // 3709 a database snapshot of the database being dropped.
         // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c).
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183],
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183],
         // 1828 and 5170: a logical file name or a physical file is taken.
         // 15025: a server principal already has the name (a login's rename).
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025],

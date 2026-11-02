@@ -1,6 +1,7 @@
 import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
+import { promptTabFacts } from '../../../shared/actions/prompts.ts'
+import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
@@ -38,7 +39,12 @@ export interface OpenObjectDialog {
   readonly steps?: readonly ActionStep[]
   /** An info line for the message bar (a script delivered, informational messages). */
   readonly notice?: string
+  /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
+  readonly tabsWithTransactions?: readonly string[]
+  readonly moreTabsWithTransactions?: number
 }
+/** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
+export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
   readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
@@ -48,6 +54,11 @@ export interface ObjectDialogServiceOptions {
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
   readonly newId?: () => string
+  /** An action removed a database: its Properties documents turn orphan and a toast counts the query windows that used it. */
+  readonly databaseGone?: (gone: DatabaseGone) => void
+  /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
+   *  holding an open transaction in the database (A7), whatever database each tab is in. */
+  readonly tabNames?: (ids: readonly string[]) => readonly string[]
 }
 
 export const dialogMessages = {
@@ -149,6 +160,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const result = await this.call(() => this.options.api.executeObjectAction({ ...built, connectionId: open.connectionId, requestId } as ActionRequest))
     if (!this.end(open, requestId)) return
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
+    if (value && definition.removesDatabase?.(open.target, value.steps, !value.error) && open.target.name !== undefined) {
+      const gone = { connectionId: open.connectionId, server: open.server, database: open.target.name }
+      try { this.options.databaseGone?.(gone) } catch (failure) { onUnexpectedError(failure) }
+    }
     if (value && !value.error) {
       this.publish({})
       try { definition.afterSuccess({ refreshListing: () => this.refreshListing(open) }) } catch (failure) { onUnexpectedError(failure) }
@@ -203,6 +218,12 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
     this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
+    if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
+  }
+  /** Names Varia's query tabs whose session the describe found holding an open transaction in the database (A7). */
+  private nameTabTransactions(open: OpenObjectDialog, ids: readonly string[]): void {
+    const names = ids.length && this.options.tabNames ? this.options.tabNames(ids) : []
+    if (names.length) this.update(open, promptTabFacts(names))
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }

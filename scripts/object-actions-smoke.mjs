@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineWarning, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -675,17 +675,89 @@ try {
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
   console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the palette says why a group\'s Disable is greyed, the own login is refused first, Stop reaches a waiting Disable, and Rename refuses a ##…## name and a SQL login\'s backslash, the message leaving with the box.')
 
-  // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
-  // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.
-  await expect(async () => {
-    await (await revealExplorerRow(page, ...appData)).click({ button: 'right', force: true })
-    await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
-  }).toPass()
-  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the press
+  // repeats until its row's menu opens.
+  const databaseItem = async (path, item) => {
+    await expect(async () => {
+      await (await revealExplorerRow(page, ...path)).click({ button: 'right', force: true })
+      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+    }).toPass()
+    await explorerMenu().getByRole('menuitem', { name: item, exact: true }).click(fast)
+  }
+
+  // 6a. D3d: offline Archive's Delete Object says that its files stay on disk and counts the query window on it. Deleting it
+  // drops it from Databases, a toast counts that window, and its Properties document turns orphan with only Close.
+  const archive = ['server-a', 'Databases', 'Archive']
+  const archiveProperties = () => documentFrame(page, 'Archive')
+  const archiveTab = () => documentTab(page, 'Database Properties - Archive')
+  await databaseItem(archive, 'Properties')
+  await expect(archiveTab()).toHaveAttribute('aria-selected', 'true')
+  const archiveTabsBefore = await tabs().count()
+  await databaseItem(archive, 'New Query')
+  await expect(tabs()).toHaveCount(archiveTabsBefore + 1)
+  await databaseItem(archive, 'Delete')
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
-  await expect(dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })).toBeChecked()
-  await expect(dialog().getByLabel('Close existing connections', { exact: true })).not.toBeChecked()
+  await expect(objectDialogWarnings(dialog())).toHaveText([offlineWarning])
+  await expect(dialog().getByText('1 query window uses this database.', { exact: true })).toBeVisible()
+  await expect(objectDialogSessions(dialog())).toHaveCount(0)
+  // An offline database has no connections to close: the option is greyed with its reason, and its label greys with it.
+  const closeOption = () => dialog().getByLabel('Close existing connections', { exact: true })
+  const historyOption = () => dialog().getByLabel('Delete backup and restore history information for databases', { exact: true })
+  const labelColour = option => option.evaluate(input => getComputedStyle(input.closest('label')).color)
+  await expect(closeOption()).toBeDisabled()
+  await expect(closeOption()).toHaveAccessibleDescription('An offline database has no connections to close.')
+  expect(await labelColour(closeOption())).not.toBe(await labelColour(historyOption()))
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-offline-dark.png') })
+  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'database', name: 'Archive' }, closeConnections: false, deleteHistory: true })
+  await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Archive$/ })).toHaveCount(0)
+  await expect(toastMessage(toasts(page).filter({ hasText: 'Archive' }))).toHaveText('1 query window was using Archive.')
+  await archiveTab().click()
+  await expect(documentBanner(archiveProperties())).toContainText('This database no longer exists on server-a.')
+  await expect(documentBanner(archiveProperties()).getByRole('button', { name: 'Refresh', exact: true })).toHaveCount(0)
+  await expect(documentState(archiveProperties())).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-properties-orphan-dark.png') })
+  await documentBanner(archiveProperties()).getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(archiveTab()).toHaveCount(0)
+  console.log('Object action checks: an offline database\'s Delete Object warns that its files stay, and deleting it leaves a toast for its query window and an orphaned Properties document with Close.')
+
+  // 6. A database: SSMS's two options (backup history checked, Close existing connections not), the sessions using it and
+  // how many hold a transaction that closing them rolls back, then a lost server leaves only Close.
+  await databaseItem(appData, 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(historyOption()).toBeChecked()
+  await expect(closeOption()).not.toBeChecked()
+  // Eight sessions with long program and host names sit in a headed disclosure whose grid scrolls by itself, so the options
+  // and what closing rolls back stay in view; the rollback note describes the option it is about.
+  const rollback = '4 sessions have open transactions, which Close existing connections rolls back.'
+  await expect(objectDialogSessionsToggle(dialog())).toHaveText('Sessions using AppData (23)')
+  await expect(objectDialogSessionsToggle(dialog())).toHaveAttribute('aria-expanded', 'true')
+  await expect(objectDialogSessions(dialog())).toHaveCount(8)
+  await expect(objectDialogSessions(dialog()).first().getByRole('cell')).toHaveText(['61', /^Report Builder 1 p+$/, /^BUILD-1-h+$/, 'Yes'])
+  await expect(dialog().getByText('More sessions are connected than are listed.', { exact: true })).toBeVisible()
+  await expect(closeOption()).toHaveAccessibleDescription(rollback)
+  /** Whether the option's box and the note under it show inside the page without scrolling it. */
+  const optionsInView = () => objectDialogPage(dialog()).evaluate(area => {
+    const shown = area.getBoundingClientRect(), close = [...area.querySelectorAll('label')].find(label => label.textContent === 'Close existing connections')
+    const notes = [close, ...[...area.querySelectorAll('[id^="delete-object-"][id$="-note"]')]].map(element => element.getBoundingClientRect())
+    return area.scrollTop === 0 && notes.length > 1 && notes.every(rect => rect.top >= shown.top && rect.bottom <= shown.bottom)
+  })
+  await expect.poll(optionsInView, 'Close existing connections and its notes show without scrolling the page').toBe(true)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-database-dark.png') })
+  await objectDialogSessionsToggle(dialog()).click()
+  await expect(objectDialogSessions(dialog())).toHaveCount(0)
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // On Managed Instance the option is greyed with its reason, and the note only counts the transactions it cannot roll back.
+  await application.evaluate(() => { globalThis.variaStub.managed = true })
+  await databaseItem(appData, 'Delete')
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(closeOption()).toBeDisabled()
+  await expect(closeOption()).toHaveAccessibleDescription('Managed Instance cannot set SINGLE_USER. 4 sessions have open transactions.')
+  expect(await labelColour(closeOption())).not.toBe(await labelColour(historyOption()))
+  await expect.poll(optionsInView, 'on Managed Instance too').toBe(true)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-database-managed-dark.png') })
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('varia:backend-state', {
     status: 'restarting', generation: 1, lost: { generation: 1, reason: 'crash', connections: 1, queries: 0 }, retryInMs: 60000
   }))
