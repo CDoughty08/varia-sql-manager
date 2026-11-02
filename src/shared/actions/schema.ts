@@ -224,6 +224,11 @@ export interface ActionExecuteResult {
   readonly messages: readonly string[]
   readonly elapsedMs: number
   readonly error?: ActionError
+  /**
+   * A renamed database's identity under its new name (D3c), read just after MODIFY NAME: SQL Server gives it a new create_date
+   * (sys.databases: "created or renamed"), so the Database Properties documents that follow it apply with this one.
+   */
+  readonly identity?: DatabaseIdentity
 }
 
 // Objects in these schemas, and these databases, are SQL Server's own; the backend re-checks by catalog (is_ms_shipped,
@@ -322,7 +327,7 @@ const actionErrorSchema = z.object({ code: z.enum(actionErrorCodes), message: z.
  *  compensation and cleanup steps, at most statements + 8; bounded messages. */
 export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionLimits.statements + 8), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
-  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional()
+  elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(), identity: identitySchema.optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 export const actionCancelSchema = z.object({

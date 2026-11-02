@@ -257,7 +257,8 @@ internal sealed record ActionScriptResult(string? Text, string Database, List<st
 /// the step acts on (at most 128 characters, never a secret); Compensates: it undid an earlier step's change, or cleaned up,
 /// after a failure or Stop; Progress: percent done (0-100) of a long step. ActionSteps.Bound clips them all.</summary>
 internal sealed record ActionStepDto(string Status, string Title, string? Message = null, string? Detail = null, bool? Compensates = null, int? Progress = null);
-internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null);
+/// <summary>actions.execute's answer; Identity is a renamed database's under its new name (src/shared/actions/schema.ts ActionExecuteResult).</summary>
+internal sealed record ActionExecuteResult(List<ActionStepDto> Steps, List<string> Messages, long ElapsedMs, ActionError? Error = null, DatabaseIdentityDto? Identity = null);
 
 /// <summary>ssis.describe (src/shared/ssis/schema.ts): a view of the SSIS catalogue and the tree object it describes.</summary>
 internal sealed record SsisDescribeArgs(string ConnectionId, string RequestId, string View, ObjectRefDto Target);

@@ -520,7 +520,11 @@ describe (and the prompt) reuses that id once the describe has answered. The ren
 database; `identity` as for Database Properties). `closeConnections` runs `Close existing connections` (SINGLE_USER WITH
 ROLLBACK IMMEDIATE, unless the database is already single-user), `Rename` and `Restore multi-user access` (or `Restore
 restricted user access`); a failure or Stop after the first step runs a compensating step restoring the access under whichever
-name the database then has. Without it, `Rename` alone waits for other sessions until Stop.
+name the database then has. Without it, `Rename` alone waits for other sessions until Stop: where SQL Server refuses MODIFY NAME
+at once as in use (5030) rather than queueing it, the backend tries it again each second until it completes or Stop. Once MODIFY
+NAME has completed, the reply carries `identity: { id, created }`, the database's identity under the new name, read in the action's
+connection just after (SQL Server gives a renamed database a new `create_date`); it is absent when it cannot be read within 5 s or
+the name now belongs to another database. Database Properties documents that follow the rename send it with their Apply.
 
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in

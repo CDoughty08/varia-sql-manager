@@ -120,11 +120,13 @@ export function installActionsStub({ ipcMain }, { statics }) {
     return ok({ renameDatabase: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions, withTransaction: Math.min(sessions, 1), loginsDefaulting: 0, canClose: true,
       connections: [connectionId] }, elapsedMs: 1 })
   }
-  /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise. */
+  /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise; the
+   *  reply names the database under its new name, with the new create_date SQL Server gives it. */
   function renameDatabase(params) {
     stub.database = params.newName
     const titles = params.closeConnections ? ['Close existing connections', 'Rename', 'Restore multi-user access'] : ['Rename']
-    return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [`The database name '${params.newName}' has been set.`], elapsedMs: 1 })
+    return ok({ steps: titles.map(title => ({ status: 'done', title })), messages: [`The database name '${params.newName}' has been set.`], elapsedMs: 1,
+      identity: { id: 7, created: '2026-01-02T03:04:06.000' } })
   }
   function describe({ target }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }] : []

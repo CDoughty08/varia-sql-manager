@@ -30,6 +30,7 @@ internal static class ActionChecks
         Plans(check);
         Errors(check);
         Validation(check);
+        await RenameWaitAsync(check);
         await ServiceAsync(check);
     }
 
@@ -86,7 +87,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 7 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 8 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -215,6 +216,32 @@ internal static class ActionChecks
             && ActionErrors.FromSql(Catalog, Sql(1222), null, ddl: false, inUseAdvice: null).Message == "Another session holds a lock on the object; try again when it finishes."
             && ActionErrors.FromSql(Catalog, Sql(50000, 16, new string('m', 5000)), null, ddl: true, inUseAdvice: null).Message.Length == ActionErrors.MaxMessage,
             "error values carry SQL Server's message (clipped to 2,048 characters) with advice for IN_USE");
+    }
+
+    /// <summary>D3c: Rename When Free waits on every version. Where SQL Server refuses MODIFY NAME at once as in use (5030) instead of
+    /// queueing it, the rename tries again until it completes or Stop; any other failure, a single-user database's 924 included, ends it.</summary>
+    private static async Task RenameWaitAsync(Action<bool, string> check)
+    {
+        var tries = 0;
+        string Outcome(Exception? error) => error switch { null => "completed", SqlException sql => sql.Number.ToString(System.Globalization.CultureInfo.InvariantCulture), OperationCanceledException => "cancelled", _ => error.GetType().Name };
+        async Task<string> Run(Func<Task> run, CancellationToken token)
+        {
+            try { await ActionService.WhileLockedAsync(run, ActionService.LockedByOthers, TimeSpan.FromMilliseconds(5), token); return Outcome(null); }
+            catch (Exception error) { return Outcome(error); }
+        }
+        var freed = await Run(() => ++tries < 3 ? throw Sql(5030) : Task.CompletedTask, CancellationToken.None);
+        var completed = tries;
+        tries = 0;
+        var single = await Run(() => { tries++; throw Sql(924); }, CancellationToken.None);
+        var singleTries = tries;
+        using var stop = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        tries = 0;
+        var stopped = await Run(() => { tries++; throw Sql(5030); }, stop.Token);
+        check(freed == "completed" && completed == 3 && single == "924" && singleTries == 1 && stopped == "cancelled" && tries > 1 && !ActionService.LockedByOthers(new InvalidOperationException()),
+            "Rename When Free tries MODIFY NAME again while SQL Server refuses it as in use (5030), until it completes or Stop; any other failure ends it (" + freed + " after " + completed + ", " + single + ", " + stopped + ")");
+        check(ActionService.RenameInUseAdvice(0) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(2) == ActionService.RenameCloseAdvice && ActionService.RenameInUseAdvice(1) == ActionService.SingleUserAdvice
+            && ActionErrors.FromSql(Catalog, Sql(5030), null, ddl: true, ActionService.RenameInUseAdvice(0)).Message.EndsWith("Close its connections, or rename it when they disconnect.", StringComparison.Ordinal),
+            "a database rename that fails in use advises closing the connections, or, for a single-user database, ending the session that holds it");
     }
 
     private static void Validation(Action<bool, string> check)

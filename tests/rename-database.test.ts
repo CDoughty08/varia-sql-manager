@@ -3,8 +3,9 @@ import type { ActionDescribeResult, ActionExecuteResult, RenameDatabaseFacts } f
 import type { ApiResult } from '../src/shared/contracts'
 import { databaseRenameHooks, ownTabReads } from '../src/renderer/src/actions/database-rename'
 import { renameMessages } from '../src/renderer/src/actions/ObjectActionService'
+import { databaseModel } from './fixtures/database-properties'
 import { deferred } from './fixtures/documents'
-import { connectionInfo, connectionOptions, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
+import { connectionInfo, connectionOptions, explorerAnswer, queryOutput, readyBackend, workbenchFixture } from './fixtures/workbench'
 
 const cleanups: (() => void)[] = []
 afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
@@ -88,6 +89,20 @@ describe('Rename of a database (D3c)', () => {
     await actions.commitRename(node(), 'Sales')
     expect(api.confirmAction.mock.calls[0][0].facts).toEqual({ database: 'AppData', tabs: 2, tabsWithTransactions: [], canClose: false })
     expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ closeConnections: false, identity })
+    expect(actions.getSnapshot().jobs).toEqual([])
+  })
+  it('names the wait in the status bar while Rename When Free waits for the other connections, which can last until Stop', async () => {
+    const { actions, api, node } = await setup()
+    api.describeObject.mockResolvedValueOnce(facts({ sessions: 2, withTransaction: 0 }))
+    api.confirmAction.mockResolvedValueOnce({ ok: true, value: 'renameWhenFree' })
+    const pending = deferred<ApiResult<ActionExecuteResult>>()
+    api.executeObjectAction.mockReturnValueOnce(pending.promise)
+    const running = actions.commitRename(node(), 'Sales')
+    await vi.waitFor(() => expect(api.executeObjectAction).toHaveBeenCalled())
+    expect(actions.getSnapshot().jobs).toEqual([expect.objectContaining({ label: 'AppData', newName: 'Sales', step: renameMessages.waiting })])
+    expect(renameMessages.waiting).toBe('Waiting for connections to close')
+    pending.resolve(done('Rename'))
+    await running
     expect(actions.getSnapshot().jobs).toEqual([])
   })
   it('sends nothing on Cancel, or when the describe refuses or fails, which it reports', async () => {
@@ -181,7 +196,8 @@ describe('Rename of a database (D3c)', () => {
     expect(actions.canRun('rename', at({ state: 6 }))).toBe(false)
     // F2 reaches the greyed Rename: the banner says why, and nothing is read or renamed.
     await expect(commands.execute('explorer.rename', { target: { kind: 'explorer', node: at({ state: 6 }) } }, 'keybinding')).resolves.toBe(false)
-    expect(commands.getSnapshot().error).toBe('Rename is unavailable: the database must be online to be renamed.')
+    // A notice, not a failure: nothing failed.
+    expect(commands.getSnapshot()).toEqual({ error: 'Rename is unavailable: the database must be online to be renamed.', kind: 'warning' })
     expect(api.describeObject).not.toHaveBeenCalled()
     expect(actions.unavailable('rename', at({ state: 6 }))).toBe('Rename is unavailable: the database must be online to be renamed.')
     expect(actions.unavailable('rename', at({ state: 0, readOnly: true }))).toBe('Rename is unavailable: a read-only database cannot be renamed.')
@@ -238,6 +254,79 @@ describe('Rename of a database (D3c)', () => {
     expect(properties.get(id)).toMatchObject({ target: { kind: 'database', name: 'Sales' }, label: 'Sales' })
     // A clean document reads the database again, under its new name.
     await vi.waitFor(() => expect(api.describeObject.mock.calls.at(-1)?.[0]).toMatchObject({ dialog: 'databaseProperties', target: { name: 'Sales' } }))
+  })
+  it('gives a Database Properties document with unsaved changes the identity the rename read, so Apply sends its changes to the renamed database', async () => {
+    const { actions, api, node, properties } = await setup()
+    // MODIFY NAME gives the database a new create_date (sys.databases: "created or renamed"); the reply reads it under the new name.
+    const renamed = { id: 7, created: '2026-11-02T14:03:12.077' }
+    api.describeObject.mockImplementation(async params => params.dialog === 'databaseProperties'
+      ? { ok: true, value: { databaseProperties: databaseModel({ general: { ...databaseModel().general, name: params.target.name ?? '', id: identity.id, created: identity.created } }), elapsedMs: 1 } }
+      : facts())
+    const id = properties.open(node())
+    await vi.waitFor(() => expect(properties.get(id)?.phase).toBe('ready'))
+    properties.updateDraft(id, { owner: 'AppUser' })
+    expect(properties.get(id)?.changed).toBe(true)
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: [], elapsedMs: 1, identity: renamed } })
+    await actions.commitRename(node(), 'Sales')
+    expect(properties.get(id)).toMatchObject({ changed: true, draft: { owner: 'AppUser' }, target: { name: 'Sales' }, model: { general: { name: 'Sales', id: 7, created: renamed.created } } })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Change the owner' }], messages: [], elapsedMs: 1 } })
+    expect(await properties.apply(id)).toBe(true)
+    expect(api.executeObjectAction.mock.calls.at(-1)?.[0]).toMatchObject({ action: 'properties', target: { kind: 'database', name: 'Sales' }, changes: { owner: 'AppUser' }, identity: renamed })
+  })
+  it('keeps the identity a document read when the rename reply names another database or none', async () => {
+    const { actions, api, node, properties } = await setup()
+    api.describeObject.mockImplementation(async params => params.dialog === 'databaseProperties'
+      ? { ok: true, value: { databaseProperties: databaseModel({ general: { ...databaseModel().general, name: params.target.name ?? '', id: identity.id, created: identity.created } }), elapsedMs: 1 } }
+      : facts())
+    const id = properties.open(node())
+    await vi.waitFor(() => expect(properties.get(id)?.phase).toBe('ready'))
+    properties.updateDraft(id, { owner: 'AppUser' })
+    api.executeObjectAction.mockResolvedValueOnce({ ok: true, value: { steps: [{ status: 'done', title: 'Rename' }], messages: [], elapsedMs: 1, identity: { id: 8, created: '2026-11-02T14:03:12.077' } } })
+    await actions.commitRename(node(), 'Sales')
+    expect(properties.get(id)?.model?.general).toMatchObject({ name: 'Sales', id: 7, created: identity.created })
+  })
+  it('moves the home database of the connections opened in it, so New Query on the server opens in the new name', async () => {
+    const { actions, api, node, connections, commands, documents, explorer } = await setup()
+    connections.add({ ...connectionInfo('home'), server: 'server-a.example', database: 'appdata' }, { ...connectionOptions, database: 'appdata' })
+    connections.add({ ...connectionInfo('elsewhere'), database: 'AppData' }, connectionOptions)
+    api.describeObject.mockResolvedValueOnce(facts())
+    api.executeObjectAction.mockResolvedValueOnce(done('Rename'))
+    await actions.commitRename(node(), 'Sales')
+    // Another server's AppData is another database; the saved options keep what the user connected with.
+    expect(['home', 'elsewhere', 'server-a'].map(id => connections.get(id)?.database)).toEqual(['Sales', 'AppData', 'master'])
+    expect(connections.get('home')?.options.database).toBe('appdata')
+    let server: number | undefined
+    await vi.waitFor(() => { server = explorer.getSnapshot().rows.nodes.find(row => row?.connectionId === 'home' && row.ref.type === 'object' && row.ref.object.kind === 'server')?.id; expect(server).toBeDefined() })
+    await expect(commands.execute('explorer.newQuery', { target: { kind: 'explorer', node: explorer.menuNode(server!)! } }, 'menu')).resolves.toBe(true)
+    expect(documents.active).toMatchObject({ connectionId: 'home', database: 'Sales' })
+  })
+})
+
+describe('a greyed database action in the palette', () => {
+  it('shows the reason F2 gives on the greyed row', async () => {
+    const fixture = workbenchFixture()
+    cleanups.push(fixture.dispose)
+    // AppData is offline.
+    fixture.api.explorerChildren.mockImplementation(async params => {
+      const answer = explorerAnswer(params)
+      return { ok: true, value: { ...answer, nodes: answer.nodes.map(item => item.ref.type === 'object' && item.ref.object.kind === 'database'
+        ? { ...item, sublabel: '(Offline)', status: 'unavailable' as const, hasChildren: false, database: { state: 6, userAccess: 0, readOnly: false, standby: false } } : item) } }
+    })
+    fixture.api.push(readyBackend())
+    fixture.connections.add(connectionInfo('server-a'), connectionOptions)
+    const find = async (label: string) => {
+      let id: number | undefined
+      await vi.waitFor(() => { id = fixture.explorer.getSnapshot().rows.nodes.find(item => item?.label === label)?.id; expect(id, label).toBeDefined() })
+      return id!
+    }
+    fixture.explorer.expand(await find('Databases'))
+    fixture.explorer.select(await find('AppData'))
+    await fixture.commands.execute('workbench.showCommands', undefined, 'keybinding')
+    const row = (id: string) => fixture.quickInput.getSnapshot().rows.find(entry => entry.item.id === id)?.item
+    expect(row('explorer.rename')).toMatchObject({ disabled: true, disabledHint: 'Rename is unavailable: the database must be online to be renamed.' })
+    expect(row('explorer.takeOffline')).toMatchObject({ disabled: true, disabledHint: 'Take Offline is unavailable: the database is offline.' })
+    expect(row('explorer.bringOnline')).toMatchObject({ label: expect.stringContaining('Bring') })
+    expect(row('explorer.bringOnline')?.disabled).toBeUndefined()
   })
 })
 

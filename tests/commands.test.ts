@@ -74,18 +74,18 @@ describe('command execution', () => {
     await expect(commands.execute('file.close', { tabId: second.id }, 'toolbar')).resolves.toBe(true)
     expect(close).toHaveBeenCalledWith(second.id)
   })
-  it('says why a greyed command is unavailable when a key or the palette reaches it, and only then', async () => {
+  it('says why a greyed command is unavailable, as a notice, when a key reaches it, and only then', async () => {
     const commands = new CommandService(), run = vi.fn()
     let reason: string | undefined = 'Rename is unavailable: the database must be online to be renamed.'
     commands.register('explorer.rename', { run, when: () => false, unavailable: () => reason })
     await expect(commands.execute('explorer.rename', undefined, 'keybinding')).resolves.toBe(false)
-    expect(commands.getSnapshot().error).toBe(reason)
+    expect(commands.getSnapshot()).toEqual({ error: reason, kind: 'warning' })
+    expect(commands.unavailableReason('explorer.rename')).toBe(reason)
     commands.clearError()
-    await expect(commands.execute('explorer.rename', undefined, 'palette')).resolves.toBe(false)
-    expect(commands.getSnapshot().error).toBe(reason)
-    commands.clearError()
-    // A menu shows the item greyed; the API path stays silent; a command that cannot say why says nothing.
-    for (const source of ['menu', 'toolbar', 'api'] as const) await commands.execute('explorer.rename', undefined, source)
+    // A menu shows the item greyed and the palette its row with the reason (unavailableReason); the API path stays silent; a
+    // command that cannot say why says nothing.
+    for (const source of ['menu', 'toolbar', 'palette', 'api'] as const) await commands.execute('explorer.rename', undefined, source)
+    expect(commands.getSnapshot().error).toBe('')
     reason = undefined
     await commands.execute('explorer.rename', undefined, 'keybinding')
     expect(commands.getSnapshot().error).toBe('')

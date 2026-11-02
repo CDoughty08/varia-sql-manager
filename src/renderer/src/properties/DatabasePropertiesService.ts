@@ -1,6 +1,6 @@
 import { actionLimits, dialogSpecs, dialogTitle } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
+import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DatabaseIdentity, DatabasePropertiesModel } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { ScriptDestination } from '../../../shared/scripting/catalog.ts'
@@ -267,11 +267,12 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   }
   /**
    * Object Explorer renamed a database (D3c): each of its documents on that server, through any connection, follows the new
-   * name, as it is the same database (its identity is unchanged): the tab retitles, Properties on the renamed node finds it,
-   * and Apply and Refresh act on the new name. One without changes reads it again; one with changes keeps them. `connections`
-   * are the backend's to the same server (the describe's), which match whatever name each was opened with.
+   * name, as it is the same database: the tab retitles, Properties on the renamed node finds it, and Apply and Refresh act on the
+   * new name. One without changes reads it again; one with changes keeps them, and takes the database's identity under the new
+   * name (`identity`, the rename's reply: MODIFY NAME gives it a new create_date), so its Apply is not refused as another
+   * database's. `connections` are the backend's to the same server (the describe's), which match whatever name each was opened with.
    */
-  databaseRenamed(connectionId: string, database: string, newName: string, connections: readonly string[] = []): void {
+  databaseRenamed(connectionId: string, database: string, newName: string, connections: readonly string[] = [], identity?: DatabaseIdentity): void {
     const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
     const named = new Set([connectionId, ...connections])
     for (const state of Object.values(this.getSnapshot().documents)) {
@@ -279,7 +280,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
       if (state.target.name !== database || (!(owner !== undefined && named.has(owner)) && (server === undefined || !this.follows(state.id, server)))) continue
       const target = { ...state.target, name: newName }, label = scriptObjectLabel(target)
       this.options.documents.update(state.id, { name: dialogTitle('databaseProperties', label), database: newName })
-      this.patch(state.id, { target, label })
+      const read = state.model, model = read && { ...read, general: { ...read.general, name: newName, ...identity && identity.id === read.general.id ? { created: identity.created } : {} } }
+      this.patch(state.id, { target, label, ...model ? { model } : {} })
       if (!state.changed && this.canRefresh(state.id)) this.refresh(state.id)
     }
   }

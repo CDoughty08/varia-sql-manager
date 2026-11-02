@@ -11,7 +11,8 @@ namespace Varia.Backend.Tests;
 /// <summary>Live checks of a database's rename (PR D3c, spec 7). Without scratch databases: SQL Server's own databases are refused
 /// before any connection, and the server builds exactly the statements Script shows for hostile old and new names (7.6). With
 /// VARIA_TEST_SQL_SCRATCH=1, in marked VariaScratch_…_ren, _renn and _rent databases: the describe reads the identity, access, sessions
-/// and the logins whose default it is, leaving out the backend's own pools (7.7); with no session MODIFY NAME runs alone (7.1); Close
+/// and the logins whose default it is, leaving out the backend's own pools (7.7); with no session MODIFY NAME runs alone (7.1), and its reply carries
+/// the identity under the new name, which Database Properties' preflight accepts and the old one no longer passes; Close
 /// Connections and Rename rolls a holder back, renames and restores MULTI_USER under the new name, and the holder's tab is told its
 /// session closed and then runs under the new name, while the old name no longer opens (7.2); Rename When Free waits for the holder until
 /// Stop and changes nothing (7.3); a rename that fails after SINGLE_USER restores the access under the old name, and one stopped after
@@ -90,6 +91,7 @@ internal static class RenameDatabaseLiveChecks
         // 7.7: a connection opened in the database leaves Object Explorer's idle pooled session there, which the describe frees first,
         // and Activity Monitor's pool sits in master: neither counts. 7.1: with no session MODIFY NAME runs alone, and that connection
         // follows the new name.
+        DatabaseIdentityDto? renamedIdentity = null;
         var inside = await Call<ConnectionInfo>("connections.connect", live(db));
         try
         {
@@ -109,12 +111,25 @@ internal static class RenameDatabaseLiveChecks
             var watch = Stopwatch.StartNew();
             var first = await Execute(Rename(db, renamed, close: false, identity));
             var elapsed = watch.ElapsedMilliseconds;
+            renamedIdentity = first.Identity;
             var followed = await Call<ExplorerChildrenResult>("explorer.children", new ExplorerChildrenArgs(inside.Id, Guid.NewGuid().ToString(), new NodeRefDto("folder", Owner: new ObjectRefDto("server"), Folder: "databases")));
             check(first.Error is null && Steps(first) == "done:Rename" && await State(renamed) == "ONLINE MULTI_USER" && await State(db) is null && elapsed < 10_000
                 && followed.Error is null && followed.Nodes.Any(node => node.Label == renamed),
                 "with no session, a database's rename runs MODIFY NAME alone, and a connection opened in it follows the new name (" + elapsed + " ms, " + first.Error?.Message + ")");
         }
         finally { await Call<object>("connections.disconnect", new ConnectionArgs(inside.Id)); }
+
+        // SQL Server gives a renamed database a new create_date, so the reply carries its identity under the new name: a Database
+        // Properties document that follows the rename with unsaved changes applies them with it, while the identity read before is refused.
+        var afterRename = (await Sql("SELECT database_id, FORMAT(create_date, 'yyyy-MM-ddTHH:mm:ss.fff', 'en-US') FROM sys.databases WHERE name = " + Literal(renamed) + ";")).Sets[0][0];
+        var current = new DatabaseIdentityDto(int.Parse(afterRename[0]!, CultureInfo.InvariantCulture), afterRename[1]!);
+        ActionArgs Properties(DatabaseIdentityDto read) => new("properties", info.Id, Guid.NewGuid().ToString(), Database(renamed), CloseConnections: false,
+            Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }), Identity: read);
+        var stale = await Call<ActionScriptResult>("actions.script", Properties(identity));
+        var fresh = await Call<ActionScriptResult>("actions.script", Properties(current));
+        check(renamedIdentity == current && current.Id == identity.Id && current.Created != identity.Created && stale is { Error.Code: "NOT_FOUND" } && fresh is { Error: null, Text.Length: > 0 },
+            "a database rename's reply carries its identity under the new name (a new create_date, the same database_id), which Database Properties' preflight accepts where the old one is refused ("
+            + renamedIdentity + ", " + current + ", " + stale.Error?.Code + ", " + fresh.Error?.Message + ")");
 
         // 7.2: a query tab holding an open transaction in the database. Close Connections and Rename rolls it back, renames, and restores
         // MULTI_USER under the new name; the tab is told its session closed, and its next run under the new name opens a session there.
@@ -141,8 +156,8 @@ internal static class RenameDatabaseLiveChecks
         }
         finally { await Call<object>("query.session.close", new SessionArgs(holder)); }
 
-        // 7.3: Rename When Free waits for a session in the database (SQL Server 2025, as probed) until Stop, or fails at once that it is
-        // in use; either way the name and the session's transaction stay.
+        // 7.3: Rename When Free waits for a session in the database until Stop, on every version: SQL Server 2025 queues MODIFY NAME (as
+        // probed), and where it refuses it at once (5030) the rename tries again. The name and the session's transaction stay.
         var waiter = Guid.NewGuid().ToString();
         try
         {
@@ -155,9 +170,9 @@ internal static class RenameDatabaseLiveChecks
             try { stopped = await waiting; } catch (OperationCanceledException) { }
             var open = (await Sql("SELECT @@TRANCOUNT;", db, waiter)).Scalar;
             var outcome = stopped is null ? "unknown" : Steps(stopped) + ", " + stopped.Error?.Code;
-            check((stillWaiting ? stopped is { Error.Code: "CANCELLED" } && Steps(stopped) == "cancelled:Rename" : stopped is { Error.Code: "IN_USE" } && Steps(stopped) == "failed:Rename")
+            check(stillWaiting && stopped is { Error.Code: "CANCELLED" } && Steps(stopped) == "cancelled:Rename"
                 && await State(db) == "ONLINE MULTI_USER" && await State(renamed) is null && open == "1",
-                "Rename When Free waits for another session until Stop, or fails that the database is in use; the name and that session's transaction stay (" + (stillWaiting ? "waited" : "failed at once") + ", " + outcome + ")");
+                "Rename When Free waits for another session until Stop; the name and that session's transaction stay (" + (stillWaiting ? "waited" : "ended at once") + ", " + outcome + ")");
         }
         finally { await Call<object>("query.session.close", new SessionArgs(waiter)); }
 

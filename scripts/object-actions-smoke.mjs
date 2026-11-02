@@ -658,12 +658,14 @@ try {
   await page.keyboard.press('Enter')
   await expect(offlineDialog()).toHaveCount(0)
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(1)
-  // F2 on the offline database: Rename is greyed, and the key says why rather than doing nothing.
+  // F2 on the offline database: Rename is greyed, and the key says why, as a notice rather than a failure, instead of doing nothing.
   await select(...appData)
   await page.keyboard.press('F2')
-  await expect(commandBanner()).toHaveText('Rename is unavailable: the database must be online to be renamed.')
+  await expect(warningBanner()).toHaveText('Rename is unavailable: the database must be online to be renamed.')
+  await expect(commandBanner()).toHaveCount(0)
   await expect(renameBox(page)).toHaveCount(0)
-  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  await page.getByRole('button', { name: 'Dismiss warning', exact: true }).click()
+  await expect(warningBanner()).toHaveCount(0)
   // Offline: Take Offline greys and Bring Online runs as soon as its dialog has read the database.
   await task('Bring Online', ['Take Offline'])
   await expect(objectDialogProgress(onlineDialog())).toHaveText('Success')

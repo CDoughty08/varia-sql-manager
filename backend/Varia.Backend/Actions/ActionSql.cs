@@ -287,6 +287,9 @@ internal static partial class ActionSql
     /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
     public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
 
+    /// <summary>A database's identity by name, in master: a renamed database's under its new name (MODIFY NAME gives it a new create_date).</summary>
+    public const string DatabaseIdentity = "SELECT d.database_id AS database_id, d.create_date AS create_date FROM sys.databases AS d WHERE d.name = @name;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -474,6 +477,7 @@ internal static partial class ActionSql
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database identity", LintCatalog(DatabaseIdentity, ExplorerCatalog.MaxBand, database: false));
         yield return ("logins defaulting", LintCatalog(LoginsDefaulting, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,

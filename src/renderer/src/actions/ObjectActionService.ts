@@ -75,6 +75,8 @@ export const renameMessages = {
   reading: 'Reading the database',
   /** The status bar's step while SINGLE_USER WITH ROLLBACK IMMEDIATE closes the other connections. */
   closing: 'Closing connections',
+  /** The status bar's step while Rename When Free waits for the other connections to go, which can last until Stop. */
+  waiting: 'Waiting for connections to close',
   /** A login whose default database was renamed away gets 4064 when it connects without naming a database (Learn). */
   loginsDefaulting: (logins: number, database: string) =>
     `${count(logins, 'login has', 'logins have')} ${database} as ${logins === 1 ? 'its' : 'their'} default database, which no longer exists under that name. ${logins === 1 ? 'It cannot' : 'They cannot'} connect without naming a database until ${logins === 1 ? 'its default is' : 'their defaults are'} changed.`,
@@ -171,7 +173,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
       if (object.kind === 'database') {
         plan = await this.prepareDatabaseRename(node, object, requestId)
         if (!plan || !this.running(requestId)) return undefined
-        this.setJobStep(requestId, plan.closeConnections ? renameMessages.closing : undefined)
+        this.setJobStep(requestId, plan.closeConnections ? renameMessages.closing : plan.facts.sessions !== 0 ? renameMessages.waiting : undefined)
       }
       return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {} })
     })
@@ -196,7 +198,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
       return true
     }
     if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
-    if (object.kind === 'database' && object.name !== undefined) this.databaseRenamed(node.connectionId, object.name, text, plan?.facts)
+    if (object.kind === 'database' && object.name !== undefined) this.databaseRenamed(node.connectionId, object.name, text, plan?.facts, result.value.identity)
     if (error) { this.options.report.error(`${node.label} was renamed to ${newName}, but: ${error.message}`); return true }
     // sp_rename's caution is a warning; MODIFY NAME's "The database name 'x' has been set." only confirms the rename.
     const caution = object.kind === 'database' ? '' : result.value.messages.join(' ')
@@ -241,9 +243,12 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (answer.value === 'cancel' || !this.running(requestId)) return undefined
     return { identity: facts.identity, closeConnections: answer.value === 'closeAndRename', facts }
   }
-  /** After SQL Server renamed a database: query windows and Database Properties follow the new name, and a toast names the logins whose default it was. */
-  private databaseRenamed(connectionId: string, database: string, newName: string, facts: RenameDatabaseFacts | undefined): void {
-    try { this.options.databases?.renamed(connectionId, database, newName, facts?.connections) } catch (thrown) { onUnexpectedError(thrown) }
+  /**
+   * After SQL Server renamed a database: query windows, connections opened in it and Database Properties follow the new name (with
+   * its identity under it, `identity`), and a toast names the logins whose default it was.
+   */
+  private databaseRenamed(connectionId: string, database: string, newName: string, facts: RenameDatabaseFacts | undefined, identity: DatabaseIdentity | undefined): void {
+    try { this.options.databases?.renamed(connectionId, database, newName, facts?.connections, identity) } catch (thrown) { onUnexpectedError(thrown) }
     if (facts?.loginsDefaulting) this.options.notify?.({ severity: 'warning', message: renameMessages.loginsDefaulting(facts.loginsDefaulting, displayText(database)) })
   }
 

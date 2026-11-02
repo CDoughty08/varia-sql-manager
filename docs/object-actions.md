@@ -139,7 +139,9 @@ there, as the rename does), and how many logins have it as their default databas
 at once, `ALTER DATABASE … MODIFY NAME` alone. Otherwise the Rename Database confirmation (Confirmations, below) asks: Close Connections and
 Rename sets `SINGLE_USER WITH ROLLBACK IMMEDIATE`, renames, and restores the access the database had (MULTI_USER, or
 RESTRICTED_USER), the status bar saying "Closing connections" while it runs; Rename When Free runs MODIFY NAME alone, which
-waits for the other sessions until they leave or Stop cancels it; Cancel sends nothing. The prompt names Varia's own query
+waits for the other sessions until they leave or Stop cancels it, the status bar saying "Waiting for connections to close"
+(SQL Server 2025 queues MODIFY NAME behind them, probed; where SQL Server refuses it at once with 5030, as earlier versions are
+recalled to, the backend tries it again each second until it completes or Stop); Cancel sends nothing. The prompt names Varia's own query
 windows on the database whose session holds an open transaction (A7), through any connection the describe names as reaching
 the same server (`SERVERPROPERTY('ServerName')`, whatever name each was opened with). From Enter the status bar shows the
 rename ("Reading the database" during the describe) with Stop, which cancels the describe too. A database already in
@@ -151,12 +153,15 @@ Monitor; where the sessions cannot be counted, its prompt offers Rename When Fre
 If the rename fails or is stopped after SINGLE_USER completed, Varia restores the access it changed, under the old name, or
 under the new one when MODIFY NAME completed first, and only that: never another session's change. A rename that completed
 before a later step failed still counts, and the message says what was left. After a rename, the database's query windows on
-that server (through any connection to it) and its Database Properties documents follow the new name, and when logins
-default to the old name a warning says how many, since they cannot connect without naming a database until their
-defaults change.
+that server (through any connection to it), the home database of the connections opened in it (New Query on the server), and
+its Database Properties documents follow the new name. MODIFY NAME gives the database a new `create_date` (sys.databases:
+"created or renamed"), so the reply carries its identity under the new name, read just after, and a document with unsaved
+changes takes it, so its Apply is not refused as another database's. When logins default to the old name a warning says how
+many, since they cannot connect without naming a database until their defaults change.
 
 Rename is greyed unless the database is online and read-write (MODIFY NAME checkpoints it: SQL Server answers 902 for a
-read-only or standby database, probed), and F2 on a greyed one says why. It is refused on an availability group database,
+read-only or standby database, probed), and F2 on a greyed one says why in a notice, as the command palette's greyed row does
+(Take Offline and Bring Online likewise). It is refused on an availability group database,
 and needs CONTROL SERVER, ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before
 anything runs, because SQL Server refuses its MODIFY NAME with 916 (probed). Managed Instance renames, but cannot set
 SINGLE_USER, so its prompt offers Rename When Free only. The backend refuses a database whose identity changed since the

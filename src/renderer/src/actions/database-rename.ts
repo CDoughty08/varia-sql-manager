@@ -2,9 +2,10 @@
 // follows the new name once SQL Server has it. Every connection to the database's server counts, as the backend moves every
 // connection to that server that was opened in the database (SqlService.DatabaseChanged): those the describe names, by the
 // server's own name (another alias of one instance included), and those opened under the same server name, lost ones included.
+import type { DatabaseIdentity } from '../../../shared/actions/schema'
 import { isQueryDocument } from '../documents'
 import type { ExternalStore } from '../core/types'
-import type { LiveConnection } from '../services/connections'
+import type { ConnectionService, LiveConnection } from '../services/connections'
 import type { DocumentService } from '../services/documents'
 import type { QueryService } from '../services/queries'
 import type { TargetService } from '../services/targets'
@@ -17,15 +18,19 @@ export interface OwnTabs { readonly count: number; readonly withTransactions: re
 export interface DatabaseRenameHooks {
   /** The query windows with a session in the database, through any connection to the connection's server (`connections`: the describe's). */
   tabs(connectionId: string, database: string, connections?: readonly string[]): Promise<OwnTabs>
-  /** SQL Server renamed the database: query windows and Database Properties documents on that server follow the new name. */
-  renamed(connectionId: string, database: string, newName: string, connections?: readonly string[]): void
+  /**
+   * SQL Server renamed the database: query windows, the connections opened in it (their home database, as the backend's
+   * DatabaseChanged moves them) and Database Properties documents on that server follow the new name; `identity` is the database's
+   * under it, from the rename's reply.
+   */
+  renamed(connectionId: string, database: string, newName: string, connections?: readonly string[], identity?: DatabaseIdentity): void
 }
 export interface DatabaseRenameHookOptions {
   readonly documents: Pick<DocumentService, 'getSnapshot'>
   readonly queries: Pick<QueryService, 'getSnapshot' | 'transactionState'>
-  readonly connections: ExternalStore<readonly LiveConnection[]>
+  readonly connections: ExternalStore<readonly LiveConnection[]> & Pick<ConnectionService, 'rehome'>
   readonly targets: Pick<TargetService, 'changeDatabase'>
-  readonly properties: { databaseRenamed(connectionId: string, database: string, newName: string, connections?: readonly string[]): void }
+  readonly properties: { databaseRenamed(connectionId: string, database: string, newName: string, connections?: readonly string[], identity?: DatabaseIdentity): void }
 }
 
 const serverKey = (server: string) => server.trim().toLowerCase()
@@ -51,9 +56,11 @@ export function databaseRenameHooks(options: DatabaseRenameHookOptions): Databas
       }))
       return { count: tabs.length, withTransactions: found.flat() }
     },
-    renamed(connectionId, database, newName, connections = []) {
+    renamed(connectionId, database, newName, connections = [], identity) {
       for (const document of queriesIn(connectionId, database, connections)) options.targets.changeDatabase(document.id, newName)
-      options.properties.databaseRenamed(connectionId, database, newName, connections)
+      // New Query on the server node opens in the connection's home, which must not name a database that is gone.
+      options.connections.rehome(sameServer(connectionId, connections), database, newName)
+      options.properties.databaseRenamed(connectionId, database, newName, connections, identity)
     }
   }
 }
