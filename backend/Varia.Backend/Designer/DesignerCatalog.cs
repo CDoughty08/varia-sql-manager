@@ -23,7 +23,7 @@ internal sealed class DesignerCatalog
         return Parse(stream);
     });
 
-    private sealed record CatalogJson(int Version, Dictionary<string, DesignerBoundJson> Bounds, List<string> Describes, Dictionary<string, long> Limits, List<string> Requests,
+    private sealed record CatalogJson(int Version, Dictionary<string, DesignerBoundJson> Bounds, List<string> Describes, List<string> Engines, Dictionary<string, long> Limits, List<string> Requests,
         List<string> ReservedKeywords, List<DesignerTypeJson> Types);
 
     private readonly Dictionary<string, int> ids;
@@ -36,6 +36,7 @@ internal sealed class DesignerCatalog
         Bounds = json.Bounds;
         Describes = json.Describes.ToHashSet(StringComparer.Ordinal);
         Requests = json.Requests.ToHashSet(StringComparer.Ordinal);
+        Engines = json.Engines;
         Limits = json.Limits;
         ReservedKeywords = json.ReservedKeywords.Append("GO").ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
@@ -51,6 +52,8 @@ internal sealed class DesignerCatalog
     public IReadOnlySet<string> Describes { get; }
     /// <summary>actions.script and actions.execute actions the designer answers (createTable).</summary>
     public IReadOnlySet<string> Requests { get; }
+    /// <summary>The servers Save, Script and the describe run on (ExplorerProfile.ServerEngine values).</summary>
+    public IReadOnlyList<string> Engines { get; }
     public IReadOnlyDictionary<string, long> Limits { get; }
     /// <summary>T-SQL's reserved keywords and GO: names the change script brackets.</summary>
     public IReadOnlySet<string> ReservedKeywords { get; }

@@ -380,7 +380,7 @@ describe('generated scripting files', () => {
     expect(docs).toContain('| 13 | Script permissions | `scriptPermissions` | False (docs page: True) | ')
     expect(docs).toContain('`table` (`droppedLedger`)')
     expect(docs).toContain('`certificate`')
-    expect(docs).toContain('| `login` | — | Script Login as |')
+    expect(docs).toContain('| `login` | none, `sa`, `system`, `sql`, `windowsUser`, `windowsGroup`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | Script Login as |')
     expect(docs).toContain('Not scriptable: folders, and `server`, `column`, `parameter`, `returnValue`, `ssisCatalog`, `ssisFolder`, `ssisProject`, `ssisPackage`, `ssisEnvironment`.')
     expect(docs).toContain('| `maxScriptChars` | 4,000,000 |')
   })

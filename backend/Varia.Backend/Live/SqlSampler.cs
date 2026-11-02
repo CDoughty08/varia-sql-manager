@@ -24,13 +24,13 @@ internal static class LiveConnections
         _ => throw new InvalidOperationException("This live scope reads no SQL Server.")
     };
 
-    /// <summary>A source's pool. Object Explorer's status samples by default, for as long as the pane shows, so on a box server
-    /// and Managed Instance it opens in master: a session in the login's own database (the Connect dialog's Database, or
-    /// the login's default) would keep that database from being restored, set single-user or dropped, and could not connect
-    /// while it is offline. Azure SQL Database runs none of its probes and keeps the connection's own catalog, which a contained
-    /// user signs in to.</summary>
+    /// <summary>A source's pool. Object Explorer's status and Activity Monitor (the server scope) sample for as long as their
+    /// views show, so on a box server and Managed Instance they open in master (critic A5): a session in the login's own database
+    /// (the Connect dialog's Database, or the login's default) would keep that database from being restored, taken offline, set
+    /// single-user or dropped, and could not connect while it is offline. Azure SQL Database, and a contained database user (who
+    /// cannot open master), keep the connection's own catalog.</summary>
     public static (string? Database, string Suffix) Pool(string scope, string source, ServerProfile profile, string catalogDatabase) =>
-        source == "explorer" && profile.EngineEdition is 1 or 2 or 3 or 4 or 8 ? ("master", Pool(scope, catalogDatabase).Suffix) : Pool(scope, catalogDatabase);
+        (source == "explorer" || scope == "server") && profile.ServerScopeInMaster ? ("master", Pool(scope, catalogDatabase).Suffix) : Pool(scope, catalogDatabase);
 
     /// <summary>The live band of a server: its major version (2016 to 2025), or the newest for Managed Instance, which reports
     /// 12 while running the newest engine.</summary>
