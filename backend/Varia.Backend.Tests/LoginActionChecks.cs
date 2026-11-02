@@ -45,6 +45,10 @@ internal static class LoginActionChecks
             "loginFacts is a describe without a dialog, for logins, under Disable's target rules");
         check(LoginRules.SystemName("##MS_PolicyTsqlExecutionLogin##") && !LoginRules.SystemName("##") && !LoginRules.SystemName("##x") && !LoginRules.SystemName("AppUser"),
             "SQL Server's own logins are named ##…##");
+        // SQL Server compares names without trailing spaces, so "##x## " is SQL Server's own ##x## too.
+        check(LoginRules.SystemName("##MS_PolicyEventProcessingLogin##  ") && Catalog.Logins.SubtypeOf(300, "S", "##x## ") == "system" && !LoginRules.SystemName(" ##x##")
+            && !LoginRules.SystemName("##x##\t"), "a ##…## name with trailing spaces is SQL Server's own too");
+        check(Catalog.Logins.Message("systemName") == "Names that start and end with ## are reserved for SQL Server's own logins.", "the reserved-name message is the catalogue's");
         check(Catalog.Logins.Limit("serviceName") == 256 && Catalog.Logins.Limit("serviceNames") == 4 && Catalog.Logins.Message("sqlBackslash") == "A SQL Server login's name cannot contain a backslash.",
             "the login facts' service bounds and the backslash message are the catalogue's");
     }
@@ -110,15 +114,19 @@ internal static class LoginActionChecks
             ("an identity on a disable", State("disable", AppUser) with { Identity = new(1, "2026-01-01T00:00:00.000") }), ("a table's disable", State("disable", table)),
             ("a database's enable", State("enable", new ObjectRefDto("database", Name: "AppData"))), ("SQL Server's own login's disable", State("disable", system)),
             ("SQL Server's own login's rename", Rename(system, "x")), ("a login's delete", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false)),
-            ("a login without a name", State("disable", new ObjectRefDto("login"))), ("secrets on a disable", State("disable", AppUser) with { Secrets = new("x", null) })
+            ("a login without a name", State("disable", new ObjectRefDto("login"))), ("secrets on a disable", State("disable", AppUser) with { Secrets = new("x", null) }),
+            ("SQL Server's own login with a trailing space", State("disable", system with { Name = system.Name + " " })), ("a rename of one with trailing spaces", Rename(system with { Name = system.Name + "  " }, "x")),
+            ("a login's rename to SQL Server's own form", Rename(AppUser, "##AppUser##")), ("one with a trailing space", Rename(AppUser, "##AppUser## "))
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for a login's actions: " + string.Join(", ", accepted));
         check(Refused(State("disable", AppUser)) == "accepted" && Refused(State("enable", new ObjectRefDto("login", Name: @"CONTOSO\Ops"))) == "accepted"
-            && Refused(Rename(AppUser, "App]User")) == "accepted" && Refused(Rename(new ObjectRefDto("login", Name: "sa"), @"a\b")) == "accepted",
+            && Refused(Rename(AppUser, "App]User")) == "accepted" && Refused(Rename(new ObjectRefDto("login", Name: "sa"), @"a\b")) == "accepted"
+            && Refused(Rename(new ObjectRefDto("database", Name: "AppData"), "##AppData##")) == "accepted",
             "a login's Disable, Enable and Rename are accepted, a backslash left to the preflight, which knows the login's type");
         check(DescribeRefused("loginFacts", AppUser) == "accepted" && DescribeRefused("loginFacts", table) == "INVALID_PARAMS" && DescribeRefused("loginFacts", system) == "INVALID_PARAMS"
-            && DescribeRefused("loginFacts", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("loginfacts", AppUser) == "INVALID_PARAMS",
+            && DescribeRefused("loginFacts", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("loginfacts", AppUser) == "INVALID_PARAMS"
+            && DescribeRefused("loginFacts", system with { Name = system.Name + " " }) == "INVALID_PARAMS",
             "the loginFacts describe takes only a login Disable may act on");
     }
 
@@ -138,7 +146,9 @@ internal static class LoginActionChecks
             ("an Entra rename", Facts("externalUser", "E"), Rename(AppUser, "x"), "NOT_SUPPORTED", "A Microsoft Entra login cannot be renamed."),
             ("SQL Server's own login's enable", Facts("system"), State("enable", AppUser), "NOT_SUPPORTED", "This login belongs to SQL Server and cannot be changed."),
             ("no ALTER ANY LOGIN", Facts("sql", canAlter: false), State("disable", AppUser), "PERMISSION_DENIED", "You do not have permission to change logins (ALTER ANY LOGIN)."),
-            ("a plain disable", Facts("sql"), State("disable", AppUser), null, null)
+            ("a plain disable", Facts("sql"), State("disable", AppUser), null, null),
+            ("a Windows login's rename to ##…##", Facts("windowsUser", "U"), Rename(AppUser, "##AppUser##"), "NOT_SUPPORTED", "Names that start and end with ## are reserved for SQL Server's own logins."),
+            ("a SQL login's rename to ##…## with a backslash", Facts("sql"), Rename(AppUser, @"##App\User## "), "NOT_SUPPORTED", "Names that start and end with ## are reserved for SQL Server's own logins.")
         };
         var wrong = cases.Where(item => service.LoginRefusal(item.Facts, item.Args) is var refused && (refused?.Code != item.Code || item.Message is not null && refused?.Message != item.Message))
             .Select(item => item.Name).ToList();
@@ -147,8 +157,9 @@ internal static class LoginActionChecks
             && ActionService.ServiceOfName(@"NT SERVICE\") is null && ActionService.ServiceOfName(@"CONTOSO\svc") is null && ActionService.ServiceOfName("NT SERVICE") is null,
             "a per-service login names its service when sys.dm_server_services cannot be read");
         // The live checks rename their scratch login to a hostile name and add a taken one; a crashed run's must still be swept.
-        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --" }.All(ScratchDatabase.SweepableLogin)
-            && !new[] { "VariaScratch_20261031010203_0a1b2c3d_x", "VariaScratch_2026_0a1b2c3d", "AppUser", "VariaScratch_20261031010203_0a1b2c3d_lr" }.Any(ScratchDatabase.SweepableLogin),
+        check(new[] { "VariaScratch_20261031010203_0a1b2c3d", "VariaScratch_20261031010203_0a1b2c3d_lt", "VariaScratch_20261031010203_0a1b2c3d_lr]' --", "##VariaScratch_20261031010203_0a1b2c3d_ls##", "VariaScratch_20261031010203_0a1b2c3d_lsx" }.All(ScratchDatabase.SweepableLogin)
+            && !new[] { "VariaScratch_20261031010203_0a1b2c3d_x", "VariaScratch_2026_0a1b2c3d", "AppUser", "VariaScratch_20261031010203_0a1b2c3d_lr", "##VariaScratch_20261031010203_0a1b2c3d##",
+                "##VariaScratch_20261031010203_0a1b2c3d_ls", "##MS_PolicyEventProcessingLogin##" }.Any(ScratchDatabase.SweepableLogin),
             "the scratch sweep drops the login action checks' scratch logins under every name they give them, and no other login");
     }
 

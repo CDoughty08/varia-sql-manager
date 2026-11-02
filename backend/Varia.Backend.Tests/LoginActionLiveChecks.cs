@@ -10,8 +10,9 @@ namespace Varia.Backend.Tests;
 /// a login a SQL Server service runs as is described with that service, SQL Server's own logins are refused, and the login
 /// this connection uses is refused by the preflight alone (it is never changed). With VARIA_TEST_SQL_SCRATCH=1, on the run's
 /// own scratch SQL logins only: Disable keeps an open session while a new sign-in fails (18470), Enable lets it in again,
-/// Script runs nothing, rename to a hostile name and back, a taken name, a backslash, Stop while another session holds the
-/// login, and, connected as the scratch login, its own login and a login it may not alter. The scratch logins are dropped in
+/// Script runs nothing, rename to a hostile name and back, a taken name, a backslash and a ##…## name, a ##…## login asked for
+/// by other spellings, its facts and Stop while another session holds the login, and, connected as the scratch login, its own
+/// login and a login it may not alter. The scratch logins are dropped in
 /// finally, under any name a check gave them.</summary>
 internal static class LoginActionLiveChecks
 {
@@ -92,6 +93,8 @@ internal static class LoginActionLiveChecks
         var login = scratch.Login!;
         var taken = login + "_lt";
         var hostile = login + "_lr]' --";
+        var reserved = "##" + login + "_ls##";
+        var unreserved = login + "_lsx";
         var connectivity = live("master");
         async Task<string> SignIn()
         {
@@ -167,17 +170,45 @@ internal static class LoginActionLiveChecks
             var back = await Execute(info.Id, "rename", hostile, login);
             var collision = await Execute(info.Id, "rename", login, taken);
             var backslash = await Execute(info.Id, "rename", login, login + "\\x");
+            // SQL Server accepts a ##…## name, which would make Varia take the login for one of SQL Server's own.
+            var reservedName = await Refused(() => Execute(info.Id, "rename", login, reserved));
             check(Steps(away) == "done:Rename" && away.Error is null && awayExists && Steps(back) == "done:Rename" && back.Error is null && await Exists(login)
                 && collision is { Error.Code: "NAME_IN_USE", Steps.Count: 0 } && backslash is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && backslash.Error.Message == words.Message("sqlBackslash")
-                && await Exists(taken) && !await Exists(login + "\\x"),
-                "a login is renamed to a name with brackets, quotes and a comment and back; a taken name is NAME_IN_USE and a backslash NOT_SUPPORTED, before any DDL: "
-                + away.Error?.Message + back.Error?.Message + collision.Error?.Code + " " + backslash.Error?.Code);
+                && reservedName == "INVALID_PARAMS" && await Exists(taken) && !await Exists(login + "\\x") && !await Exists(reserved),
+                "a login is renamed to a name with brackets, quotes and a comment and back; a taken name is NAME_IN_USE, a backslash NOT_SUPPORTED and a ##…## name refused, before any DDL: "
+                + away.Error?.Message + back.Error?.Message + collision.Error?.Code + " " + backslash.Error?.Code + " " + reservedName);
 
-            // Another session changes the login in an open transaction: Disable waits for it without a timeout, until Stop.
+            // A login in SQL Server's own name form, asked for by a spelling the server collation matches to it: with a trailing
+            // space (names compare without one), and with fullwidth ＃ (where the collation ignores width). The preflight judges the
+            // principal it found by the catalog's name, so neither spelling changes it.
+            var reservedPassword = "Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12));
+            var madeReserved = await Sql("CREATE LOGIN " + Bracket(reserved) + " WITH PASSWORD = " + Literal(reservedPassword) + ", CHECK_POLICY = OFF;");
+            var fullwidth = reserved.Replace('#', '＃');
+            var widthBlind = (await Sql("SELECT COUNT(*) FROM sys.server_principals WHERE name = " + Literal(fullwidth) + ";")).Scalar == "1";
+            var expected = widthBlind ? "NOT_SUPPORTED" : "NOT_FOUND";
+            var spellings = new[]
+            {
+                await Refused(() => Execute(info.Id, "disable", reserved + " ")), await Refused(() => Execute(info.Id, "rename", reserved + " ", unreserved)),
+                await Refused(() => Execute(info.Id, "disable", fullwidth)), await Refused(() => Execute(info.Id, "enable", fullwidth)), await Refused(() => Execute(info.Id, "rename", fullwidth, unreserved))
+            };
+            var spacedFacts = await service.Actions.LoginFactsAsync(info.Id, reserved + " ", CancellationToken.None);
+            var wideFacts = await Describe(info.Id, fullwidth);
+            check(madeReserved.Status == "completed" && spellings.SequenceEqual(["INVALID_PARAMS", "INVALID_PARAMS", expected, expected, expected]) && spacedFacts?.Subtype == "system"
+                && (widthBlind ? wideFacts.Login?.Subtype == "system" : wideFacts.Error?.Code == "NOT_FOUND") && await Disabled(reserved) == "0" && !await Exists(unreserved),
+                "a login named ##…## stays SQL Server's own under a trailing space and a fullwidth spelling (width-insensitive: " + widthBlind + "), before any DDL: "
+                + madeReserved.Error + string.Join(", ", spellings));
+
+            // Another session changes the login in an open transaction (D4 P8): a disabled login enabled, which locks its row. The
+            // loginFacts describe still answers at once (it reads past the change rather than waiting out the read lock timeout,
+            // which would answer BLOCKED), and Disable waits for the change without a timeout, before or in its step, until Stop.
             var holder = Guid.NewGuid().ToString();
             try
             {
+                var off = await Sql("ALTER LOGIN " + Bracket(login) + " DISABLE;");
                 var held = await InSession(info.Id, holder, "BEGIN TRANSACTION;\nALTER LOGIN " + Bracket(login) + " ENABLE;");
+                var reading = Stopwatch.StartNew();
+                var facts = await Describe(info.Id, login);
+                var readMs = reading.ElapsedMilliseconds;
                 using var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0);
                 var waiting = Execute(info.Id, "disable", login, context: context);
                 var stillWaiting = !await Task.WhenAny(waiting, Task.Delay(2000)).ContinueWith(done => done.Result == waiting);
@@ -187,21 +218,25 @@ internal static class LoginActionLiveChecks
                 try { stopped = await waiting; } catch (OperationCanceledException) { }
                 var answeredMs = watch.ElapsedMilliseconds;
                 await InSession(info.Id, holder, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
-                check(held.Status == "completed" && stillWaiting && stopped is { Error.Code: "CANCELLED" } && Steps(stopped) == "cancelled:Disable the login" && answeredMs < 5000
-                    && await Disabled(login) == "0",
-                    "Disable waits on another session's change to the login until Stop, which answers once SQL Server cancelled it (" + answeredMs + " ms, " + stopped?.Error?.Message + ")");
+                check(off.Status == "completed" && held.Status == "completed" && facts is { Error: null, Login.Subtype: "sql" } && stillWaiting && stopped is { Error.Code: "CANCELLED" }
+                    && Steps(stopped) is "" or "cancelled:Disable the login" && answeredMs < 5000 && await Disabled(login) == "1",
+                    "behind another session's change to the login, its facts answer (" + readMs + " ms, " + facts.Error?.Code + ") and Disable waits until Stop, which answers once SQL Server "
+                    + "cancelled it (" + answeredMs + " ms, " + stopped?.Error?.Message + ")");
             }
             finally
             {
                 await InSession(info.Id, holder, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
                 await Call<object>("query.session.close", new SessionArgs(holder));
+                await Sql("ALTER LOGIN " + Bracket(login) + " ENABLE;");
             }
         }
         finally
         {
             // The scratch logins under any name a check left them with; the scratch login itself goes with the scratch name.
             await Sql("IF SUSER_ID(" + Literal(hostile) + ") IS NOT NULL AND SUSER_ID(" + Literal(login) + ") IS NULL ALTER LOGIN " + Bracket(hostile) + " WITH NAME = " + Bracket(login) + ";\n"
-                + "IF SUSER_ID(" + Literal(taken) + ") IS NOT NULL DROP LOGIN " + Bracket(taken) + ";");
+                + "IF SUSER_ID(" + Literal(taken) + ") IS NOT NULL DROP LOGIN " + Bracket(taken) + ";\n"
+                + "IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + Literal(reserved) + " AND type = 'S') DROP LOGIN " + Bracket(reserved) + ";\n"
+                + "IF SUSER_ID(" + Literal(unreserved) + ") IS NOT NULL DROP LOGIN " + Bracket(unreserved) + ";");
         }
     }
 }

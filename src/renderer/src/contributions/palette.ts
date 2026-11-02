@@ -42,7 +42,7 @@ export function paletteContribution(workbench: PaletteWorkbench, history = new C
   const commandItems = (): QuickPickItem[] => commandIds.filter(id => commandDescriptor(id).palette !== false && commands.has(id)).map(id => {
       // Titles follow settings ("Select Top 50 Rows").
       const command = commandDescriptor(id), title = commandTitle(id, workbench.settings?.getSnapshot().values), label = command.category ? `${command.category}: ${title}` : title
-      const unavailable = commands.isEnabled(id) ? {} : { disabled: true, disabledHint: command.unavailableHint ?? `“${label}” is not available right now.` }
+      const unavailable = commands.isEnabled(id) ? {} : { disabled: true, disabledHint: commands.unavailableHint(id) ?? command.unavailableHint ?? `“${label}” is not available right now.` }
       // The category ("Query: ") does not count as the start of the name, so a match there ranks no higher than one in the title.
       return { id, label, titleStart: label.length - title.length, icon: command.icon, keywords: command.keywords, keybinding: keybindings.lookup(id), ...unavailable }
     }).sort((a, b) => a.label.localeCompare(b.label, 'en'))

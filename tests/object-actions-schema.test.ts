@@ -59,6 +59,13 @@ describe('object action request schemas', () => {
       ['SQL Server\'s own login\'s rename', rename({ target: system })], ['secrets on a disable', state('disable', { secrets: { password: 'x' } })], ['a login without a name', state('disable', { target: { kind: 'login' } })]
     ] as const) expect(valid(value), name).toBe(false)
     expect(actionTargetProblems(system, 'disable')).toEqual(['This login belongs to SQL Server and cannot be changed.'])
+    // SQL Server compares names without trailing spaces: "##x## " is SQL Server's own ##x## too. A login's new name in that form is
+    // refused, since Varia would then take the login for one of SQL Server's own; a database may still take one.
+    const spaced = { ...system, name: system.name + '  ' }
+    expect([valid(state('disable', { target: spaced })), valid(rename({ target: spaced, newName: 'x' })), valid(rename({ target: login, newName: '##AppUser##' })), valid(rename({ target: login, newName: '##AppUser## ' }))])
+      .toEqual([false, false, false, false])
+    expect(actionRequestSchema.safeParse(rename({ target: login, newName: '##AppUser##' })).error?.issues.map(issue => issue.message)).toEqual(["Names that start and end with ## are reserved for SQL Server's own logins."])
+    expect(valid(rename({ target: database, newName: '##Sales##' }))).toBe(true)
     expect(actionTargetProblems({ kind: 'login', name: '##' }, 'disable')).toEqual([])
     // The loginFacts describe reads a login Disable may act on.
     const describe = { ...ids(), dialog: 'loginFacts', target: login }

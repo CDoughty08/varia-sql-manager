@@ -26,13 +26,20 @@ export type LoginType = keyof typeof loginTypeSubtypes
 /** sa keeps principal_id 1 whatever it is renamed to. */
 export const saPrincipalId = 1
 
+/** Whether a login's name has SQL Server's own form, `##…##`. SQL Server compares names without trailing spaces, so `##x## `
+ *  names the same login as `##x##` and counts too. C#: LoginRules.SystemName. */
+export function isSystemLoginName(name: string): boolean {
+  const trimmed = name.replace(/ +$/, '')
+  return trimmed.length >= 4 && trimmed.startsWith('##') && trimmed.endsWith('##')
+}
+
 /** A login's subtype: sa by principal_id, SQL Server's own by a name that starts and ends with `##` (checked on the name read
  *  back, never by a SQL literal), else its type. Undefined for a type the Logins folder does not list. */
 export function loginSubtypeOf(principalId: number, type: string, name: string): LoginSubtype | undefined {
   const byType = (loginTypeSubtypes as Readonly<Record<string, LoginSubtype>>)[type.trim()]
   if (!byType) return undefined
   if (principalId === saPrincipalId) return 'sa'
-  if (name.length >= 4 && name.startsWith('##') && name.endsWith('##')) return 'system'
+  if (isSystemLoginName(name)) return 'system'
   return byType
 }
 
@@ -104,7 +111,9 @@ export const loginMessages = {
   alterAnyLogin: 'You do not have permission to change logins (ALTER ANY LOGIN).',
   controlServer: 'The login is a member of sysadmin: changing it needs CONTROL SERVER.',
   // SQL Server's own answer is 15021, which does not say what is wrong (D4 P3).
-  sqlBackslash: "A SQL Server login's name cannot contain a backslash."
+  sqlBackslash: "A SQL Server login's name cannot contain a backslash.",
+  // SQL Server accepts such a name, and Varia would then take the login for one of SQL Server's own and refuse to change it.
+  systemName: "Names that start and end with ## are reserved for SQL Server's own logins."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -178,11 +187,12 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
-/** Why a login may not take this new name, or undefined: a SQL Server login's name has no backslash (SQL Server answers
- *  15021, "Invalid value given for parameter NAME", D4 P3), so Varia says why before sending; a Windows login's name is
+/** Why a login may not take this new name, or undefined: SQL Server's own form (`##…##`, for every subtype), which would
+ *  make the login look like one of SQL Server's own; and a backslash in a SQL Server login's name (SQL Server answers 15021,
+ *  "Invalid value given for parameter NAME", D4 P3), so Varia says why before sending; a Windows login's name is
  *  DOMAIN\name. C#: LoginRules.NameRefusal. */
 export const loginNameRefusal = (subtype: LoginSubtype, newName: string): LoginMessageId | undefined =>
-  noBackslashSubtypes.includes(subtype) && newName.includes('\\') ? 'sqlBackslash' : undefined
+  isSystemLoginName(newName) ? 'systemName' : noBackslashSubtypes.includes(subtype) && newName.includes('\\') ? 'sqlBackslash' : undefined
 
 /** The rules as actions-catalog.json carries them, so C# needs no rules of its own. */
 export function loginsCatalog() {

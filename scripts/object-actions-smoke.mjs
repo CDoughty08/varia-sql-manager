@@ -7,7 +7,7 @@ import { actionsStubData, caution, dependentsMessage, installActionsStub, proper
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
-  renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
+  quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
 
@@ -601,13 +601,22 @@ try {
   expect(await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')).toEqual(['Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
   expect(await disabled()).toEqual(['Enable', 'Rename'])
   await closeMenu()
+  // The palette says why a greyed login verb is greyed for the login selected, in its own words.
+  await select(...logins, 'CONTOSO\\Ops')
+  await page.keyboard.press('F1')
+  await page.keyboard.insertText('Disable Login')
+  await expect(quickInputActive(page)).toContainText('Object Explorer: Disable Login')
+  await page.keyboard.press('Enter')
+  await expect(quickInputMessage(page)).toHaveText('A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status.')
+  await page.keyboard.press('Escape')
+  await expect(quickInput(page)).toHaveCount(0)
   await answer(0)
   await menuOf(...logins, 'AppUser')
   await explorerMenu().getByRole('menuitem', { name: 'Disable', exact: true }).click(fast)
   await expect.poll(async () => (await prompts()).length).toBe(promptCount + 1)
   expect((await prompts()).at(-1)).toEqual({ title: 'Disable Login', message: 'Disable the login AppUser?', buttons: ['Disable', 'Cancel'], defaultId: 0, cancelId: 1,
     detail: 'New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them.' })
-  await expect(notice()).toHaveText('Disabled the login AppUser. 2 sessions connected as it stay connected.')
+  await expect(notice()).toHaveText('Disabled the login AppUser. Its 2 open sessions stay connected.')
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'disable', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' } })
   await expect(async () => {
     if (await explorerMenu().count()) await closeMenu()
@@ -636,10 +645,21 @@ try {
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(heldId)
   await expect(status).not.toContainText('Disabling')
   await expect(commandBanner()).toHaveCount(0)
-  // Rename: F2 on a login; a backslash keeps the box with the reason, and a new name renames it with a notice.
+  // Rename: F2 on a login; a name in SQL Server's own form keeps the box with the reason, which Escape takes away with the box.
   await select(...logins, 'AppUser')
   await page.keyboard.press('F2')
   const loginBox = page.getByRole('textbox', { name: 'Rename Login', exact: true })
+  await expect(loginBox).toHaveValue('AppUser')
+  await page.keyboard.type('##AppUser##')
+  await page.keyboard.press('Enter')
+  await expect(commandBanner()).toHaveText("Names that start and end with ## are reserved for SQL Server's own logins.")
+  await expect(loginBox).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(loginBox).toHaveCount(0)
+  await expect(commandBanner()).toHaveCount(0)
+  // A backslash keeps the box too, and a new name renames the login with a notice and takes the message away.
+  await select(...logins, 'AppUser')
+  await page.keyboard.press('F2')
   await expect(loginBox).toHaveValue('AppUser')
   await page.keyboard.type('CONTOSO\\AppUser')
   await page.keyboard.press('Enter')
@@ -647,14 +667,13 @@ try {
   await expect(loginBox).toBeVisible()
   await loginBox.fill('AppOwner')
   await page.keyboard.press('Enter')
-  await expect(notice()).toHaveText('Database users mapped to this login keep their names.')
-  await expect(await explorerRow(page, ...logins, 'AppOwner')).toBeVisible()
+  await expect(notice()).toHaveText('Renamed the login AppUser to AppOwner. Database users mapped to it keep their names.')
+  await expect(await revealExplorerRow(page, ...logins, 'AppOwner')).toBeVisible()
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'rename', target: { kind: 'login', name: 'AppUser' }, newName: 'AppOwner' })
-  // The backslash's message stays until it is dismissed: dismissing it earlier would have left the box, which commits.
-  if (await commandBanner().count()) await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
+  await expect(commandBanner()).toHaveCount(0)
   await page.screenshot({ path: resolve('artifacts', 'object-actions-logins-dark.png') })
   await application.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.previousShowMessageBox })
-  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the own login is refused first, Stop reaches a waiting Disable, and Rename refuses a SQL login\'s backslash.')
+  console.log('Object action checks: a login\'s menu offers Disable or Enable by its state and greys what its kind refuses; Disable asks, Enable does not, the palette says why a group\'s Disable is greyed, the own login is refused first, Stop reaches a waiting Disable, and Rename refuses a ##…## name and a SQL login\'s backslash, the message leaving with the box.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

@@ -77,7 +77,7 @@ const actionSpecData = {
 export const actionDescribeSpecs: { readonly [D in ActionDescribeId]: { readonly action: ObjectAction; readonly kind: NodeKind } } = {
   loginFacts: { action: 'disable', kind: 'login' }
 }
-export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec &{ readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
+export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
 export type ActionCommandId = typeof actionSpecData[ObjectAction]['command']
 

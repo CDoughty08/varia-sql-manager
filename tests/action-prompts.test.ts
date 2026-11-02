@@ -55,6 +55,8 @@ describe('object action prompts (varia:confirm-action)', () => {
       'SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled.', 'This login is a member of sysadmin.'
     ])
     expect(service.defaultId).toBe(1)
+    // One session takes the singular verb and pronoun.
+    expect(confirmActionBox(disable({ sessions: 1 })).detail).toBe('New connections will be refused. 1 session connected as this login stays connected until it ends; Activity Monitor can end it.')
     // Varia's other connections that sign in as the login (critic D4-3), named through displayText.
     expect(confirmActionBox(disable({ connections: ['Reporting (sql01)'] })).detail.split('\n\n')).toEqual([
       'New connections will be refused.', "Varia's connection Reporting (sql01) signs in as this login, and cannot reconnect while it is disabled."

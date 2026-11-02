@@ -5,7 +5,7 @@ import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
-import { loginLimits, type LoginFacts } from './logins.ts'
+import { isSystemLoginName, loginLimits, loginMessages, type LoginFacts } from './logins.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
@@ -171,7 +171,7 @@ export interface ActionExecuteResult {
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
 const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled' }
-const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && (ref.name ?? '').length >= 4 && ref.name!.startsWith('##') && ref.name!.endsWith('##')
+const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && isSystemLoginName(ref.name ?? '')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
@@ -234,6 +234,7 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   switch (request.action) {
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
+      if (request.target.kind === 'login' && isSystemLoginName(request.newName)) issue(context, 'newName', loginMessages.systemName)
       break
     case 'delete':
       if (kindSpecs[request.target.kind].scope !== 'database' && (request.closeConnections || request.deleteHistory)) issue(context, 'closeConnections', 'Only a database has connections to close and backup history to delete.')

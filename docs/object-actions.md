@@ -336,16 +336,21 @@ statement may name. Delete, Unlock and Properties arrive in later versions; thei
 
 Disable and Enable are inline actions in a login's menu after Copy Name, one of them at a time: a disabled login offers
 Enable. Each runs at once as a status-bar job with Stop, from the server's master database, and then Object Explorer
-reselects the login with its new state. Disable first reads the login's facts (`actions.describe` with `loginFacts`, in
-the action's own connection) and asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which
+reselects the login with its new state. Both first read the login's facts (`actions.describe` with `loginFacts`, in the
+action's own connection, under READ UNCOMMITTED so that another session's open change to the login cannot hold it back;
+meanwhile the status bar says "Disabling app_user: Reading the login…" with Stop, and a second request for the login
+says why it waits). Disable then asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which
 stay connected, warns when it is a member of sysadmin, names the service that runs as it (from
 `sys.dm_server_services`, or an `NT SERVICE\` name), and names Varia's other connections that sign in as it. Enable
-asks nothing; its notice says when permission to connect is still denied.
+asks nothing; its notice says when permission to connect is still denied. The statement itself waits behind such a
+change, as SSMS's does, until Stop.
 
 Rename uses Object Explorer's inline box, as for a table. A SQL Server login's name cannot hold a backslash: "A SQL Server login's name cannot contain a backslash."
-The box stays open with that message, since SQL Server would refuse it (15021). The backend refuses a name another
-login or server role uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a
-warning names Varia's other connections that sign in under the old name.
+SQL Server would refuse it (15021). No login may take a name in SQL Server's own form: "Names that start and end with ## are reserved for SQL Server's own logins."
+SQL Server would accept it, and Varia would then take the login for one of SQL Server's own. The box stays open with
+either message, which leaves the banner when the box closes. The backend refuses a name another login or server role
+uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a warning names Varia's
+other connections that sign in under the old name.
 
 | Action | Step | As Script Action writes it |
 | --- | --- | --- |
@@ -354,8 +359,11 @@ warning names Varia's other connections that sign in under the old name.
 | Rename | Rename | `ALTER LOGIN [login] WITH NAME=[new]` |
 
 SQL Server's errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what
-changing a login needs. SQL Server's own logins (`##…##`) are refused by the backend as system objects, whatever the
-page asks.
+changing a login needs. SQL Server's own logins (`##…##`, trailing spaces ignored as SQL Server ignores them) are
+refused by the backend as system objects, whatever the page asks: the preflight judges the principal the server
+collation finds by the name the catalog holds, and the statement names exactly that principal, so no other spelling
+(a trailing space, a fullwidth `＃`) reaches one of them. A greyed verb's reason (a Windows group's Disable, SQL
+Server's own logins) is its hint in the command palette.
 
 ✓ allowed, ○ shown greyed and refused, – not offered.
 

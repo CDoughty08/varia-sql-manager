@@ -86,8 +86,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks'.
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt)?$")]
     private static partial Regex Pattern();
-    // _lt is the login actions' taken name, and _lr]' -- the hostile name they rename the scratch login to and back (D4b).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --)?$")]
+    // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
+    // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
+    // of it would have given it (D4b).
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_lt|_lr\]' --|_lsx)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     /// <summary>Whether the sweep drops a stale SQL login of this name.</summary>
     internal static bool SweepableLogin(string name) => LoginPattern().IsMatch(name);
@@ -163,7 +165,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                     log("Could not delete a stale scratch backup file of " + group.Key);
             await run(HistorySql(group.Key), "msdb");
         }
-        var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
+        var logins = await run("SELECT name FROM sys.server_principals WHERE (name LIKE N'VariaScratch[_]%' OR name LIKE N'##VariaScratch[_]%') AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
             if (SweepableLogin(row[0]!))
             {

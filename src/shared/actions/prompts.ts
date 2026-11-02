@@ -102,7 +102,7 @@ export const actionPrompts = {
     title: 'Disable Login',
     message: facts => `Disable the login ${show(facts.login)}?`,
     detail: facts => [
-      'New connections will be refused.' + (facts.sessions ? ` ${plural(facts.sessions, 'session', 'sessions')} connected as this login stay connected until they end; Activity Monitor can end them.` : ''),
+      'New connections will be refused.' + (facts.sessions ? ` ${facts.sessions === 1 ? '1 session connected as this login stays connected until it ends' : `${plural(facts.sessions, 'session', 'sessions')} connected as this login stay connected until they end`}; Activity Monitor can end ${facts.sessions === 1 ? 'it' : 'them'}.` : ''),
       ...facts.service ? [`${show(facts.service)} runs as this account, and cannot connect while it is disabled.`] : [],
       ...facts.sysadmin ? ['This login is a member of sysadmin.'] : [],
       ...facts.connections?.length ? [loginConnectionsText(facts.connections, 'cannot reconnect while it is disabled')] : []

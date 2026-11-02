@@ -42,8 +42,13 @@ internal sealed class LoginRules
         return byType;
     }
 
-    /// <summary>Whether a login's name is SQL Server's own form, ##…## (logins.ts loginSubtypeOf).</summary>
-    public static bool SystemName(string name) => name.Length >= 4 && name.StartsWith("##", StringComparison.Ordinal) && name.EndsWith("##", StringComparison.Ordinal);
+    /// <summary>Whether a login's name is SQL Server's own form, ##…## (logins.ts isSystemLoginName). SQL Server compares names
+    /// without trailing spaces, so "##x## " names the same login and counts too.</summary>
+    public static bool SystemName(string name)
+    {
+        var trimmed = name.TrimEnd(' ');
+        return trimmed.Length >= 4 && trimmed.StartsWith("##", StringComparison.Ordinal) && trimmed.EndsWith("##", StringComparison.Ordinal);
+    }
 
     /// <summary>A login row's status (logins.ts loginStatusOf): disabled, else noAccess while CONNECT SQL is denied, else none.
     /// The two were one status before D4a; they stay apart because Enable does not lift a DENY CONNECT SQL.</summary>
@@ -89,9 +94,10 @@ internal sealed class LoginRules
         return null;
     }
 
-    /// <summary>The message id that refuses a login's new name, or null: a backslash in the name of a login SQL Server
-    /// authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>
-    public string? NameRefusal(string subtype, string newName) => json.NoBackslash.Contains(subtype) && newName.Contains('\\') ? "sqlBackslash" : null;
+    /// <summary>The message id that refuses a login's new name, or null: SQL Server's own form for every subtype, then a backslash
+    /// in the name of a login SQL Server authenticates itself (logins.ts loginNameRefusal; SQL Server would answer 15021).</summary>
+    public string? NameRefusal(string subtype, string newName) =>
+        SystemName(newName) ? "systemName" : json.NoBackslash.Contains(subtype) && newName.Contains('\\') ? "sqlBackslash" : null;
 
     public string Message(string id) => json.Messages.TryGetValue(id, out var text) ? text : throw new InvalidOperationException("Unknown login message " + id);
 

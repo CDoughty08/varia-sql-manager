@@ -277,7 +277,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) }
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) }
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false

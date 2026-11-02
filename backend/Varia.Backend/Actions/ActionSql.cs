@@ -41,6 +41,8 @@ internal static partial class ActionSql
     public const string ReadPrologue = Prologue + " SET LOCK_TIMEOUT 10000;";
     /// <summary>Execute requests restore the default after a describe on the same connection could have set it.</summary>
     public const string ExecutePrologue = Prologue + " SET LOCK_TIMEOUT -1;";
+    /// <summary>A describe whose facts only advise (loginFacts) reads past other sessions' uncommitted changes rather than waiting.</summary>
+    public const string FactsIsolation = "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;";
 
     public const string Declarations = "@schema sysname, @name sysname, @new sysname, @take int";
     /// <summary>Runs a catalog statement in the object's database, which reaches T-SQL only through QUOTENAME.</summary>
@@ -230,8 +232,9 @@ internal static partial class ActionSql
     /// <summary>The login preflight (D4 §6), in master: the login's row (type, state, SID, policy flags, CONNECT SQL denied,
     /// whether it is this connection's own login or a Windows group it gets in through, sysadmin membership, its sessions with
     /// VIEW SERVER STATE, what it owns, the permissions to change it, and whether @new is another principal's name), then at
-    /// most @take names of the databases it owns. Catalog views only: a READ COMMITTED read never takes LOGINPROPERTY's locks.</summary>
-    public const string Login = "SELECT p.principal_id AS principal_id, p.type AS principal_type, p.is_disabled AS is_disabled, CONVERT(varchar(172), p.sid, 2) AS sid_hex, "
+    /// most @take names of the databases it owns. Catalog views only, never LOGINPROPERTY's locks; under READ COMMITTED (an
+    /// execute's preflight) the row still waits behind another session's uncommitted ALTER LOGIN, until Stop.</summary>
+    public const string Login = "SELECT p.principal_id AS principal_id, p.name AS name, p.type AS principal_type, p.is_disabled AS is_disabled, CONVERT(varchar(172), p.sid, 2) AS sid_hex, "
         + "p.create_date AS create_date, l.is_policy_checked AS policy_checked, l.is_expiration_checked AS expiration_checked, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END) AS connect_denied, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.principal_id = p.principal_id AND t.usage = N'GRANT OR DENY') THEN 1 ELSE 0 END) AS is_own, "

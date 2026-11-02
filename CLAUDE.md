@@ -178,8 +178,10 @@ pages, limits, error codes, display formats, benchmarks).
   collations only as `sys.fn_helpcollations()` names them (live checks prove the server builds what Script Action shows
   for hostile names, and that Database Properties' script equals SMO's capture of SSMS's sequence); after a preflight in
   the same connection; waiting for locks as SSMS does (`LOCK_TIMEOUT -1`), so every DDL path needs a Stop (the dialog's,
-  or the status bar's for a rename), whose reply waits for SQL Server and lists the steps completed; and never logging
-  names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000`. The test-only dry
+  or the status bar's for a rename and a login's Disable and Enable), whose reply waits for SQL Server and lists the steps completed; and never logging
+  names, SQL or values. Script never runs anything. Describe and script reads use `LOCK_TIMEOUT 10000` (the loginFacts
+  describe, whose facts only advise, under READ UNCOMMITTED). Every lint refuses `LOGINPROPERTY` (it takes its own locks whatever
+  the isolation level) and any read of a password hash (`CatalogSql.SecretUses`). The test-only dry
   run is an internal C# method, never a request field.
 - Table Designer types, properties, commands and limits live only in `src/shared/designer/catalog.ts`; after changing it,
   regenerate `docs/table-designer.md` and the backend's embedded `Designer/designer-catalog.json` with

@@ -1,7 +1,7 @@
 import { actionLimits, actionMenuState, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
-import { loginMessages, loginNameRefusal, loginRefusal, loginSubtypes, type LoginFacts, type LoginSubtype } from '../../../shared/actions/logins.ts'
+import { loginGreyedMessage, loginMessages, loginNameRefusal, loginRefusal, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb } from '../../../shared/actions/logins.ts'
 import { loginConnectionsText, promptLimits } from '../../../shared/actions/prompts.ts'
-import type { ActionDescribeResult, ActionExecuteResult } from '../../../shared/actions/schema.ts'
+import type { ActionExecuteResult } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import { ident } from '../../../shared/explorer/schema.ts'
@@ -26,10 +26,11 @@ export interface ObjectActionServiceOptions {
   readonly queries: { canExecute(): boolean; execute(): Promise<unknown> }
   readonly connections: ExternalStore<readonly LiveConnection[]>
   /**
-   * The command banner (a failed action's message, sp_rename's caution, a login's other Varia connections) and, for what
-   * finished as asked but is worth knowing, an information notice (a login's sessions that stay connected).
+   * The command banner (a failed action's message, sp_rename's caution, a login's other Varia connections), `clear` to take
+   * back one message the Rename box reported once the box closes, and, for what finished as asked but is worth knowing, an
+   * information notice (a login's sessions that stay connected).
    */
-  readonly report: { error(message: string): void; warning(message: string): void; notice(message: string): void }
+  readonly report: { error(message: string): void; warning(message: string): void; clear(message: string): void; notice(message: string): void }
   /** Tools › Options › SQL Server Object Explorer › Commands: Select Top <n> Rows. */
   readonly selectTopCount: () => number
   readonly timers?: Timers
@@ -75,11 +76,15 @@ export const renameMessages = {
 export const objectActionNoticeKey = 'objectActions.notice'
 /** What a login's Disable, Enable and Rename say (D4b): Varia's notes, recalled rather than SSMS's, which says nothing. */
 export const loginActionMessages = {
-  disabled: (label: string, sessions: number | undefined) => `Disabled the login ${label}.` + (sessions ? ` ${sessions === 1 ? '1 session connected as it stays' : `${sessions.toLocaleString('en-US')} sessions connected as it stay`} connected.` : ''),
+  disabled: (label: string, sessions: number | undefined) => `Disabled the login ${label}.` + (sessions ? sessions === 1 ? ' Its open session stays connected.' : ` Its ${sessions.toLocaleString('en-US')} open sessions stay connected.` : ''),
   // ENABLE leaves a DENY CONNECT SQL in place (D4 P18), which Login Properties › Status lifts.
   enabled: (label: string, connectDenied: boolean) => `Enabled the login ${label}.` + (connectDenied ? ' Permission to connect is still denied.' : ''),
-  renamed: 'Database users mapped to this login keep their names.',
+  renamed: (label: string, newName: string) => `Renamed the login ${label} to ${newName}. Database users mapped to it keep their names.`,
   stoppedUnknown: (verb: 'disable' | 'enable') => `The ${verb} was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.`,
+  /** The status bar's step while Disable or Enable reads the login's facts, before it asks or runs. */
+  reading: 'Reading the login',
+  /** A second Disable or Enable while the first one waits for its prompt. */
+  asking: (label: string) => `An action on ${label} is waiting for your answer.`,
   /** What Varia's other connections that sign in as the login cannot do afterwards (critic D4-3). */
   disableConnections: 'cannot reconnect while it is disabled',
   renameConnections: 'cannot reconnect under the old name',
@@ -87,15 +92,24 @@ export const loginActionMessages = {
 } as const
 const verbTitle = { rename: 'Rename', disable: 'Disable', enable: 'Enable' } as const satisfies { readonly [V in StateVerb]: string }
 const isLoginSubtype = (subtype: string | undefined): subtype is LoginSubtype => (loginSubtypes as readonly string[]).includes(subtype ?? '')
+const isLoginVerb = (action: ObjectAction): action is ObjectAction & LoginVerb => (loginVerbs as readonly string[]).includes(action)
 const sameText = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
 const connectionLabel = (connection: Pick<LiveConnection, 'displayName' | 'server'>) => connection.displayName ? `${connection.displayName} (${connection.server})` : connection.server
+/** `text` in at most `max` UTF-16 units, as zod counts them, ending in … when cut, never inside a surrogate pair. */
+export function clipUnits(text: string, max: number): string {
+  if (text.length <= max) return text
+  let out = ''
+  for (const character of text) { if (out.length + character.length > max - 1) break; out += character }
+  return out + '…'
+}
 const maxNewName = 400
 const unwrap = <T>(result: ApiResult<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const objectOf = (node: Pick<ExplorerMenuNode, 'ref'>): ObjectRef | undefined => node.ref.type === 'object' ? node.ref.object : undefined
 
 interface Job { readonly connectionId: string; readonly requestId: string; readonly verb: StateVerb; readonly label: string; readonly newName?: string; step?: string; dropped: boolean; stopped: boolean; visible: boolean; timer?: unknown }
 /** How a state job ended: the backend's answer, unless the job was dropped (its server went) or the call threw. */
-export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResult>; readonly thrown?: unknown; readonly dropped: boolean; readonly stopped: boolean }
+interface TrackedJob<T> { readonly result?: ApiResult<T>; readonly thrown?: unknown; readonly dropped: boolean; readonly stopped: boolean }
+export type StateJobOutcome = TrackedJob<ActionExecuteResult>
 
 /**
  * Object Explorer's actions in the renderer: Select Top 1000 Rows for tables and views, and inline Rename (Delete and
@@ -107,8 +121,10 @@ export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResu
  */
 export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> implements Disposable {
   private readonly jobs = new Map<number, Job>()
-  /** Nodes whose login action is reading its facts or asking, before its job starts: a second one waits for it. */
+  /** Nodes whose login action is reading its facts or asking, before its job starts: a second request is told why it waits. */
   private readonly preparing = new Set<number>()
+  /** The message the Rename box reported for its name, which the banner shows only while the box stays open. */
+  private boxError: string | undefined
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly unsubscribe: () => void
@@ -128,6 +144,16 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     return !!node && !node.lost && node.ref.type === 'object' && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
   }
 
+  /**
+   * Why `action` is greyed for the node when its rules say more than the command's catalogue hint: a login's greyed verb (a
+   * Windows group's Disable, SQL Server's own logins, an Entra login's Rename), as logins.ts words it. Undefined otherwise.
+   */
+  unavailableHint(action: ObjectAction, node: ExplorerMenuNode | undefined): string | undefined {
+    const subtype = node && objectOf(node)?.kind === 'login' ? node.subtype : undefined
+    if (!node || !isLoginSubtype(subtype) || !isLoginVerb(action) || actionMenuState(node)[action] !== 'disabled') return undefined
+    return loginMessages[loginGreyedMessage(subtype, action)]
+  }
+
   /** SSMS's Select Top N Rows: the columns, one per line, in a new unmarked query on the object's database, run at once. */
   async selectTop(node: ExplorerMenuNode): Promise<void> {
     const object = objectOf(node)
@@ -144,8 +170,17 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   beginRename(node: ExplorerMenuNode): void {
     if (!this.canRun('rename', node) || !this.options.explorer.beginRename(node.id)) throw new Error('This object cannot be renamed.')
   }
-  /** Escape, or a box that went away: nothing is sent. */
-  cancelRename(): void { this.options.explorer.endRename() }
+  /** Escape, or a box that went away: nothing is sent, and the box's own refusal leaves the banner with it. */
+  cancelRename(): void {
+    if (this.boxError !== undefined) { this.options.report.clear(this.boxError); this.boxError = undefined }
+    this.options.explorer.endRename()
+  }
+  /** Keeps the Rename box open with why its name cannot be sent, until the box closes. */
+  private refuseName(message: string): false {
+    this.boxError = message
+    this.options.report.error(message)
+    return false
+  }
 
   /**
    * Enter or leaving the box. An unchanged or empty name ends it silently; an invalid one reports why and keeps the box
@@ -155,10 +190,10 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const object = objectOf(node)
     if (!object || text === '' || text === object.name) { this.cancelRename(); return true }
     const parsed = ident.safeParse(text)
-    if (!parsed.success) { this.options.report.error(parsed.error.issues[0]?.message ?? 'The name is not valid.'); return false }
+    if (!parsed.success) return this.refuseName(parsed.error.issues[0]?.message ?? 'The name is not valid.')
     // SQL Server would answer 15021, which does not say why; the backend repeats the rule from the login's type.
     const badName = object.kind === 'login' && isLoginSubtype(node.subtype) ? loginNameRefusal(node.subtype, text) : undefined
-    if (badName) { this.options.report.error(loginMessages[badName]); return false }
+    if (badName) return this.refuseName(loginMessages[badName])
     this.cancelRename()
     if (this.disposed || !this.isLive(node.connectionId)) return true
     const characters = [...displayText(text)]
@@ -171,7 +206,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (!value) return true
     if (folder !== undefined) this.options.explorer.reconcile(folder, { select: { type: 'object', object: { ...object, name: text } } })
     if (object.kind === 'login') {
-      this.options.report.notice(loginActionMessages.renamed)
+      this.options.report.notice(loginActionMessages.renamed(displayText(object.name ?? ''), newName))
       if (others.length) this.options.report.warning(loginConnectionsText(others, loginActionMessages.renameConnections))
       return true
     }
@@ -185,7 +220,8 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
    * A login's Disable or Enable (D4b). It reads the login's facts in the backend's own connection (the loginFacts
    * describe) and refuses by logins.ts' rules (the login this connection uses, SQL Server's own, a Windows group, the
    * permissions); Disable then asks, naming the sessions that stay connected, the service that runs as the login, a
-   * sysadmin member and Varia's other connections that sign in as it. The statement runs as a status-bar job with Stop;
+   * sysadmin member and Varia's other connections that sign in as it. Reading the facts and the statement each run as a
+   * status-bar job with Stop ("Disabling AppUser: Reading the login…"), and a second request for the login says why it waits;
    * on success the listing folder is reconciled, so the row's badge and chip follow, and a notice says what changed.
    */
   async changeLoginState(node: ExplorerMenuNode, verb: 'disable' | 'enable'): Promise<void> {
@@ -193,11 +229,11 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (!this.canRun(verb, node) || object?.kind !== 'login' || object.name === undefined) throw new Error(loginActionMessages.unavailable[verb])
     const running = this.jobs.get(node.id)
     if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return }
-    if (this.preparing.has(node.id)) return
+    if (this.preparing.has(node.id)) { this.options.report.error(loginActionMessages.asking(node.label)); return }
     this.preparing.add(node.id)
     let facts: LoginFacts
     try {
-      const described = await this.describeLogin(node, object)
+      const described = await this.describeLogin(node, object, verb)
       if (!described) return
       facts = described
       const refused = loginRefusal(facts, verb)
@@ -214,12 +250,16 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     this.options.report.notice(verb === 'disable' ? loginActionMessages.disabled(label, value.sessions ?? facts.sessions) : loginActionMessages.enabled(label, facts.connectDenied))
   }
 
-  /** The login's facts as the backend's preflight reads them, or undefined after reporting why not (or when the server went). */
-  private async describeLogin(node: ExplorerMenuNode, object: ObjectRef): Promise<LoginFacts | undefined> {
-    let result: ApiResult<ActionDescribeResult>
-    try { result = await this.options.api.describeObject({ connectionId: node.connectionId, requestId: this.newId(), dialog: 'loginFacts', target: object }) }
-    catch (error) { if (this.isLive(node.connectionId)) this.options.report.error(error instanceof Error ? error.message : 'The login could not be read.'); return undefined }
-    if (this.disposed || !this.isLive(node.connectionId)) return undefined
+  /**
+   * The login's facts as the backend's preflight reads them, read as the verb's status-bar job, or undefined after reporting
+   * why not; nothing is said when the server went or Stop ended the read.
+   */
+  private async describeLogin(node: ExplorerMenuNode, object: ObjectRef, verb: 'disable' | 'enable'): Promise<LoginFacts | undefined> {
+    const tracked = await this.trackJob(node, verb, undefined, loginActionMessages.reading,
+      requestId => this.options.api.describeObject({ connectionId: node.connectionId, requestId, dialog: 'loginFacts', target: object }))
+    if (!tracked || tracked.dropped || tracked.stopped || this.disposed || !this.isLive(node.connectionId)) return undefined
+    const { result, thrown } = tracked
+    if (thrown !== undefined || !result) { this.options.report.error(thrown instanceof Error ? thrown.message : 'The login could not be read.'); return undefined }
     if (!result.ok) { this.options.report.error(result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST' ? result.error : `Could not read ${node.label}: ${result.error}`); return undefined }
     if (result.value.error || !result.value.login) { this.options.report.error(result.value.error?.message ?? `Could not read ${node.label}.`); return undefined }
     return result.value.login
@@ -230,7 +270,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const connections = this.loginConnections(node.connectionId, login)
     const answer = await this.options.api.confirmAction({ prompt: 'disableLogin', facts: {
       login, sysadmin: facts.sysadmin, ...facts.sessions !== undefined ? { sessions: Math.min(facts.sessions, promptLimits.count) } : {},
-      ...facts.service ? { service: facts.service.slice(0, promptLimits.service) } : {}, ...connections.length ? { connections } : {}
+      ...facts.service ? { service: clipUnits(facts.service, promptLimits.service) } : {}, ...connections.length ? { connections } : {}
     } })
     if (!answer.ok) { this.options.report.error(answer.error); return false }
     return answer.value === 'disable' && !this.disposed && this.isLive(node.connectionId)
@@ -243,7 +283,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
   private loginConnections(connectionId: string, login: string | undefined): string[] {
     const all = this.options.connections.getSnapshot(), server = all.find(connection => connection.id === connectionId)?.server
     const labels = all.filter(connection => connection.id !== connectionId && !connection.lost && sameText(connection.server, server) && sameText(connection.login, login))
-      .map(connection => [...connectionLabel(connection)].slice(0, promptLimits.connectionName).join(''))
+      .map(connection => clipUnits(connectionLabel(connection), promptLimits.connectionName))
     return [...new Set(labels)].slice(0, promptLimits.connections)
   }
 
@@ -275,12 +315,16 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
    * sends the request with the job's request id. A rename (and D3c's rename after its Open Connections prompt) and a
    * login's Disable and Enable (D4b) run through it; `setJobStep` names a later step.
    */
-  async runStateJob(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, run: (requestId: string) => Promise<ApiResult<ActionExecuteResult>>): Promise<StateJobOutcome | undefined> {
+  runStateJob(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, run: (requestId: string) => Promise<ApiResult<ActionExecuteResult>>): Promise<StateJobOutcome | undefined> {
+    return this.trackJob(node, verb, newName, undefined, run)
+  }
+  /** A status-bar job around any request the backend can cancel by its request id, starting at `step` (a login's facts). */
+  private async trackJob<T>(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, step: string | undefined, run: (requestId: string) => Promise<ApiResult<T>>): Promise<TrackedJob<T> | undefined> {
     const object = objectOf(node)
     if (this.disposed || !object || !this.isLive(node.connectionId)) return undefined
     const running = this.jobs.get(node.id)
     if (running) { this.options.report.error(renameMessages.running(running.label, running.verb)); return undefined }
-    const job: Job = { connectionId: node.connectionId, requestId: this.newId(), verb, label: scriptObjectLabel(object), ...newName !== undefined ? { newName } : {}, dropped: false, stopped: false, visible: false }
+    const job: Job = { connectionId: node.connectionId, requestId: this.newId(), verb, label: scriptObjectLabel(object), ...newName !== undefined ? { newName } : {}, ...step ? { step } : {}, dropped: false, stopped: false, visible: false }
     job.timer = this.timers.setTimeout(() => { if (this.jobs.get(node.id) === job) { job.visible = true; this.changed() } }, actionLimits.statusDelayMs)
     this.jobs.set(node.id, job)
     this.changed()

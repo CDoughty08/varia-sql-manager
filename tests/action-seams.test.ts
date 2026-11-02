@@ -40,7 +40,7 @@ describe('login rules', () => {
   it('derives a subtype as the backend does: sa by principal_id, SQL Server\'s own by ##name##, else by type', () => {
     const cases: [number, string, string, LoginSubtype | undefined][] = [
       [1, 'S', 'renamed_sa', 'sa'], [1, 'S ', 'sa', 'sa'], [270, 'C', '##MS_PolicySigningCertificate##', 'system'], [270, 'S', '##MS_PolicyTsqlExecutionLogin##', 'system'],
-      [300, 'S', '##', 'sql'], [300, 'S', 'app', 'sql'], [300, 'U', 'D\\u', 'windowsUser'], [300, 'G', 'D\\g', 'windowsGroup'], [300, 'C', 'c', 'certificateMapped'],
+      [300, 'S', '##', 'sql'], [300, 'S', '##x##  ', 'system'], [300, 'S', ' ##x##', 'sql'], [300, 'S', 'app', 'sql'], [300, 'U', 'D\\u', 'windowsUser'], [300, 'G', 'D\\g', 'windowsGroup'], [300, 'C', 'c', 'certificateMapped'],
       [300, 'K', 'k', 'asymmetricKeyMapped'], [300, 'E', 'e@x', 'externalUser'], [300, 'X', 'g', 'externalGroup'], [3, 'R', 'sysadmin', undefined]
     ]
     expect(cases.map(([id, type, name]) => loginSubtypeOf(id, type, name))).toEqual(cases.map(item => item[3]))

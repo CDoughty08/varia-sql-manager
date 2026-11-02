@@ -348,7 +348,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
     ...(options.timers ? { timers: options.timers } : {})
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })

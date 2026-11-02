@@ -187,6 +187,8 @@ internal sealed partial class ActionService : IDisposable
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
+                // Varia would take the renamed login for one of SQL Server's own (zod refuses it too).
+                if (renamed.Kind == "login" && LoginRules.SystemName(args.NewName!)) throw Invalid("newName.");
                 return renamed;
             case "delete":
                 if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("delete takes no new name or changes.");
@@ -392,7 +394,8 @@ internal sealed partial class ActionService : IDisposable
         {
             var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases"), token);
             if (facts is null) return (null, Error("NOT_FOUND", "The login " + display + " no longer exists. Refresh Object Explorer."));
-            return (new ActionSubject(target, display, title, facts.Subtype, loginRow!, warnings, false, facts), null);
+            // The login by the name the catalog holds: the rules judged that principal, so the DDL names exactly it.
+            return (new ActionSubject(target with { Name = loginRow!.Text("name") }, display, title, facts.Subtype, loginRow, warnings, false, facts), null);
         }
         if (target.Kind == "database")
         {
@@ -486,7 +489,9 @@ internal sealed partial class ActionService : IDisposable
             while (await reader.ReadAsync(token)) owned.Add(reader.GetString(0));
         var type = row.Text("principal_type")?.Trim() ?? "";
         var principalId = row.Int("principal_id");
-        var subtype = catalog.Logins.SubtypeOf(principalId, type, name);
+        // By the catalog's name, never the request's: the server collation finds "##x## " and a fullwidth ＃ spelling of
+        // SQL Server's own ##x##, whose subtype the request's spelling would hide.
+        var subtype = catalog.Logins.SubtypeOf(principalId, type, row.Text("name") ?? "");
         if (subtype is null) return (null, null);
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         var created = DatabaseProperties.Iso(row.Raw("create_date")) ?? "";
@@ -697,9 +702,12 @@ internal sealed partial class ActionService : IDisposable
     /// services that run as it, which the Disable prompt names.</summary>
     private async Task<ActionDescribeResult> DescribeLoginJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
     {
-        var (facts, _) = await LoginAsync(connection, target.Name!, null, 0, token);
+        // Behind another session's uncommitted change to the login (D4 P8), a READ COMMITTED read of its row would wait out the
+        // lock timeout before Disable could even ask; the facts only advise, and the execute preflight reads them again.
+        await RunAsync(connection, ActionSql.FactsIsolation, token);
+        var (facts, row) = await LoginAsync(connection, target.Name!, null, 0, token);
         if (facts is null) return new(null, 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
-        var service = facts.Type == "U" ? await LoginServiceAsync(connection, target.Name!, token) : null;
+        var service = facts.Type == "U" ? await LoginServiceAsync(connection, row!.Text("name") ?? target.Name!, token) : null;
         return new(null, 0, Login: facts with { Service = service });
     }
 
@@ -708,7 +716,7 @@ internal sealed partial class ActionService : IDisposable
         var database = ScriptDatabase(target);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = ScriptText(Plan(args, target));
+        var text = ScriptText(Plan(args, subject.Target));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
@@ -724,7 +732,7 @@ internal sealed partial class ActionService : IDisposable
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
-        var plan = Plan(args, target);
+        var plan = Plan(args, subject.Target);
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
