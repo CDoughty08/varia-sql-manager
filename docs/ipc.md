@@ -493,7 +493,13 @@ service?: ≤ 256 }, elapsedMs }`, `service` naming the SQL Server service that 
 `sys.dm_server_services`, read only where VIEW SERVER STATE allows it, else from an `NT SERVICE\` name); a missing login is
 `error: NOT_FOUND`. The catalogue's `describes` block maps each such id to its kind and the action whose permissions it
 checks. `actions.script` and `actions.execute` take `{ action: 'disable' | 'enable', connectionId, requestId, target: { kind:
-'login', name } }` (strict: no other member) or a login's `rename` with `newName`; they run in master, Script answers
+'login', name }, loginIdentity?: { sid: ^[0-9A-F]{2,172}$, created: yyyy-MM-ddTHH:mm:ss.fff } }` (strict: no other member) or
+a login's `rename` with `newName` (no `loginIdentity`). `loginIdentity` is the login the describe read; the preflight refuses
+a principal with another SID or creation time (`NOT_FOUND`, "…is not the one that was read…") before any DDL, so a
+confirmation is never applied to a login that has taken the name since. The describe's other facts stay advisory (read
+past open changes). Disable, Enable and Rename's preflight (`ActionSql.LoginAlter`) seeks only the login's own rows and
+leaves out the owned counts, which would scan every principal under READ COMMITTED and wait behind any other session's
+open change to one; the describe and Delete's preflight read them. They run in master, Script answers
 `database: 'master'`, and execute answers `sessions`, the count of sessions connected as the login that the preflight read.
 The backend re-derives the subtype from the name the catalog holds (the server collation also finds `##x## ` and a fullwidth
 spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then names that principal: SQL Server's own logins

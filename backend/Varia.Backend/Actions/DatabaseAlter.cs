@@ -42,7 +42,7 @@ internal static partial class DatabaseAlter
     private static partial Regex CollationPattern();
     /// <summary>create_date as the describe writes it (DatabaseProperties.Iso).</summary>
     [GeneratedRegex(@"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}\z")]
-    private static partial Regex IdentityCreated();
+    internal static partial Regex IdentityCreated();
 
     /// <summary>The catalogue entry of an option or scoped configuration key, or null.</summary>
     public static OptionJson? Option(ActionsCatalog catalog, string key) =>

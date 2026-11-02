@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Common;
 using Varia.Backend.Designer;
@@ -120,6 +121,9 @@ internal sealed partial class ActionService : IDisposable
     public int ActiveJobs => Volatile.Read(ref activeJobs);
 
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid object action request: " + detail);
+    /// <summary>A SID as CONVERT(varchar(172), sid, 2) writes it (loginLimits.sidHex).</summary>
+    [GeneratedRegex(@"^[0-9A-F]{2,172}\z")]
+    private static partial Regex LoginSid();
 
     // --- Validation -------------------------------------------------------------------------------------------------------
 
@@ -173,13 +177,16 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
-    /// with nothing but a target, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
+    /// with nothing but a target and the login's identity, the delete flags only for databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
     /// takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
+        // The login a confirmation was about: only Disable and Enable read it first (D4c adds Delete).
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+            || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
         switch (args.Action)
         {
             case "rename":
@@ -237,7 +244,7 @@ internal sealed partial class ActionService : IDisposable
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
-                _ => DescribeJobAsync(connection, target, band, job)
+                _ => DescribeJobAsync(connection, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
     }
@@ -383,7 +390,7 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Finds the object again in this connection and derives its subtype. <paramref name="take"/> bounds the
     /// dependents read per kind (0 reads none). Returns an error value when it is gone, unavailable or SQL Server's own.</summary>
-    private async Task<(ActionSubject? Subject, ActionError? Error)> ResolveAsync(SqlConnection connection, ObjectRefDto target, string? newName, int band, int take, CancellationToken token)
+    private async Task<(ActionSubject? Subject, ActionError? Error)> ResolveAsync(SqlConnection connection, ObjectRefDto target, string action, string? newName, int band, int take, CancellationToken token)
     {
         var display = Display(target);
         var title = Title(target);
@@ -392,7 +399,9 @@ internal sealed partial class ActionService : IDisposable
         ScriptPreflight.Row? row = null;
         if (target.Kind == "login")
         {
-            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases"), token);
+            // What the login owns only where it matters (Delete): the scans that count it would wait behind other principals' changes.
+            int? owned = action is "disable" or "enable" or "rename" ? null : take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases");
+            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, owned, token);
             if (facts is null) return (null, Error("NOT_FOUND", "The login " + display + " no longer exists. Refresh Object Explorer."));
             // The login by the name the catalog holds: the rules judged that principal, so the DDL names exactly it.
             return (new ActionSubject(target with { Name = loginRow!.Text("name") }, display, title, facts.Subtype, loginRow, warnings, false, facts), null);
@@ -471,16 +480,17 @@ internal sealed partial class ActionService : IDisposable
         return (new ActionSubject(target, display, title, subtype, row, warnings, truncated), null);
     }
 
-    /// <summary>The login preflight (ActionSql.Login) in master: the login's facts, at most <paramref name="take"/> names of the
-    /// databases it owns, and its row; null facts when no login of a listed type has the name.</summary>
-    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int take, CancellationToken token)
+    /// <summary>The login preflight in master: the login's facts, at most <paramref name="take"/> names of the databases it owns
+    /// (ActionSql.Login), or with a null take nothing it owns (ActionSql.LoginAlter), and its row; null facts when no login of
+    /// a listed type has the name.</summary>
+    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = ActionSql.Login;
+        command.CommandText = take is null ? ActionSql.LoginAlter : ActionSql.Login;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         Add(command, "@new", SqlDbType.NVarChar, 128, newName);
-        Add(command, "@take", SqlDbType.Int, 0, take);
+        if (take is { } limit) Add(command, "@take", SqlDbType.Int, 0, limit);
         await using var reader = await command.ExecuteReaderAsync(token);
         if (!await reader.ReadAsync(token)) return (null, null);
         var row = ReadRow(reader);
@@ -496,7 +506,7 @@ internal sealed partial class ActionService : IDisposable
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         var created = DatabaseProperties.Iso(row.Raw("create_date")) ?? "";
         var facts = new LoginFactsDto(principalId, type, subtype, row.Bool("is_disabled"), row.Text("sid_hex") ?? "", created, row.NullableBool("policy_checked"), row.NullableBool("expiration_checked"),
-            row.Bool("connect_denied"), row.Bool("is_own"), row.Bool("is_sysadmin"), sessions, row.Int("owned_databases"), owned, row.Int("owned_server_objects"), row.Bool("can_alter"),
+            row.Bool("connect_denied"), row.Bool("is_own"), row.Bool("is_sysadmin"), sessions, take is null ? null : row.Int("owned_databases"), owned, take is null ? null : row.Int("owned_server_objects"), row.Bool("can_alter"),
             row.Bool("can_control_server"), row.Bool("name_in_use"));
         return (facts, row);
     }
@@ -559,9 +569,12 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>A login action's refusal from the facts its preflight read: the protected-principal rules (permissions answer
     /// PERMISSION_DENIED, the rest NOT_SUPPORTED), then a rename's new name: a backslash in a SQL Server login's, or another
-    /// principal's.</summary>
+    /// principal's. First, a login the request's identity does not describe: the name now belongs to another principal, whose
+    /// facts the user never saw (a confirmation's warnings were about the one it read).</summary>
     internal ActionError? LoginRefusal(LoginFactsDto login, ActionArgs args)
     {
+        if (args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal)))
+            return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
         if (catalog.Logins.Refusal(login, args.Action) is { } refused)
             return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
         if (args.Action != "rename") return null;
@@ -686,9 +699,9 @@ internal sealed partial class ActionService : IDisposable
 
     // --- Jobs -------------------------------------------------------------------------------------------------------------
 
-    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, ObjectRefDto target, string action, int band, CancellationToken token)
     {
-        var (subject, error) = await ResolveAsync(connection, target, null, band, (int)catalog.Limit("dependents") + 1, token);
+        var (subject, error) = await ResolveAsync(connection, target, action, null, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, 0, error);
         var row = subject.Row;
         var snapshot = target.Kind == "database" ? row.Bool("is_snapshot") : (bool?)null;
@@ -714,7 +727,7 @@ internal sealed partial class ActionService : IDisposable
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var database = ScriptDatabase(target);
-        var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
+        var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
         var text = ScriptText(Plan(args, subject.Target));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
@@ -729,7 +742,7 @@ internal sealed partial class ActionService : IDisposable
     private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
-        var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
+        var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, subject.Target);

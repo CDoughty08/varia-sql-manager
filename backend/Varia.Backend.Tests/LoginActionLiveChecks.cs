@@ -11,9 +11,9 @@ namespace Varia.Backend.Tests;
 /// this connection uses is refused by the preflight alone (it is never changed). With VARIA_TEST_SQL_SCRATCH=1, on the run's
 /// own scratch SQL logins only: Disable keeps an open session while a new sign-in fails (18470), Enable lets it in again,
 /// Script runs nothing, rename to a hostile name and back, a taken name, a backslash and a ##…## name, a ##…## login asked for
-/// by other spellings, its facts and Stop while another session holds the login, and, connected as the scratch login, its own
-/// login and a login it may not alter. The scratch logins are dropped in
-/// finally, under any name a check gave them.</summary>
+/// by other spellings, every verb unblocked while another session holds other principals, a refusal once another login has taken
+/// the name since the facts were read, its facts and Stop while another session holds the login, and, connected as the scratch
+/// login, its own login and a login it may not alter. The scratch logins are dropped in finally, under any name a check gave them.</summary>
 internal static class LoginActionLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -36,8 +36,8 @@ internal static class LoginActionLiveChecks
         ObjectRefDto Login(string name) => new("login", Name: name);
         Task<ActionDescribeResult> Describe(string connectionId, string name) =>
             Call<ActionDescribeResult>("actions.describe", new ActionDescribeArgs(connectionId, Guid.NewGuid().ToString(), "loginFacts", Login(name)));
-        Task<ActionExecuteResult> Execute(string connectionId, string action, string name, string? newName = null, RequestContext? context = null) =>
-            Call<ActionExecuteResult>("actions.execute", new ActionArgs(action, connectionId, Guid.NewGuid().ToString(), Login(name), newName), context);
+        Task<ActionExecuteResult> Execute(string connectionId, string action, string name, string? newName = null, RequestContext? context = null, LoginIdentityDto? identity = null) =>
+            Call<ActionExecuteResult>("actions.execute", new ActionArgs(action, connectionId, Guid.NewGuid().ToString(), Login(name), newName, LoginIdentity: identity), context);
         async Task<string> Refused(Func<Task<ActionExecuteResult>> call)
         {
             try { return await call() is { Error: { } error } result ? error.Code + (result.Steps.Count == 0 ? "" : " after steps") : "accepted"; }
@@ -114,6 +114,18 @@ internal static class LoginActionLiveChecks
         }
         async Task<string?> Disabled(string name) => (await Sql("SELECT CONVERT(int, is_disabled) FROM sys.server_principals WHERE name = " + Literal(name) + ";")).Scalar;
         async Task<bool> Exists(string name) => (await Sql("SELECT COUNT(*) FROM sys.server_principals WHERE name = " + Literal(name) + ";")).Scalar == "1";
+        // An unblocked Disable's round trip, which the timed checks below scale their bounds by (LiveResultChecks.CancelBound).
+        long referenceMs = 0;
+        // Runs an execute and, if it has not answered within the bound, stops it: (its reply, whether it answered by itself).
+        async Task<(ActionExecuteResult? Result, bool Answered)> Bounded(string action, string name, string? newName, long boundMs)
+        {
+            using var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0);
+            var running = Execute(info.Id, action, name, newName, context);
+            var answered = await Task.WhenAny(running, Task.Delay(TimeSpan.FromMilliseconds(boundMs))) == running;
+            if (!answered) context.Cancel(CancelReason.User);
+            try { return (await running, answered); }
+            catch (OperationCanceledException) { return (null, answered); }
+        }
 
         try
         {
@@ -138,7 +150,9 @@ internal static class LoginActionLiveChecks
             {
                 var opened = await InSession(limited.Id, kept, "SELECT 1;");
                 var counted = await Describe(info.Id, login);
+                var timing = Stopwatch.StartNew();
                 var disabled = await Execute(info.Id, "disable", login);
+                referenceMs = timing.ElapsedMilliseconds;
                 var stillOpen = await InSession(limited.Id, kept, "SELECT SUSER_SNAME();");
                 var refused = await SignIn();
                 var state = await Disabled(login);
@@ -178,6 +192,52 @@ internal static class LoginActionLiveChecks
                 "a login is renamed to a name with brackets, quotes and a comment and back; a taken name is NAME_IN_USE, a backslash NOT_SUPPORTED and a ##…## name refused, before any DDL: "
                 + away.Error?.Message + back.Error?.Message + collision.Error?.Code + " " + backslash.Error?.Code + " " + reservedName);
 
+            // Another session's open change to other principals (an ALTER LOGIN and a DENY CONNECT SQL on the second login, as a
+            // New Login in its transaction or another tool would hold): the preflight of Disable, Enable, Rename and Script reads
+            // only this login's rows, so each answers by itself, as the ALTER LOGIN it runs would. Reading what a login owns, or
+            // every CONNECT SQL permission, under READ COMMITTED would wait behind it until Stop.
+            var other = Guid.NewGuid().ToString();
+            try
+            {
+                var holding = await InSession(info.Id, other, "BEGIN TRANSACTION;\nALTER LOGIN " + Bracket(taken) + " DISABLE;\nDENY CONNECT SQL TO " + Bracket(taken) + ";");
+                var bound = LiveResultChecks.CancelBound(15_000, referenceMs);
+                var facts = await Describe(info.Id, login);
+                var (off, offAnswered) = await Bounded("disable", login, null, bound);
+                var (on, onAnswered) = await Bounded("enable", login, null, bound);
+                var (renamed, renamedAnswered) = await Bounded("rename", login, unreserved, bound);
+                var (restored, restoredAnswered) = await Bounded("rename", unreserved, login, bound);
+                var scripted = await Call<ActionScriptResult>("actions.script", new ActionArgs("disable", info.Id, Guid.NewGuid().ToString(), Login(login)));
+                await InSession(info.Id, other, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
+                check(holding.Status == "completed" && facts is { Error: null, Login.Subtype: "sql" } && offAnswered && off is { Error: null } && onAnswered && on is { Error: null }
+                    && renamedAnswered && renamed is { Error: null } && restoredAnswered && restored is { Error: null } && scripted is { Error: null, Text: { } } && await Disabled(login) == "0" && await Exists(login),
+                    "behind another session's open change to other principals, Disable, Enable, Rename and Script of a login answer by themselves (bound " + bound + " ms): "
+                    + off?.Error?.Code + " " + on?.Error?.Code + " " + renamed?.Error?.Code + " " + restored?.Error?.Code + " " + scripted.Error?.Code);
+            }
+            finally
+            {
+                await InSession(info.Id, other, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
+                await Call<object>("query.session.close", new SessionArgs(other));
+                await Sql("IF SUSER_ID(" + Literal(unreserved) + ") IS NOT NULL AND SUSER_ID(" + Literal(login) + ") IS NULL ALTER LOGIN " + Bracket(unreserved) + " WITH NAME = " + Bracket(login) + ";");
+            }
+
+            // The confirmation is about the login its facts were read from: when another login has taken the name since (dropped
+            // and created again, so another SID), Disable and Enable refuse before any DDL, and the new login is untouched.
+            var read = await Describe(info.Id, taken);
+            var replaced = await Sql("DROP LOGIN " + Bracket(taken) + ";\nCREATE LOGIN " + Bracket(taken) + " WITH PASSWORD = " + Literal("Vx9!" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(12)))
+                + ", CHECK_POLICY = OFF;");
+            var identity = read.Login is { } seen ? new LoginIdentityDto(seen.Sid, seen.Created) : null;
+            var stale = await Execute(info.Id, "disable", taken, identity: identity);
+            var staleEnable = await Execute(info.Id, "enable", taken, identity: identity);
+            var current = await Describe(info.Id, taken);
+            var bound2 = current.Login is { } now ? await Execute(info.Id, "disable", taken, identity: new(now.Sid, now.Created)) : null;
+            var boundState = await Disabled(taken);
+            await Sql("ALTER LOGIN " + Bracket(taken) + " ENABLE;");
+            check(read.Login is not null && replaced.Status == "completed" && current.Login?.Sid != read.Login.Sid
+                && stale is { Error.Code: "NOT_FOUND", Steps.Count: 0 } && stale.Error.Message.Contains("is not the one that was read", StringComparison.Ordinal)
+                && staleEnable is { Error.Code: "NOT_FOUND", Steps.Count: 0 } && bound2 is { Error: null } && boundState == "1",
+                "Disable and Enable refuse a login that took the name after its facts were read, before any DDL, and run for the one they read: "
+                + replaced.Error + " " + stale.Error?.Code + " " + staleEnable.Error?.Code + " " + bound2?.Error?.Code);
+
             // A login in SQL Server's own name form, asked for by a spelling the server collation matches to it: with a trailing
             // space (names compare without one), and with fullwidth ＃ (where the collation ignores width). The preflight judges the
             // principal it found by the catalog's name, so neither spelling changes it.
@@ -200,28 +260,38 @@ internal static class LoginActionLiveChecks
 
             // Another session changes the login in an open transaction (D4 P8): a disabled login enabled, which locks its row. The
             // loginFacts describe still answers at once (it reads past the change rather than waiting out the read lock timeout,
-            // which would answer BLOCKED), and Disable waits for the change without a timeout, before or in its step, until Stop.
+            // which would answer BLOCKED), and Disable waits for the change without a timeout, before or in its step, until Stop. Stop's
+            // answer is timed against an unblocked Disable's round trip, and once more when it misses (the server is shared).
             var holder = Guid.NewGuid().ToString();
+            async Task<(SqlRun Off, SqlRun Held, ActionDescribeResult Facts, long ReadMs, bool StillWaiting, ActionExecuteResult? Stopped, long AnsweredMs)> HeldAsync()
+            {
+                try
+                {
+                    var off = await Sql("ALTER LOGIN " + Bracket(login) + " DISABLE;");
+                    var held = await InSession(info.Id, holder, "BEGIN TRANSACTION;\nALTER LOGIN " + Bracket(login) + " ENABLE;");
+                    var reading = Stopwatch.StartNew();
+                    var facts = await Describe(info.Id, login);
+                    var readMs = reading.ElapsedMilliseconds;
+                    using var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0);
+                    var waiting = Execute(info.Id, "disable", login, context: context);
+                    var stillWaiting = await Task.WhenAny(waiting, Task.Delay(2000)) != waiting;
+                    var watch = Stopwatch.StartNew();
+                    context.Cancel(CancelReason.User);
+                    ActionExecuteResult? stopped = null;
+                    try { stopped = await waiting; } catch (OperationCanceledException) { }
+                    var answeredMs = watch.ElapsedMilliseconds;
+                    return (off, held, facts, readMs, stillWaiting, stopped, answeredMs);
+                }
+                finally { await InSession(info.Id, holder, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;"); }
+            }
             try
             {
-                var off = await Sql("ALTER LOGIN " + Bracket(login) + " DISABLE;");
-                var held = await InSession(info.Id, holder, "BEGIN TRANSACTION;\nALTER LOGIN " + Bracket(login) + " ENABLE;");
-                var reading = Stopwatch.StartNew();
-                var facts = await Describe(info.Id, login);
-                var readMs = reading.ElapsedMilliseconds;
-                using var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0);
-                var waiting = Execute(info.Id, "disable", login, context: context);
-                var stillWaiting = !await Task.WhenAny(waiting, Task.Delay(2000)).ContinueWith(done => done.Result == waiting);
-                var watch = Stopwatch.StartNew();
-                context.Cancel(CancelReason.User);
-                ActionExecuteResult? stopped = null;
-                try { stopped = await waiting; } catch (OperationCanceledException) { }
-                var answeredMs = watch.ElapsedMilliseconds;
-                await InSession(info.Id, holder, "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;");
+                var stopBound = LiveResultChecks.CancelBound(5000, referenceMs);
+                var (off, held, facts, readMs, stillWaiting, stopped, answeredMs) = await LiveResultChecks.OnceMore("Stop of a Disable behind a held login", stopBound, item => item.AnsweredMs, HeldAsync);
                 check(off.Status == "completed" && held.Status == "completed" && facts is { Error: null, Login.Subtype: "sql" } && stillWaiting && stopped is { Error.Code: "CANCELLED" }
-                    && Steps(stopped) is "" or "cancelled:Disable the login" && answeredMs < 5000 && await Disabled(login) == "1",
+                    && Steps(stopped) is "" or "cancelled:Disable the login" && answeredMs < stopBound && await Disabled(login) == "1",
                     "behind another session's change to the login, its facts answer (" + readMs + " ms, " + facts.Error?.Code + ") and Disable waits until Stop, which answers once SQL Server "
-                    + "cancelled it (" + answeredMs + " ms, " + stopped?.Error?.Message + ")");
+                    + "cancelled it (" + answeredMs + " ms of " + stopBound + ", " + stopped?.Error?.Message + ")");
             }
             finally
             {

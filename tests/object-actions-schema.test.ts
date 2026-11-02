@@ -44,12 +44,19 @@ describe('object action request schemas', () => {
     expect(actionDescribeSchema.safeParse({ ...request, target: { kind: 'login', name: 'sa' } }).success).toBe(false)
     expect(actionDescribeSchema.safeParse({ ...request, extra: true }).success).toBe(false)
   })
-  it('takes a login\'s Disable and Enable with only a target, and refuses SQL Server\'s own logins and other kinds', () => {
+  it('takes a login\'s Disable and Enable with only a target and the login\'s identity, and refuses SQL Server\'s own logins and other kinds', () => {
     const login = { kind: 'login', name: 'AppUser' } as const
     const state = (action: 'disable' | 'enable', changes: Record<string, unknown> = {}) => ({ action, ...ids(), target: login, ...changes })
     const request = state('disable')
     expect(actionRequestSchema.parse(request)).toEqual(request)
     expect([valid(state('enable')), valid(rename({ target: login, newName: 'App]User' })), valid(state('enable', { target: { kind: 'login', name: 'CONTOSO\\Ops' } }))]).toEqual([true, true, true])
+    // The login the facts were read from: its SID as CONVERT(varchar(172), sid, 2) writes it, and its create_date.
+    const identity = { sid: '0'.repeat(171) + 'F', created: '2026-01-02T03:04:05.000' }
+    expect([valid(state('disable', { loginIdentity: identity })), valid(state('enable', { loginIdentity: { ...identity, sid: '01' } }))]).toEqual([true, true])
+    expect([{ ...identity, sid: '0' }, { ...identity, sid: '0'.repeat(172) + 'F' }, { ...identity, sid: '0a' }, { ...identity, sid: '01\n' }, { ...identity, created: '2026-01-02 03:04:05' },
+      { ...identity, created: '2026-01-02T03:04:05.000\n' }, { sid: '01' }, { ...identity, id: 1 }].map(loginIdentity => valid(state('disable', { loginIdentity })))).toEqual(Array(8).fill(false))
+    expect([valid(rename({ target: login, newName: 'x', loginIdentity: identity })), valid({ action: 'delete', ...ids(), target: login, closeConnections: false, deleteHistory: false, loginIdentity: identity })])
+      .toEqual([false, false])
     // A backslash is left to the preflight, which knows whether the login is a SQL Server or a Windows login.
     expect(valid(rename({ target: { kind: 'login', name: 'sa' }, newName: 'a\\b' }))).toBe(true)
     const system = { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } as const

@@ -233,23 +233,33 @@ internal static partial class ActionSql
     /// whether it is this connection's own login or a Windows group it gets in through, sysadmin membership, its sessions with
     /// VIEW SERVER STATE, what it owns, the permissions to change it, and whether @new is another principal's name), then at
     /// most @take names of the databases it owns. Catalog views only, never LOGINPROPERTY's locks; under READ COMMITTED (an
-    /// execute's preflight) the row still waits behind another session's uncommitted ALTER LOGIN, until Stop.</summary>
-    public const string Login = "SELECT p.principal_id AS principal_id, p.name AS name, p.type AS principal_type, p.is_disabled AS is_disabled, CONVERT(varchar(172), p.sid, 2) AS sid_hex, "
+    /// execute's preflight) the row still waits behind another session's uncommitted ALTER LOGIN, until Stop. Every other read
+    /// seeks the login's own rows (CONNECT SQL by its class, major and minor id too), except the owned counts and names, which
+    /// scan every principal, database and endpoint: <see cref="LoginAlter"/> leaves them out.</summary>
+    public const string Login = LoginHead + LoginOwned + LoginTail + ";\n"
+        + "SELECT TOP (@take) d.name AS database_name FROM sys.databases AS d JOIN sys.server_principals AS p ON p.sid = d.owner_sid "
+        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY d.name;";
+
+    /// <summary>The preflight of the verbs that ALTER LOGIN (Disable, Enable, Rename): <see cref="Login"/> without what the login
+    /// owns. Under READ COMMITTED those scans would wait behind any other session's open change to any principal (a New Login in
+    /// its transaction, another login's ALTER), which the ALTER LOGIN itself does not.</summary>
+    public const string LoginAlter = LoginHead + LoginTail + ";";
+
+    private const string LoginHead = "SELECT p.principal_id AS principal_id, p.name AS name, p.type AS principal_type, p.is_disabled AS is_disabled, CONVERT(varchar(172), p.sid, 2) AS sid_hex, "
         + "p.create_date AS create_date, l.is_policy_checked AS policy_checked, l.is_expiration_checked AS expiration_checked, "
-        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.grantee_principal_id = p.principal_id AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END) AS connect_denied, "
+        + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_permissions AS sp WHERE sp.class = 100 AND sp.major_id = 0 AND sp.minor_id = 0 AND sp.grantee_principal_id = p.principal_id "
+        + "AND sp.type = 'COSQ' AND sp.state = 'D') THEN 1 ELSE 0 END) AS connect_denied, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.principal_id = p.principal_id AND t.usage = N'GRANT OR DENY') THEN 1 ELSE 0 END) AS is_own, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_role_members AS m JOIN sys.server_principals AS r ON r.principal_id = m.role_principal_id "
         + "WHERE m.member_principal_id = p.principal_id AND r.name = N'sysadmin') THEN 1 ELSE 0 END) AS is_sysadmin, "
-        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.security_id = p.sid AND es.is_user_process = 1) END AS sessions, "
-        + "(SELECT COUNT(*) FROM sys.databases AS d WHERE d.owner_sid = p.sid) AS owned_databases, "
-        + "(SELECT COUNT(*) FROM sys.server_principals AS o WHERE o.owning_principal_id = p.principal_id) + (SELECT COUNT(*) FROM sys.endpoints AS e WHERE e.principal_id = p.principal_id) AS owned_server_objects, "
-        + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 0)) AS can_alter, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.security_id = p.sid AND es.is_user_process = 1) END AS sessions, ";
+    private const string LoginOwned = "(SELECT COUNT(*) FROM sys.databases AS d WHERE d.owner_sid = p.sid) AS owned_databases, "
+        + "(SELECT COUNT(*) FROM sys.server_principals AS o WHERE o.owning_principal_id = p.principal_id) + (SELECT COUNT(*) FROM sys.endpoints AS e WHERE e.principal_id = p.principal_id) AS owned_server_objects, ";
+    private const string LoginTail = "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 0)) AS can_alter, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'CONTROL SERVER'), 0)) AS can_control_server, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_principals AS x WHERE x.name = @new AND x.principal_id <> p.principal_id) THEN 1 ELSE 0 END) AS name_in_use "
         + "FROM sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id "
-        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X');\n"
-        + "SELECT TOP (@take) d.name AS database_name FROM sys.databases AS d JOIN sys.server_principals AS p ON p.sid = d.owner_sid "
-        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') ORDER BY d.name;";
+        + "WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X')";
 
     /// <summary>The sessions this backend's process (@pid) holds in a database, bounded by its own connections: the action keeps
     /// those its pooled connections were given, which a cleared pool leaves for a moment before the server ends them. Without VIEW
@@ -444,6 +454,7 @@ internal static partial class ActionSql
         }
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login alter", LintCatalog(LoginAlter, ExplorerCatalog.MaxBand, database: false));
         yield return ("login service", LintCatalog(LoginService, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));

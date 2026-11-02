@@ -16,6 +16,8 @@ internal static class LoginActionChecks
 
     private static ActionArgs State(string action, ObjectRefDto target) => new(action, Id(), Id(), target);
     private static ActionArgs Rename(ObjectRefDto target, string name) => new("rename", Id(), Id(), target, name);
+    /// <summary>The identity of the login <see cref="Facts"/> describes.</summary>
+    private static readonly LoginIdentityDto Identity = new("01", "2026-01-01T00:00:00.000");
     private static LoginFactsDto Facts(string subtype, string type = "S", bool own = false, bool canAlter = true, bool nameInUse = false) =>
         new(300, type, subtype, false, "01", "2026-01-01T00:00:00.000", null, null, false, own, false, 3, 0, [], 0, canAlter, true, nameInUse);
 
@@ -76,10 +78,17 @@ internal static class LoginActionChecks
             && ActionSql.LintExecutable(executable.Replace("QUOTENAME(@p2)", "@p2", StringComparison.Ordinal), ActionTemplate.RenameLogin).Count > 0
             && ActionSql.LintExecutable(executable, ActionTemplate.DisableLogin).Count > 0,
             "the rename's batch has SQL Server quote both names, and the lint refuses a bare new name or a template that binds one name");
+        // Before an ALTER LOGIN, the preflight reads only the login's own rows (seeks), so it waits behind nothing the ALTER would not.
+        check(!ActionSql.LoginAlter.Contains("owning_principal_id", StringComparison.Ordinal) && !ActionSql.LoginAlter.Contains("sys.databases", StringComparison.Ordinal)
+            && !ActionSql.LoginAlter.Contains("sys.endpoints", StringComparison.Ordinal) && !ActionSql.LoginAlter.Contains("@take", StringComparison.Ordinal)
+            && ActionSql.Login.Contains("owning_principal_id", StringComparison.Ordinal)
+            && ActionSql.LoginAlter.Contains("sp.class = 100 AND sp.major_id = 0 AND sp.minor_id = 0 AND sp.grantee_principal_id = p.principal_id", StringComparison.Ordinal)
+            && ActionSql.Login.Contains("sp.class = 100 AND sp.major_id = 0 AND sp.minor_id = 0 AND sp.grantee_principal_id = p.principal_id", StringComparison.Ordinal),
+            "Disable, Enable and Rename's preflight leaves out what the login owns, whose scans wait behind other principals' changes, and both preflights seek CONNECT SQL");
         var lint = ActionSql.Lint().ToList();
-        check(lint.Single(result => result.Name == "login service").Problems.Count == 0 && lint.Any(result => result.Name == "RenameLogin (dry run)")
+        check(lint.Single(result => result.Name == "login service").Problems.Count == 0 && lint.Single(result => result.Name == "login alter").Problems.Count == 0 && lint.Any(result => result.Name == "RenameLogin (dry run)")
             && ActionSql.LintCatalog(ActionSql.LoginService.Replace("UPPER(@name)", "LOGINPROPERTY(@name, N'IsLocked')", StringComparison.Ordinal), 17, database: false).Count > 0,
-            "the service lookup passes the catalog lint, which refuses LOGINPROPERTY in it");
+            "the service lookup and the ALTER LOGIN preflight pass the catalog lint, which refuses LOGINPROPERTY in it");
     }
 
     private static void Plans(Action<bool, string> check)
@@ -116,14 +125,21 @@ internal static class LoginActionChecks
             ("SQL Server's own login's rename", Rename(system, "x")), ("a login's delete", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false)),
             ("a login without a name", State("disable", new ObjectRefDto("login"))), ("secrets on a disable", State("disable", AppUser) with { Secrets = new("x", null) }),
             ("SQL Server's own login with a trailing space", State("disable", system with { Name = system.Name + " " })), ("a rename of one with trailing spaces", Rename(system with { Name = system.Name + "  " }, "x")),
-            ("a login's rename to SQL Server's own form", Rename(AppUser, "##AppUser##")), ("one with a trailing space", Rename(AppUser, "##AppUser## "))
+            ("a login's rename to SQL Server's own form", Rename(AppUser, "##AppUser##")), ("one with a trailing space", Rename(AppUser, "##AppUser## ")),
+            ("a login identity on a rename", Rename(AppUser, "x") with { LoginIdentity = Identity }),
+            ("a login identity on a delete", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false) with { LoginIdentity = Identity }),
+            ("a short SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0" } }), ("a long SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 172) + "F" } }),
+            ("a lower-case SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "0a" } }), ("a SID with a line break", State("enable", AppUser) with { LoginIdentity = Identity with { Sid = "01\n" } }),
+            ("no SID", State("disable", AppUser) with { LoginIdentity = Identity with { Sid = null! } }), ("a created without milliseconds", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05" } }),
+            ("a created with a line break", State("disable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-02T03:04:05.000\n" } })
         };
         var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for a login's actions: " + string.Join(", ", accepted));
         check(Refused(State("disable", AppUser)) == "accepted" && Refused(State("enable", new ObjectRefDto("login", Name: @"CONTOSO\Ops"))) == "accepted"
+            && Refused(State("disable", AppUser) with { LoginIdentity = Identity }) == "accepted" && Refused(State("enable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 171) + "F" } }) == "accepted"
             && Refused(Rename(AppUser, "App]User")) == "accepted" && Refused(Rename(new ObjectRefDto("login", Name: "sa"), @"a\b")) == "accepted"
             && Refused(Rename(new ObjectRefDto("database", Name: "AppData"), "##AppData##")) == "accepted",
-            "a login's Disable, Enable and Rename are accepted, a backslash left to the preflight, which knows the login's type");
+            "a login's Disable, Enable (with the identity of the login it read) and Rename are accepted, a backslash left to the preflight, which knows the login's type");
         check(DescribeRefused("loginFacts", AppUser) == "accepted" && DescribeRefused("loginFacts", table) == "INVALID_PARAMS" && DescribeRefused("loginFacts", system) == "INVALID_PARAMS"
             && DescribeRefused("loginFacts", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("loginfacts", AppUser) == "INVALID_PARAMS"
             && DescribeRefused("loginFacts", system with { Name = system.Name + " " }) == "INVALID_PARAMS",
@@ -142,13 +158,18 @@ internal static class LoginActionChecks
             ("the own login's disable", Facts("sql", own: true), State("disable", AppUser), "NOT_SUPPORTED", "This is the login this connection uses. Connect with another login to change it."),
             ("the own login's rename", Facts("sql", own: true), Rename(AppUser, "x"), "NOT_SUPPORTED", null),
             ("the own login's enable", Facts("sql", own: true), State("enable", AppUser), null, null),
-            ("a group's disable", Facts("windowsGroup", "G"), State("disable", AppUser), "NOT_SUPPORTED", "A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status."),
+            ("a group's disable", Facts("windowsGroup", "G"), State("disable", AppUser), "NOT_SUPPORTED", "A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead."),
             ("an Entra rename", Facts("externalUser", "E"), Rename(AppUser, "x"), "NOT_SUPPORTED", "A Microsoft Entra login cannot be renamed."),
             ("SQL Server's own login's enable", Facts("system"), State("enable", AppUser), "NOT_SUPPORTED", "This login belongs to SQL Server and cannot be changed."),
             ("no ALTER ANY LOGIN", Facts("sql", canAlter: false), State("disable", AppUser), "PERMISSION_DENIED", "You do not have permission to change logins (ALTER ANY LOGIN)."),
             ("a plain disable", Facts("sql"), State("disable", AppUser), null, null),
             ("a Windows login's rename to ##…##", Facts("windowsUser", "U"), Rename(AppUser, "##AppUser##"), "NOT_SUPPORTED", "Names that start and end with ## are reserved for SQL Server's own logins."),
-            ("a SQL login's rename to ##…## with a backslash", Facts("sql"), Rename(AppUser, @"##App\User## "), "NOT_SUPPORTED", "Names that start and end with ## are reserved for SQL Server's own logins.")
+            ("a SQL login's rename to ##…## with a backslash", Facts("sql"), Rename(AppUser, @"##App\User## "), "NOT_SUPPORTED", "Names that start and end with ## are reserved for SQL Server's own logins."),
+            ("the login that was read", Facts("sql"), State("disable", AppUser) with { LoginIdentity = Identity }, null, null),
+            // Another principal took the name after the facts were read: its own refusals never get a say.
+            ("another SID", Facts("sql", own: true), State("disable", AppUser) with { LoginIdentity = Identity with { Sid = "02" } }, "NOT_FOUND",
+                "The login AppUser is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again."),
+            ("another create date", Facts("sql"), State("enable", AppUser) with { LoginIdentity = Identity with { Created = "2026-01-01T00:00:00.001" } }, "NOT_FOUND", null)
         };
         var wrong = cases.Where(item => service.LoginRefusal(item.Facts, item.Args) is var refused && (refused?.Code != item.Code || item.Message is not null && refused?.Message != item.Message))
             .Select(item => item.Name).ToList();

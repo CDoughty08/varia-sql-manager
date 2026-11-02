@@ -343,7 +343,11 @@ says why it waits). Disable then asks (A13 `disableLogin`): the prompt counts th
 stay connected, warns when it is a member of sysadmin, names the service that runs as it (from
 `sys.dm_server_services`, or an `NT SERVICE\` name), and names Varia's other connections that sign in as it. Enable
 asks nothing; its notice says when permission to connect is still denied. The statement itself waits behind such a
-change, as SSMS's does, until Stop.
+change, as SSMS's does, until Stop. The facts only advise, since they read past other sessions' open changes, but the
+request names the login they describe (its SID and creation time): when another login has taken the name since,
+the backend refuses before any statement ("Refresh Object Explorer and try again"). Before Disable, Enable and Rename
+run, the preflight reads only the login's own rows, never what it owns, so another session's open change to other
+logins (a New Login in its transaction) holds back neither it nor Script Action.
 
 Rename uses Object Explorer's inline box, as for a table. A SQL Server login's name cannot hold a backslash: "A SQL Server login's name cannot contain a backslash."
 SQL Server would refuse it (15021). No login may take a name in SQL Server's own form: "Names that start and end with ## are reserved for SQL Server's own logins."
@@ -373,7 +377,7 @@ Server's own logins) is its hint in the command palette.
 | `system` | ○ | ○ | ○ | ○ | ○ | This login belongs to SQL Server and cannot be changed. |
 | `sql` | ✓ | ✓ | ✓ | ✓ | ✓ |  |
 | `windowsUser` | ✓ | ✓ | – | ✓ | ✓ |  |
-| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status. |
+| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead. |
 | `certificateMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `asymmetricKeyMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `externalUser` | ✓ | ✓ | – | ○ | ✓ | A Microsoft Entra login cannot be renamed. |

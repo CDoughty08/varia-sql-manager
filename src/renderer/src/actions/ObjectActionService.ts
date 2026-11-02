@@ -77,7 +77,7 @@ export const objectActionNoticeKey = 'objectActions.notice'
 /** What a login's Disable, Enable and Rename say (D4b): Varia's notes, recalled rather than SSMS's, which says nothing. */
 export const loginActionMessages = {
   disabled: (label: string, sessions: number | undefined) => `Disabled the login ${label}.` + (sessions ? sessions === 1 ? ' Its open session stays connected.' : ` Its ${sessions.toLocaleString('en-US')} open sessions stay connected.` : ''),
-  // ENABLE leaves a DENY CONNECT SQL in place (D4 P18), which Login Properties › Status lifts.
+  // ENABLE leaves a DENY CONNECT SQL in place (D4 P18): the notice says so, as a fact (Login Properties › Status, D2c, will lift it).
   enabled: (label: string, connectDenied: boolean) => `Enabled the login ${label}.` + (connectDenied ? ' Permission to connect is still denied.' : ''),
   renamed: (label: string, newName: string) => `Renamed the login ${label} to ${newName}. Database users mapped to it keep their names.`,
   stoppedUnknown: (verb: 'disable' | 'enable') => `The ${verb} was stopped, but SQL Server did not confirm it in time, so whether it completed is unknown. Refresh Object Explorer to check.`,
@@ -242,7 +242,9 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     } finally { this.preparing.delete(node.id) }
     if (this.disposed || !this.isLive(node.connectionId)) return
     const folder = this.options.explorer.listingFolderOf(node.id)
-    const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction({ action: verb, connectionId: node.connectionId, requestId, target: object }))
+    // The statement is for the principal these facts describe: one that has taken the name since is refused before any DDL.
+    const loginIdentity = facts.sid && facts.created ? { loginIdentity: { sid: facts.sid, created: facts.created } } : {}
+    const outcome = await this.runStateJob(node, verb, undefined, requestId => this.options.api.executeObjectAction({ action: verb, connectionId: node.connectionId, requestId, target: object, ...loginIdentity }))
     const value = this.succeeded(node, verb, outcome)
     if (!value) return
     if (folder !== undefined) this.options.explorer.reconcile(folder, { select: node.ref })

@@ -38,8 +38,13 @@ export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
   readonly identity?: DatabaseIdentity
 }
-/** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master. */
-export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef }
+/**
+ * The login the loginFacts describe read: its SID (hexadecimal, at most loginLimits.sidHex characters) and create_date as the
+ * describe writes it. The preflight refuses a principal that has taken the name since, whose facts the confirmation never showed.
+ */
+export interface LoginIdentity { readonly sid: string; readonly created: string }
+/** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master, of the login its facts were read from. */
+export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | LoginStateRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
@@ -220,7 +225,8 @@ const renameSchema = z.object({ action: z.literal('rename'), connectionId: z.uui
 const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), deleteHistory: z.boolean() }).strict()
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
-const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema }).strict()
+const loginIdentitySchema = z.object({ sid: z.string().max(loginLimits.sidHex).regex(/^[0-9A-F]{2,172}$/), created: identitySchema.shape.created }).strict()
+const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,

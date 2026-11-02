@@ -65,7 +65,8 @@ describe('a login\'s Disable and Enable', () => {
     await vi.waitFor(() => expect(notices()).toEqual([['info', 'Disabled the login AppUser. Its 3 open sessions stay connected.']]))
     expect(api.describeObject.mock.calls[0][0]).toMatchObject({ connectionId: 'server-a', dialog: 'loginFacts', target: { kind: 'login', name: 'AppUser' } })
     expect(api.confirmAction.mock.calls).toEqual([[{ prompt: 'disableLogin', facts: { login: 'AppUser', sysadmin: false, sessions: 3 } }]])
-    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'disable', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' } })
+    // The statement is bound to the login whose facts the prompt showed.
+    expect(api.executeObjectAction.mock.calls[0][0]).toEqual({ action: 'disable', connectionId: 'server-a', requestId: expect.any(String), target: { kind: 'login', name: 'AppUser' }, loginIdentity: { sid: '01', created: '2026-01-01T00:00:00.000' } })
     // The reconcile shows the new state: the row's status changes, and it stays selected.
     await vi.waitFor(() => expect(explorer.getSnapshot().rows.nodes.find(node => node?.label === 'AppUser')).toMatchObject({ status: 'disabled' }))
     await vi.waitFor(async () => expect(explorer.getSnapshot().selected).toBe(await find('AppUser')))
@@ -111,7 +112,7 @@ describe('a login\'s Disable and Enable', () => {
     api.executeObjectAction.mockResolvedValueOnce(done('Enable the login'))
     await actions.changeLoginState(node(await find('Retired')), 'enable')
     expect(api.confirmAction).not.toHaveBeenCalled()
-    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'enable', target: { kind: 'login', name: 'Retired' } })
+    expect(api.executeObjectAction.mock.calls[0][0]).toMatchObject({ action: 'enable', target: { kind: 'login', name: 'Retired' }, loginIdentity: { sid: '01', created: '2026-01-01T00:00:00.000' } })
     expect(notices()).toEqual([['info', loginActionMessages.enabled('Retired', true)]])
     expect(loginActionMessages.enabled('Retired', true)).toBe('Enabled the login Retired. Permission to connect is still denied.')
     expect(loginActionMessages.disabled('AppUser', 1)).toBe('Disabled the login AppUser. Its open session stays connected.')

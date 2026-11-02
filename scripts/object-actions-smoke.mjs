@@ -607,7 +607,7 @@ try {
   await page.keyboard.insertText('Disable Login')
   await expect(quickInputActive(page)).toContainText('Object Explorer: Disable Login')
   await page.keyboard.press('Enter')
-  await expect(quickInputMessage(page)).toHaveText('A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status.')
+  await expect(quickInputMessage(page)).toHaveText('A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead.')
   await page.keyboard.press('Escape')
   await expect(quickInput(page)).toHaveCount(0)
   await answer(0)

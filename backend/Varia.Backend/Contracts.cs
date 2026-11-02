@@ -191,10 +191,13 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 /// what the table designer needs of a database (tableDesigner), or a login's facts (loginFacts, before Disable).</summary>
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; a login's disable and enable take nothing more.
+/// CloseConnections and Changes, createTable (Target the database) Design; a login's disable and enable take only LoginIdentity.
 /// Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, LoginIdentityDto? LoginIdentity = null);
+/// <summary>Which login the loginFacts describe read (its SID as hexadecimal, at most loginLimits.sidHex characters, and
+/// create_date as the describe writes it): Disable and Enable refuse a principal that has taken the name since.</summary>
+internal sealed record LoginIdentityDto(string Sid, string Created);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -213,9 +216,10 @@ internal sealed record DatabaseIdentityDto(int Id, string Created);
 internal sealed record DatabaseChangesDto(string? Owner = null, Dictionary<string, string>? Options = null, Dictionary<string, string>? Scoped = null);
 internal sealed record ActionError(string Code, string Message, bool Retryable);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
-/// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only.</summary>
+/// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only. The owned
+/// counts are null where the preflight leaves them out (ActionSql.LoginAlter, before an ALTER LOGIN).</summary>
 internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
-    bool Own, bool Sysadmin, int? Sessions, int OwnedDatabases, List<string> OwnedDatabaseNames, int OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse, string? Service = null);
+    bool Own, bool Sysadmin, int? Sessions, int? OwnedDatabases, List<string> OwnedDatabaseNames, int? OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse, string? Service = null);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 internal sealed record DeleteTargetDto(string Name, string Type, string? Owner, List<ActionWarningDto> Warnings, bool DependentsTruncated, bool? IsSnapshot = null, int? Sessions = null);
 /// <summary>Database Properties' General page; sizes in MB, dates as ISO 8601, a backup of "None" when msdb has no history.</summary>

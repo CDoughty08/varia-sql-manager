@@ -198,9 +198,11 @@ using (var offline = new SqlService())
     Check(await StateError("invalid") == "INVALID_PARAMS" && await StateError(Guid.NewGuid().ToString()) == "SESSION_CLOSED", "an unknown session's state is an error value, at once");
 }
 // Live runs share one server with other runs: they leave each other's scratch objects alone and time cancels against the load.
-Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x" }.All(ScratchDatabase.IsScratchName)
-    && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy" }.Any(ScratchDatabase.IsScratchName),
-    "scratch names are the .NET checks' VariaScratch_ and the vitest and smoke suites' varia_scratch_ prefixes");
+Check(new[] { "VariaScratch_20261018120000_0123abcd_su", "VariaScratch_x", "varia_scratch_0123456789ab", "VARIA_SCRATCH_x", "##VariaScratch_20261018120000_0123abcd_ls##" }.All(ScratchDatabase.IsScratchName)
+    && !new[] { "master", "variascratch_x", "VariaScratch", "AppVariaScratch_x", "varia_scratchy", "##MS_PolicyTsqlExecutionLogin##", "#VariaScratch_x", "##variascratch_x" }.Any(ScratchDatabase.IsScratchName)
+    && InjectionMatrix.Inventory.Contains("sp.name NOT LIKE N'##VariaScratch[_]%'", StringComparison.Ordinal),
+    "scratch names are the .NET checks' VariaScratch_ (and ##VariaScratch_ for a login in SQL Server's own name form) and the vitest and smoke suites' varia_scratch_ prefixes, "
+    + "which the injection matrix's server principals leave out");
 static SqlRun Names(params string[] names) => new("Completed", null, [[.. names.Select(name => new string?[] { name })]]);
 Check(ScratchDatabase.Lasting(Names("master", "VariaScratch_20261018120000_0123abcd", "model", "varia_scratch_0123456789ab"))
         == ScratchDatabase.Lasting(Names("master", "model"))

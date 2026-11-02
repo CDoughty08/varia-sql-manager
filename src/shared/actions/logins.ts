@@ -104,7 +104,8 @@ export const ownLoginRefuses: readonly LoginVerb[] = ['disable', 'rename', 'dele
 export const loginMessages = {
   system: 'This login belongs to SQL Server and cannot be changed.',
   saDelete: 'The sa login cannot be deleted.',
-  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status.',
+  // Login Properties › Status (D2c) is where SSMS denies it; name it there once Varia has that page.
+  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead.',
   externalRename: 'A Microsoft Entra login cannot be renamed.',
   notOffered: 'This kind of login does not offer this action.',
   own: 'This is the login this connection uses. Connect with another login to change it.',
@@ -144,7 +145,8 @@ export const loginLimits = {
 } as const
 
 /** What the login preflight (ActionSql.Login) reads in the action's own connection, in master. Counts that need VIEW SERVER
- *  STATE are absent without it. */
+ *  STATE are absent without it, and what the login owns is absent where the preflight leaves it out (ActionSql.LoginAlter,
+ *  before an ALTER LOGIN: its scans would wait behind other sessions' changes to any principal). */
 export interface LoginFacts {
   readonly principalId: number
   readonly type: LoginType
@@ -165,10 +167,10 @@ export interface LoginFacts {
   /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
    *  loginFacts describe only; at most loginLimits.serviceName characters. */
   readonly service?: string
-  readonly ownedDatabases: number
+  readonly ownedDatabases?: number
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
-  readonly ownedServerObjects: number
+  readonly ownedServerObjects?: number
   readonly canAlter: boolean
   readonly canControlServer: boolean
   readonly nameInUse: boolean

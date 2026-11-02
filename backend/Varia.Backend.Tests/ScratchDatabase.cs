@@ -104,10 +104,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     internal static bool Sweepable(string name) => Pattern().IsMatch(name);
 
     /// <summary>Whether a name is a scratch object's, this run's or another's on the same server: the .NET checks'
-    /// VariaScratch_ databases, logins and server objects, and the vitest and smoke suites' varia_scratch_ databases.
-    /// Another run's can be mid-setup, single-user, offline or gone a moment later.</summary>
+    /// VariaScratch_ databases, logins and server objects (and the login actions' ##VariaScratch_…_ls##, in SQL Server's own
+    /// name form), and the vitest and smoke suites' varia_scratch_ databases. Another run's can be mid-setup, single-user,
+    /// offline or gone a moment later.</summary>
     public static bool IsScratchName(string name) =>
-        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
+        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("##VariaScratch_", StringComparison.Ordinal)
+        || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Lists every database by name, for "the server is unchanged" checks through <see cref="Lasting"/>.</summary>
     public const string DatabaseNamesSql = "SELECT name FROM sys.databases ORDER BY name;";
