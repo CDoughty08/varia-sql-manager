@@ -58,8 +58,9 @@ A database row carries its runtime state as listed (state, user access, read-onl
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
 No rule narrows a database's actions yet.
 
-An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
-the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Servers column above says which, and on another server the menu hides the item. Menus read the server through
+`explorerServerEngine` and `explorerServerLinux`.
 
 ## Dialogs
 

@@ -131,15 +131,15 @@ export function PageList({ pages, current, tabs, rendered, onPage, onKeyDown, na
     : <nav ref={navRef} className="object-dialog-pages" aria-label="Select a page" onKeyDown={onKeyDown}><div className="object-dialog-caption">Select a page</div>{buttons}</nav>
 }
 
-/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`). A long list scrolls,
- *  and a new step scrolls it to the end, where the run is. */
+/** A run's steps under the message bar, for dialogs whose spec asks for them (`DialogSpec.steps`), each by its title (a
+ *  failed step's SQL Server text is in the message bar). A long list scrolls, and a new step scrolls it to the end, where the run is. */
 export function StepsPanel({ steps }: { readonly steps: readonly ActionStep[] }) {
   const panel = useRef<HTMLElement>(null)
   useEffect(() => { if (panel.current) panel.current.scrollTop = panel.current.scrollHeight }, [steps.length])
   if (!steps.length) return null
   return <section ref={panel} className="object-dialog-steps" aria-labelledby="object-dialog-steps">
     <div className="object-dialog-caption" id="object-dialog-steps">Steps</div>
-    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.message ?? step.title }))} />
+    <StepList labelledBy="object-dialog-steps" steps={steps.map(step => ({ state: step.status, text: step.title }))} />
   </section>
 }
 

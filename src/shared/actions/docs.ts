@@ -102,8 +102,9 @@ function narrowingDocs(): string[] {
         rule.readOnly === undefined ? 'Any' : yesNo(rule.readOnly), rule.hide ? 'Hidden' : 'Greyed', rule.reason]))
       : 'No rule narrows a database\'s actions yet.',
     '',
-    `An action can name the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
-    'the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.',
+    `Each action names the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
+    'the Servers column above says which, and on another server the menu hides the item. Menus read the server through',
+    '`explorerServerEngine` and `explorerServerLinux`.',
     ''
   ]
 }

@@ -51,8 +51,8 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** The servers it runs on (critic A1). On another, the menu hides the item, and the backend refuses it before opening a
-   *  connection (it reads this list from actions-catalog.json). */
+  /** The servers that offer it (critic A1). On another, the menu hides the item, and the backend refuses a request for it
+   *  before opening a connection (it reads this list from actions-catalog.json). */
   readonly engines: readonly ServerEngine[]
   /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
    *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
