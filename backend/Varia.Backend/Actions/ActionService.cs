@@ -36,6 +36,9 @@ internal interface IActionHost
     /// those still in a database just after FreeDatabase are Varia's own, which a cleared pool ends within moments. Query tabs
     /// are unpooled and never among them.</summary>
     IReadOnlySet<int> PoolSessions(string connectionId);
+    /// <summary>The connection, then every other connection of the backend to the same server, as SERVERPROPERTY('ServerName')
+    /// names it (whatever name each was opened with): those DatabaseChanged and FreeDatabase act on.</summary>
+    IReadOnlyList<string> SameServer(string connectionId);
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -601,7 +604,9 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>A database's rename (D3c, spec 7). Closing the connections is SINGLE_USER WITH ROLLBACK IMMEDIATE on the action's own
     /// connection, which keeps the database until MODIFY NAME (critic A12), and then the original access back under the new name.
     /// The compensations put the access back where the database is: under the old name when the rename failed or was stopped, under the
-    /// new one when only the restore did not complete. A database already in SINGLE_USER keeps it, so it has nothing to restore.</summary>
+    /// new one when only the restore did not complete. A database already in SINGLE_USER keeps it, so it has nothing to restore: setting
+    /// it again would wait for a session that holds the database, and MODIFY NAME alone fails with 924 while one does (probed on 2025),
+    /// which the describe refuses first.</summary>
     internal static List<PlannedStatement> RenameDatabasePlan(string name, string newName, bool closeConnections, int userAccess)
     {
         var rename = new PlannedStatement(ActionTemplate.RenameDatabase, "master", [name, newName]);
@@ -747,7 +752,9 @@ internal sealed partial class ActionService : IDisposable
         if ((state ? StateRefusal(subject, args.Action, args.Identity) : Refusal(subject, args, engine)) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, target, target.Kind == "database" ? subject.Row.Int("user_access") : 0);
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
-        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
+        var inUseAdvice = target.Kind != "database" ? null : args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice
+            : args.Action == "rename" && subject.Row.Int("user_access") == 1 ? SingleUserAdvice : null;
+        var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, inUseAdvice, token);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it. An offline
         // database keeps its name, so its connections keep it too and fail until it is back online, as in SSMS.
         if (plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
@@ -867,9 +874,17 @@ internal sealed partial class ActionService : IDisposable
         }
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
+        var userAccess = row.Int("user_access");
+        // Another session holds a SINGLE_USER database: MODIFY NAME fails with 924, and SET SINGLE_USER WITH ROLLBACK IMMEDIATE waits for
+        // it rather than closing it (both probed on 2025), so neither button could rename it.
+        if (userAccess == 1 && sessions > 0) return new(null, 0, Error("IN_USE", subject.Display + " is in single-user mode and another session is using it. " + SingleUserAdvice));
         var identity = new DatabaseIdentityDto(row.Int("database_id"), DatabaseProperties.Iso(row.Raw("create_date")) ?? "");
-        return new(null, 0, RenameDatabase: new(subject.Display, identity, row.Int("user_access"), sessions, withTransaction, logins, engine != "managedInstance"));
+        var connections = host.SameServer(connectionId).Take((int)catalog.Limit("serverConnections")).ToList();
+        return new(null, 0, RenameDatabase: new(subject.Display, identity, userAccess, sessions, withTransaction, logins, engine != "managedInstance" && userAccess != 1, connections));
     }
+
+    /// <summary>What to do about a session that holds a single-user database a rename needs (924).</summary>
+    internal const string SingleUserAdvice = "That session must disconnect, or be ended in Activity Monitor, before the database can be renamed.";
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>
     private sealed class MessageLog(int max, int chars)

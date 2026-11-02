@@ -52,6 +52,7 @@ internal static class SeamChecks
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
         public bool FreeDatabase(string connectionId, string database) { Freed.Add(database); return false; }
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
     }
 
     private static ActionArgs Delete(ObjectRefDto target) => new("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, null, false, false);

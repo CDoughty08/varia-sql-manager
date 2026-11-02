@@ -236,8 +236,10 @@ internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identit
     List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
 /// <summary>What a database's rename reads first (src/shared/actions/schema.ts RenameDatabaseFacts): the database read, its user_access,
 /// the sessions in it without the backend's own pooled ones (null counts: no VIEW SERVER STATE), the logins whose default database it
-/// is, and whether Varia may close the sessions (not on Managed Instance).</summary>
-internal sealed record RenameDatabaseDto(string Name, DatabaseIdentityDto Identity, int UserAccess, int? Sessions, int? WithTransaction, int LoginsDefaulting, bool CanClose);
+/// is, whether Varia may close the sessions (not on Managed Instance, nor in a SINGLE_USER database), and the backend's connections to the
+/// same server (by SERVERPROPERTY('ServerName')), at most the catalogue's serverConnections, this one first.</summary>
+internal sealed record RenameDatabaseDto(string Name, DatabaseIdentityDto Identity, int UserAccess, int? Sessions, int? WithTransaction, int LoginsDefaulting, bool CanClose,
+    List<string> Connections);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, DatabaseStateDto? DatabaseState = null, RenameDatabaseDto? RenameDatabase = null);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>

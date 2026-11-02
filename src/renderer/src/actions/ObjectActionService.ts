@@ -1,4 +1,4 @@
-import { actionLimits, actionMenuState, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
+import { actionLimits, actionMenuReasons, actionMenuState, objectActionSpecs, unknownOutcomeMessage, type ActionState, type ActionTarget, type ObjectAction } from '../../../shared/actions/catalog.ts'
 import { promptLimits, promptTabFacts } from '../../../shared/actions/prompts.ts'
 import type { ActionExecuteResult, DatabaseIdentity, RenameDatabaseFacts } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -71,6 +71,8 @@ export const moduleRenameNote = 'The definition text keeps the old name; script 
 const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 export const renameMessages = {
   running: (label: string, verb: StateVerb = 'rename') => `${verb === 'rename' ? 'A rename of' : 'An action on'} ${label} is already running. Wait for it, or stop it in the status bar.`,
+  /** The status bar's step while a database's rename reads who is using it (its describe), which Stop cancels. */
+  reading: 'Reading the database',
   /** The status bar's step while SINGLE_USER WITH ROLLBACK IMMEDIATE closes the other connections. */
   closing: 'Closing connections',
   /** A login whose default database was renamed away gets 4064 when it connects without naming a database (Learn). */
@@ -100,8 +102,6 @@ export interface StateJobOutcome { readonly result?: ApiResult<ActionExecuteResu
  */
 export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> implements Disposable {
   private readonly jobs = new Map<number, Job>()
-  /** Nodes whose database rename is reading its facts or asking: a second commit meanwhile is refused as a running one is. */
-  private readonly preparing = new Set<number>()
   private readonly timers: Timers
   private readonly newId: () => string
   private readonly unsubscribe: () => void
@@ -133,6 +133,16 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     if (this.options.queries.canExecute()) await this.options.queries.execute()
   }
 
+  /**
+   * Why `action` is greyed for the node by the database's state (the catalogue's rule reason), as "<Action> is unavailable: <reason>",
+   * so a key that reaches a greyed action can say why; undefined when no rule greys it.
+   */
+  unavailable(action: ObjectAction, node: ExplorerMenuNode | undefined): string | undefined {
+    if (!node || node.lost || node.ref.type !== 'object' || !this.isLive(node.connectionId)) return undefined
+    const reason = actionMenuReasons(node)[action]
+    return reason && actionMenuState(node)[action] === 'disabled' ? `${objectActionSpecs[action].menuTitle ?? objectActionSpecs[action].title} is unavailable: ${reason.charAt(0).toLowerCase()}${reason.slice(1)}` : undefined
+  }
+
   /** F2 or Rename: the node's label becomes the Rename box. */
   beginRename(node: ExplorerMenuNode): void {
     if (!this.canRun('rename', node) || !this.options.explorer.beginRename(node.id)) throw new Error('This object cannot be renamed.')
@@ -155,15 +165,14 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     const newName = characters.length > maxNewName ? characters.slice(0, maxNewName - 1).join('') + '…' : characters.join('')
     const folder = this.options.explorer.listingFolderOf(node.id)
     let plan: DatabaseRenamePlan | undefined
-    if (object.kind === 'database') {
-      if (this.jobs.has(node.id) || this.preparing.has(node.id)) { this.options.report.error(renameMessages.running(this.jobs.get(node.id)?.label ?? scriptObjectLabel(object))); return true }
-      this.preparing.add(node.id)
-      try { plan = await this.prepareDatabaseRename(node, object) } finally { this.preparing.delete(node.id) }
-      if (!plan || this.disposed || !this.isLive(node.connectionId)) return true
-    }
-    const closing = plan?.closeConnections
-    const outcome = await this.runStateJob(node, 'rename', newName, requestId => {
-      if (closing) this.setJobStep(requestId, renameMessages.closing)
+    // A database's rename is one job from Enter: its describe and prompt run under it, so the status bar shows it with Stop (which
+    // cancels the describe by the job's request id) and a second rename meanwhile is refused as a running one is.
+    const outcome = await this.runStateJob(node, 'rename', newName, async requestId => {
+      if (object.kind === 'database') {
+        plan = await this.prepareDatabaseRename(node, object, requestId)
+        if (!plan || !this.running(requestId)) return undefined
+        this.setJobStep(requestId, plan.closeConnections ? renameMessages.closing : undefined)
+      }
       return this.options.api.executeObjectAction({ action: 'rename', connectionId: node.connectionId, requestId, target: object, newName: text, ...plan ? { closeConnections: plan.closeConnections, identity: plan.identity } : {} })
     })
     if (!outcome) return true
@@ -199,22 +208,25 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
    * A database's rename reads its facts first (actions.describe renameDatabase): the preflight's refusal, the database read, and
    * who is using it. With no other session it runs at once, as before; otherwise main's prompt (critic A13) asks whether to close
    * the connections (rolling back their open transactions, which it counts and names for Varia's own windows, A7), to wait for them
-   * with Stop, or to cancel. Undefined: refused, failed or cancelled, already reported.
+   * with Stop, or to cancel. It runs under the rename's job (`requestId`): the describe goes out with that id, so Stop and a
+   * disconnect cancel it, and a Stop meanwhile ends the rename quietly. Undefined: refused, failed, cancelled or stopped, already reported.
    */
-  private async prepareDatabaseRename(node: ExplorerMenuNode, object: ObjectRef): Promise<DatabaseRenamePlan | undefined> {
+  private async prepareDatabaseRename(node: ExplorerMenuNode, object: ObjectRef, requestId: string): Promise<DatabaseRenamePlan | undefined> {
     const { connectionId } = node, database = object.name!
-    const fail = (message: string) => { if (!this.disposed && this.isLive(connectionId)) this.options.report.error(`Rename failed for ${node.label}: ${message}`) }
+    const fail = (message: string) => { if (this.running(requestId)) this.options.report.error(`Rename failed for ${node.label}: ${message}`) }
+    this.setJobStep(requestId, renameMessages.reading)
     let described
-    try { described = await this.options.api.describeObject({ connectionId, requestId: this.newId(), dialog: 'renameDatabase', target: object }) }
+    try { described = await this.options.api.describeObject({ connectionId, requestId, dialog: 'renameDatabase', target: object }) }
     catch (thrown) { fail(thrown instanceof Error ? thrown.message : 'The database could not be read.'); return undefined }
-    if (this.disposed || !this.isLive(connectionId)) return undefined
+    if (!this.running(requestId)) return undefined
     if (!described.ok) { fail(described.error); return undefined }
     const facts = described.value.renameDatabase
     if (described.value.error || !facts) { fail(described.value.error?.message ?? 'The database could not be read.'); return undefined }
     if (facts.sessions === 0) return { identity: facts.identity, closeConnections: false, facts }
+    this.setJobStep(requestId, undefined)
     let tabs: { readonly count: number; readonly withTransactions: readonly string[] } = { count: 0, withTransactions: [] }
-    try { if (this.options.databases) tabs = await this.options.databases.tabs(connectionId, database) } catch (thrown) { onUnexpectedError(thrown) }
-    if (this.disposed || !this.isLive(connectionId)) return undefined
+    try { if (this.options.databases) tabs = await this.options.databases.tabs(connectionId, database, facts.connections) } catch (thrown) { onUnexpectedError(thrown) }
+    if (!this.running(requestId)) return undefined
     let answer
     try {
       answer = await this.options.api.confirmAction({
@@ -226,12 +238,12 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
       })
     } catch (thrown) { fail(thrown instanceof Error ? thrown.message : 'The confirmation failed.'); return undefined }
     if (!answer.ok) { fail(answer.error); return undefined }
-    if (answer.value === 'cancel' || this.disposed || !this.isLive(connectionId)) return undefined
+    if (answer.value === 'cancel' || !this.running(requestId)) return undefined
     return { identity: facts.identity, closeConnections: answer.value === 'closeAndRename', facts }
   }
   /** After SQL Server renamed a database: query windows and Database Properties follow the new name, and a toast names the logins whose default it was. */
   private databaseRenamed(connectionId: string, database: string, newName: string, facts: RenameDatabaseFacts | undefined): void {
-    try { this.options.databases?.renamed(connectionId, database, newName) } catch (thrown) { onUnexpectedError(thrown) }
+    try { this.options.databases?.renamed(connectionId, database, newName, facts?.connections) } catch (thrown) { onUnexpectedError(thrown) }
     if (facts?.loginsDefaulting) this.options.notify?.({ severity: 'warning', message: renameMessages.loginsDefaulting(facts.loginsDefaulting, displayText(database)) })
   }
 
@@ -241,7 +253,7 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
    * sends the request with the job's request id. A rename (and D3c's rename after its Open Connections prompt) and a
    * login's Disable and Enable (D4b) run through it; `setJobStep` names a later step.
    */
-  async runStateJob(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, run: (requestId: string) => Promise<ApiResult<ActionExecuteResult>>): Promise<StateJobOutcome | undefined> {
+  async runStateJob(node: ExplorerMenuNode, verb: StateVerb, newName: string | undefined, run: (requestId: string) => Promise<ApiResult<ActionExecuteResult> | undefined>): Promise<StateJobOutcome | undefined> {
     const object = objectOf(node)
     if (this.disposed || !object || !this.isLive(node.connectionId)) return undefined
     const running = this.jobs.get(node.id)
@@ -250,13 +262,20 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
     job.timer = this.timers.setTimeout(() => { if (this.jobs.get(node.id) === job) { job.visible = true; this.changed() } }, actionLimits.statusDelayMs)
     this.jobs.set(node.id, job)
     this.changed()
-    try { return { result: await run(job.requestId), dropped: job.dropped, stopped: job.stopped } }
+    try { const result = await run(job.requestId); return { ...result ? { result } : {}, dropped: job.dropped, stopped: job.stopped } }
     catch (thrown) { return { thrown: thrown ?? new Error('The action failed.'), dropped: job.dropped, stopped: job.stopped } }
     finally { this.finish(node.id, job) }
   }
   /** The step a running job is on, as the status bar says it ("Closing connections"); undefined goes back to the verb alone. */
   setJobStep(requestId: string, step: string | undefined): void {
     for (const job of this.jobs.values()) if (job.requestId === requestId && job.step !== step) { job.step = step; this.changed() }
+  }
+
+  /** Whether the job with this request id still runs: not stopped, nor dropped with its server, nor the service disposed. */
+  private running(requestId: string): boolean {
+    if (this.disposed) return false
+    for (const job of this.jobs.values()) if (job.requestId === requestId) return !job.stopped && !job.dropped && this.isLive(job.connectionId)
+    return false
   }
 
   /** The status bar's Stop: cancels the jobs in SQL Server; each answers when its statement has ended. */

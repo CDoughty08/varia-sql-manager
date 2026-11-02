@@ -259,7 +259,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     cancelScripting: vi.fn<VariaApi['cancelScripting']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Delete Object's row for the object, or a database rename's facts (no other session); actions succeed with one done step.
     describeObject: vi.fn<VariaApi['describeObject']>(async params => params.dialog === 'renameDatabase'
-      ? { ok: true, value: { renameDatabase: { name: params.target.name!, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions: 0, withTransaction: 0, loginsDefaulting: 0, canClose: true }, elapsedMs: 1 } }
+      ? { ok: true, value: { renameDatabase: { name: params.target.name!, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions: 0, withTransaction: 0, loginsDefaulting: 0, canClose: true, connections: [params.connectionId] }, elapsedMs: 1 } }
       : ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),

@@ -182,8 +182,13 @@ export interface RenameDatabaseFacts {
   readonly withTransaction?: number
   /** Logins whose default database it is, of those this login can see: they get 4064 after the rename until changed. */
   readonly loginsDefaulting: number
-  /** Whether Varia may close the sessions (SINGLE_USER): not on Managed Instance. */
+  /** Whether Varia may close the sessions (SINGLE_USER): not on Managed Instance, nor in a database already in single-user mode. */
   readonly canClose: boolean
+  /**
+   * The backend's connections to the same server, as SERVERPROPERTY('ServerName') names it whatever name each was opened with (at
+   * most `actionLimits.serverConnections`, this one first): their windows count in the prompt and follow the new name.
+   */
+  readonly connections: readonly string[]
 }
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel

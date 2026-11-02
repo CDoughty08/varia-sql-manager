@@ -268,12 +268,15 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /**
    * Object Explorer renamed a database (D3c): each of its documents on that server, through any connection, follows the new
    * name, as it is the same database (its identity is unchanged): the tab retitles, Properties on the renamed node finds it,
-   * and Apply and Refresh act on the new name. One without changes reads it again; one with changes keeps them.
+   * and Apply and Refresh act on the new name. One without changes reads it again; one with changes keeps them. `connections`
+   * are the backend's to the same server (the describe's), which match whatever name each was opened with.
    */
-  databaseRenamed(connectionId: string, database: string, newName: string): void {
+  databaseRenamed(connectionId: string, database: string, newName: string, connections: readonly string[] = []): void {
     const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
+    const named = new Set([connectionId, ...connections])
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      const owner = this.connectionOf(state.id)
+      if (state.target.name !== database || (!(owner !== undefined && named.has(owner)) && (server === undefined || !this.follows(state.id, server)))) continue
       const target = { ...state.target, name: newName }, label = scriptObjectLabel(target)
       this.options.documents.update(state.id, { name: dialogTitle('databaseProperties', label), database: newName })
       this.patch(state.id, { target, label })

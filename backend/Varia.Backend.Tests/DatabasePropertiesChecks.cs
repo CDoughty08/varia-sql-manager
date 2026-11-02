@@ -245,6 +245,7 @@ internal static class DatabasePropertiesChecks
         public bool ClearPoolsFor(string connectionId, string database) => false;
         public bool FreeDatabase(string connectionId, string database) => false;
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
         public void DatabaseChanged(string connectionId, string database, string? newName) { }
     }
 }

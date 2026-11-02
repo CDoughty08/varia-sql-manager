@@ -28,6 +28,7 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     }),
     commands.register('explorer.rename', {
       when: args => actions.canRun('rename', nodeOf(args)),
+      unavailable: args => actions.unavailable('rename', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) actions.beginRename(node) }
     }),
     commands.register('explorer.delete', {
@@ -47,10 +48,12 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
     // Tasks › Take Offline and Bring Online (D3a): small modal dialogs; Bring Online runs as it opens.
     commands.register('explorer.takeOffline', {
       when: args => actions.canRun('takeOffline', nodeOf(args)) && !dialogs.current,
+      unavailable: args => actions.unavailable('takeOffline', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) dialogs.open('takeOffline', node) }
     }),
     commands.register('explorer.bringOnline', {
       when: args => actions.canRun('bringOnline', nodeOf(args)) && !dialogs.current,
+      unavailable: args => actions.unavailable('bringOnline', nodeOf(args)),
       run: args => { const node = nodeOf(args); if (node) dialogs.open('bringOnline', node) }
     }),
     commands.register('explorer.createCatalog', {

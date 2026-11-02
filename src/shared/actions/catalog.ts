@@ -158,7 +158,10 @@ export const databaseActionRules: readonly DatabaseActionRule[] = [
   { action: 'bringOnline', states: ['online'], reason: 'The database is online.' },
   { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' },
   // MODIFY NAME opens the database: SQL Server answers 942 for one that is offline (probed on 2025), and the other states cannot be opened either.
-  { action: 'rename', states: ['restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other'], reason: 'The database must be online to be renamed.' }
+  { action: 'rename', states: ['restoring', 'recovering', 'recoveryPending', 'suspect', 'emergency', 'offline', 'copying', 'offlineSecondary', 'other'], reason: 'The database must be online to be renamed.' },
+  // MODIFY NAME checkpoints the database: SQL Server answers 902 for one that is read-only (probed on 2025), standby included, so
+  // closing the connections first would end them for a rename that cannot succeed.
+  { action: 'rename', readOnly: true, reason: 'A read-only database cannot be renamed.' }
 ]
 const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
   !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
@@ -212,6 +215,13 @@ export function actionMenuState(target: ActionTarget | undefined, sources: Actio
   const row = target.kind === 'database' ? databaseActionState(listed, target.database, sources.rules).row : listed
   const specs: { readonly [A in ObjectAction]?: Pick<ObjectActionSpec, 'engines'> } = sources.actions ?? objectActionSpecs
   return Object.fromEntries(objectActions.map(action => [action, offeredOnEngine(specs[action]?.engines, target.engine) ? row[action] ?? '' : ''])) as Record<ObjectAction, ActionState>
+}
+/** Why the database's state greys each action it greys (the rules' reasons), for a database target; empty for anything else. */
+export function actionMenuReasons(target: ActionTarget | undefined, sources: ActionMenuSources = {}): Partial<Record<ObjectAction, string>> {
+  if (target?.kind !== 'database') return {}
+  const status = target.status && (nodeStatuses as readonly string[]).includes(target.status) ? target.status : undefined
+  const listed = actionRow(target.kind, target.subtype, status, sources.kinds)
+  return listed ? databaseActionState(listed, target.database, sources.rules).reasons : {}
 }
 /** Whether some row of the kind enables the action: what main checks before the backend re-derives the subtype. */
 export function actionOffered(kind: NodeKind, action: ObjectAction): boolean {
@@ -436,7 +446,9 @@ export const actionLimits = {
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
   cleanupMs: 10_000,
   /** Take Offline's sessions list: the sessions it shows, and the characters of each login, program and host name. */
-  sessions: 8, sessionText: 128
+  sessions: 8, sessionText: 128,
+  /** A database rename's describe: the backend's connections to the same server it names, which the page's windows follow. */
+  serverConnections: 64
 } as const
 
 /** Whether an action runs on a server of this engine. */

@@ -44,7 +44,8 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
   cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
   sessions: 'Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so',
-  sessionText: 'Characters of each login, program and host name in that list'
+  sessionText: 'Characters of each login, program and host name in that list',
+  serverConnections: 'Connections to the same server a database rename\'s describe names (whatever name each was opened with); their query windows and Database Properties documents follow the new name'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -204,8 +205,13 @@ function databaseRenameDocs(): string[] {
     'Rename sets `SINGLE_USER WITH ROLLBACK IMMEDIATE`, renames, and restores the access the database had (MULTI_USER, or',
     'RESTRICTED_USER), the status bar saying "Closing connections" while it runs; Rename When Free runs MODIFY NAME alone, which',
     'waits for the other sessions until they leave or Stop cancels it; Cancel sends nothing. The prompt names Varia\'s own query',
-    'windows on the database whose session holds an open transaction (A7). A database already in single-user mode is renamed',
-    'without setting it again (SQL Server refuses that with 5064 while another session holds it, probed).',
+    'windows on the database whose session holds an open transaction (A7), through any connection the describe names as reaching',
+    'the same server (`SERVERPROPERTY(\'ServerName\')`, whatever name each was opened with). From Enter the status bar shows the',
+    'rename ("Reading the database" during the describe) with Stop, which cancels the describe too. A database already in',
+    'single-user mode is renamed without setting it again, and only when no other session is in it: while one is, MODIFY NAME',
+    'fails with 924 and `SET SINGLE_USER WITH ROLLBACK IMMEDIATE` waits for that session rather than closing it (both probed on',
+    'SQL Server 2025), so the describe refuses it with `IN_USE`, saying the session must disconnect or be ended in Activity',
+    'Monitor; where the sessions cannot be counted, its prompt offers Rename When Free only.',
     '',
     'If the rename fails or is stopped after SINGLE_USER completed, Varia restores the access it changed, under the old name, or',
     'under the new one when MODIFY NAME completed first, and only that: never another session\'s change. A rename that completed',
@@ -214,8 +220,9 @@ function databaseRenameDocs(): string[] {
     'default to the old name a warning says how many, since they cannot connect without naming a database until their',
     'defaults change.',
     '',
-    'Rename is greyed unless the database is online, and refused on an availability group database. It needs CONTROL SERVER,',
-    'ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before',
+    'Rename is greyed unless the database is online and read-write (MODIFY NAME checkpoints it: SQL Server answers 902 for a',
+    'read-only or standby database, probed), and F2 on a greyed one says why. It is refused on an availability group database,',
+    'and needs CONTROL SERVER, ownership, or ALTER on the database (`can_rename`): a dbcreator member with no user in the database is refused before',
     'anything runs, because SQL Server refuses its MODIFY NAME with 916 (probed). Managed Instance renames, but cannot set',
     'SINGLE_USER, so its prompt offers Rename When Free only. The backend refuses a database whose identity changed since the',
     'describe read it.',

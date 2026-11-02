@@ -16,7 +16,8 @@ namespace Varia.Backend.Tests;
 /// session closed and then runs under the new name, while the old name no longer opens (7.2); Rename When Free waits for the holder until
 /// Stop and changes nothing (7.3); a rename that fails after SINGLE_USER restores the access under the old name, and one stopped after
 /// MODIFY NAME under the new one (7.4); RESTRICTED_USER comes back as it was (7.5); a database replaced since the describe is refused;
-/// a sysadmin renames a database another session holds SINGLE_USER; and a dbcreator member with no user in the database is refused first.</summary>
+/// a SINGLE_USER database is renamed by MODIFY NAME alone with no other session, and refused (924) while another session is in it; a
+/// read-only one is refused (902) before SINGLE_USER, its sessions untouched; and a dbcreator member with no user in the database is refused first.</summary>
 internal static class RenameDatabaseLiveChecks
 {
     private static string Bracket(string name) => "[" + name.Replace("]", "]]", StringComparison.Ordinal) + "]";
@@ -102,8 +103,8 @@ internal static class RenameDatabaseLiveChecks
                 quiet = await Describe(db);
             }
             check(listed.Error is null && explorerSessions is not (null or "0") && quiet is { Error: null, RenameDatabase: { UserAccess: 0, Sessions: 0, WithTransaction: 0, LoginsDefaulting: 0, CanClose: true } facts }
-                && facts.Identity == identity && facts.Name == db,
-                "the rename's describe reads the database's identity and access, and counts no session once the backend's own pooled ones are freed; Activity Monitor's pool is in master ("
+                && facts.Identity == identity && facts.Name == db && facts.Connections.FirstOrDefault() == info.Id && facts.Connections.Contains(inside.Id),
+                "the rename's describe reads the database's identity and access, and counts no session once the backend's own pooled ones are freed; Activity Monitor's pool is in master; it names the backend's connections to the server ("
                 + explorerSessions + ", " + quiet.Error?.Message + ", " + quiet.RenameDatabase?.Sessions + ")");
             var watch = Stopwatch.StartNew();
             var first = await Execute(Rename(db, renamed, close: false, identity));
@@ -196,25 +197,54 @@ internal static class RenameDatabaseLiveChecks
         check(script is { Error: null, Database: "master" } && script.Text == ActionService.ScriptText(ActionService.RenameDatabasePlan(db, renamed, true, 0)) && await State(db) == "ONLINE MULTI_USER",
             "Script Action shows SINGLE_USER, MODIFY NAME and MULTI_USER and runs nothing");
 
-        // Another session holds the database SINGLE_USER: HAS_PERMS_BY_NAME on it answers 0 even to sysadmin, which may still rename it.
-        // SET SINGLE_USER again would fail (5064), so Close Connections and Rename runs MODIFY NAME alone, which SQL Server 2025 completes
-        // with the session inside (probed); the access stays SINGLE_USER.
+        // A SINGLE_USER database: with no other session, MODIFY NAME alone renames it and keeps its access, and the describe offers no
+        // Close (SET SINGLE_USER again would wait for a session that holds it rather than close it, probed on 2025).
         await Sql("ALTER DATABASE " + Bracket(db) + " SET SINGLE_USER;");
+        var alone = await Describe(db);
+        var aloneRenamed = await Execute(Rename(db, renamed, close: false, alone.RenameDatabase?.Identity));
+        check(alone is { Error: null, RenameDatabase: { UserAccess: 1, Sessions: 0, CanClose: false } } && aloneRenamed.Error is null && Steps(aloneRenamed) == "done:Rename"
+            && await State(renamed) == "ONLINE SINGLE_USER" && await State(db) is null,
+            "a SINGLE_USER database no other session is in is renamed by MODIFY NAME alone, keeps SINGLE_USER, and its describe offers no Close (" + alone.Error?.Message + " | " + Steps(aloneRenamed) + ", " + aloneRenamed.Error?.Message + ")");
+        await Sql("ALTER DATABASE " + Bracket(renamed) + " MODIFY NAME = " + Bracket(db) + ";");
+
+        // Another session holds it SINGLE_USER: MODIFY NAME fails with 924 (probed on 2025), so the describe refuses it, naming what to do,
+        // and a rename sent anyway (either way) runs MODIFY NAME alone, fails IN_USE with the same advice, and leaves the session, the name
+        // and the access as they were.
         var occupant = Guid.NewGuid().ToString();
         try
         {
             var inSingle = await Sql("SELECT @@SPID;", db, occupant);
             var occupied = await Describe(db);
-            var single = await Execute(Rename(db, renamed, close: true, occupied.RenameDatabase?.Identity));
-            var name = await State(renamed) is null ? db : renamed;
-            check(inSingle.Status == "completed" && occupied is { Error: null, RenameDatabase: { UserAccess: 1, Sessions: 1 } } && single.Steps.All(step => step.Title == "Rename")
-                && single.Steps.Count == 1 && (single.Error is null ? name == renamed : single.Error.Code is "IN_USE" or "SQL_ERROR") && await State(name) == "ONLINE SINGLE_USER",
-                "a sysadmin renames a SINGLE_USER database another session holds with MODIFY NAME alone, and its access stays SINGLE_USER (" + occupied.Error?.Message + " | " + Steps(single) + ", " + single.Error?.Message + ")");
-            await Call<object>("query.session.close", new SessionArgs(occupant));
-            await Sql("ALTER DATABASE " + Bracket(name) + " SET MULTI_USER;");
-            if (name == renamed) await Sql("ALTER DATABASE " + Bracket(renamed) + " MODIFY NAME = " + Bracket(db) + ";");
+            // No identity: a rename gives create_date a new value (sys.databases: "created or renamed"), and the describe was refused.
+            var forced = new[] { await Execute(Rename(db, renamed, close: true)), await Execute(Rename(db, renamed, close: false)) };
+            var stays = await Sql("SELECT DB_NAME();", db, occupant);
+            check(inSingle.Status == "completed" && occupied is { RenameDatabase: null, Error: { Code: "IN_USE" } } && occupied.Error.Message.EndsWith(ActionService.SingleUserAdvice, StringComparison.Ordinal)
+                && forced.All(result => result is { Error.Code: "IN_USE" } && Steps(result) == "failed:Rename"
+                    && result.Error.Message.EndsWith(ActionService.SingleUserAdvice, StringComparison.Ordinal))
+                && stays.Status == "completed" && stays.Scalar == db && await State(db) == "ONLINE SINGLE_USER" && await State(renamed) is null,
+                "a SINGLE_USER database another session is in is refused by the describe, and a rename sent anyway fails IN_USE (924) with the same advice, leaving the session, name and access ("
+                + occupied.Error?.Message + " | " + string.Join("; ", forced.Select(result => Steps(result) + ", " + result.Error?.Message)) + ")");
         }
         finally { await Call<object>("query.session.close", new SessionArgs(occupant)); }
+        await Sql("ALTER DATABASE " + Bracket(db) + " SET MULTI_USER;");
+
+        // A read-only database: MODIFY NAME fails with 902 (probed on 2025), so the describe and the preflight refuse it before SINGLE_USER,
+        // and another session in it, here with an open transaction in tempdb, keeps running.
+        var readOnly = await Sql("ALTER DATABASE " + Bracket(db) + " SET READ_ONLY;");
+        var reader = Guid.NewGuid().ToString();
+        try
+        {
+            var reading = await Sql("BEGIN TRANSACTION; CREATE TABLE #held (id int); SELECT @@SPID;", db, reader);
+            var readOnlyFacts = await Describe(db);
+            var refused = await Execute(Rename(db, renamed, close: true));
+            var alive = await Sql("SELECT @@TRANCOUNT;", db, reader);
+            check(readOnly.Status == "completed" && reading.Status == "completed" && readOnlyFacts is { RenameDatabase: null, Error: { Code: "NOT_SUPPORTED", Message: "A read-only database cannot be renamed." } }
+                && refused is { Error: { Code: "NOT_SUPPORTED", Message: "A read-only database cannot be renamed." } } && refused.Steps.Count == 0 && alive.Scalar == "1"
+                && await State(db) == "ONLINE MULTI_USER" && await State(renamed) is null,
+                "a read-only database is refused before SINGLE_USER, and another session's transaction in it survives (" + readOnlyFacts.Error?.Message + " | " + Steps(refused) + ", " + refused.Error?.Message + " | " + alive.Scalar + ")");
+        }
+        finally { await Call<object>("query.session.close", new SessionArgs(reader)); }
+        await Sql("ALTER DATABASE " + Bracket(db) + " SET READ_WRITE;");
 
         // A login whose default database it is, and a dbcreator member with no user in the database, which MODIFY NAME refuses (916, as it
         // must open the database) although it may take the database offline: the preflight refuses it before SINGLE_USER.

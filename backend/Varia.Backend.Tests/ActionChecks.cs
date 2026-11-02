@@ -52,9 +52,10 @@ internal static class ActionChecks
             && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "takeOffline", "bringOnline"]) && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline",
             "the catalogue lists the action error codes and the Delete Object, Database Properties, Take Offline and Bring Online dialogs");
         check(Catalog.Describes.Keys.SequenceEqual(["renameDatabase"]) && Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
-            && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, true, true) is null
-            && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, false, false) == "The database must be online to be renamed."),
-            "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online (D3c)");
+            && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, false, false) is null && Catalog.DatabaseRefusal("rename", 0, 2, false, false) is null
+            && Catalog.DatabaseRefusal("rename", 0, 0, true, false) == "A read-only database cannot be renamed." && Catalog.DatabaseRefusal("rename", 0, 0, false, true) == "A read-only database cannot be renamed."
+            && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, true, false) == "The database must be online to be renamed."),
+            "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online, or is read-only or standby (902) (D3c)");
         // The database rules are the menu's (databaseActionState, tests/object-actions-catalog.test.ts): the preflight refuses what the menu greys.
         check(Catalog.DatabaseStateOf(0) == "online" && Catalog.DatabaseStateOf(6) == "offline" && Catalog.DatabaseStateOf(10) == "offlineSecondary" && Catalog.DatabaseStateOf(42) == "other"
             && Catalog.DatabaseRefusal("takeOffline", 0, 0, false, false) is null && Catalog.DatabaseRefusal("takeOffline", 6, 0, false, false) == "The database is offline."
@@ -184,7 +185,7 @@ internal static class ActionChecks
             && !Due(compensations[0], "done", "done", "failed") && Due(compensations[1], "done", "done", "failed") && Due(compensations[1], "done", "done", "cancelled")
             && !Due(compensations[0], "failed", "skipped", "skipped") && !Due(compensations[1], "failed", "skipped", "skipped"),
             "the rename's compensations restore the access under the old name when MODIFY NAME did not complete, under the new one when only the restore did not, and never without SINGLE_USER");
-        check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" &&ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
+        check(ActionService.StepTitle(ActionTemplate.SetOffline) == "Take database offline" && ActionService.StepTitle(ActionTemplate.SetOfflineRollback) == "Close connections and take database offline"
             && ActionService.StepTitle(ActionTemplate.SetOnline) == "Bring database online", "the state steps have their own titles");
     }
 
@@ -294,6 +295,7 @@ internal static class ActionChecks
         public bool ClearPoolsFor(string connectionId, string database) { Cleared.Add(database); return true; }
         public bool FreeDatabase(string connectionId, string database) { Cleared.Add("free " + database); return true; }
         public IReadOnlySet<int> PoolSessions(string connectionId) => new HashSet<int>();
+        public IReadOnlyList<string> SameServer(string connectionId) => [connectionId];
         public void DatabaseChanged(string connectionId, string database, string? newName) => Cleared.Add(database + " -> " + newName);
     }
 

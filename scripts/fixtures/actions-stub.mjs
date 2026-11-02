@@ -115,9 +115,10 @@ export function installActionsStub({ ipcMain }, { statics }) {
     return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
   }
   /** What a database's rename reads first: `renameSessions` other sessions, one of them in a transaction, and no login defaulting to it. */
-  function renameFacts({ target }) {
+  function renameFacts({ target, connectionId }) {
     const sessions = stub.renameSessions
-    return ok({ renameDatabase: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions, withTransaction: Math.min(sessions, 1), loginsDefaulting: 0, canClose: true }, elapsedMs: 1 })
+    return ok({ renameDatabase: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, userAccess: 0, sessions, withTransaction: Math.min(sessions, 1), loginsDefaulting: 0, canClose: true,
+      connections: [connectionId] }, elapsedMs: 1 })
   }
   /** A database's rename: SINGLE_USER, MODIFY NAME and MULTI_USER when it closes connections, MODIFY NAME alone otherwise. */
   function renameDatabase(params) {

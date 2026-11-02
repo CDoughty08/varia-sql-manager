@@ -658,6 +658,12 @@ try {
   await page.keyboard.press('Enter')
   await expect(offlineDialog()).toHaveCount(0)
   await expect(explorerTree(page).getByRole('treeitem', { name: /^AppData\b.*Offline/ })).toHaveCount(1)
+  // F2 on the offline database: Rename is greyed, and the key says why rather than doing nothing.
+  await select(...appData)
+  await page.keyboard.press('F2')
+  await expect(commandBanner()).toHaveText('Rename is unavailable: the database must be online to be renamed.')
+  await expect(renameBox(page)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Dismiss command error', exact: true }).click()
   // Offline: Take Offline greys and Bring Online runs as soon as its dialog has read the database.
   await task('Bring Online', ['Take Offline'])
   await expect(objectDialogProgress(onlineDialog())).toHaveText('Success')
@@ -691,7 +697,7 @@ try {
   await renameBox(page).fill('Sales')
   await page.keyboard.press('Enter')
   await expect(explorerTree(page).getByRole('treeitem', { name: /^Sales\b/ })).toHaveCount(1)
-  expect((await application.evaluate(() => globalThis.variaStub.prompts)).slice(asked)).toEqual([{ title: 'Rename Database', message: '1 connection is using AppData. Close them and rename the database?',
+  expect((await application.evaluate(() => globalThis.variaStub.prompts)).slice(asked)).toEqual([{ title: 'Rename Database', message: '1 connection is using AppData. Close it and rename the database?',
     buttons: ['Close Connections and Rename', 'Rename When Free', 'Cancel'], defaultId: 0, cancelId: 2 }])
   // The rename's describe, then Database Properties reading the database again under its new name.
   expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'renameDatabase').at(-1)).toMatchObject({ target: { kind: 'database', name: 'AppData' } })
@@ -741,7 +747,7 @@ try {
   console.log('Object action checks: a database\'s Delete Object offers SSMS\'s options with their defaults, and a lost server leaves only Close.')
 
   expect(failures).toEqual([])
-  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database's with its prompt), the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
+  console.log('Object action checks passed: menus, Select Top for views, inline Rename (a database\'s with its prompt), the Delete Object dialog with Script and errors, Database Properties, database options, and a lost server.')
 } catch (error) {
   await page?.screenshot({ path: resolve('artifacts', 'object-actions-failure.png') }).catch(() => {})
   throw error

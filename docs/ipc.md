@@ -504,12 +504,18 @@ answers `PERMISSION_DENIED`.
 
 **Rename of a database** (D3c) uses the same methods too. Before it renames, the page sends `actions.describe { connectionId,
 requestId, dialog: 'renameDatabase', target: { kind: 'database', name } }` (a fact describe: no dialog opens), which answers
-`{ renameDatabase: { name, identity: { id, created }, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose },
-elapsedMs }`, read in master after the backend's own idle pooled connections in the database were closed (the counts are absent
-without VIEW SERVER STATE; `loginsDefaulting` counts the logins whose default database it is, and `canClose` is false on
-Managed Instance, which cannot set SINGLE_USER), or an `error` value where the rename cannot run: `NOT_SUPPORTED` for a database
-that is not online, in an availability group, or on Managed Instance with `closeConnections`; `PERMISSION_DENIED` without
-CONTROL SERVER, ownership or ALTER on the database; `NAME_IN_USE`; `NOT_FOUND` for an identity that changed. The rename itself is
+`{ renameDatabase: { name, identity: { id, created }, userAccess, sessions?, withTransaction?, loginsDefaulting, canClose,
+connections }, elapsedMs }`, read in master after the backend's own idle pooled connections in the database were closed (the
+counts are absent without VIEW SERVER STATE; `loginsDefaulting` counts the logins whose default database it is; `canClose` is
+false on Managed Instance, which cannot set SINGLE_USER, and for a database already in single-user mode; `connections` lists the
+backend's connections to the same server by `SERVERPROPERTY('ServerName')`, this one first, at most 64, so the page counts and
+moves the query windows of a connection opened under another name for the same instance), or an `error` value where the rename
+cannot run: `NOT_SUPPORTED` for a database that is not online, read-only or standby (902), in an availability group, or on
+Managed Instance with `closeConnections`; `IN_USE` for a single-user database another session is in (MODIFY NAME would fail
+with 924, and SET SINGLE_USER would wait for it); `PERMISSION_DENIED` without CONTROL SERVER, ownership or ALTER on the
+database; `NAME_IN_USE`; `NOT_FOUND` for an identity that changed. The page sends the describe under the rename's own
+`requestId`, so the status bar's Stop cancels it (`cancelObjectActions`) before anything runs, and the execute that follows the
+describe (and the prompt) reuses that id once the describe has answered. The rename itself is
 `actions.execute { action: 'rename', connectionId, requestId, target, newName, closeConnections?, identity? }` (both only for a
 database; `identity` as for Database Properties). `closeConnections` runs `Close existing connections` (SINGLE_USER WITH
 ROLLBACK IMMEDIATE, unless the database is already single-user), `Rename` and `Restore multi-user access` (or `Restore
