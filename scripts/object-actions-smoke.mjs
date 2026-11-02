@@ -794,10 +794,11 @@ try {
 
   // 5c. Restore Database runs (D1f). The Databases folder's Restore Database… opens it on the history's first database, and a
   // database's Tasks › Restore › Database… on that database. Close existing connections makes Restore ask first, Cancel in
-  // focus and Escape answering it (owner decision 4); the Run panel lists the backend's steps with the full backup's RESTORE
-  // at 40 % (about 13 % of three sets) while the sections say their choices in a line; Stop over a database that existed asks
-  // first (Keep restoring in focus), and the outcome names the state SQL Server left (critic A12). Without the confirm's fact
-  // it runs at once, and ends restored.
+  // focus, drawn as the default and last, Escape answering it and focus going back to Restore, which is disabled while the bar
+  // asks (owner decision 4); the Run panel lists the backend's steps with the full backup's RESTORE at 40 % (about 13 % of
+  // three sets) while the sections say their choices in a line; Stop over a database that existed asks first (Keep restoring
+  // in focus and last, focus back on Stop), and the outcome, a status rather than an error, names the state SQL Server left
+  // (critic A12). Without the confirm's fact it runs at once, and ends restored.
   await expect(async () => {
     await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
     await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
@@ -825,8 +826,13 @@ try {
   const runConfirm = runFrame.getByRole('alertdialog', { name: 'Restore Database', exact: true })
   await expect(runConfirm).toContainText('Closing existing connections ends 1 session in AppData, and rolls back any open transaction.')
   await expect(runConfirm.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused()
+  // Danger first, the safe default last and drawn as the default whether or not focus shows (its ring is a box shadow).
+  expect(await runConfirm.getByRole('button').allTextContents()).toEqual(['Restore', 'Cancel'])
+  expect(await runConfirm.getByRole('button', { name: 'Cancel', exact: true }).evaluate(button => getComputedStyle(button).boxShadow)).not.toBe('none')
+  await expect(restoreVerb('Restore')).toBeDisabled()
   await page.keyboard.press('Escape')
   await expect(runConfirm).toHaveCount(0)
+  await expect(restoreVerb('Restore')).toBeFocused()
   expect(await restoreRuns()).toHaveLength(0)
   await restoreVerb('Restore').click()
   await runConfirm.getByRole('button', { name: 'Restore', exact: true }).click()
@@ -845,14 +851,18 @@ try {
   const stopConfirm = runFrame.getByRole('alertdialog', { name: 'Stop the restore', exact: true })
   await expect(stopConfirm).toContainText('Stop the restore? Stopping leaves AppData restoring and unusable until a restore finishes.')
   await expect(stopConfirm.getByRole('button', { name: 'Keep restoring', exact: true })).toBeFocused()
+  expect(await stopConfirm.getByRole('button').allTextContents()).toEqual(['Stop', 'Keep restoring'])
   await page.keyboard.press('Escape')
   await expect(stopConfirm).toHaveCount(0)
   await expect(runPanel).toBeVisible()
+  await expect(restoreVerb('Stop')).toBeFocused()
   expect(await stubCancels()).toBe(cancelsBefore)
   await restoreVerb('Stop').click()
   await stopConfirm.getByRole('button', { name: 'Stop', exact: true }).click()
   const stoppedPanel = runFrame.getByRole('region', { name: 'Stopped restoring AppData', exact: true })
-  await expect(stoppedPanel).toContainText('AppData is restoring and cannot be used until a restore finishes in single-user mode.')
+  await expect(stoppedPanel.getByRole('heading', { name: 'Stopped restoring AppData', exact: true })).toBeFocused()
+  await expect(stoppedPanel.getByRole('status')).toContainText('AppData is restoring, in single-user mode, and cannot be used until a restore finishes.')
+  await expect(stoppedPanel.getByRole('alert')).toHaveCount(0)
   await expect.poll(() => runStatuses(stoppedPanel)).toEqual(['done', 'done', 'cancelled', 'skipped', 'skipped', 'skipped'])
   await expect(stoppedPanel.getByRole('listitem').nth(2)).toContainText('40 %')
   await expect(stoppedPanel.getByRole('button', { name: 'Restore again', exact: true })).toBeEnabled()
@@ -869,7 +879,7 @@ try {
   expect(await restoreRuns()).toHaveLength(2)
   await closeDocumentButton(page, 'Restore Database - AppData').click()
   await expect(documentTab(page, 'Restore Database - AppData')).toHaveCount(0)
-  console.log('Object action checks: Restore Database opens from the Databases folder and from Tasks › Restore › Database…, asks before closing connections (Cancel in focus, Escape answers), shows the steps and the RESTORE\'s percent while the sections summarise, asks before Stop over a database that existed, names what Stop left, and runs at once to Restored without the confirm\'s fact.')
+  console.log('Object action checks: Restore Database opens from the Databases folder and from Tasks › Restore › Database…, asks before closing connections (Restore disabled meanwhile, Cancel last, the default and in focus, Escape answering and focus back on Restore), shows the steps and the RESTORE\'s percent while the sections summarise, asks before Stop over a database that existed (Keep restoring last and in focus, focus back on Stop), names what Stop left as a status with focus on the panel title, and runs at once to Restored without the confirm\'s fact.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

@@ -37,9 +37,9 @@ internal static class RestoreChecks
 
         var lint = RestoreSql.Lint(Restore).ToList();
         var problems = lint.SelectMany(item => item.Problems.Select(problem => item.Name + ": " + problem)).ToList();
-        // 8 catalog reads, LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
+        // 10 catalog reads (the run's file reads among them), LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
         // 3 recovery states × 16 option sets) and HEADERONLY and FILELISTONLY per device count.
-        check(lint.Count == 8 + 1 + 1 + 2 + 3 * 4 * 2 * 3 * 16 + 2 * 64 && problems.Count == 0, "every restore catalog read, media read and run statement passes its lint (" + lint.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(lint.Count == 10 + 1 + 1 + 2 + 3 * 4 * 2 * 3 * 16 + 2 * 64 && problems.Count == 0, "every restore catalog read, media read and run statement passes its lint (" + lint.Count + "): " + string.Join("; ", problems.Take(5)));
         check(RestoreSql.Header(3) == "RESTORE HEADERONLY FROM DISK = @d1, DISK = @d2, DISK = @d3 WITH NOUNLOAD;" && RestoreSql.FileList(1) == "RESTORE FILELISTONLY FROM DISK = @d1 WITH FILE = @file, NOUNLOAD;"
             && RestoreSql.Label == "RESTORE LABELONLY FROM DISK = @d1 WITH NOUNLOAD;", "media reads take every device and the position as parameters, one text per device count");
         var mediaRefused = new[]

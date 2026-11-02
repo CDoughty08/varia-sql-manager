@@ -403,20 +403,33 @@ other database options do, where SMO writes one.
 
 ### Run
 
-Restore (SSMS's OK) reads the server again, then asks in the document, with Cancel focused, when a fact calls for it:
+Restore (SSMS's OK) reads the server again, then asks in the document when a fact calls for it, Restore first and Cancel
+last, the default (focused, drawn as the default, and Escape's answer; Restore is disabled while the bar asks):
 REPLACE over an existing database (which is left restoring if the run stops or fails part way, and whose contents are
-lost outright when it is not the database the backups are of), a tail-log backup that could be taken but is off, and
+lost outright when it is not the database the backups are of: another name, or the same name with another recovery
+family, from another server or an earlier database of that name), a tail-log backup that could be taken but is off, and
 Close existing connections, with the sessions it ends, those with open transactions it rolls back, and Varia's own
-query windows in the database that are running or may hold one. SSMS asks none of these. It then runs `actions.execute`
-with the same request Script takes, as a long run (closing the window, Disconnect of the server and Restart are refused
-while it runs) on the long gate, and the Run panel lists its steps with the running RESTORE's STATS percent
-(`action.progress`), an overall percent (the sets done and the running set's percent, each set alike) and the time.
+query windows in the database that are running or may hold one. Only an online database has connections to close, so
+the option is disabled, and not sent, for any other. SSMS asks none of these. It then runs `actions.execute`
+with the same request Script takes, as a long run (closing the tab or the window, Disconnect of the server and Restart
+SQL Backend are refused until it ends: Stop it first) on the long gate, and the Run panel lists its steps with the running
+RESTORE's STATS percent (`action.progress`), an overall percent (the sets done and the running set's percent, each set
+alike) and the time. Answering the bar moves focus to the Run panel's title (Restore, Stop) or back to the verb (Cancel,
+Keep restoring).
 
 The backend first checks what the request names, on the action's own connection: the destination's identity (an
 existing database must be the one the document read), a snapshot or a database without RESTORING rights, whether the
-tail-log backup can be taken, each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues
-the set before it; `RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and Restore As paths other
-databases hold. Then the steps, each its own statement with every name, path and number a parameter (`RestoreSql`):
+tail-log backup can be taken, Close existing connections over a database that is not online (`DATABASE_UNAVAILABLE`),
+each set's header on the media (`RESTORE HEADERONLY`: its type, family, and that it continues the set before it;
+`RestoreChain`), REPLACE over another database's backups (`BACKUP_MISMATCH`), and the files the restore writes
+(`NAME_IN_USE`): the first set's `RESTORE FILELISTONLY` with the Restore As paths gives each file's path, which must be no
+other database's file and, unless it is a file of the destination, no file already on the server; a standby file or
+tail-log backup must be no database's file and have no database file's extension. Paths compare by a key
+(`ServerPath.Key`, `serverPathKey` in the renderer, both checked against `tests/fixtures/server-paths.json`): `.` and
+empty segments dropped, `..` resolved, and on Windows `/` as `\`, trailing dots and spaces trimmed, and case ignored.
+Files on disk are seen through `sys.dm_os_file_exists` (SQL Server 2017 and later) or `xp_fileexist` (2016, sysadmin
+only; otherwise not checked). Then the steps, each its own statement with every name, path and number a parameter
+(`RestoreSql`):
 
 | Step | When |
 | --- | --- |
@@ -424,18 +437,23 @@ databases hold. Then the steps, each its own statement with every name, path and
 | Back up the tail of the log | The tail-log backup is on (`BACKUP LOG … TO DISK = … WITH NORECOVERY` when Leave source database in the restoring state is checked) |
 | Restore the full backup, Restore the differential backup, Restore log backup (n of m) | One RESTORE per set of the plan, NORECOVERY on all but the last |
 | Restore multi-user access | After a RECOVERY restore that closed connections, unless Restrict access is checked |
-| Bring the database back online | Compensation: the tail-log backup left the database restoring and no RESTORE has written to it (`RESTORE DATABASE … WITH RECOVERY`) |
+| Bring the database back online | Cleanup: the tail-log backup left the database restoring (it ended, or a Stop came as it finished), no RESTORE has written to it, and it is still RESTORING with the id the preflight read (`RESTORE DATABASE … WITH RECOVERY`) |
 | Restore multi-user access | Compensation: connections were closed and no RESTORE has written to the database (its access as it was: multi-user or restricted) |
-| Remove the partly restored database | Cleanup: the destination did not exist, and a RESTORE left it RESTORING; dropped only when its name, state 1 and an id absent at the preflight all match, which the DROP's own batch checks again |
+| Remove the partly restored database | Cleanup: the destination did not exist, and a RESTORE left it RESTORING; dropped only when its name, state 1 and an id absent at the preflight all match, which the DROP's own batch checks again. Its files are read first, and checked on disk after the DROP |
 
 After a failure or Stop the compensations and the cleanup run in order under a fresh 30 s budget, and are listed only
 when they run. Varia never drops a database that existed (owner decision 5). Stop cancels the running statement in SQL
 Server; over a database that existed it asks first ("Stopping leaves <database> restoring and unusable until a restore
-finishes", Keep restoring focused). A refusal SQL Server makes while it plans a RESTORE (3101, 3154, 3159, 3201, 4305…)
+finishes", Stop first and Keep restoring last, the default). A refusal SQL Server makes while it plans a RESTORE (3101, 3154, 3159, 3201, 4305…)
 has not written to the database, so the compensations still run. The reply lists the steps, and the database's state and
-access as the run left it (`restored`: `sys.databases` read last; the access comes from the backup). The Databases folder
-is reconciled once the run ends, and Restore again keeps the choices. A run whose backend or server is lost says that how
-far it got is not known.
+access as the run left it (`restored`: `sys.databases` read last; the access comes from the backup), or `absent` when no
+database has the name, or nothing when it could not be read (the panel then says to check Object Explorer). A Stop that
+came as the last RESTORE WITH RECOVERY reached 100 % and left the database online says it was restored. SQL Server leaves
+the files of a cancelled RESTORE on disk even when the partly restored database is dropped: `restored.filesLeft` names
+them (at most 16), the error and the cleanup step say to delete them or restore to other paths, and the
+next restore to those paths is refused until then. A Stop or an unknown outcome shows as a status in the warning tone, a
+failure as an error. The Databases folder is reconciled once the run ends, and Restore again keeps the choices. A run
+whose backend or server is lost, or whose reply main stopped waiting for, says that how far it got is not known.
 
 SQL Server's own databases (master, model, msdb, tempdb) are refused as destinations, in any case (MSDB too): "Restore system databases with T-SQL; it needs single-user mode or a stopped Agent."
 Their backups can still be sources, restored under another name (msdb_copy), as SSMS allows.

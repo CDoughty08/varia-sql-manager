@@ -181,7 +181,7 @@ internal static partial class RestoreDescribe
             await using var reader = await command.ExecuteReaderAsync(token);
             while (await reader.ReadAsync(token))
                 destinations.Add(new(reader.GetString(0), reader.GetInt32(1), DatabaseProperties.Iso(reader.GetValue(2)), Text(reader, 3), Text(reader, 4), reader.IsDBNull(5) ? null : reader.GetInt32(5),
-                    reader.IsDBNull(6) ? null : reader.GetInt32(6)));
+                    reader.IsDBNull(6) ? null : reader.GetInt32(6), reader.IsDBNull(7) ? null : reader.GetGuid(7).ToString("D")));
         }
         var takeFiles = (int)restore.Limit("serverFiles");
         var files = new List<RestoreServerFileDto>();

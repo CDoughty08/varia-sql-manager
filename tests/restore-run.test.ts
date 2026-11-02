@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { validateRequest } from '../src/main/validation'
 import { restoreStepTitles, type BackupSetRow, type RestoreModel, type RestoreServerFacts } from '../src/shared/actions/restore'
@@ -6,6 +7,7 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionProgress, ActionS
 import type { ApiResult } from '../src/shared/contracts'
 import { longRunMessages } from '../src/shared/long-runs'
 import { restoreServiceMessages } from '../src/renderer/src/restore/RestoreService'
+import { closesConnections, draftProblems, sameDatabase } from '../src/renderer/src/restore/model'
 import { confirmLines, confirmTabNames, outcomeOf, overallPercent, plannedSteps, restoredText, runSteps, sectionSummaries, setWhere, stopQuestion } from '../src/renderer/src/restore/run'
 import { connectionInfo, workbenchFixture } from './fixtures/workbench'
 
@@ -84,6 +86,14 @@ describe('Restore Database\'s run, pure', () => {
     expect(plannedSteps(request({ restrictedUser: true })).map(step => step.title)).not.toContain(restoreStepTitles.multiUser)
     expect(setWhere({ devices: ['C:\\a\\b.bak'] })).toBe('b.bak')
   })
+  it('plans the main steps RestoreRun.cs builds for the shared cases (tests/fixtures/restore/run-steps.json)', () => {
+    const fixture = JSON.parse(readFileSync('tests/fixtures/restore/run-steps.json', 'utf8')) as { cases: { name: string; exists: boolean; restore: RestoreRequest['restore']; steps: { kind: string; title: string; detail?: string }[] }[] }
+    expect(fixture.cases.length).toBeGreaterThanOrEqual(4)
+    for (const item of fixture.cases) {
+      const planned = plannedSteps({ ...request({}, item.exists), restore: item.restore })
+      expect(planned.map(step => ({ kind: 'main', title: step.title, ...step.detail ? { detail: step.detail } : {} })), item.name).toEqual(item.steps.filter(step => step.kind === 'main'))
+    }
+  })
   it('counts the sets done and the running set\'s percent alike for the overall percent, and shows the step in progress', () => {
     const planned = plannedSteps(request())
     expect(overallPercent(planned, undefined)).toBe(0)
@@ -104,11 +114,22 @@ describe('Restore Database\'s run, pure', () => {
     expect(outcomeOf({ code: 'CANCELLED', message: 'Stopped.', retryable: true }, false)).toBe('stopped')
     expect(outcomeOf({ code: 'MEDIA', message: 'Bad.', retryable: false }, false)).toBe('failed')
     expect(outcomeOf(undefined, true)).toBe('unknown')
-    expect(restoredText('Sales', { state: 0, userAccess: 0 }, true)).toBe('Sales is online.')
-    expect(restoredText('Sales', { state: 0, userAccess: 1 }, true)).toBe('Sales is online in single-user mode.')
-    expect(restoredText('Sales', { state: 1, userAccess: 0 }, true)).toBe('Sales is restoring and cannot be used until a restore finishes.')
-    expect(restoredText('New', undefined, false)).toBe('New is not on the server: the partly restored database was removed.')
-    expect(restoredText('Sales', undefined, true)).toBeUndefined()
+    const ran = [{ status: 'done' as const, title: restoreStepTitles.full }]
+    expect(restoredText('Sales', { state: 0, userAccess: 0 }, ran)).toBe('Sales is online.')
+    expect(restoredText('Sales', { state: 0, userAccess: 1 }, ran)).toBe('Sales is online, in single-user mode.')
+    expect(restoredText('Sales', { state: 1, userAccess: 0 }, ran)).toBe('Sales is restoring and cannot be used until a restore finishes.')
+    // A Stop over a database Close existing connections put in single-user mode leaves it so, and restoring: both are said.
+    expect(restoredText('Sales', { state: 1, userAccess: 1 }, ran)).toBe('Sales is restoring, in single-user mode, and cannot be used until a restore finishes.')
+    expect(restoredText('Sales', { state: 1, userAccess: 2 }, ran)).toBe('Sales is restoring, with access restricted (RESTRICTED_USER), and cannot be used until a restore finishes.')
+    // "Removed" only when the reply lists the cleanup done: a new database the first RESTORE never created was not removed.
+    const removed = [{ status: 'cancelled' as const, title: restoreStepTitles.full }, { status: 'done' as const, title: restoreStepTitles.remove, compensates: true }]
+    expect(restoredText('New', { absent: true }, removed)).toBe('New is not on the server: the partly restored database was removed.')
+    expect(restoredText('New', { absent: true, filesLeft: ['D:\\DATA\\New.mdf'] }, removed)).toBe('New is not on the server: the partly restored database was removed.')
+    expect(restoredText('New', { absent: true }, [{ status: 'failed', title: restoreStepTitles.full }])).toBe('New is not on the server.')
+    // Steps ran but the backend could not read the database afterwards: the page says so; before any step, nothing.
+    expect(restoredText('Sales', undefined, ran)).toBe('How the restore left Sales could not be read: check its state in Object Explorer.')
+    expect(restoredText('Sales', undefined, [])).toBeUndefined()
+    expect(restoredText('Sales', undefined, undefined)).toBeUndefined()
     expect(stopQuestion('Sales', true)).toBe('Stop the restore? Stopping leaves Sales restoring and unusable until a restore finishes. Its previous contents are replaced as the restore runs (WITH REPLACE).')
   })
 })
@@ -139,6 +160,34 @@ describe('Restore Database\'s confirm bar (owner decision 4, critic A7 and A11b)
     expect(confirmLines({ ...draft, closeConnections: true }, uncounted, { tabs: [] })).toEqual(['Closing existing connections ends every session in Sales, and rolls back any open transaction.'])
     expect(restore.get(id)!.run).toBeUndefined()
   })
+  it('says a same-named database of another family is lost outright (critic B7)', async () => {
+    const { state } = await opened()
+    const draft = { ...state().draft!, replace: true, tailLog: false, closeConnections: false }, facts = state().facts
+    const family = (destination: string | undefined, backups: string | undefined) => ({ ...facts, server: { ...facts.server!, destinations: [{ ...sales, familyGuid: destination }, other] },
+      sets: facts.sets?.map(set => ({ ...set, familyGuid: backups })) })
+    expect(sameDatabase(draft, family('865a0569-836e-4acc-b574-cc22a56e3d74', '865A0569-836E-4ACC-B574-CC22A56E3D74'))).toBe(true)
+    expect(sameDatabase(draft, family(undefined, '865a0569-836e-4acc-b574-cc22a56e3d74'))).toBe(true)
+    const foreign = family('11111111-836e-4acc-b574-cc22a56e3d74', '865a0569-836e-4acc-b574-cc22a56e3d74')
+    expect(sameDatabase(draft, foreign)).toBe(false)
+    expect(confirmLines(draft, foreign, { tabs: [] })).toEqual([
+      'Restoring over Sales replaces it. If the restore stops or fails part way, Sales is left restoring and cannot be used until a restore finishes.',
+      'Sales is not the database these backups are of (Sales, from another server or an earlier database of that name): everything in it now is lost, and no tail-log backup can keep its recent changes.'
+    ])
+  })
+  it('closes no connections of a destination that is not online, and refuses standby and tail-log files over database files (critic B4, B10)', async () => {
+    const { state } = await opened()
+    const draft = state().draft!, facts = state().facts
+    const restoring = { ...facts, server: { ...facts.server!, destinations: [{ ...sales, state: 'RESTORING', sessions: undefined, withTransaction: undefined }, other] } }
+    expect(closesConnections({ ...draft, closeConnections: true }, facts)).toBe(true)
+    expect(closesConnections({ ...draft, closeConnections: true }, restoring)).toBe(false)
+    expect(confirmLines({ ...draft, replace: true, closeConnections: true }, restoring, { tabs: ['Query1.sql'] }).join(' ')).not.toContain('Closing existing connections')
+    // A standby file or tail-log backup written over a file of a database, under another spelling, or with a database file's extension.
+    const problems = (patch: Partial<typeof draft>) => draftProblems({ ...draft, ...patch }, facts).options
+    expect(problems({ recovery: 'standby', standbyFile: 'd:\\data\\.\\SALES.mdf' })).toEqual(['Standby file: The file is a file of the database Sales.'])
+    expect(problems({ recovery: 'standby', standbyFile: 'D:\\DATA\\Sales_undo.ldf' })).toEqual(['Standby file: Choose a file without a database file\'s extension (.mdf, .ndf or .ldf).'])
+    expect(problems({ tailLog: true, tailLogFile: 'L:\\LOG\\\\Sales_log.ldf ' })).toEqual(['Backup file: The file is a file of the database Sales.'])
+    expect(problems({ tailLog: true, tailLogFile: 'B:\\Backup\\Sales_tail.bak' })).toEqual([])
+  })
   it('reads the server again, waits on the bar, runs on Restore, and withdraws it on Cancel or a change', async () => {
     const { restore, id, state, api, sent, documents, sessionStates, keys } = await opened()
     // A query of this window in Sales with an open transaction, which closing connections would roll back.
@@ -152,6 +201,9 @@ describe('Restore Database\'s confirm bar (owner decision 4, critic A7 and A11b)
     expect(api.describeObject.mock.calls.length).toBe(reads + 1)
     expect(api.describeObject.mock.calls.at(-1)![0].restore).toEqual({ kind: 'history' })
     expect(state().run).toMatchObject({ phase: 'confirm', database: 'Sales', existed: true, replace: true })
+    // While the bar asks, Restore is not runnable again (a second run would withdraw the bar under the user's answer).
+    expect(restore.canRun(id)).toBe(false)
+    expect(keys()).toMatchObject({ runnable: false })
     expect(state().run!.confirm).toEqual([
       'Restoring over Sales replaces it. If the restore stops or fails part way, Sales is left restoring and cannot be used until a restore finishes.',
       'Closing existing connections ends 3 sessions in Sales; 1 of them has an open transaction, which is rolled back.',
@@ -234,7 +286,7 @@ describe('Restore Database\'s run and Stop', () => {
     pending.resolve(reply({ steps: [{ status: 'done', title: restoreStepTitles.tailLog }, { status: 'cancelled', title: restoreStepTitles.full }], error: { code: 'CANCELLED', message: 'Stopped.', retryable: true }, restored: { state: 1, userAccess: 0 } }))
     await settled()
     expect(state().run).toMatchObject({ phase: 'stopped', restored: { state: 1, userAccess: 0 } })
-    expect(restoredText('Sales', state().run!.restored, true)).toContain('restoring')
+    expect(restoredText('Sales', state().run!.restored, state().run!.steps)).toBe('Sales is restoring and cannot be used until a restore finishes.')
     expect(reconcile).toHaveBeenCalledWith(41, { select: { type: 'object', object: { kind: 'database', name: 'Sales' } } })
   })
   it('says how far it got is unknown when the backend goes, and that a restore which finished is online', async () => {
@@ -244,6 +296,14 @@ describe('Restore Database\'s run and Stop', () => {
     first.pending.resolve({ ok: false, error: 'The SQL backend stopped.', code: 'BACKEND_LOST' })
     await settled()
     expect(first.state().run).toMatchObject({ phase: 'unknown', error: { code: 'CONNECTION_LOST', message: restoreServiceMessages.unknown } })
+    // Main stopped waiting for the job's reply (its Stop grace passed): the restore may still run or finish, so the outcome is unknown, not a Stop.
+    const waited = await opened()
+    void waited.restore.run(waited.id)
+    await settled()
+    waited.pending.resolve({ ok: false, error: 'The action was stopped.', code: 'CANCELLED' })
+    await settled()
+    expect(waited.state().run).toMatchObject({ phase: 'unknown', error: { code: 'CANCELLED', message: restoreServiceMessages.stoppedUnknown } })
+    expect(waited.reconcile).toHaveBeenCalledWith(41, {})
     const second = await opened()
     void second.restore.run(second.id)
     await settled()

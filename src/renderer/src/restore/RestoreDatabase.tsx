@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { isRestoreSystemDatabase, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery } from '../../../shared/actions/restore.ts'
 import type { ServerFilePurpose } from '../../../shared/actions/catalog.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
+import type { CommandId } from '../../../shared/commands/catalog.ts'
 import type { IconId } from '../../../shared/icons.ts'
 import type { StatusTone } from '../../../shared/theme/tones.ts'
 import { useActionProgress } from '../actions/ActionProgressService'
@@ -165,6 +166,7 @@ function FilesSection({ state, draft, facts, service, problems, browse }: Sectio
 function OptionsSection({ state, draft, facts, service, problems, browse }: SectionProps) {
   const update = (patch: Partial<RestoreDraft>) => service.updateDraft(state.id, patch)
   const tail = tailLogPossible(draft, facts), recoveryId = fieldId(state.id, 'recovery')
+  const destination = destinationOf(facts, draft.destination), online = destination?.state === 'ONLINE'
   const check = (label: string, checked: boolean, change: (value: boolean) => void, disabled = false, title?: string) =>
     <label className="checkbox-label" title={title}><input type="checkbox" checked={checked} disabled={disabled} onChange={event => change(event.target.checked)} />{label}</label>
   return <div className="restore-options object-dialog-options">
@@ -188,7 +190,8 @@ function OptionsSection({ state, draft, facts, service, problems, browse }: Sect
       <PathField id={fieldId(state.id, 'tailFile')} label="Backup file:" value={draft.tailLogFile} disabled={!(draft.tailLog && tail)} purpose="backup" browse={browse} onChange={tailLogFile => update({ tailLogFile })} />
     </div>
     <h3 className="properties-group-title">Server connections</h3>
-    {check('Close existing connections to destination database', draft.closeConnections, closeConnections => update({ closeConnections }), !destinationOf(facts, draft.destination))}
+    {check('Close existing connections to destination database', draft.closeConnections && online, closeConnections => update({ closeConnections }), !online,
+      !destination ? 'A new database has no connections to close.' : online ? undefined : `${displayText(destination.name)} is not online (${destination.state.toLowerCase()}), so it has no connections to close.`)}
     <h3 className="properties-group-title">Prompt</h3>
     {check('Prompt before restoring each backup', false, () => {}, true, restoreMessages.notYetAvailable)}
     <p className="field-note">{restoreMessages.notYetAvailable}</p>
@@ -219,33 +222,54 @@ function SelectBackupDevices({ state, draft, service, browse }: Pick<SectionProp
   </SubDialog>
 }
 
-/** The confirm bar before a restore runs (owner decision 4): its lines, then Restore and Cancel; Cancel has focus and Escape answers it. */
-function RunConfirm({ state, lines, service }: { readonly state: RestoreState; readonly lines: readonly string[]; readonly service: RestoreService }) {
-  const cancel = useRef<HTMLButtonElement>(null)
-  // The safe answer has focus, so a stray Enter never overwrites a database.
-  useEffect(() => cancel.current?.focus(), [lines])
-  const textId = `restore-${state.id}-confirm`
-  return <div className="restore-confirm" role="alertdialog" aria-label="Restore Database" aria-describedby={textId}
-    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); service.cancelRun(state.id) } }}>
+/**
+ * Where focus goes once a confirm bar has its answer, after the bar is gone: back to the header verb it answered for (Cancel,
+ * Escape, Keep restoring), or on to the Run panel's title (Restore, Stop), so it never drops to the page.
+ */
+function focusAfter(documentId: string, target: CommandId | 'run', frames = 4): void {
+  requestAnimationFrame(() => {
+    const frame = document.querySelector(`[data-restore="${CSS.escape(documentId)}"]`)
+    const element = target === 'run' ? frame?.querySelector<HTMLElement>(`#${CSS.escape(`restore-${documentId}-run`)}`) : frame?.querySelector<HTMLElement>(`[data-command="${CSS.escape(target)}"]`)
+    element?.focus()
+    // The verb is enabled, or the panel drawn, once the answer's state has rendered: try again for a few frames until it takes focus.
+    if (document.activeElement !== element && frames > 1) focusAfter(documentId, target, frames - 1)
+  })
+}
+
+/**
+ * The inline confirm bars put the danger answer first and the safe one last, as SSIS's Stop Operation bar does, and the safe one
+ * is the default: it has focus and is drawn as the default button, and Escape answers it.
+ */
+function ConfirmBar({ documentId, label, textId, children, danger, safe, onDanger, onSafe }: {
+  readonly documentId: string; readonly label: string; readonly textId: string; readonly children: React.ReactNode
+  readonly danger: string; readonly safe: string; readonly onDanger: () => void; readonly onSafe: () => void
+}) {
+  const safeButton = useRef<HTMLButtonElement>(null)
+  // The safe answer has focus, so a stray Enter never overwrites or stops anything.
+  useEffect(() => safeButton.current?.focus(), [documentId, textId])
+  return <div className="restore-confirm" role="alertdialog" aria-label={label} aria-describedby={textId}
+    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onSafe() } }}>
     <Icon name="warning" />
-    <div id={textId} className="restore-confirm-text">{lines.map(line => <p key={line}>{line}</p>)}</div>
-    <button type="button" className="danger" onClick={() => void service.confirmRun(state.id)}>Restore</button>
-    <button type="button" ref={cancel} onClick={() => service.cancelRun(state.id)}>Cancel</button>
+    <div id={textId} className="restore-confirm-text">{children}</div>
+    <button type="button" className="danger" onClick={onDanger}>{danger}</button>
+    <button type="button" className="default" ref={safeButton} onClick={onSafe}>{safe}</button>
   </div>
 }
 
-/** Stop over a database that existed asks first (critic A11c): Keep restoring has focus and Escape answers it. */
+/** The confirm bar before a restore runs (owner decision 4): its lines, then Restore and Cancel (the default). */
+function RunConfirm({ state, lines, service }: { readonly state: RestoreState; readonly lines: readonly string[]; readonly service: RestoreService }) {
+  return <ConfirmBar documentId={state.id} label="Restore Database" textId={`restore-${state.id}-confirm`} danger="Restore" safe="Cancel"
+    onDanger={() => { void service.confirmRun(state.id); focusAfter(state.id, 'run') }} onSafe={() => { service.cancelRun(state.id); focusAfter(state.id, 'restoreDatabase.run') }}>
+    {lines.map(line => <p key={line}>{line}</p>)}
+  </ConfirmBar>
+}
+
+/** Stop over a database that existed asks first (critic A11c): Stop, then Keep restoring (the default). */
 function StopConfirm({ state, run, service }: { readonly state: RestoreState; readonly run: RestoreRun; readonly service: RestoreService }) {
-  const keep = useRef<HTMLButtonElement>(null)
-  useEffect(() => keep.current?.focus(), [])
-  const textId = `restore-${state.id}-stop`
-  return <div className="restore-confirm" role="alertdialog" aria-label="Stop the restore" aria-describedby={textId}
-    onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); service.answerStop(state.id, false) } }}>
-    <Icon name="warning" />
-    <div id={textId} className="restore-confirm-text"><p>{stopQuestion(run.database, run.replace)}</p></div>
-    <button type="button" ref={keep} onClick={() => service.answerStop(state.id, false)}>Keep restoring</button>
-    <button type="button" className="danger" onClick={() => service.answerStop(state.id, true)}>Stop</button>
-  </div>
+  return <ConfirmBar documentId={state.id} label="Stop the restore" textId={`restore-${state.id}-stop`} danger="Stop" safe="Keep restoring"
+    onDanger={() => { service.answerStop(state.id, true); focusAfter(state.id, 'run') }} onSafe={() => { service.answerStop(state.id, false); focusAfter(state.id, 'restoreDatabase.stop') }}>
+    <p>{stopQuestion(run.database, run.replace)}</p>
+  </ConfirmBar>
 }
 
 const outcomeTones: Readonly<Record<RunOutcome, StatusTone>> = { done: 'success', failed: 'critical', stopped: 'warning', unknown: 'warning' }
@@ -266,11 +290,12 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
   const elapsed = run.startedAt === undefined ? 0 : (run.endedAt ?? now) - run.startedAt
   const overall = overallPercent(run.planned, progress)
   const steps = runSteps(run.planned, run.steps, progress, running)
-  const left = outcome ? restoredText(run.database, run.restored, run.existed) : undefined
+  const left = outcome ? restoredText(run.database, run.restored, run.steps) : undefined
+  const again = service.canRun(state.id) ? [{ label: 'Restore again', run: () => void service.run(state.id) }] : []
   return <section className="restore-run" aria-labelledby={titleId} data-run={run.phase}>
     <div className="restore-run-head">
       <Icon name={outcome ? outcomeIcons[outcome] : 'loading'} spin={!outcome} className={outcome ? `restore-run-${outcome}` : undefined} />
-      <h2 id={titleId} className="restore-run-title">{outcome ? outcomeTitle(outcome, run.database) : `${run.stopping ? 'Stopping' : 'Restoring'} ${displayText(run.database)}`}</h2>
+      <h2 id={titleId} className="restore-run-title" tabIndex={-1}>{outcome ? outcomeTitle(outcome, run.database) : `${run.stopping ? 'Stopping' : 'Restoring'} ${displayText(run.database)}`}</h2>
       <span className="restore-run-elapsed">{outcome ? 'Took' : 'Elapsed'} {formatElapsed(elapsed)}</span>
       {running && <span className="restore-run-overall">
         <span>about {overall} %</span>
@@ -281,8 +306,15 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
     </div>
     {running && run.stopConfirm && <StopConfirm state={state} run={run} service={service} />}
     <StepList steps={steps} labelledBy={titleId} />
-    {outcome && run.error && <InlineError message={run.error.message} code={run.error.code} role="alert" context={`Restore Database on ${state.server}`} note={left}
-      actions={service.canRun(state.id) ? [{ label: 'Restore again', run: () => void service.run(state.id) }] : []} />}
+    {outcome === 'failed' && run.error && <InlineError message={run.error.message} code={run.error.code} role="alert" context={`Restore Database on ${state.server}`} note={left} actions={again} />}
+    {/* A Stop is the user's own, and an unknown outcome no failure: a status in the warning tone, not an error. */}
+    {(outcome === 'stopped' || outcome === 'unknown') && run.error && <div className="restore-run-outcome restore-run-warning">
+      <Icon name="warning" />
+      <div className="restore-run-outcome-body">
+        <p role="status">{run.error.message}{left && <span className="inline-error-note">{left}</span>}</p>
+        {again.length > 0 && <div className="inline-error-actions">{again.map(action => <button key={action.label} type="button" onClick={action.run}>{action.label}</button>)}</div>}
+      </div>
+    </div>}
     {outcome === 'done' && <p className="restore-run-outcome" role="status"><Icon name="pass" />{left ?? `Restored ${displayText(run.database)}.`}</p>}
     {running && <p className="document-status"><Icon name="info" />{run.stopping ? 'Stopping: SQL Server ends the running statement, then Varia undoes what this restore changed.' : runNote(run.database, run.existed)}</p>}
   </section>

@@ -1,5 +1,8 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Data.SqlClient;
 using Varia.Backend.Actions;
+using Varia.Backend.Explorer;
 
 namespace Varia.Backend.Tests;
 
@@ -70,6 +73,8 @@ internal static partial class RestoreRunChecks
             "a Stop that reached SQL Server only as the restore finished has one message, naming the database once, within an error's length");
 
         CheckChain(check);
+        CheckPlan(check);
+        CheckStop(check);
 
         // The compensations wait on SQL Server refusing the first RESTORE before it writes: the codes a restore's refusals map to are among them.
         var restoreCodes = new[] { "BACKUP_MISMATCH", "TAIL_LOG_NEEDED", "RESTORE_SEQUENCE" };
@@ -102,6 +107,63 @@ internal static partial class RestoreRunChecks
         };
         check(mutations.All(text => text != executable && ActionSql.LintExecutable(text, ActionTemplate.DropRestoring).Count > 0),
             "the lint catches the cleanup's name or id outside their two forms, and an unlisted literal");
+    }
+
+    /// <summary>Nothing runs: the step plan is built, never executed.</summary>
+    private sealed class NoHost : IActionHost
+    {
+        public ServerProfile Profile(string connectionId) => throw new NotSupportedException();
+        public SqlConnection Connection(string connectionId) => throw new NotSupportedException();
+        public Task OpenAsync(SqlConnection connection, CancellationToken token) => throw new NotSupportedException();
+        public bool ClearPoolsFor(string connectionId, string database) => throw new NotSupportedException();
+        public bool FreeDatabase(string connectionId, string database) => throw new NotSupportedException();
+        public IReadOnlySet<int> PoolSessions(string connectionId) => throw new NotSupportedException();
+        public void DatabaseChanged(string connectionId, string database, string? newName) => throw new NotSupportedException();
+    }
+
+    /// <summary>RestoreSteps against tests/fixtures/restore/run-steps.json, which run.ts's plannedSteps is held to as well: the Run
+    /// panel's list, which the progress EVENTs index, is the backend's.</summary>
+    private static void CheckPlan(Action<bool, string> check)
+    {
+        using var fixture = JsonDocument.Parse(File.ReadAllText(Fixtures.Path("tests/fixtures/restore/run-steps.json")));
+        var web = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        using var service = new ActionService(new NoHost());
+        using var connection = new SqlConnection();
+        var wrong = new List<string>();
+        var cases = 0;
+        foreach (var item in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            cases++;
+            var options = item.GetProperty("restore").Deserialize<RestoreOptionsDto>(web)!;
+            var facts = new ActionService.RestoreFacts(item.GetProperty("exists").GetBoolean(), 7, item.GetProperty("userAccess").GetInt32(), new HashSet<int>());
+            var planned = service.RestoreSteps(connection, "c", "Sales", options, facts, new()).Select(step => (step.Kind.ToString().ToLowerInvariant(), step.Title, step.Detail)).ToList();
+            var expected = item.GetProperty("steps").EnumerateArray().Select(step => (step.GetProperty("kind").GetString()!, step.GetProperty("title").GetString()!,
+                step.TryGetProperty("detail", out var detail) ? detail.GetString() : null)).ToList();
+            if (!planned.SequenceEqual(expected)) wrong.Add(item.GetProperty("name").GetString() + ": " + string.Join(", ", planned.Select(step => step.Item1 + " " + step.Title + " (" + step.Detail + ")")));
+        }
+        check(cases == 4 && wrong.Count == 0, "the run's steps are tests/fixtures/restore/run-steps.json's, as run.ts plans them, with the compensations and cleanup that may follow: " + string.Join("; ", wrong));
+    }
+
+    /// <summary>What a Stop's reply may claim: that the restore finished only with its own STATS at 100 percent and the database online;
+    /// RECOVERY after the tail-log backup only while no RESTORE wrote; and the files a dropped partly restored database left, named.</summary>
+    private static void CheckStop(Action<bool, string> check)
+    {
+        var last = Restore.Step("full");
+        List<ActionStepDto> Steps(int? progress, string status = "cancelled") => [new("done", Restore.Step("close")), new(status, last, Progress: progress)];
+        var online = new ActionService.RestoredRow(5, 0, 0);
+        check(ActionService.FinishedAtStop(last, "recovery", Steps(100), online) && !ActionService.FinishedAtStop(last, "recovery", Steps(null), online)
+            && !ActionService.FinishedAtStop(last, "recovery", Steps(99), online) && !ActionService.FinishedAtStop(last, "recovery", Steps(100), online with { State = 1 })
+            && !ActionService.FinishedAtStop(last, "recovery", Steps(100), null) && !ActionService.FinishedAtStop(last, "norecovery", Steps(100), online)
+            && !ActionService.FinishedAtStop(Restore.Step("log"), "recovery", Steps(100), online) && !ActionService.FinishedAtStop(last, "recovery", Steps(100, "failed"), online),
+            "a Stop's reply says the restore finished only when the last RESTORE's own STATS reached 100 percent before it and the database reads online; a Stop before the RESTORE was sent has no percent");
+        check(ActionService.RecoverDue("done", false) && ActionService.RecoverDue("cancelled", false) && !ActionService.RecoverDue("done", true) && !ActionService.RecoverDue("cancelled", true)
+            && !ActionService.RecoverDue("failed", false) && !ActionService.RecoverDue("skipped", false),
+            "RECOVERY after the tail-log backup is due once the BACKUP LOG completed or was stopped (it may have finished as Stop came) and while no RESTORE wrote");
+        var many = Enumerable.Range(0, 40).Select(index => "C:\\" + new string('x', 250) + index).ToList();
+        check(ActionService.LeftoversNote(many, false).Length + ActionErrors.MaxMessage / 2 <= ActionErrors.MaxMessage && ActionService.LeftoversNote(many, true).Contains("and 37 more", StringComparison.Ordinal)
+            && ActionService.LeftoversNote(["/d/a.mdf"], false) == "SQL Server left the database's files on disk (/d/a.mdf): delete them, or restore to other paths."
+            && ActionService.MaxFilesLeft == 16,
+            "the note on a dropped partly restored database's files names at most three, fits beside an error's message, and the reply lists at most 16");
     }
 
     private static BackupSetDto Header(string type, string first, string last, string checkpoint = "0", string databaseBackup = "0", bool copyOnly = false, bool damaged = false,

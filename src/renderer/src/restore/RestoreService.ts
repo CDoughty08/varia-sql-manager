@@ -46,7 +46,7 @@ export interface RestoreRun {
   readonly stopping?: boolean
   readonly steps?: readonly ActionStep[]
   readonly error?: ActionError
-  /** The destination as the run left it (critic A12), or absent when no database has its name any more. */
+  /** The destination as the run left it (critic A12): its state, or that no database has its name; absent when it could not be read. */
   readonly restored?: RestoredDatabase
 }
 export interface RestoreState {
@@ -107,7 +107,9 @@ export const restoreServiceMessages = {
   /** A close of the tab while it restores. */
   running: 'A restore is running. Stop it first, or wait for it to finish.',
   /** No answer: the backend or the server went away while the restore ran. */
-  unknown: 'The connection was lost while the restore ran, so how far it got is not known. Check the database\'s state in Object Explorer.'
+  unknown: 'The connection was lost while the restore ran, so how far it got is not known. Check the database\'s state in Object Explorer.',
+  /** A Stop whose reply came without the job's steps: the backend stopped waiting for SQL Server to end the restore and run the cleanup. */
+  stoppedUnknown: 'Varia stopped waiting for SQL Server to end the restore and undo what it changed, which may still be running: the restore may yet finish, or its cleanup remove the database. Check the database\'s state in Object Explorer.'
 } as const
 /** How long the Script preview waits after the last change, so typing sends one request. */
 export const restorePreviewDelayMs = 300
@@ -315,7 +317,8 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   /** Whether Restore can start: the backups are read, the choices form a restore, nothing runs in the document, and its server is connected. */
   canRun(id: string): boolean {
     const state = this.get(id), connectionId = this.connectionOf(id)
-    if (!state?.draft || !connectionId || this.disposed || state.phase !== 'ready' || state.sets !== 'ready' || state.files === 'loading' || busyRun(state.run) || !this.live(id)) return false
+    // While the confirm bar asks, its own Restore and Cancel are the only answers: the header's Restore would only ask again.
+    if (!state?.draft || !connectionId || this.disposed || state.phase !== 'ready' || state.sets !== 'ready' || state.files === 'loading' || busyRun(state.run) || state.run?.phase === 'confirm' || !this.live(id)) return false
     return !('problem' in restoreRequest(state.draft, state.facts, { connectionId, requestId: 'check' }))
   }
   isRunning(id: string): boolean { return this.get(id)?.run?.phase === 'running' }
@@ -327,7 +330,6 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
    */
   async run(id: string): Promise<void> {
     if (!this.canRun(id)) return
-    this.dropConfirm(id)
     const first = this.get(id)!
     this.patch(id, { run: { phase: 'checking', database: first.draft!.destination, existed: false, replace: first.draft!.replace, planned: [] }, runNotice: undefined, error: undefined })
     const read = await this.readServer(id)
@@ -402,10 +404,13 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     }
     const current = this.get(id)
     if (this.disposed || !current?.run || current.run.requestId !== requestId) return
-    const lost = !result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST')
+    // A CANCELLED answer without the job's reply is not a Stop the backend saw through: it stopped waiting (StopGrace plus the
+    // cleanup budget) while the RESTORE or its cleanup may still run, so how it ends is not known.
+    const stoppedUnknown = !result.ok && result.code === 'CANCELLED'
+    const lost = stoppedUnknown || (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST'))
     const value = result.ok ? result.value : undefined
-    const failure = lost ? error('CONNECTION_LOST', restoreServiceMessages.unknown)
-      : value ? value.error : error(!result.ok && result.code === 'CANCELLED' ? 'CANCELLED' : 'SQL_ERROR', result.ok ? 'The restore failed.' : result.error)
+    const failure = stoppedUnknown ? error('CANCELLED', restoreServiceMessages.stoppedUnknown) : lost ? error('CONNECTION_LOST', restoreServiceMessages.unknown)
+      : value ? value.error : error('SQL_ERROR', result.ok ? 'The restore failed.' : result.error)
     this.patch(id, {
       refusal: undefined,
       run: {
@@ -415,7 +420,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     })
     // The tree is reconciled once the run ends (owner decision 9), with the database selected when it is there.
     if (current.folderNodeId !== undefined) {
-      try { this.options.explorer?.reconcile(current.folderNodeId, value?.restored ? { select: { type: 'object', object: { kind: 'database', name: request.target.name } } } : {}) } catch (failure) { onUnexpectedError(failure) }
+      try { this.options.explorer?.reconcile(current.folderNodeId, value?.restored && !value.restored.absent ? { select: { type: 'object', object: { kind: 'database', name: request.target.name } } } : {}) } catch (failure) { onUnexpectedError(failure) }
     }
     if (!lost && this.live(id)) void this.readServer(id)
   }

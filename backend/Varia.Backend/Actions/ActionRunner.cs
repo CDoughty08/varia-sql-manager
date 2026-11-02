@@ -86,6 +86,7 @@ internal sealed partial class ActionService
                     token.ThrowIfCancellationRequested();
                     progress?.Begin(steps.Count);
                     await step.Run(new(open, token));
+                    if (Options.AfterStep is { } afterStep) await afterStep(step.Title, token);
                     Add("done", step);
                     completed++;
                 }

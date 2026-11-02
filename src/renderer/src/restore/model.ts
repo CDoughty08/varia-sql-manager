@@ -7,7 +7,7 @@ import {
 } from '../../../shared/actions/restore.ts'
 import { dependants, lastBackupTaken, orderSelection, planRestore, reachesPoint, selectionProblem, usableSet } from '../../../shared/actions/restore-plan.ts'
 import { restoreOptionsProblems, type RestoreRequest } from '../../../shared/actions/restore-schema.ts'
-import { folderPath, sameServerPath, serverPathProblem } from '../../../shared/actions/files.ts'
+import { folderPath, sameServerPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
 
 export type RestoreSourceKind = 'database' | 'device'
 /** What the person chose on the three pages; everything else (the plan, the moves) follows from it and the describe. */
@@ -84,12 +84,26 @@ export function sourceSets(draft: RestoreDraft, facts: RestoreFacts): readonly B
   return facts.sets.filter(set => set.database === database)
 }
 /**
+ * Whether the destination is the database the backups are of: the same name and, where both are known, the same backup family
+ * (a database of that name from another server, or one dropped and created again, has another, and its changes are not in them).
+ */
+export function sameDatabase(draft: RestoreDraft, facts: RestoreFacts): boolean {
+  const destination = destinationOf(facts, draft.destination)
+  if (!destination || destination.name.toLowerCase() !== sourceDatabase(draft, facts).toLowerCase()) return false
+  const full = sourceSets(draft, facts).find(set => set.id === draftPlan(draft, facts).ids[0])
+  return !destination.familyGuid || !full?.familyGuid || destination.familyGuid.toLowerCase() === full.familyGuid.toLowerCase()
+}
+/**
  * Whether a tail-log backup can be taken (SSMS offers it, checked, in this case): the destination is the source database,
  * it exists online, and its recovery model keeps a log (FULL or BULK_LOGGED).
  */
 export function tailLogPossible(draft: RestoreDraft, facts: RestoreFacts): boolean {
   const destination = destinationOf(facts, draft.destination)
-  return !!destination && destination.name.toLowerCase() === sourceDatabase(draft, facts).toLowerCase() && destination.state === 'ONLINE' && destination.recoveryModel !== 'SIMPLE'
+  return !!destination && sameDatabase(draft, facts) && destination.state === 'ONLINE' && destination.recoveryModel !== 'SIMPLE'
+}
+/** Whether Close existing connections applies: it is checked, and the destination exists online (one a stopped restore left RESTORING has no connections, and SET SINGLE_USER fails on it). */
+export function closesConnections(draft: RestoreDraft, facts: RestoreFacts): boolean {
+  return draft.closeConnections && destinationOf(facts, draft.destination)?.state === 'ONLINE'
 }
 
 /** The plan the grid checks: the planner's, or Manual Selection's in restore order, with why it cannot restore. */
@@ -149,8 +163,9 @@ export interface FileRow { readonly file: BackupFileRow; readonly restoreAs: str
 export function fileRows(draft: RestoreDraft, facts: RestoreFacts): FileRow[] {
   const server = facts.server, separator = server?.separator ?? '\\', source = sourceDatabase(draft, facts)
   const taken = new Map<string, string>()
-  // Paths compare as the server's platform does: without case on Windows, exactly on Linux.
-  const key = (path: string) => separator === '\\' ? path.toLowerCase() : path
+  // Paths compare as the files they name on the server's platform, as RestoreRun.cs compares them: '.', '..' and doubled
+  // separators resolved, and on Windows without case.
+  const key = (path: string) => serverPathKey(path, separator) ?? path
   for (const file of server?.files ?? []) if (file.database.toLowerCase() !== draft.destination.toLowerCase()) taken.set(key(file.path), file.database)
   const rows = facts.files.map(file => {
     const typed = draft.restoreAs[file.logical]
@@ -166,6 +181,18 @@ export function fileRows(draft: RestoreDraft, facts: RestoreFacts): FileRow[] {
   })
   // Two files restored to one path.
   return rows.map(row => !row.problem && rows.some(other => other !== row && sameServerPath(other.restoreAs, row.restoreAs, separator)) ? { ...row, problem: 'Another file is restored to this path.' } : row)
+}
+
+/** Why the standby file or the tail-log backup cannot be written where the draft says: a bad path, a database's file (STANDBY
+ *  overwrites its file; RestoreRun.cs's preflight refuses it too), or a database file's extension. */
+function writtenFileProblem(path: string, facts: RestoreFacts): string | undefined {
+  const problem = serverPathProblem(path)
+  if (problem) return problem
+  const separator = facts.server?.separator ?? '\\', key = serverPathKey(path, separator)
+  if (!key) return 'Enter a path to a file.'
+  const holder = facts.server?.files.find(file => serverPathKey(file.path, separator) === key)
+  if (holder) return `The file is a file of the database ${holder.database}.`
+  return /\.(mdf|ndf|ldf)$/i.test(key) ? 'Choose a file without a database file\'s extension (.mdf, .ndf or .ldf).' : undefined
 }
 
 /** The problems that keep Script from writing the restore, by the section that shows them. */
@@ -188,9 +215,9 @@ export function draftProblems(draft: RestoreDraft, facts: RestoreFacts, plan = d
     const problem = folder ? serverPathProblem(folder) : 'Choose a folder.'
     if (problem) files.push(`${label}: ${problem}`)
   }
-  if (draft.recovery === 'standby') { const problem = draft.standbyFile ? serverPathProblem(draft.standbyFile) : 'Choose a standby file.'; if (problem) options.push(`Standby file: ${problem}`) }
+  if (draft.recovery === 'standby') { const problem = draft.standbyFile ? writtenFileProblem(draft.standbyFile, facts) : 'Choose a standby file.'; if (problem) options.push(`Standby file: ${problem}`) }
   if (draft.keepReplication && draft.recovery === 'norecovery') options.push('Preserve the replication settings cannot be used with RESTORE WITH NORECOVERY.')
-  if (draft.tailLog && tailLogPossible(draft, facts)) { const problem = draft.tailLogFile ? serverPathProblem(draft.tailLogFile) : 'Choose the tail-log backup file.'; if (problem) options.push(`Backup file: ${problem}`) }
+  if (draft.tailLog && tailLogPossible(draft, facts)) { const problem = draft.tailLogFile ? writtenFileProblem(draft.tailLogFile, facts) : 'Choose the tail-log backup file.'; if (problem) options.push(`Backup file: ${problem}`) }
   return { general, files, options }
 }
 
@@ -213,7 +240,7 @@ export function restoreRequest(draft: RestoreDraft, facts: RestoreFacts, ids: { 
   const options: RestoreOptions = {
     sets, relocate, replace: draft.replace, keepReplication: draft.keepReplication, restrictedUser: draft.restrictedUser, recovery: draft.recovery,
     ...plan.stopAt ? { stopAt: plan.stopAt } : {}, ...draft.recovery === 'standby' ? { standbyFile: draft.standbyFile } : {},
-    ...tail ? { tailLog: { file: draft.tailLogFile, noRecovery: draft.leaveRestoring } } : {}, closeConnections: draft.closeConnections
+    ...tail ? { tailLog: { file: draft.tailLogFile, noRecovery: draft.leaveRestoring } } : {}, closeConnections: closesConnections(draft, facts)
   }
   const shape = restoreOptionsProblems(options)[0]
   if (shape) return { problem: shape.message }

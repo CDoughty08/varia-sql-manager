@@ -7,7 +7,7 @@ import type { ActionError, ActionStep, RestoredDatabase } from '../../../shared/
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { StepProgress } from '../actions/ActionProgressService'
 import type { StepItem } from '../kit/StepList'
-import { destinationOf, draftPlan, fileRows, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
+import { closesConnections, destinationOf, draftPlan, fileRows, sameDatabase, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
 
 /** A step the run will take, as the backend titles it; `set` marks a RESTORE, which the overall percent counts. */
 export interface PlannedStep { readonly title: string; readonly detail?: string; readonly set: boolean }
@@ -61,11 +61,11 @@ export function confirmLines(draft: RestoreDraft, facts: RestoreFacts, close: Cl
   const name = show(destination.name), lines: string[] = []
   if (draft.replace) {
     lines.push(`Restoring over ${name} replaces it. If the restore stops or fails part way, ${name} is left restoring and cannot be used until a restore finishes.`)
-    if (destination.name.toLowerCase() !== sourceDatabase(draft, facts).toLowerCase())
-      lines.push(`${name} is not the database these backups are of (${show(sourceDatabase(draft, facts))}): everything in it now is lost, and no tail-log backup can keep its recent changes.`)
+    if (!sameDatabase(draft, facts))
+      lines.push(`${name} is not the database these backups are of (${show(sourceDatabase(draft, facts))}${destination.name.toLowerCase() === sourceDatabase(draft, facts).toLowerCase() ? ', from another server or an earlier database of that name' : ''}): everything in it now is lost, and no tail-log backup can keep its recent changes.`)
   }
   if (tailLogPossible(draft, facts) && !draft.tailLog) lines.push(`No tail-log backup is taken: changes to ${name} since its last log backup will be lost.`)
-  if (draft.closeConnections) {
+  if (closesConnections(draft, facts)) {
     const counted = destination.sessions === undefined ? `Closing existing connections ends every session in ${name}, and rolls back any open transaction.`
       : destination.sessions === 0 ? undefined
         : `Closing existing connections ends ${plural(destination.sessions, 'session', 'sessions')} in ${name}` + (destination.withTransaction === undefined ? ', and rolls back any open transaction.'
@@ -115,13 +115,23 @@ export function overallPercent(planned: readonly PlannedStep[], progress: StepPr
   return Math.max(0, Math.min(100, Math.round(((done + current) / sets) * 100)))
 }
 
-/** sys.databases' state and user_access in words, as the outcome names them (critic A12). */
-export function restoredText(database: string, restored: RestoredDatabase | undefined, existed: boolean): string | undefined {
+/**
+ * How the run left the database, in words (critic A12), only from what the backend read after it: sys.databases' state and
+ * user_access, or that no database has the name, "removed" only when the reply lists the cleanup done. When the backend could not read it, after steps ran, the page says so rather than guess; a refusal before any
+ * statement, or a lost backend (whose message says to check), has no line.
+ */
+export function restoredText(database: string, restored: RestoredDatabase | undefined, steps: readonly ActionStep[] | undefined): string | undefined {
   const name = show(database)
-  if (!restored) return existed ? undefined : `${name} is not on the server: the partly restored database was removed.`
-  const state = restored.state === 0 ? `${name} is online` : restored.state === 1 ? `${name} is restoring and cannot be used until a restore finishes` : `${name} is ${['online', 'restoring', 'recovering', 'recovery pending', 'suspect', 'in emergency mode', 'offline'][restored.state] ?? 'in another state'}`
-  const access = restored.userAccess === 1 ? ' in single-user mode' : restored.userAccess === 2 ? ' with access restricted (RESTRICTED_USER)' : ''
-  return `${state}${access}.`
+  if (!restored) return steps?.length ? `How the restore left ${name} could not be read: check its state in Object Explorer.` : undefined
+  if (restored.absent) {
+    // Files SQL Server left (filesLeft) are named once, by the backend's error message (RestoreRun.LeftoversNote), not again here.
+    const removed = steps?.some(step => step.title === restoreStepTitles.remove && step.status === 'done')
+    return `${name} is not on the server${removed ? ': the partly restored database was removed' : ''}.`
+  }
+  const access = restored.userAccess === 1 ? 'in single-user mode' : restored.userAccess === 2 ? 'with access restricted (RESTRICTED_USER)' : undefined
+  if (restored.state === 1) return `${name} is restoring${access ? `, ${access},` : ''} and cannot be used until a restore finishes.`
+  const state = ['online', 'restoring', 'recovering', 'recovery pending', 'suspect', 'in emergency mode', 'offline'][restored.state] ?? 'in another state'
+  return `${name} is ${state}${access ? `, ${access}` : ''}.`
 }
 
 export type RunOutcome = 'done' | 'failed' | 'stopped' | 'unknown'
@@ -145,6 +155,6 @@ export function sectionSummaries(draft: RestoreDraft, facts: RestoreFacts): { re
   const rows = fileRows(draft, facts), moved = rows.filter(row => row.typed || draft.relocate).length
   const files = `${draft.relocate ? `Relocated to ${show(draft.dataFolder)}` : moved ? `${moved} moved` : 'Default locations'} · ${plural(rows.length, 'file', 'files')}`
   const tail = tailLogPossible(draft, facts) ? draft.tailLog ? 'tail-log backup on' : 'no tail-log backup' : exists ? 'no tail-log backup possible' : 'no tail-log backup (new database)'
-  const options = [...draft.replace ? ['WITH REPLACE'] : [], restoreRecoveryLabels[draft.recovery], tail, ...draft.closeConnections && exists ? ['closes connections'] : []].join(' · ')
+  const options = [...draft.replace ? ['WITH REPLACE'] : [], restoreRecoveryLabels[draft.recovery], tail, ...closesConnections(draft, facts) ? ['closes connections'] : []].join(' · ')
   return { general, files, options }
 }

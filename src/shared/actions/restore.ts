@@ -182,6 +182,8 @@ export interface RestoreDestination {
   readonly sessions?: number
   /** Of them, the sessions with an open transaction, which closing connections rolls back (critic A7); absent without VIEW SERVER STATE. */
   readonly withTransaction?: number
+  /** Its backup family (sys.database_recovery_status): a database of the same name from elsewhere has another, and its backups are not this one's. */
+  readonly familyGuid?: string
 }
 export interface RestoreServerFacts {
   readonly separator: ServerPathSeparator

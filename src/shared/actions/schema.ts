@@ -162,9 +162,16 @@ export interface ActionStep {
   readonly compensates?: boolean
   readonly progress?: number
 }
-/** A restored database as the run left it: sys.databases' state and user_access, read after the last step (critic A12: the access
- *  comes from the backup, not from the SINGLE_USER Varia set), or absent when no database has the name any more. */
-export interface RestoredDatabase { readonly state: number; readonly userAccess: number }
+/**
+ * A restored database as the run left it, read after the last step (critic A12): sys.databases' state and user_access (the access
+ * comes from the backup, not from the SINGLE_USER Varia set); or `absent` when no database has the name, with the files a dropped
+ * partly restored database left on disk (`filesUnknown`: whether they are could not be asked). A reply leaves it out when the
+ * database could not be read, so the page never infers a state.
+ */
+export type RestoredDatabase = { readonly state: number; readonly userAccess: number; readonly absent?: undefined }
+  | { readonly absent: true; readonly filesLeft?: readonly string[]; readonly filesUnknown?: true }
+/** The most leftover files a reply names (ActionService.MaxFilesLeft). */
+export const restoredFilesLimit = 16
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]
@@ -283,7 +290,10 @@ export const actionStepLimit = Math.max(actionLimits.statements, restoreLimits.p
 export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionStepLimit), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
   elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(),
-  restored: z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255) }).strict().optional()
+  restored: z.union([
+    z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255) }).strict(),
+    z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
+  ]).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>
 
 /** The index a step takes in the reply, or the percent a long step reports. */
