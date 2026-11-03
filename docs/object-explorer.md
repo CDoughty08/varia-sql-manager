@@ -268,6 +268,10 @@ comes from `src/shared/actions/logins.ts`: `sa` by principal_id 1 whatever its n
 logins, else by type. Its tooltip names its kind, then Disabled and Permission to connect denied (both when both apply),
 then "Password policy enforced" and "Password expiration enforced" for a SQL login whose policy flags are on.
 Lock-out, expiry and must-change are not shown: only LOGINPROPERTY knows them.
+The live Logins listing checks (`LoginListingLiveChecks.cs`, with `VARIA_TEST_SQL_SCRATCH=1`) create a scratch login
+(`VariaScratch_…`), take it through disabled, denied permission to connect, both, and password policy and expiration
+enforced, and list it while another session holds an uncommitted `ALTER LOGIN … DISABLE` on it, then drop it;
+`--login-listing-live` runs only them.
 
 | Type | Subtype | Kind in the tooltip |
 | --- | --- | --- |

@@ -59,7 +59,8 @@ describe('Logins listing (D4a)', () => {
     expect(prose(docs)).toContain('the listing also sends `connectDenied`, so its row shows both chips and says both')
     expect(prose(docs)).toContain('amber (`warningForeground`) for `noAccess` (a database the current login cannot open, a login denied permission to connect)')
     expect(prose(readFileSync('docs/ipc.md', 'utf8'))).toContain('A login row carries `connectDenied: true` when CONNECT SQL is denied to it')
-    // README says what the live Logins checks do to a shared server, and names their lane.
-    expect(readFileSync('README.md', 'utf8')).toMatch(/The Logins listing checks create a scratch login .*uncommitted `ALTER LOGIN … DISABLE`.*`--logins-live` runs only them\./)
+    // The docs say what the live Logins listing checks do to a shared server, and name their lane (the README no longer
+    // lists test lanes, and `--logins-live` is New Login's).
+    expect(prose(docs)).toMatch(/The live Logins listing checks .*create a scratch login .*uncommitted `ALTER LOGIN … DISABLE`.*`--login-listing-live` runs only them\./)
   })
 })

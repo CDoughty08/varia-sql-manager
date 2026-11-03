@@ -49,7 +49,10 @@ import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
+import { databaseGoneHandler } from '../dialogs/database-gone'
+import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
+import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
 import { actionsContribution } from '../contributions/actions'
@@ -60,6 +63,8 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../new-database/NewDatabaseService'
+import { RestoreService } from '../restore/RestoreService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -136,8 +141,12 @@ export interface Workbench extends Disposable {
   readonly scripting: ScriptingService
   /** Object Explorer's Select Top, Rename and the other object actions. */
   readonly actions: ObjectActionService
+  /** The latest STATS progress of the long object actions (restore, backup) this window runs, by request id. */
+  readonly actionProgress: ActionProgressService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
+  /** The server file picker (Locate Backup File, Locate Database Files, Locate Folder) that a dialog's "…" button opens. */
+  readonly serverFiles: ServerFilePickerService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
   /** The long runs (Create Catalog, later a restore): they refuse a window close, a Disconnect of their server and Restart. */
@@ -148,6 +157,10 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** New Database documents (D1b): their designs, OK as a long run, Script previews and frames. */
+  readonly newDatabase: NewDatabaseService
+  /** Restore Database documents (D1e: read and Script; opened only by the test hook until D1f's OK restores). */
+  readonly restore: RestoreService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
@@ -194,6 +207,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // The backend caps live views per server it reaches; a typed name is the closest this side knows.
   const live = new LiveService({ client: resultClient, settings, page: documentPage(document), schedule: callback => { frame(callback) }, serverOf: id => connections.get(id)?.server.trim().toLowerCase() })
   const explorerStatus = new ExplorerStatusService({ live, connections, panes, settings, schedule: callback => { frame(callback) } })
+  // A database's menu follows its live state (Take Offline greys once a sample shows it offline), not only its listing.
+  const explorerRuntime = explorer.useStatus(explorerStatus)
   const ssisTree = new SsisTreeProbe({ explorer, live, settings, events, explorerVisible: { visible: () => panes.getSnapshot().explorer, subscribe: panes.subscribe } })
   const gridStats = api.testMode ? new GridStats() : undefined
   const queries = new QueryService(documents, api, id => connections.get(id), events, results, undefined, undefined, () => settings.getSnapshot().values)
@@ -211,8 +226,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
+  const dialogs = new ObjectDialogService({
+    api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // Database Properties documents of a database a dialog took offline or brought online follow it.
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
+  })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
@@ -226,9 +247,25 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }), close: id => { void files.close(id) },
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
+  // A database Delete removed: its Properties documents turn orphan and a toast counts the query windows left on it (D3 §8).
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
+  const newDatabase = new NewDatabaseService({
+    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // The database name, once the first read has drawn it; until then the document's first section in its list.
+    focus: id => nextFrame(() => {
+      if (modalOpen()) return
+      const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
+      const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
+      ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    })
+  })
+  const restore = new RestoreService({
+    api, documents, files, connections, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
@@ -257,6 +294,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -275,6 +313,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen, menus, editorHasTextFocus: () => documents.boundEditor?.hasTextFocus() ?? false,
     editorContains: target => target instanceof Node && !!documents.boundEditor?.getContainerDomNode().contains(target) })
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
+  const actionProgress = new ActionProgressService(api)
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
     report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }
@@ -320,12 +359,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     settings,
     scripting,
     actions,
+    actionProgress,
     dialogs,
+    serverFiles,
     ssisCatalog,
     longRuns,
     designers,
     ssisProperties,
     properties,
+    newDatabase,
+    restore,
     activity,
     operations,
     theme,
@@ -347,12 +390,14 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       queries.dispose()
       results.dispose()
       resultMemory.dispose()
+      actionProgress.dispose()
       // Before the live views: its documents' views and stops are cancelled while the service still runs them.
       operations.dispose()
       // Before the live views: each monitor disposes its own; then the client, while the port is still there.
       activity.dispose()
       // Before the client: its views cancel their subscriptions while the port is still there.
       ssisTree.dispose()
+      explorerRuntime.dispose()
       explorerStatus.dispose()
       live.dispose()
       resultClient.dispose()
@@ -361,6 +406,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
+      newDatabase.dispose()
+      restore.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -368,6 +415,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       actions.dispose()
       dialogs.dispose()
+      serverFiles.dispose()
       ssisCatalog.dispose()
       longRuns.dispose()
       connections.dispose()

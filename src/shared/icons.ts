@@ -25,6 +25,7 @@ export const svgIcons = {
   'execution-plan': { path: 'M2.5 2.5h4v4h-4ZM9.5 2.5h4v4h-4ZM9.5 9.5h4v4h-4ZM6.5 4.5h3M7.5 4.5v7h2', use: 'Execution plan documents.' },
   'agent-job': { path: 'M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0ZM7.5 4.5v4h3', use: 'SQL Server Agent: Object Explorer\'s running-jobs chip, and jobs (planned).' },
   'ssis-package': { path: 'M1.5 3.5h13v2h-13ZM2.5 5.5h11v8h-11ZM5.5 9.5h4.5M8.5 8l1.5 1.5-1.5 1.5', use: 'Integration Services packages (planned).' },
+  drive: { path: 'M2.5 9.5 4 3.5h8l1.5 6M3.5 9.5h9a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1ZM10.5 11.5h1', use: 'Drives in the server file picker.' },
   'ssis-environment': { path: 'M2.5 3.5h11M2.5 7.5h11M2.5 11.5h7M13.5 11.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0Z', use: 'Integration Services environments (planned).' }
 } as const satisfies Record<string, { readonly path: string; readonly use: string }>
 export type SvgIconId = keyof typeof svgIcons

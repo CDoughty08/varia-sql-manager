@@ -4,7 +4,7 @@ import { connectionOptionsSchema } from '../shared/connections'
 import { limits } from '../shared/ipc/wire/protocol'
 import { explorerChildrenParamsSchema } from '../shared/explorer/schema.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
-import { actionDescribeSchema, actionExecuteResultSchema, actionRequestSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
+import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema } from '../shared/ssis/schema.ts'
 import { activityDetailsRequestSchema, activityKillRequestSchema } from '../shared/activity/schema.ts'
 
@@ -37,7 +37,7 @@ export const requestSchemas = {
   'scripting.script': scriptRequestSchema,
   'actions.describe': actionDescribeSchema,
   'actions.script': actionScriptRequestSchema,
-  'actions.execute': actionRequestSchema,
+  'actions.execute': actionExecuteRequestSchema,
   'ssis.describe': ssisDescribeSchema,
   'ssis.execute': ssisExecuteSchema,
   'ssis.catalogSetup': ssisCatalogSetupSchema,
