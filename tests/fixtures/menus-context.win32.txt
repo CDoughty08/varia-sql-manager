@@ -154,6 +154,10 @@ explorer.context, for a database
       &File…  -++-
       C&lipboard  -+++
   ---
+  &Tasks >
+    &Take Offline  -+++
+    Bring &Online  -+++
+  ---
   Copy N&ame  -+++
   ---
   Rena&me  F2  -+++

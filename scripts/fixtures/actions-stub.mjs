@@ -28,6 +28,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Security › Logins lists sa and every login New Login made. New Login describes a Windows server (master and AppData, two
  * languages, three server roles); its Script is `newLoginScript`; OK with the password "Weak" answers PASSWORD_POLICY at
  * "Create the login", "Held" waits until its Stop arrives, and anything else adds the login.
+ * Take Database Offline describes AppData with two sessions, one of them in a transaction; taken offline (Drop All Active
+ * Connections, or none left), it lists as "(Offline)" until Bring Online. With `holding` set, a SET OFFLINE without Drop All
+ * Active Connections waits, as on a session that joined after the describe, until its Stop arrives.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -63,13 +66,16 @@ export const newDatabaseScript = name => `CREATE DATABASE [${name}]
  ON PRIMARY
 GO
 `
+export const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
+export const stubSessions = [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }]
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], logins: ['sa'], blocked: new Map(), catalog: false }
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], logins: ['sa'], blocked: new Map(), catalog: false, offline: false, holding: false,
+    sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
@@ -80,6 +86,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
  ON PRIMARY
 GO
 `
+  const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
@@ -88,7 +95,11 @@ GO
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
-    databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database')),
+    // As the backend lists a database: its runtime state, and offline (AppData after Take Offline), that state in the sublabel,
+    // unavailable, with nothing to expand.
+    databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database', name === 'AppData' && stub.offline
+      ? { sublabel: '(Offline)', status: 'unavailable', hasChildren: false, database: { state: 6, userAccess: 0, readOnly: false, standby: false } }
+      : { database: { state: 0, userAccess: 0, readOnly: false, standby: false } })),
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'view')],
@@ -132,6 +143,28 @@ GO
       filesTruncated: false, filegroups: [{ name: 'PRIMARY', type: 'rows', files: 1, readOnly: false, isDefault: true, autogrowAllFiles: false }], filegroupsTruncated: false,
       server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 1
     }, elapsedMs: 1 })
+  }
+  /** Take Database Offline's and Bring Database Online's read, refused as the backend's database rules refuse it. */
+  function databaseState({ dialog, target }) {
+    const refused = message => ok({ elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message, retryable: false } })
+    if (dialog === 'takeOffline' && stub.offline) return refused('The database is offline.')
+    if (dialog === 'bringOnline' && !stub.offline) return refused('The database is online.')
+    const sessions = stub.offline ? [] : stub.sessions
+    return ok({ databaseState: { name: target.name, identity: { id: 7, created: '2026-01-02T03:04:05.000' }, state: stub.offline ? 6 : 0, userAccess: 0, readOnly: false, standby: false,
+      sessions: sessions.length, withTransaction: sessions.filter(session => session.openTransactions > 0).length, sessionList: sessions, sessionsTruncated: false, warnings: [] }, elapsedMs: 1 })
+  }
+  /** SET OFFLINE (waiting until Stop while `holding`, without Drop All Active Connections) and SET ONLINE. */
+  function databaseStateChange(params) {
+    if (params.action === 'bringOnline') {
+      stub.offline = false
+      return ok({ steps: [{ status: 'done', title: 'Bring database online' }], messages: [], elapsedMs: 1 })
+    }
+    const title = params.dropConnections ? 'Close connections and take database offline' : 'Take database offline'
+    if (!params.dropConnections && stub.holding) return new Promise(resolve => stub.blocked.set(params.requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title }], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: `The action was stopped at "${title}"; SQL Server cancelled that statement.`, retryable: true } }))))
+    stub.offline = true
+    stub.sessions = []
+    return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
   }
   function describe({ target }) {
     const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }] : []
@@ -248,6 +281,7 @@ GO
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'createLogin') return createLogin(params)
     if (params.action === 'attach') return attachExecute(params)
+    if (params.action === 'takeOffline' || params.action === 'bringOnline') return databaseStateChange(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
       if (params.newName === 'Taken') return ok({ steps: [], messages: [], elapsedMs: 1, error: { code: 'NAME_IN_USE', message: 'The name Taken is already in use in this schema.', retryable: false } })
@@ -315,6 +349,7 @@ GO
           case 'serverFiles': return listServerFiles(params)
           case 'restoreDatabase': return restore(params)
           case 'attachDatabase': return attachDescribe(params)
+          case 'takeOffline': case 'bringOnline': return databaseState(params)
           default: return describe(params)
         }
       case 'actions.script':
@@ -326,6 +361,7 @@ GO
           case 'createDatabase': return ok({ text: newDatabaseScript(params.target.name), database: 'master', warnings: [] })
           case 'attach': return ok({ text: params.databases.map(database => `USE [master]\r\nGO\r\nCREATE DATABASE [${database.name}] ON ${database.files.map(file => `( FILENAME = N'${file}' )`).join(', ')}`
             + ` FOR ATTACH${database.rebuildLog ? '_REBUILD_LOG' : ''}\r\nGO\r\n`).join(''), database: 'master', warnings: [] })
+          case 'takeOffline': return ok({ text: offlineScript(params.dropConnections), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

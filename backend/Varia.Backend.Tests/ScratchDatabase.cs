@@ -106,6 +106,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>The name of the attach checks' second database, whose file is missing (never created, unless an attach goes wrong).</summary>
     public string AttachMissing => Name + "_at2";
     private string[]? attachFiles;
+    /// <summary>Where the Take Offline and Bring Online checks take a database offline and back (created on demand).</summary>
+    public string DatabaseState => Name + "_dbs";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -117,8 +119,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
-    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; and _lgn New Login's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn)?$")]
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _lgn New Login's; and _dbs Take Offline's and
+    // Bring Online's (a crashed run can leave it offline, which the sweep drops by state).
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn|_dbs)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -461,6 +464,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>The files <see cref="Attach"/> has now (a rebuilt log has a name of SQL Server's choosing), which Dispose attaches.</summary>
     public void AttachFilesAre(string[] files) => attachFiles = files;
 
+    /// <summary>Creates the empty, marked database the Take Offline and Bring Online checks change the state of.</summary>
+    public Task<string> CreateDatabaseStateAsync() => CreateMarkedAsync(DatabaseState);
+
     /// <summary>Creates the empty, marked table designer database.</summary>
     public Task<string> CreateDesignerAsync() => CreateMarkedAsync(Designer);
 
@@ -581,7 +587,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         if (attachFiles is { } files)
             await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "
                 + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;", "master");
-        foreach (var name in created) await Drop(run, name, name != Offline);
+        // A failed state check can leave _dbs offline; SET ONLINE first lets the DROP delete its files.
+        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         // Restore Database's source files go, then its history; a file left behind keeps the history for the stale sweep.

@@ -2,7 +2,8 @@
 
 <!-- Generated from src/shared/actions/catalog.ts. Regenerate with: npx vitest run tests/object-actions-catalog.test.ts -u -->
 
-Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete and Properties, and the Databases folder's Attach. Which kinds, subtypes and folders offer each is
+Object Explorer's actions on objects: Select Top 1000 Rows, Rename, Delete, Properties, a database's Tasks › Take Offline and
+Bring Online, and the Databases folder's Attach. Which kinds, subtypes and folders offer each is
 data in `src/shared/actions/catalog.ts`; the backend embeds the same data as `backend/Varia.Backend/Actions/actions-catalog.json`
 and re-derives the subtype in the action's own connection before any DDL runs.
 
@@ -15,6 +16,8 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
 | `attach` | Attach… | `explorer.attachDatabase` | dialog (`attachDatabase`) | `explorer.context` | `0_new` 2 | a | — | — | SQL Server | `explorerActionAttach` |
+| `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 1 | t | — | — | SQL Server | `explorerActionTakeOffline` |
+| `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 2 | o | — | — | SQL Server | `explorerActionBringOnline` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -38,21 +41,21 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties |
-| --- | --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ | ✓ |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – |
-| `view` | none | ✓ | ✓ | ✓ | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
-| `function` | `aggregate` | – | ✓ | ○ | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Take Database Offline | Bring Database Online |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
 
 ## Folder actions
 
@@ -72,7 +75,12 @@ No kind changes its actions by status yet.
 
 A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
-No rule narrows a database's actions yet.
+| Action | States | Access | Read-only | Effect | Reason |
+| --- | --- | --- | --- | --- | --- |
+| Take Database Offline | offline | Any | Any | Greyed | The database is offline. |
+| Take Database Offline | restoring, recovering, copying, offlineSecondary | Any | Any | Greyed | A database that is restoring or recovering cannot be taken offline. |
+| Bring Database Online | online | Any | Any | Greyed | The database is online. |
+| Bring Database Online | restoring, recovering, copying | Any | Any | Greyed | A database that is restoring or recovering cannot be brought online. |
 
 Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
 the Servers column above says which, and on another server the menu hides the item. Menus read the server through
@@ -87,6 +95,8 @@ the Servers column above says which, and on another server the menu hides the it
 | `newDatabase` | New Database | Document tab | `createDatabase` | General (`settings-gear`), Options (`settings-gear`), Filegroups (`settings-gear`) | No |
 | `attachDatabase` | Attach Databases | Modal dialog | `attach` | General (`settings-gear`) | No |
 | `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), Status (`settings-gear`) | Yes |
+| `takeOffline` | Take Database Offline - <name> | Modal dialog | `takeOffline` | General (`settings-gear`) | Yes |
+| `bringOnline` | Bring Database Online - <name> | Modal dialog | `bringOnline` | General (`settings-gear`) | Yes |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -104,6 +114,40 @@ OK runs the action; Cancel reads Stop while it runs, and Stop cancels the statem
 Delete Object for a database also offers "Delete backup and restore history information for databases" (checked,
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation.
+
+### Take Offline and Bring Online
+
+Tasks › Take Offline opens Take Database Offline - <name>: a grid of Database Name, Drop All Active Connections
+(cleared), Status and Message, as SSMS 18 and later lay it out (recalled). The Message counts the sessions in the
+database and those with an open transaction; a disclosure lists them (session id, login, program, host and open
+transactions, at most 8, with VIEW SERVER STATE), and the page names Varia's own query windows on the database
+whose session holds an open transaction, which Drop All Active Connections rolls back (A7). Before it counts, the
+describe closes the backend's own idle pooled connections in the database, as the action does before SET OFFLINE, and
+waits up to a second for SQL Server to end their sessions; every session left is listed, Varia's query windows and busy
+pooled connections included (a session id alone never marks a session as Varia's: SQL Server reuses freed ids). Without
+VIEW SERVER STATE the Message says the sessions are unknown, and OK runs.
+
+`SET OFFLINE` without a termination clause waits for every other session to leave, so while sessions are connected and
+the box is cleared the Status is Not ready and OK is disabled, with the reason beside it; Check Again counts them again.
+Checked, OK runs `SET OFFLINE WITH ROLLBACK IMMEDIATE` (about 3 s even on an idle database, probed). Either way the run
+can wait for locks, so Stop (focused once OK starts the run) cancels it in SQL Server and the database stays online; the
+row then asks to Check Again. A success keeps the dialog open on its steps with Close focused and Script greyed, as
+SSMS's progress dialog does.
+
+Tasks › Bring Online opens Bring Database Online - <name> and runs `SET ONLINE` at once, with nothing to confirm; Stop
+cancels a recovery that waits. The menu offers it on any state SQL Server lets `SET ONLINE` act on (offline, recovery
+pending, suspect, emergency) and greys it while the database is online, restoring, recovering or copying. A database left
+SINGLE_USER (or RESTRICTED_USER) while it was offline comes back so, and the reply says so in a message (read after
+SET ONLINE under a budget of its own, so a Stop that arrives just then leaves the success a success).
+
+Both are offered on box SQL Server only (Managed Instance cannot set OFFLINE or ONLINE), greyed on SQL Server's own
+databases and absent on a snapshot. The backend re-derives the state rules above from `sys.databases` before it runs
+anything, refuses a database whose identity changed since the dialog read it, and needs ALTER ANY DATABASE, dbcreator,
+ownership, or (while it is online) ALTER on the database: `HAS_PERMS_BY_NAME` on the database answers 0 to a login with no
+user in it, to sysadmin while another session holds it SINGLE_USER, and to everyone once it is offline (probed). SQL
+Server's 5011 is PERMISSION_DENIED too. After either, the Databases folder is listed again ("(Offline)" in the sublabel),
+and the database's Database Properties documents on that server read it again, or, while they hold changes, keep them
+with an Offline status and a banner; Apply still runs, and its preflight refuses a database that is not online.
 
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
@@ -551,7 +595,7 @@ Stop's reply waits for SQL Server to end the statement and then for them, so it 
 Varia's own cleanup runs. An action can instead run its steps in one transaction (the table designer's Save): a failure or
 Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.
 
-Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and
+Before the first statement that needs a database to itself (setting single-user, taking it offline, renaming, dropping or detaching it), and
 before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection
 to that server: for each connection whose own database it is (the Connect dialog's Database, or the login's default, read
 at connect), Object Explorer's, scripting's, SSIS's and the live views' server-scope connections open in master from then
@@ -570,11 +614,14 @@ If the backend stops while an action runs: "The SQL backend stopped while the ac
 
 ### Shared statements
 
-Later actions plan these statements. Each is built by SQL Server from constant text, linted, and checked against hostile
+Take Offline and Bring Online plan the first three, later actions the others. Each is built by SQL Server from constant text, linted, and checked against hostile
 names by a live dry run:
 
 | Step | As Script Action writes it |
 | --- | --- |
+| Take database offline | `ALTER DATABASE [db] SET  OFFLINE` |
+| Close connections and take database offline | `ALTER DATABASE [db] SET  OFFLINE WITH ROLLBACK IMMEDIATE` |
+| Bring database online | `ALTER DATABASE [db] SET  ONLINE` |
 | Restore multi-user access | `ALTER DATABASE [db] SET  MULTI_USER` |
 | Restore restricted user access | `ALTER DATABASE [db] SET  RESTRICTED_USER` |
 | Detach the database | `EXEC master.dbo.sp_detach_db @dbname = N'db', @skipchecks = 'false'` ('true' when Update Statistics is cleared) |
@@ -762,3 +809,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `logFileMb` | 2,097,152 | A log file's initial and maximum size in New Database, in MB (2 TB, SQL Server's ceiling for a log file) |
 | `growthMb` | 2,097,152 | A file's autogrowth in MB, in New Database |
 | `growthPercent` | 100 | A file's autogrowth in percent, in New Database |
+| `sessions` | 8 | Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so |
+| `sessionText` | 128 | Characters of each login, program and host name in that list |

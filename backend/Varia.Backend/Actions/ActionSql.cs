@@ -8,13 +8,14 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; and New Login's ALTER SERVER ROLE …
-/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password).</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; New Login's ALTER SERVER ROLE …
+/// ADD MEMBER (its CREATE LOGIN is LoginSql's builder, which takes the password); then Take Offline's SET OFFLINE (plain, or
+/// WITH ROLLBACK IMMEDIATE) and Bring Online's SET ONLINE.</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
-    AddServerRoleMember
+    AddServerRoleMember, SetOffline, SetOfflineRollback, SetOnline
 }
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
@@ -118,6 +119,10 @@ internal static partial class ActionSql
             ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
             // The role, then the member, as SMO writes it (captured by D2).
             ActionTemplate.AddServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " ADD MEMBER " + Quote(names[1]),
+            // SMO's capture of SSMS's Take Offline and Bring Online (probed by D3).
+            ActionTemplate.SetOffline => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE",
+            ActionTemplate.SetOfflineRollback => "ALTER DATABASE " + Quote(names[0]) + " SET  OFFLINE WITH ROLLBACK IMMEDIATE",
+            ActionTemplate.SetOnline => "ALTER DATABASE " + Quote(names[0]) + " SET  ONLINE",
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -152,6 +157,9 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.AddServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' ADD MEMBER ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.SetOffline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE';\n"),
+            ActionTemplate.SetOfflineRollback => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  OFFLINE WITH ROLLBACK IMMEDIATE';\n"),
+            ActionTemplate.SetOnline => Run("DECLARE @stmt nvarchar(max) = N'ALTER DATABASE ' + QUOTENAME(@p1) + N' SET  ONLINE';\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -212,10 +220,16 @@ internal static partial class ActionSql
             + "JOIN sys.objects AS ro ON ro.object_id = r.referencing_id JOIN sys.schemas AS rs ON rs.schema_id = ro.schema_id ORDER BY rs.name, ro.name;";
     }
 
-    /// <summary>A database's row in master: state, subtype, what blocks a DROP (replication, an availability group,
-    /// mirroring), owner, sessions in it (with VIEW SERVER STATE), permissions and whether @new is another database's name.
-    /// The owner falls back to SUSER_SNAME(d.owner_sid): a Windows group's member owns it with no server principal of its own.</summary>
-    public const string Database = "SELECT d.database_id AS database_id, d.state AS state, d.state_desc AS state_desc, "
+    /// <summary>A database's row in master: its identity (database_id, create_date), state, user access, read-only and standby,
+    /// subtype, what blocks a DROP or SET OFFLINE (replication, an availability group, mirroring), owner, sessions in it and those
+    /// with an open transaction (with VIEW SERVER STATE), permissions and whether @new is another database's name. can_alter_state is
+    /// what SET OFFLINE and SET ONLINE need, which HAS_PERMS_BY_NAME on the database does not answer: it says 0 to a login with no user
+    /// in the database (ALTER ANY DATABASE, dbcreator), to sysadmin while another session holds a SINGLE_USER database, and to everyone
+    /// on a database that is not online (probed on SQL Server 2025). So ALTER ANY DATABASE, dbcreator (sys.login_token) or ownership
+    /// grant it in any state, and ALTER on the database while it is online. The owner falls back to SUSER_SNAME(d.owner_sid): a Windows
+    /// group's member owns it with no server principal of its own.</summary>
+    public const string Database = "SELECT d.database_id AS database_id, d.create_date AS create_date, d.state AS state, d.state_desc AS state_desc, "
+        + "d.user_access AS user_access, d.is_read_only AS is_read_only, d.is_in_standby AS is_in_standby, "
         + "CONVERT(bit, CASE WHEN d.source_database_id IS NULL THEN 0 ELSE 1 END) AS is_snapshot, "
         + "CONVERT(bit, CASE WHEN d.database_id <= 4 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS is_system, "
         + "CONVERT(bit, CASE WHEN d.is_published = 1 OR d.is_subscribed = 1 OR d.is_merge_published = 1 OR d.is_distributor = 1 THEN 1 ELSE 0 END) AS replicated, "
@@ -223,7 +237,11 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN dm.mirroring_guid IS NULL THEN 0 ELSE 1 END) AS mirrored, "
         + "COALESCE(sp.name, SUSER_SNAME(d.owner_sid)) AS owner_name, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id) END AS sessions, "
+        + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.database_id = d.database_id AND es.open_transaction_count > 0) END AS with_transaction, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1)) AS can_alter, "
+        + "CONVERT(bit, CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 OR d.owner_sid = SUSER_SID() "
+        + "OR EXISTS (SELECT 1 FROM sys.login_token AS t WHERE t.type = N'SERVER ROLE' AND t.name = N'dbcreator') THEN 1 "
+        + "WHEN d.state = 0 THEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER'), 1) ELSE 0 END) AS can_alter_state, "
         + "CONVERT(bit, CASE WHEN ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'CONTROL'), 1) = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY DATABASE') = 1 THEN 1 ELSE 0 END) AS can_drop, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.databases AS x WHERE x.name = @new AND x.database_id <> d.database_id) THEN 1 ELSE 0 END) AS name_in_use "
         + "FROM sys.databases AS d LEFT JOIN sys.database_mirroring AS dm ON dm.database_id = d.database_id LEFT JOIN sys.server_principals AS sp ON sp.sid = d.owner_sid "
@@ -256,6 +274,16 @@ internal static partial class ActionSql
     public const string OwnSessions = "SELECT es.session_id AS session_id FROM sys.dm_exec_sessions AS es JOIN sys.databases AS d ON d.database_id = es.database_id "
         + "WHERE d.name = @name AND es.host_process_id = @pid AND es.session_id <> @@SPID;";
 
+    /// <summary>The sessions in a database (in master, with VIEW SERVER STATE; without it only this session, which is not in it,
+    /// is visible), at most @take by session id, this process's query windows among them. Names are clipped in C#.</summary>
+    public const string DatabaseSessions = "DECLARE @id int = (SELECT d.database_id FROM sys.databases AS d WHERE d.name = @name);\n"
+        + "SELECT TOP (@take) es.session_id AS session_id, es.login_name AS login_name, es.program_name AS program_name, es.host_name AS host_name, "
+        + "es.open_transaction_count AS open_transactions FROM sys.dm_exec_sessions AS es WHERE es.database_id = @id AND es.session_id <> @@SPID "
+        + "ORDER BY es.session_id;";
+
+    /// <summary>A database's state and user access after an action, in master (Bring Online reports a database still SINGLE_USER).</summary>
+    public const string DatabaseAccess = "SELECT d.state AS state, d.user_access AS user_access FROM sys.databases AS d WHERE d.name = @name;";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -263,12 +291,16 @@ internal static partial class ActionSql
         "N'.'", "N'.sys.sp_executesql'", "N'.sys.sp_rename'", "N'OBJECT'", "N'SCHEMA'", "N'DATABASE'", "N'ALTER'", "N'CONTROL'", "N'VIEW SERVER STATE'", "N'ALTER ANY DATABASE'",
         "N'A name could not be quoted.'", "N'DROP TABLE '", "N'DROP VIEW '", "N'DROP PROCEDURE '", "N'DROP FUNCTION '", "N'DROP DATABASE '", "N'ALTER DATABASE '",
         "N' MODIFY NAME = '", "N' SET  SINGLE_USER WITH ROLLBACK IMMEDIATE'",
+        // Take Offline and Bring Online.
+        "N' SET  OFFLINE'", "N' SET  OFFLINE WITH ROLLBACK IMMEDIATE'", "N' SET  ONLINE'",
         // The shared templates (critic A21).
         "N' SET  MULTI_USER'", "N' SET  RESTRICTED_USER'", "N'ALTER LOGIN '", "N' DISABLE'", "N' ENABLE'", "N'DENY CONNECT SQL TO '", "N'GRANT CONNECT SQL TO '", "N'DROP USER '",
         // New Login's server roles (Actions/LoginSql), and its describe's and preflight's server facts.
         "N'ALTER SERVER ROLE '", "N' ADD MEMBER '", "'IsIntegratedSecurityOnly'",
         // The login preflight (Login).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'",
+        // Take Offline's and Bring Online's permission (Database's can_alter_state).
+        "N'SERVER ROLE'", "N'dbcreator'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -424,6 +456,8 @@ internal static partial class ActionSql
         yield return ("database state", LintCatalog(DatabaseState, ExplorerCatalog.MaxBand, database: false));
         yield return ("login", LintCatalog(Login, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database sessions", LintCatalog(DatabaseSessions, ExplorerCatalog.MaxBand, database: false));
+        yield return ("database access", LintCatalog(DatabaseAccess, ExplorerCatalog.MaxBand, database: false));
         yield return ("module call", LintCatalog(ModuleCall, ExplorerCatalog.MaxBand, database: false));
         // Database Properties: the describe in master and inside the database for every band, its call, the preflight,
         // and every ALTER the catalogue can plan, run and dry run.

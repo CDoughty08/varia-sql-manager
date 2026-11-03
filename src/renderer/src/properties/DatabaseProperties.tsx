@@ -14,8 +14,8 @@ import Segmented from '../kit/Segmented'
 import Skeleton from '../kit/Skeleton'
 import StatusPill from '../kit/StatusPill'
 import Switch from '../kit/Switch'
-import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, switchStates } from './fields'
-import type { DatabasePropertiesService, PropertiesState } from './DatabasePropertiesService'
+import { databaseStatusPill, dateText, fieldControl, megabytes, problemSections, shownModel, switchStates } from './fields'
+import { propertiesMessages, type DatabasePropertiesService, type PropertiesState } from './DatabasePropertiesService'
 
 /** The DOM id prefix of a document's fields, so two open documents never share one. */
 const fieldId = (documentId: string, key: string, prefix = 'properties') => `${prefix}-${documentId}-${key}`
@@ -211,13 +211,13 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
   const verbs: Verb[] = state.phase === 'applying'
     ? [{ command: 'databaseProperties.stop', args, emphasis: 'danger' }]
     : [{ command: 'databaseProperties.refresh', args }, { command: 'databaseProperties.discard', args }, { command: 'databaseProperties.apply', args, label: 'Apply', emphasis: 'primary' }]
-  const pill = model ? databaseStatusPill(model) : undefined
+  const pill = model ? databaseStatusPill(shownModel(model, state.offline)) : undefined
   const phaseLabel = state.phase === 'loading' ? 'Reading the database…' : state.phase === 'applying' ? 'Applying the changes…' : state.phase === 'confirming' ? 'Waiting for your answer…' : undefined
   const content = (page: PageId) => {
     if (!model || !draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the database" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the database could not be read.' : ''}</p>
     const props: SectionProps = { state, model, draft, editable, errors, service: properties }
     switch (page) {
-      case 'general': return <GeneralSection model={model} />
+      case 'general': return <GeneralSection model={shownModel(model, state.offline)} />
       case 'files': return <FilesSection {...props} />
       case 'filegroups': return <FilegroupsSection state={state} model={model} />
       case 'options': return <OptionsSection {...props} />
@@ -236,6 +236,7 @@ export default function DatabaseProperties({ documentId }: { documentId: string 
       actions={recovery} />}
     {!state.error && state.notice && <p className="document-status" role="status"><Icon name="pass" />{state.notice}</p>}
     {model?.readOnlyReason && <p className="document-status"><Icon name="lock" />{model.readOnlyReason}</p>}
+    {model && !model.readOnlyReason && state.offline && <p className="document-status"><Icon name="lock" />{propertiesMessages.offline}</p>}
     {model && !model.readOnlyReason && model.options.readOnly === 'true' && <p className="document-status"><Icon name="lock" />{greyNotes.readOnlyDatabase}</p>}
   </>
   return <FieldHints><DocumentFrame id={`properties-${state.id}`} title={state.label} subtitle="Database Properties" crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]}

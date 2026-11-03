@@ -16,11 +16,14 @@ import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
 import type { ServerFilePick } from '../server-files/ServerFilePickerService'
-import { definitionOf, type BuiltRequest, type DialogDraft, type DialogModel } from './definitions'
+import { definitionOf, type BuiltRequest, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
 import { emptySecrets, type SecretState } from './new-login'
 
-/** loading → ready, or loadFailed; OK → (confirming →) executing → closed, or failed (or stopped); a lost server → disconnected. */
-export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'failed' | 'stopped' | 'disconnected'
+/**
+ * loading → ready, or loadFailed; OK → (confirming →) executing → closed (`succeeded` for a dialog that stays open on its
+ * steps), or failed (or stopped); a lost server → disconnected. Check Again reads the object again (`loading` with the model kept).
+ */
+export type DialogPhase = 'loading' | 'ready' | 'loadFailed' | 'confirming' | 'scripting' | 'executing' | 'succeeded' | 'failed' | 'stopped' | 'disconnected'
 export interface OpenObjectDialog {
   /** Changes with every dialog, so the frame remounts. */
   readonly id: number
@@ -69,6 +72,8 @@ export interface ObjectDialogServiceOptions {
   readonly documents: DeliverScriptDeps['documents']
   readonly files: DeliverScriptDeps['files']
   readonly focusEditor?: () => void
+  /** A database a dialog took offline or brought online (DatabasePropertiesService follows it). */
+  readonly databaseState?: (connectionId: string, database: string, offline: boolean) => void
   readonly newId?: () => string
 }
 
@@ -143,9 +148,21 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   /** Changes the draft, from a patch or from the draft as it is now (a page's async step, Attach's Add, reads the latest). */
   updateDraft(patch: Partial<DialogDraft> | ((draft: DialogDraft) => Partial<DialogDraft>)): void {
     const open = this.current
-    if (!open?.draft || open.phase === 'executing' || open.phase === 'disconnected') return
+    if (!open?.draft || open.phase === 'executing' || open.phase === 'disconnected' || open.phase === 'succeeded') return
     this.update(open, { draft: { ...open.draft, ...typeof patch === 'function' ? patch(open.draft) : patch } as DialogDraft })
     this.recheckProblem()
+  }
+  /** Why OK cannot run now with the dialog's draft (its definition's `blocked`: Attach's missing data file, Take Offline's
+   *  sessions), beside OK, which it disables; none once the dialog cannot run anything. */
+  blockedReason(open: OpenObjectDialog | undefined = this.current): string | undefined {
+    return open?.model && open.draft && open.phase !== 'succeeded' && open.phase !== 'loadFailed' && open.phase !== 'disconnected' ? definitionOf(open.dialog).blocked?.(open.model, open.draft) : undefined
+  }
+  /** Check Again: reads the object again, keeping the draft, as SSMS counts connections when its dialog opens. */
+  reload(): void {
+    const open = this.current
+    if (!open || !open.model || (open.phase !== 'ready' && open.phase !== 'failed' && open.phase !== 'stopped')) return
+    this.update(open, { phase: 'loading', error: undefined, notice: undefined })
+    void this.describe(open)
   }
   /** A password field changed: its value goes to the secret slot, and the snapshot learns only whether it is empty, matches its
    *  confirmation and is well formed. Ignored while OK runs, after the server is lost, or in a dialog without password fields. */
@@ -215,11 +232,14 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   async ok(): Promise<void> {
     const open = this.current
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
-    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
+    if (open.phase === 'disconnected' || open.phase === 'loadFailed' || open.phase === 'succeeded' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
+    // A draft's own problem (Attach: a data file not found) shows in the message bar; a definition's other reasons (Take Offline:
+    // sessions still connected) keep OK disabled with the reason beside it, so Enter does nothing either.
     if ('problem' in built) { this.showProblem(open, built.problem); return }
+    if (this.blockedReason(open)) return
     const confirmation = definition.confirm?.(open.model, built)
     if (confirmation) {
       // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
@@ -247,15 +267,17 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const value: ActionExecuteResult | undefined = result.ok ? result.value : undefined
     if (value && !value.error) {
       this.secrets.clear()
-      this.publish({})
-      try { definition.afterSuccess({ refreshListing: select => this.refreshListing(open, select), reveal: (folder, object) => this.reveal(open, folder, object) }, sent) } catch (failure) { onUnexpectedError(failure) }
+      // SQL Server's informational messages (a database left SINGLE_USER) stay readable in a dialog that stays open.
+      if (definition.keepOpen) this.update(open, { phase: 'succeeded', steps: value.steps, ...(value.messages.length ? { notice: value.messages.join(' ') } : {}) })
+      else this.publish({})
+      try { definition.afterSuccess(this.effectsOf(open), sent) } catch (failure) { onUnexpectedError(failure) }
       return
     }
     // Steps that completed before a failure or Stop changed the object (a database dropped, then its history step
     // stopped), so the listing shows what is there now; so may a step Stop reached after SQL Server finished it (an attach). A
     // dialog that creates an object shows it where it is listed.
     if (value?.steps.some(step => step.status === 'done' || step.status === 'cancelled')) {
-      const effects = { refreshListing: (select?: ExplorerNodeRef) => this.refreshListing(open, select), reveal: (folder: FolderId, object: ObjectRef) => this.reveal(open, folder, object) }
+      const effects = this.effectsOf(open)
       try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
     }
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
@@ -300,6 +322,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
 
   private async describe(open: OpenObjectDialog): Promise<void> {
+    // `open` is the dialog as it was when the read began: with a model only for Check Again.
     const requestId = this.begin(open)
     const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: open.dialog, target: open.target }))
     if (!this.end(open, requestId)) return
@@ -307,7 +330,9 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     const definition = definitionOf(open.dialog)
     const model = result.ok ? definition.modelOf(result.value) : undefined
     if (failure || !model) { this.update(open, { phase: 'loadFailed', error: failure ?? error('NOT_FOUND', 'The object could not be read.') }); return }
-    this.update(open, { phase: 'ready', model, draft: definition.initialDraft(model, open.target) })
+    // Check Again keeps what the user chose.
+    this.update(open, { phase: 'ready', model, draft: open.draft ?? definition.initialDraft(model, open.target) })
+    if (definition.runOnOpen && !open.model) await this.ok()
   }
   private async call<T>(send: () => Promise<ApiResult<T>>): Promise<ApiResult<T>> {
     try { return await send() } catch (failure) { return { ok: false, error: failure instanceof Error ? failure.message : 'The request failed.' } }
@@ -358,6 +383,14 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.extra.clear()
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */
+  /** What a definition's afterSuccess and afterPartial may do for this dialog. */
+  private effectsOf(open: OpenObjectDialog): DialogEffects {
+    return {
+      refreshListing: select => this.refreshListing(open, select),
+      reveal: (folder, object) => this.reveal(open, folder, object),
+      databaseState: offline => { if (open.target.kind === 'database' && open.target.name !== undefined) this.options.databaseState?.(open.connectionId, open.target.name, offline) }
+    }
+  }
   private reveal(open: OpenObjectDialog, folder: FolderId, object: ObjectRef): void {
     const node = this.options.explorer.folderNode?.(open.connectionId, { kind: 'server' }, folder)
     if (node !== undefined) this.options.explorer.reconcile(node, { select: { type: 'object', object } })

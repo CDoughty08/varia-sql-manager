@@ -7,7 +7,7 @@
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
 import type { NewLoginModel } from '../../../shared/actions/logins.ts'
-import type { ActionDescribeResult, ActionError, ActionRequest, AttachRequest, AttachServerFacts, CreateLoginRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import type { ActionDescribeResult, ActionError, ActionRequest, AttachRequest, AttachServerFacts, CreateLoginRequest, DatabasePropertiesModel, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
 import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
@@ -27,6 +27,8 @@ export interface DialogEffects {
   refreshListing(select?: ExplorerNodeRef): void
   /** Reloads the server's `folder` (where a new object is listed) and selects `object` in it, when that folder is in the tree. */
   reveal(folder: FolderId, object: ObjectRef): void
+  /** The dialog's database went offline or came online: its Database Properties documents follow. */
+  databaseState(offline: boolean): void
 }
 /** A question main asks before OK runs: SSMS's Open Connections prompt. */
 export type DialogConfirmation = 'openConnections'
@@ -57,6 +59,10 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest) => void
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
+  /** OK runs as soon as the describe answers, with nothing to choose (SSMS's Bring Online). */
+  readonly runOnOpen?: true
+  /** A success leaves the dialog open on its steps with Close, as SSMS's progress dialogs do, instead of closing it. */
+  readonly keepOpen?: true
 }
 
 /** Delete Object's checkboxes; they apply to databases only. */
@@ -123,19 +129,56 @@ export const attachDatabaseDefinition: ObjectDialogDefinition<AttachServerFacts,
   }
 }
 
+const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** Take Database Offline's one choice: SSMS's Drop All Active Connections, cleared. */
+export interface TakeOfflineDraft { readonly dropConnections: boolean }
+/** SET OFFLINE without a termination clause waits for every other session to leave, so OK waits for nothing: with sessions
+ *  in the database and Drop All Active Connections cleared, it is disabled (unknown sessions do not disable it). */
+export function takeOfflineBlocked(model: DatabaseStateModel, draft: TakeOfflineDraft): string | undefined {
+  if (draft.dropConnections || !model.sessions) return undefined
+  return `${count(model.sessions, 'session is', 'sessions are')} connected: check Drop All Active Connections, or Check Again once ${model.sessions === 1 ? 'it leaves' : 'they leave'}.`
+}
+export const takeOfflineDefinition: ObjectDialogDefinition<DatabaseStateModel, TakeOfflineDraft> = {
+  dialog: 'takeOffline',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({ dropConnections: false }),
+  request: (target, model, draft) => ({ action: 'takeOffline', target, dropConnections: draft.dropConnections, identity: model.identity }),
+  blocked: takeOfflineBlocked,
+  keepOpen: true,
+  // The Databases listing shows "(Offline)" in the sublabel; Database Properties of the database turns read-only.
+  afterSuccess: effects => { effects.refreshListing(); effects.databaseState(true) }
+}
+/** Bring Database Online has nothing to choose. */
+export type BringOnlineDraft = Readonly<Record<never, never>>
+export const bringOnlineDefinition: ObjectDialogDefinition<DatabaseStateModel, BringOnlineDraft> = {
+  dialog: 'bringOnline',
+  modelOf: result => result.databaseState,
+  initialDraft: () => ({}),
+  request: (target, model) => ({ action: 'bringOnline', target, identity: model.identity }),
+  runOnOpen: true,
+  keepOpen: true,
+  afterSuccess: effects => { effects.refreshListing(); effects.databaseState(false) }
+}
+
 /** The dialogs this module defines: New Database is a document with a service of its own (src/renderer/src/new-database). */
 export type DefinedDialogId = Exclude<DialogId, 'newDatabase'>
 export interface DialogModels {
   readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly attachDatabase: AttachServerFacts; readonly newLogin: NewLoginModel
+  readonly takeOffline: DatabaseStateModel; readonly bringOnline: DatabaseStateModel
 }
-export interface DialogDrafts { readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft }
+export interface DialogDrafts {
+  readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly attachDatabase: AttachDraft; readonly newLogin: NewLoginDraft
+  readonly takeOffline: TakeOfflineDraft; readonly bringOnline: BringOnlineDraft
+}
 export type DialogModel = DialogModels[DefinedDialogId]
 export type DialogDraft = DialogDrafts[DefinedDialogId]
 export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
   deleteObject: deleteObjectDefinition,
   databaseProperties: databasePropertiesDefinition,
   attachDatabase: attachDatabaseDefinition,
-  newLogin: newLoginDefinition
+  newLogin: newLoginDefinition,
+  takeOffline: takeOfflineDefinition,
+  bringOnline: bringOnlineDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

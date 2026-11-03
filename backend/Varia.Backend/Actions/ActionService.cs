@@ -72,8 +72,12 @@ internal sealed class ActionServiceOptions
     public TimeSpan ProgressInterval { get; set; } = TimeSpan.FromMilliseconds(ActionsCatalog.Current.Limit("progressEventMs"));
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How long Bring Online reads the access a database came back with, after SET ONLINE completed (the reply's note).</summary>
+    public TimeSpan AccessNoteBudget { get; set; } = TimeSpan.FromSeconds(5);
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
+    /// <summary>Test seam: called after each main step that completed, with its title (a Stop that arrives just after the statement).</summary>
+    internal Action<string>? AfterStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeCleanup { get; set; }
     /// <summary>Test seam: the newest database version Attach Databases takes the server to open, in place of master's.</summary>
@@ -238,6 +242,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
         if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
+        if (args.DropConnections is not null && args.Action != "takeOffline") throw Invalid("only takeOffline takes dropConnections.");
         switch (args.Action)
         {
             case "rename":
@@ -281,6 +286,14 @@ internal sealed partial class ActionService : IDisposable
                 if (args.Target is not { Kind: "database", Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } created || !ExplorerRefs.Ident(created.Name)) throw Invalid("target.");
                 NewDatabaseValidator.Validate(catalog, created.Name!, args.Design?.As<NewDatabaseDesignDto>());
                 return created;
+            case "takeOffline":
+            case "bringOnline":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Databases is not null)
+                    throw Invalid(args.Action + " takes no new name, delete options, changes or databases.");
+                // Take Offline asks whether to roll back other connections; Bring Online has nothing to ask (no other action takes it).
+                if (args.Action == "takeOffline" && args.DropConnections is null) throw Invalid("dropConnections is required.");
+                if (args.Identity is { } identity && !DatabaseAlter.IdentityValid(identity)) throw Invalid("identity.");
+                return Target(args.Target, args.Action);
             default:
                 throw Invalid("action.");
         }
@@ -330,6 +343,7 @@ internal sealed partial class ActionService : IDisposable
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 "newDatabase" => DescribeNewDatabaseJobAsync(connection, profile, band, job),
                 AttachDialog => DescribeAttachJobAsync(connection, args.Attach, profile.Linux, job),
+                "takeOffline" or "bringOnline" => DescribeStateJobAsync(connection, args.ConnectionId, target, action, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), reading ? "Reading the file" : "Reading the object", own: reading ? OwnGate.Browse : OwnGate.None);
@@ -693,9 +707,28 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
+    /// <summary>Take Offline's and Bring Online's verdict: a database other than the one the dialog read (<paramref name="read"/>),
+    /// SQL Server's own, a snapshot, a state the catalogue's database rules grey the action in (as the menu does), and ALTER on it.</summary>
+    private ActionError? StateRefusal(ActionSubject subject, string action, DatabaseIdentityDto? read)
+    {
+        var row = subject.Row;
+        if (read is not null && (row.Int("database_id") != read.Id || DatabaseProperties.Iso(row.Raw("create_date")) != read.Created))
+            return Error("NOT_FOUND", "The database " + subject.Display + " is not the one this dialog read: it was renamed, dropped or replaced since. Close the dialog and open it again.");
+        var verb = action == "takeOffline" ? "taken offline" : "brought online";
+        if (row.Bool("is_system")) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + verb + ".");
+        if (!catalog.Allows(subject.Target.Kind, subject.Subtype, action)) return Error("NOT_SUPPORTED", "A database snapshot cannot be " + verb + ".");
+        if (catalog.DatabaseRefusal(action, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby")) is { } reason) return Error("NOT_SUPPORTED", reason);
+        if (!row.Bool("can_alter_state")) return Error("PERMISSION_DENIED", "You do not have permission to change the state of " + subject.Display + " (ALTER on it).");
+        return null;
+    }
+
     /// <summary>The statements an action runs, in order.</summary>
     public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
     {
+        // SSMS's Take Offline rolls other connections back only when Drop All Active Connections is checked; without it SET OFFLINE
+        // waits for them to leave until Stop.
+        if (args.Action == "takeOffline") return [new(args.DropConnections == true ? ActionTemplate.SetOfflineRollback : ActionTemplate.SetOffline, "master", [target.Name!])];
+        if (args.Action == "bringOnline") return [new(ActionTemplate.SetOnline, "master", [target.Name!])];
         if (args.Action == "rename")
             return target.Kind == "database"
                 ? [new(ActionTemplate.RenameDatabase, "master", [target.Name!, args.NewName!])]
@@ -725,12 +758,15 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.GrantConnect => "Grant permission to connect",
         ActionTemplate.DropUser => "Drop the database user",
         ActionTemplate.AddServerRoleMember => "Add to a server role",
+        ActionTemplate.SetOffline => "Take database offline",
+        ActionTemplate.SetOfflineRollback => "Close connections and take database offline",
+        ActionTemplate.SetOnline => "Bring database online",
         _ => "Drop the object"
     };
 
     /// <summary>The templates whose statement needs its database (the first name) free of Varia's own idle sessions (critic A5).</summary>
     private static bool NeedsFreeDatabase(ActionTemplate template) => template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase
-        or ActionTemplate.DetachDatabase;
+        or ActionTemplate.DetachDatabase or ActionTemplate.SetOffline or ActionTemplate.SetOfflineRollback;
 
     /// <summary>Runs planned statements through runner v2 on the action's connection. Before the first main statement that needs
     /// a database to itself, the connection's own pools leave it (FreeDatabaseAsync), inside that step, so Stop reaches it.</summary>
@@ -750,15 +786,15 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>Frees a database of the backend's own sessions (critic A5): the server-scope pools of every connection to the server
     /// move to master when it is their database (host.FreeDatabase) and their idle pools in it are cleared; then, for up to FreeWait,
     /// the action counts the sessions of this process still in it that the backend's pooled connections were given
-    /// (host.PoolSessions), which the server ends a moment after a clear. Query tabs are the user's own.</summary>
-    private async Task FreeDatabaseAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    /// (host.PoolSessions), which the server ends a moment after a clear. Query tabs are the user's own. True when it cleared a pool.</summary>
+    private async Task<bool> FreeDatabaseAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
     {
-        if (!host.FreeDatabase(connectionId, database)) return;
+        if (!host.FreeDatabase(connectionId, database)) return false;
         var watch = Stopwatch.StartNew();
         while (true)
         {
             var left = await PoolSessionsInAsync(connection, connectionId, database, token);
-            if (left == 0 || watch.Elapsed >= Options.FreeWait) return;
+            if (left == 0 || watch.Elapsed >= Options.FreeWait) return true;
             await Task.Delay(50, token);
         }
     }
@@ -851,15 +887,102 @@ internal sealed partial class ActionService : IDisposable
         var messages = CollectMessages(connection, progress);
         var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
-        if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
+        var state = args.Action is "takeOffline" or "bringOnline";
+        if ((state ? StateRefusal(subject, args.Action, args.Identity) : Refusal(subject, args)) is { } refused) return new([], [], 0, refused);
         var plan = Plan(args, target);
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token,
             progress);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
+        // An offline database keeps its name, so its connections keep it too and fail until it is back online, as in SSMS.
         if (plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
             host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
-        return new(steps, messages.Collected(), 0, failure);
+        var collected = messages.Collected();
+        // SET ONLINE keeps the access a database was left in (SINGLE_USER set while it was offline stays), which SSMS does not say.
+        // It takes the last place when SQL Server's messages fill the list (main refuses more than infoMessages).
+        if (args.Action == "bringOnline" && failure is null && await AccessNoteAsync(connection, target.Name!) is { } note)
+        {
+            if (collected.Count >= catalog.Limit("infoMessages")) collected.RemoveAt(collected.Count - 1);
+            collected.Add(note);
+        }
+        return new(steps, collected, 0, failure);
+    }
+
+    /// <summary>What a database brought online still restricts: SINGLE_USER or RESTRICTED_USER access, or null. SET ONLINE has
+    /// completed, so a Stop that arrives now, or a read that fails, must not make the success a failure: the note has a budget of
+    /// its own (AccessNoteBudget), not the request's token, and is left out when it cannot be read.</summary>
+    private async Task<string?> AccessNoteAsync(SqlConnection connection, string database)
+    {
+        using var budget = new CancellationTokenSource(Options.AccessNoteBudget);
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.DatabaseAccess;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, database);
+            await using var reader = await command.ExecuteReaderAsync(budget.Token);
+            if (!await reader.ReadAsync(budget.Token)) return null;
+            return ActionsCatalog.DatabaseAccessOf(ReadRow(reader).Int("user_access")) switch
+            {
+                "single" => "The database is online in SINGLE_USER mode: only one connection at a time can use it.",
+                "restricted" => "The database is online in RESTRICTED_USER mode: only members of db_owner, dbcreator and sysadmin can use it.",
+                _ => null
+            };
+        }
+        catch (Exception error) when (error is OperationCanceledException or SqlException or InvalidOperationException) { return null; }
+    }
+
+    /// <summary>Take Database Offline's and Bring Database Online's model: the database's identity and state, the preflight's
+    /// verdict, what blocks SET OFFLINE, and the sessions in it (VIEW SERVER STATE); their open transactions are what WITH ROLLBACK
+    /// IMMEDIATE rolls back (critic A7). The backend's own idle pooled connections are no one's work: as SET OFFLINE does, Take
+    /// Offline's describe first frees the database of them (spec 3.6) and reads it again, then lists every session left, this
+    /// process's query windows included. No session is left out by its id, which SQL Server gives the next client once a cleared
+    /// pool's session has ended.</summary>
+    private async Task<ActionDescribeResult> DescribeStateJobAsync(SqlConnection connection, string connectionId, ObjectRefDto target, string action, int band, CancellationToken token)
+    {
+        var (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+        if (subject is null) return new(null, 0, error);
+        if (StateRefusal(subject, action, null) is { } refused) return new(null, 0, refused);
+        if (action == "takeOffline" && subject.Row.Long("sessions") > 0 && await FreeDatabaseAsync(connection, connectionId, target.Name!, token))
+        {
+            (subject, error) = await ResolveAsync(connection, target, null, band, 0, token);
+            if (subject is null) return new(null, 0, error);
+            if (StateRefusal(subject, action, null) is { } changed) return new(null, 0, changed);
+        }
+        var row = subject.Row;
+        var warnings = new List<ActionWarningDto>();
+        if (action == "takeOffline")
+        {
+            if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; SET OFFLINE fails until it is removed from the group.", true));
+            if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; SET OFFLINE fails until mirroring is removed.", true));
+        }
+        int? sessions = row.Long("sessions") is { } count ? (int)count : null;
+        int? withTransaction = row.Long("with_transaction") is { } open ? (int)open : null;
+        var list = new List<DatabaseSessionDto>();
+        if (sessions is not null)
+        {
+            var limit = (int)catalog.Limit("sessions");
+            var chars = (int)catalog.Limit("sessionText");
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.DatabaseSessions;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, target.Name);
+            Add(command, "@take", SqlDbType.Int, 0, limit);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            while (await reader.ReadAsync(token))
+            {
+                var session = ReadRow(reader);
+                string? Clip(string name) => session.Text(name) is { Length: > 0 } text ? ScriptingErrors.Detail(text, chars) : null;
+                list.Add(new(session.Int("session_id"), Clip("login_name"), Clip("program_name"), Clip("host_name"), session.Int("open_transactions")));
+            }
+            // Sessions that came between the count and the list leave the counts as the list found them at least.
+            sessions = Math.Max(sessions.Value, list.Count);
+            withTransaction = Math.Max(withTransaction ?? 0, list.Count(session => session.OpenTransactions > 0));
+        }
+        var identity = new DatabaseIdentityDto(row.Int("database_id"), DatabaseProperties.Iso(row.Raw("create_date")) ?? "");
+        var model = new DatabaseStateDto(subject.Display, identity, row.Int("state"), row.Int("user_access"), row.Bool("is_read_only"), row.Bool("is_in_standby"), sessions, withTransaction,
+            list, sessions is { } total && total > list.Count, warnings);
+        return new(null, 0, DatabaseState: model);
     }
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded. A long step's

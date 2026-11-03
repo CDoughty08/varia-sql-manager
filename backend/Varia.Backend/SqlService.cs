@@ -208,6 +208,8 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
     IReadOnlySet<int> ILiveHost.OwnSessions(string connectionId) => ownSessions.Sessions(connectionId, ServerOf);
     /// <summary>Varia's own session ids (the checks record and read them).</summary>
     internal OwnSessionLedger OwnSessions => ownSessions;
+    /// <summary>The ids the pooled connections were given (the checks record a stale one, as a cleared pool leaves it).</summary>
+    internal OwnSessionLedger PoolSessionLedger => poolSessions;
 
     /// <summary>Own: under one of Varia's own program names (a pool's, Object Actions'), which the Activity Monitor trusts; a plain
     /// pooled connection is recorded only for freeing a database.</summary>

@@ -53,6 +53,13 @@ export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
   readonly identity?: DatabaseIdentity
 }
+/** Tasks › Take Offline's OK: SET OFFLINE, which waits for every other session to leave the database, or with
+ *  `dropConnections` (Drop All Active Connections) SET OFFLINE WITH ROLLBACK IMMEDIATE. `identity` is the database the dialog read. */
+export interface TakeOfflineRequest {
+  readonly action: 'takeOffline'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly dropConnections: boolean; readonly identity?: DatabaseIdentity
+}
+/** Tasks › Bring Online: SET ONLINE. */
+export interface BringOnlineRequest { readonly action: 'bringOnline'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly identity?: DatabaseIdentity }
 /** New Database's OK and Script: the new database's name as the target, and the design (src/shared/actions/new-database.ts). */
 export interface CreateDatabaseRequest {
   readonly action: 'createDatabase'; readonly connectionId: string; readonly requestId: string; readonly target: { readonly kind: 'database'; readonly name: string }; readonly design: NewDatabaseDesign
@@ -78,7 +85,7 @@ export interface CreateLoginRequest {
   readonly secrets?: LoginSecrets
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest | AttachRequest | CreateLoginRequest | TakeOfflineRequest | BringOnlineRequest
 /** actions.script also scripts a restore, which actions.execute runs from D1f (critic A17). */
 export type ActionScriptRequest = ActionRequest | RestoreRequest
 export type { RestoreRequest } from './restore-schema.ts'
@@ -166,6 +173,36 @@ export interface DatabasePropertiesModel {
   /** Why nothing can change: a snapshot, a database that is not online or not accessible, or Managed Instance. */
   readonly readOnlyReason?: string
 }
+/** A session in a database, as Take Database Offline lists it (with VIEW SERVER STATE): names clipped to `actionLimits.sessionText`. */
+export interface DatabaseSession {
+  readonly sessionId: number
+  readonly login?: string
+  readonly program?: string
+  readonly host?: string
+  /** sys.dm_exec_sessions.open_transaction_count: work that Drop All Active Connections rolls back. */
+  readonly openTransactions: number
+}
+/**
+ * Take Database Offline's and Bring Database Online's row: the database read (its identity), its runtime state from
+ * sys.databases, and who is in it. The counts leave out the backend's own pooled connections, which the action closes
+ * itself; Varia's query tabs are real sessions and count. Absent counts: no VIEW SERVER STATE.
+ */
+export interface DatabaseStateModel {
+  readonly name: string
+  readonly identity: DatabaseIdentity
+  readonly state: number
+  readonly userAccess: number
+  readonly readOnly: boolean
+  readonly standby: boolean
+  readonly sessions?: number
+  /** Of `sessions`, those with an open transaction. */
+  readonly withTransaction?: number
+  /** At most `actionLimits.sessions`, by session id. */
+  readonly sessionList: readonly DatabaseSession[]
+  readonly sessionsTruncated: boolean
+  /** Facts that make the statement fail or matter (an availability group, mirroring). */
+  readonly warnings: readonly ActionWarning[]
+}
 /** What Attach Databases opens with: the logins its Owner lists (at most `actionLimits.logins`), the server's path separator,
  *  and its default data folder, where Add's picker starts. */
 export interface AttachServerFacts { readonly logins: readonly string[]; readonly loginsTruncated: boolean; readonly separator: '\\' | '/'; readonly dataPath?: string }
@@ -183,6 +220,7 @@ export interface ActionDescribeResult {
   readonly newDatabase?: NewDatabaseModel
   readonly attachDatabase?: AttachDescribeModel
   readonly newLogin?: NewLoginModel
+  readonly databaseState?: DatabaseStateModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -220,7 +258,7 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', attach: 'attached', takeOffline: 'taken offline', bringOnline: 'brought online' }
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
@@ -293,6 +331,8 @@ const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uui
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
+const takeOfflineSchema = z.object({ action: z.literal('takeOffline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, dropConnections: z.boolean(), identity: identitySchema.optional() }).strict()
+const bringOnlineSchema = z.object({ action: z.literal('bringOnline'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, identity: identitySchema.optional() }).strict()
 // New Database's design; the rules that need the server (Linux, FILESTREAM, the version) wait for the backend's preflight.
 const growthSchema = z.discriminatedUnion('enabled', [
   z.object({ enabled: z.literal(false) }).strict(),
@@ -364,7 +404,9 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   createTableSchema,
   createDatabaseSchema,
   attachSchema,
-  createLoginSchema
+  createLoginSchema,
+  takeOfflineSchema,
+  bringOnlineSchema
 ]).superRefine((request, context) => {
   // A new table, database or login is not an object row's action: its target is the database it goes in (SQL Server's own
   // included), the database it makes, or the server.

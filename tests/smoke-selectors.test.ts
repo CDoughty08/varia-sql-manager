@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFile } from 'node:child_process'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -156,6 +157,15 @@ describe('smoke selectors', () => {
     expect(factKeys).toEqual(['server', 'login', 'database', 'time', 'rows'])
     expect(facts).toEqual(['query-status-server', 'query-status-login', 'query-status-database', 'query-status-time', 'query-status-rows'])
   })
+  it('compiles every suite, bench and fixture', async () => {
+    // Nothing else loads the suites before an Electron run: a merge that declares one helper twice in a suite's scope stops
+    // that whole suite with a SyntaxError, which only the smoke gate would otherwise report.
+    const check = (file: string) => new Promise<string>(done => execFile(process.execPath, ['--check', file], (error, _stdout, stderr) => done(error ? `${file}: ${stderr.split('\n').find(line => /Error/.test(line)) ?? error.message}` : '')))
+    expect(suites.length).toBeGreaterThan(20)
+    expect((await Promise.all(suites.map(check))).filter(Boolean)).toEqual([])
+    const clash = 'tests/fixtures/smoke-selectors/duplicate-declaration.mjs'
+    expect(await check(clash)).toMatch(/SyntaxError: Identifier 'row' has already been declared/)
+  }, 60000)
   it('keeps Varia\'s class names out of the suites, the benches and their fixtures', () => {
     expect(suites.flatMap(classSelectors)).toEqual([])
   })

@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties and the Databases folder's Attach, which kinds, subtypes and folders offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online and the Databases folder's Attach, which kinds, subtypes and folders offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -18,7 +18,9 @@ export const objectActions = [
   'rename',
   'delete',
   'properties',
-  'attach'
+  'attach',
+  'takeOffline',
+  'bringOnline'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog, `create` makes a new
@@ -48,7 +50,9 @@ export const dialogIds = [
   'databaseProperties',
   'newDatabase',
   'attachDatabase',
-  'newLogin'
+  'newLogin',
+  'takeOffline',
+  'bringOnline'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -97,7 +101,12 @@ const actionSpecData = {
   attach: {
     title: 'Attach Database…', menuTitle: 'Attach…', mnemonic: 'a', group: '0_new', order: 2, class: 'dialog', dialog: 'attachDatabase', command: 'explorer.attachDatabase', folder: 'databases',
     engines: ['box']
-  }
+  },
+  // Tasks › Take Offline and Bring Online share one group. SSMS's Tasks (Microsoft Learn's SSMS 17 and 19 screenshots) shows
+  // Detach…, a separator, Take Offline and Bring Online, a separator: Detach… (D3b) goes alone in a group before 1_state.
+  // Managed Instance cannot set OFFLINE or ONLINE (Learn, T-SQL differences), so they are box-only.
+  takeOffline: { title: 'Take Database Offline', menuTitle: 'Take Offline', mnemonic: 't', menu: 'explorer.tasks', group: '1_state', order: 1, class: 'dialog', dialog: 'takeOffline', command: 'explorer.takeOffline', engines: ['box'] },
+  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
@@ -186,8 +195,12 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   procedure: { row: editable, subtypes: { system: locked, extended: locked, replicationFilter: locked } },
   // DROP AGGREGATE is a follow-up; sp_rename renames an aggregate like any object.
   function: { row: editable, subtypes: { aggregate: { rename: 'enabled', delete: 'disabled' } } },
-  // Properties opens for every database, SQL Server's own included; a snapshot's opens read-only.
-  database: { row: { ...editable, properties: 'enabled' }, subtypes: { system: { ...locked, properties: 'enabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } } }
+  // Properties opens for every database, SQL Server's own included; a snapshot's opens read-only. SQL Server's own databases
+  // cannot be taken offline (Learn: not master or tempdb; Varia greys all four, as SSMS does), and a snapshot never can.
+  database: {
+    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled' },
+    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
+  }
 }
 
 /** A row with an overlay applied: the actions it names take its state, and '' removes them. */
@@ -230,7 +243,13 @@ export interface DatabaseActionRule {
 }
 /** The database rules, in order. Wave 5's database actions (Take Offline, Bring Online, Detach, Restore) add theirs here;
  *  the backend's preflight re-derives the state before any DDL runs. */
-export const databaseActionRules: readonly DatabaseActionRule[] = []
+export const databaseActionRules: readonly DatabaseActionRule[] = [
+  { action: 'takeOffline', states: ['offline'], reason: 'The database is offline.' },
+  // Learn (database states): a database that is restoring cannot be set OFFLINE, ONLINE or EMERGENCY.
+  { action: 'takeOffline', states: ['restoring', 'recovering', 'copying', 'offlineSecondary'], reason: 'A database that is restoring or recovering cannot be taken offline.' },
+  { action: 'bringOnline', states: ['online'], reason: 'The database is online.' },
+  { action: 'bringOnline', states: ['restoring', 'recovering', 'copying'], reason: 'A database that is restoring or recovering cannot be brought online.' }
+]
 const ruleApplies = (rule: DatabaseActionRule, runtime: DatabaseRuntime) =>
   !!(rule.states?.includes(databaseStateOf(runtime.state)) || rule.access?.includes(databaseAccessOf(runtime.userAccess)) || rule.readOnly && (runtime.readOnly || runtime.standby))
 /**
@@ -349,7 +368,10 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
     unavailableHint: 'Select a database in Object Explorer.', keybindings: [{ mac: 'meta+i', when: explorerKeyWhen }]
   },
   // No default key, as in SSMS.
-  attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' }
+  attach: { icon: 'plug', keywords: ['attach', 'mdf', 'ldf', 'files', 'detached'], documentTask: false, unavailableHint: 'Select the Databases folder of a connected SQL Server in Object Explorer.' },
+  // No keys, as in SSMS.
+  takeOffline: { icon: 'debug-disconnect', keywords: ['offline', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an online user database in Object Explorer.' },
+  bringOnline: { icon: 'plug', keywords: ['online', 'database', 'state', 'tasks'], documentTask: false, unavailableHint: 'Select an offline user database in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -530,7 +552,11 @@ const dialogSpecData = {
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
     pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('status', 'Status')]
-  }
+  },
+  // SSMS's Take Database Offline dialog (recalled, SSMS 18+): a grid of Database Name, Drop All Active Connections, Status
+  // and Message. Bring Online runs as it opens and shows the same grid with its outcome.
+  takeOffline: { title: 'Take Database Offline', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'takeOffline', pages: [page('general', 'General')], steps: true },
+  bringOnline: { title: 'Bring Database Online', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'bringOnline', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */
@@ -630,7 +656,9 @@ export const actionLimits = {
   drainMarginMs: 5_000,
   /** New Database: files and filegroups one design holds, sizes in MB (a data file up to 16 TB, a log file and a growth up to
    *  2 TB, as SQL Server bounds them), and a growth in percent. */
-  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
+  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100,
+  /** Take Offline's sessions list: the sessions it shows, and the characters of each login, program and host name. */
+  sessions: 8, sessionText: 128
 } as const
 
 /** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
@@ -669,7 +697,8 @@ const optionJson = (def: DatabaseOptionDef) => ({
 /**
  * The catalogue as the backend embeds it, keys sorted and everything resolved, so C# needs no rules of its own: `rows`
  * has one row per kind with actions and each of its subtypes ('' for none), then one per subtype and status the kind has an
- * overlay for (with `status`). An action with `engines` lists them.
+ * overlay for (with `status`). An action with `engines` lists them. `databaseRules` and `databaseStates` let the preflight
+ * re-derive a database action's state from sys.databases, as the menu does.
  */
 export function actionsCatalogJson(): string {
   const rows = nodeKinds.flatMap(kind => actionKindSpecs[kind]
@@ -696,6 +725,8 @@ export function actionsCatalogJson(): string {
     `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson), ...createActions.map(createJson)])},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
+    `  "databaseRules": ${block(databaseActionRules)},`,
+    `  "databaseStates": ${line(databaseStateIds)},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
     `  "errors": ${block(actionErrorCodes.map(code => ({ code, retryable: actionErrorRetryable[code] })))},`,
     `  "limits": ${line(actionLimits)},`,

@@ -244,10 +244,11 @@ internal sealed record ServerFilesDto(string Separator, string? Path, List<Serve
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design, restore
 /// (Target the destination database) Restore and Identity, attach (Target the server) Databases, createLogin (Target the server)
-/// Login, ServerRoles, Status and, on execute only, Secrets; Validate refuses the rest.</summary>
+/// Login, ServerRoles, Status and, on execute only, Secrets, takeOffline DropConnections; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, RestoreOptionsDto? Restore = null,
-    List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null);
+    List<AttachDatabaseDto>? Databases = null, NewLoginDto? Login = null, List<string>? ServerRoles = null, LoginStatusDto? Status = null,
+    bool? DropConnections = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -327,9 +328,16 @@ internal sealed record DatabaseServerFactsDto(int Level, bool Sysadmin, int File
 internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Dictionary<string, string> Options, Dictionary<string, string> Scoped, List<int> CompatibilityLevels,
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
+/// <summary>A session in a database as Take Database Offline lists it (VIEW SERVER STATE): names clipped to the catalogue's sessionText.</summary>
+internal sealed record DatabaseSessionDto(int SessionId, string? Login, string? Program, string? Host, int OpenTransactions);
+/// <summary>Take Database Offline's and Bring Database Online's row (src/shared/actions/schema.ts DatabaseStateModel): the database read,
+/// its sys.databases state, user_access, is_read_only and is_in_standby, and the sessions in it without the backend's own pooled
+/// ones (null counts: no VIEW SERVER STATE), at most the catalogue's sessions listed.</summary>
+internal sealed record DatabaseStateDto(string Name, DatabaseIdentityDto Identity, int State, int UserAccess, bool ReadOnly, bool Standby, int? Sessions, int? WithTransaction,
+    List<DatabaseSessionDto> SessionList, bool SessionsTruncated, List<ActionWarningDto> Warnings);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, RestoreModelDto? Restore = null, NewDatabaseModelDto? NewDatabase = null,
-    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null);
+    AttachDescribeDto? AttachDatabase = null, NewLoginModelDto? NewLogin = null, DatabaseStateDto? DatabaseState = null);
 /// <summary>New Database's file (src/shared/actions/new-database.ts): Type rows, log or filestream; Filegroup none for a log; SizeMb none
 /// for a container; Path the folder and FileName the file (a container's folder) in it.</summary>
 internal sealed record NewDatabaseFileDto(string Name, string Type, GrowthDto Growth, string Path, string FileName, string? Filegroup = null, long? SizeMb = null);

@@ -23,9 +23,10 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    // Attach is SQL Server's box editions' alone (decision 10).
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'attach'))
-    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach'])
+    // Attach is SQL Server's box editions' alone (decision 10), and Managed Instance cannot SET OFFLINE or ONLINE: Take Offline and
+    // Bring Online run on box servers only.
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties'])
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline'])
     // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
     expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
