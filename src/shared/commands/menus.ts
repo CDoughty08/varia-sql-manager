@@ -104,7 +104,7 @@ export const submenus: Readonly<Record<SubmenuId, SubmenuDescriptor>> = {
     placements: [{ menu: 'query', group: '0_connection', order: 1, mnemonic: 'o' }, { menu: 'editor.context', group: '1_connection', order: 1, mnemonic: 'o' }]
   },
   // SSMS's New on the Tables folder (learn.microsoft.com: Create tables); its Table… is src/shared/designer/catalog.ts'.
-  'explorer.new': { title: 'New', nativeId: 'explorer.new', placements: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "explorerFolder == 'tables'" }] },
+  'explorer.new': { title: 'New', nativeId: 'explorer.new', placements: [{ menu: 'explorer.context', group: '0_new', order: 1, mnemonic: 'n', when: "explorerNode == 'folder' && explorerFolder == 'tables'" }] },
   // SSMS's Tasks on a database node and its Restore submenu. Both stay hidden until a database action is placed in them
   // (src/shared/actions/catalog.ts), since a submenu with nothing visible is left out.
   'explorer.tasks': { title: 'Tasks', nativeId: 'explorer.tasks', placements: [{ menu: 'explorer.context', group: '4_tasks', order: 1, mnemonic: 't', when: "explorerNode == 'database' && !explorerServerLost" }] },

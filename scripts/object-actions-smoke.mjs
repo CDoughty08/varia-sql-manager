@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expandExplorerPath, explorerRow, explorerTree, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
-import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
+import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
   explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
@@ -99,10 +99,10 @@ try {
   await closeMenu()
   expect(await menuOf(...appData, 'Programmability', 'Stored Procedures', 'dbo.ShipOrder')).toEqual(['Modify', 'Script Stored Procedure as', 'Copy Name', 'Rename', 'Delete', 'Refresh'])
   await closeMenu()
-  expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf(...appData)).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
+  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Database…', 'New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   expect(await disabled()).toEqual(['Rename', 'Delete'])
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
@@ -569,6 +569,253 @@ try {
   await createDialog().getByRole('button', { name: 'Cancel', exact: true }).click()
   await expect(createDialog()).toHaveCount(0)
   console.log('Object action checks: Create Catalog asks for CLR first, checks the passwords, sends the password only in its request, lists SSISDB after, refuses a second catalog, shows a failure\'s steps and Stops.')
+
+  // 5b. The server file picker, through its test hook until New Database, Attach and Restore open it from "…" (A17): the
+  // default backup folder opens, the keyboard expands a folder and chooses a file, a typed share and folder are listed,
+  // a slow folder is busy, and Escape returns focus to where it was.
+  const picker = () => page.getByRole('dialog', { name: 'Locate Backup File - server-a', exact: true })
+  const pickerTree = () => picker().getByRole('tree', { name: 'Select the file', exact: true })
+  const item = name => pickerTree().getByRole('treeitem', { name, exact: true })
+  const fileName = () => picker().getByLabel('File name', { exact: true })
+  const answers = () => page.evaluate(() => window.__variaServerFiles.answers())
+  await explorerTree(page).focus()
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(pickerTree()).toBeFocused()
+  await expect(item('Nightly')).toBeVisible()
+  await expect(picker().getByText("Paths are on the server server-a; SQL Server's service account must be able to read them.", { exact: true })).toBeVisible()
+  await expect(picker().getByRole('status')).toHaveText(/^5 items · listed in \d+ ms · type a path or a UNC name to go there$/)
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-selected', 'true')
+  await expect(item(stubServerFiles.backupFolder)).toHaveAttribute('aria-description', 'default backup folder')
+  await expect(item('C:\\')).toHaveAttribute('aria-description', '212 GB free')
+  await expect(item('AppData.bak')).toHaveAttribute('aria-description', '15 MB, modified 2026-10-12 14:03')
+  await expect(item('readme.txt')).toHaveCount(0)
+  await expect(picker().getByLabel('Files of type', { exact: true })).toHaveText(/Backup Files\(\*\.bak;\*\.trn\)/)
+  expect((await stubCalls('actions.describe')).filter(call => call.dialog === 'serverFiles').map(call => call.files)).toEqual([{ purpose: 'backup' }, { purpose: 'backup', path: stubServerFiles.backupFolder }])
+  // A default folder shows its own name beside its tag; its full path stays its accessible name.
+  await expect(item(stubServerFiles.backupFolder).getByText('Backup', { exact: true })).toBeVisible()
+  // Tab from the last control and Shift+Tab from the first field come back to the tree, which the trap counts as a stop.
+  await picker().getByRole('button', { name: 'Cancel', exact: true }).focus()
+  await page.keyboard.press('Tab')
+  await expect(pickerTree()).toBeFocused()
+  await picker().getByLabel('Selected path', { exact: true }).focus()
+  await page.keyboard.press('Shift+Tab')
+  await expect(pickerTree()).toBeFocused()
+  // Folders come first, by name: Empty, Nightly, Slow, then the files.
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await expect(item('Nightly')).toHaveAttribute('aria-selected', 'true')
+  await page.keyboard.press('Enter')
+  await expect(item('Nightly')).toHaveAttribute('aria-expanded', 'true')
+  await expect(picker()).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(item('Sales.bak')).toHaveAttribute('aria-selected', 'true')
+  await expect(fileName()).toHaveValue('Sales.bak')
+  await expect(picker().getByLabel('Selected path', { exact: true })).toHaveValue(stubServerFiles.backupFolder + 'Nightly\\')
+  // Under forced colours the selected row is Highlight, as Object Explorer's is; the others are not.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const highlight = await page.evaluate(() => {
+    const probe = document.createElement('div')
+    probe.style.cssText = 'background: Highlight; forced-color-adjust: none'
+    document.body.append(probe)
+    const color = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return color
+  })
+  const forcedBackgrounds = await Promise.all(['Sales.bak', 'Nightly'].map(name => item(name).evaluate(row => getComputedStyle(row).backgroundColor)))
+  await page.emulateMedia({ forcedColors: null })
+  expect(forcedBackgrounds[0]).toBe(highlight)
+  expect(forcedBackgrounds[1]).not.toBe(highlight)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-dark.png') })
+  await page.keyboard.press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak'])
+  await expect(explorerTree(page)).toBeFocused()
+
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('//files/share/')
+  await fileName().press('Enter')
+  await expect(item('\\\\files\\share\\')).toHaveAttribute('aria-expanded', 'true')
+  await expect(item('Shared.bak')).toBeVisible()
+  await expect(fileName()).toHaveValue('')
+  await fileName().fill('C:\\Missing\\x.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText('The folder C:\\Missing\\ does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill(stubServerFiles.backupFolder + 'Empty\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('This folder is empty, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await fileName().fill('C:\\Legacy\\')
+  await fileName().press('Enter')
+  await expect(pickerTree().getByText('SQL Server 2016 lists folders only to members of sysadmin. Type the path instead.', { exact: true })).toBeVisible()
+  // Slow answers after 1.5 s: after 300 ms its row and the tree are busy, with a spinner, until it lists.
+  await fileName().fill(stubServerFiles.backupFolder + 'Slow\\')
+  await fileName().press('Enter')
+  await expect(pickerTree()).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Slow')).toHaveAttribute('aria-busy', 'true')
+  await expect(item('Old.bak')).toBeVisible()
+  await expect(pickerTree()).not.toHaveAttribute('aria-busy', 'true')
+  await picker().getByLabel('Files of type', { exact: true }).selectOption({ label: 'All Files(*.*)' })
+  await expect(item('readme.txt')).toBeVisible()
+  await expect(item('Old.bak')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null])
+  await expect(explorerTree(page)).toBeFocused()
+
+  // A typed name the listing does not show is asked about, and refused only when the server says it does not exist; under
+  // C:\Legacy\ SQL Server 2016 cannot say, so the name is taken as typed.
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup'))).toBe(true)
+  await expect(item('Nightly')).toBeVisible()
+  await fileName().fill('nothing.bak')
+  await fileName().press('Enter')
+  await expect(picker().getByRole('alert')).toHaveText(stubServerFiles.backupFolder + 'nothing.bak does not exist, or SQL Server\'s service account cannot see it.')
+  await fileName().fill('readme.txt')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  expect((await stubCalls('actions.describe')).filter(call => call.files?.exists).map(call => call.files.path)).toEqual([stubServerFiles.backupFolder + 'nothing.bak', stubServerFiles.backupFolder + 'readme.txt'])
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('backup', 'C:\\Legacy\\Old.bak'))).toBe(true)
+  await expect(fileName()).toHaveValue('Old.bak')
+  await fileName().press('Enter')
+  await expect(picker()).toHaveCount(0)
+  await expect.poll(answers).toEqual([stubServerFiles.backupFolder + 'Nightly\\Sales.bak', null, stubServerFiles.backupFolder + 'readme.txt', 'C:\\Legacy\\Old.bak'])
+
+  // Locate Folder: "Select the folder", no Modified column, and a folder of files has no subfolders.
+  const folderPicker = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  expect(await page.evaluate(() => window.__variaServerFiles.pick('folder'))).toBe(true)
+  const folderTree = folderPicker().getByRole('tree', { name: 'Select the folder', exact: true })
+  await expect(folderTree).toBeFocused()
+  await expect(folderTree.getByText('This folder has no subfolders, or the server\'s account cannot list it.', { exact: true })).toBeVisible()
+  await expect(folderPicker().getByText('Modified', { exact: true })).toHaveCount(0)
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-server-files-folder.png') })
+  await page.keyboard.press('Escape')
+  await expect(folderPicker()).toHaveCount(0)
+  await expect(explorerTree(page)).toBeFocused()
+  console.log('Object action checks: the server file picker opens the default backup folder, keeps Tab in reach of its tree, expands a folder and chooses a file by keyboard, shows the selection under forced colours, goes to typed shares and folders, shows empty, 2016 and slow folders, lists All Files, asks the server about typed names it does not list, and Escape returns focus; Locate Folder names its tree for folders.')
+
+  // 5b. New Database… (D1b): first on the Databases folder's menu and offered on a database's; a document whose logical and file
+  // names follow the database's name, a files grid with Add and Remove, Change Autogrowth over it, Locate Folder for a path,
+  // the Script drawer, OK that closes the tab and selects the new database, and Stop while CREATE DATABASE runs.
+  const newDatabase = () => documentFrame(page, 'New Database')
+  const newVerb = name => documentVerb(newDatabase(), 'New Database', name)
+  const newFiles = () => newDatabase().getByRole('table', { name: 'Database files', exact: true })
+  const databasesMenu = async () => {
+    await expect(async () => {
+      await (await revealExplorerRow(page, 'server-a', 'Databases')).click({ button: 'right', force: true })
+      await expect(explorerMenu()).toBeVisible({ timeout: 1000 })
+    }).toPass()
+  }
+  await databasesMenu()
+  expect((await labels())[0]).toBe('New Database…')
+  await closeMenu()
+  expect((await menuOf(...appData))[0]).toBe('New Database…')
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(newDatabase()).toBeVisible()
+  await expect(documentTab(page, 'New Database')).toHaveAttribute('aria-selected', 'true')
+  await expect(documentCrumbs(newDatabase())).toHaveText(['server-a', 'Databases'])
+  const databaseName = newDatabase().getByLabel('Database name', { exact: true })
+  await expect(databaseName).toBeFocused()
+  await expect(newVerb('OK')).toBeDisabled()
+  await databaseName.fill('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales', { exact: true })).toHaveValue('Sales')
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toHaveValue('Sales_log')
+  await expect(newFiles().getByLabel('File Name of Sales', { exact: true })).toHaveAttribute('placeholder', 'Sales.mdf')
+  await expect(newFiles().getByLabel('Path of Sales', { exact: true })).toHaveValue(String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\DATA`)
+  await expect(newVerb('OK')).toBeEnabled()
+  // Add puts a ROWS file in PRIMARY, which needs a name before OK, with the caret in its name; Remove, named after the row it
+  // takes, leaves the caret on the row before. The primary data file and the only log file cannot be removed.
+  await newDatabase().getByRole('button', { name: 'Add', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(4)
+  await expect(newDatabase().getByText('3 of 256 files · paths are on the server server-a', { exact: true })).toBeVisible()
+  await expect(newVerb('OK')).toBeDisabled()
+  await expect(newFiles().getByLabel('Logical Name of File 3', { exact: true })).toBeFocused()
+  await newFiles().getByLabel('Logical Name of File 3', { exact: true }).fill('Sales2')
+  await expect(newFiles().getByLabel('File Name of Sales2', { exact: true })).toHaveAttribute('placeholder', 'Sales2.ndf')
+  // Forced colours drop the selection's fill, so the row Remove takes is outlined.
+  await page.emulateMedia({ forcedColors: 'active' })
+  const selectedOutline = await newFiles().getByRole('row').nth(3).evaluate(row => getComputedStyle(row).outlineStyle)
+  await page.emulateMedia({ forcedColors: null })
+  expect(selectedOutline, 'forced colours: the selected file row is outlined').toBe('solid')
+  await newDatabase().getByRole('button', { name: 'Remove Sales2', exact: true }).click()
+  await expect(newFiles().getByRole('row')).toHaveCount(3)
+  await expect(newFiles().getByLabel('Logical Name of Sales_log', { exact: true })).toBeFocused()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  await newFiles().getByLabel('Logical Name of Sales', { exact: true }).focus()
+  await expect(newDatabase().getByRole('button', { name: 'Remove', exact: true })).toBeDisabled()
+  // Each filegroup list's buttons say which list they act on.
+  await expect(newDatabase().getByRole('group', { name: 'Rows', exact: true }).getByRole('button', { name: 'Add Filegroup to Rows', exact: true })).toBeEnabled()
+  await expect(newDatabase().getByRole('button', { name: 'Remove from Memory Optimized Data', exact: true })).toBeDisabled()
+  // At 1024 x 768 a name and a path stay readable: the grid scrolls rather than squeezing them.
+  const sizeBeforeNarrow = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getSize())
+  await resizeWindow(application, page, 1024, 768)
+  const readable = await Promise.all(['Logical Name of Sales', 'Path of Sales', 'File Name of Sales'].map(label => newFiles().getByLabel(label, { exact: true })
+    .evaluate(input => Math.round(input.getBoundingClientRect().width / parseFloat(getComputedStyle(input).fontSize)))))
+  await resizeWindow(application, page, ...sizeBeforeNarrow)
+  // In font sizes (about two characters each): 16, 24 and 20 characters at least.
+  expect(readable[0], 'Logical Name at 1024 x 768').toBeGreaterThanOrEqual(8)
+  expect(readable[1], 'Path at 1024 x 768').toBeGreaterThanOrEqual(12)
+  expect(readable[2], 'File Name at 1024 x 768').toBeGreaterThanOrEqual(10)
+  // Change Autogrowth over the document: percent growth, and the cell says so.
+  await newFiles().getByRole('button', { name: 'Change Autogrowth of Sales', exact: true }).click()
+  const autogrowth = page.getByRole('dialog', { name: 'Change Autogrowth for Sales', exact: true })
+  await expect(autogrowth).toBeVisible()
+  await autogrowth.getByLabel('In Percent', { exact: true }).check()
+  await autogrowth.getByLabel('File growth in percent', { exact: true }).fill('10')
+  await autogrowth.getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(autogrowth).toHaveCount(0)
+  await expect(newFiles().getByRole('row').nth(1)).toContainText('By 10 percent, Unlimited')
+  // The path's "…" opens Locate Folder on the server; Escape leaves the path as it was.
+  const locateFolder = () => page.getByRole('dialog', { name: 'Locate Folder - server-a', exact: true })
+  await newFiles().getByRole('button', { name: 'Browse for the path of Sales', exact: true }).click()
+  await expect(locateFolder()).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(locateFolder()).toHaveCount(0)
+  // The Script drawer previews what OK runs.
+  await scriptToggle(newDatabase()).click()
+  await expect(drawerText(newDatabase())).toContainText('CREATE DATABASE [Sales]')
+  await expect.poll(async () => (await stubCalls('actions.script')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' } })
+  await page.screenshot({ path: resolve('artifacts', 'new-database-dark.png') })
+  await newVerb('OK').click()
+  await expect(newDatabase()).toHaveCount(0)
+  const created = (await stubCalls('actions.execute')).at(-1)
+  expect(created).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales' }, design: { containment: 'NONE', options: {}, scoped: {} } })
+  expect(created.design.files.map(file => [file.name, file.fileName, file.growth])).toEqual([
+    ['Sales', 'Sales.mdf', { enabled: true, unit: 'percent', by: 10 }], ['Sales_log', 'Sales_log.ldf', { enabled: true, unit: 'percent', by: 10, maxMb: 2097152 }]
+  ])
+  await expect(await explorerRow(page, 'server-a', 'Databases', 'Sales')).toHaveAttribute('aria-selected', 'true')
+  // Stop while CREATE DATABASE runs: the tab stays and says what happened; Cancel then closes it.
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(databaseName).toBeFocused()
+  await databaseName.fill('Held')
+  // Enter outside the grids is OK, as in SSMS's dialog.
+  await databaseName.press('Enter')
+  await expect(newVerb('Stop')).toBeVisible()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'Creating the database…' })).toBeVisible()
+  await newVerb('Stop').click()
+  await expect(newDatabase().getByRole('status').filter({ hasText: 'SQL Server cancelled that statement' })).toBeVisible()
+  await expect(newVerb('OK')).toBeEnabled()
+  await newVerb('Cancel').click()
+  await expect(newDatabase()).toHaveCount(0)
+  // A second New Database is numbered; Ctrl+S is its OK, and Escape cancels the first.
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  await expect(databaseName).toBeFocused()
+  await databasesMenu()
+  await explorerMenu().getByRole('menuitem', { name: 'New Database…', exact: true }).click(fast)
+  const secondDatabase = documentFrame(page, 'New Database (2)')
+  await expect(documentTab(page, 'New Database (2)')).toHaveAttribute('aria-selected', 'true')
+  const secondName = secondDatabase.getByLabel('Database name', { exact: true })
+  await expect(secondName).toBeFocused()
+  await secondName.fill('Sales3')
+  await page.keyboard.press('Control+S')
+  await expect(secondDatabase).toHaveCount(0)
+  expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'createDatabase', target: { kind: 'database', name: 'Sales3' } })
+  await documentTab(page, 'New Database').click()
+  await expect(newDatabase()).toBeVisible()
+  await databaseName.focus()
+  await page.keyboard.press('Escape')
+  await expect(newDatabase()).toHaveCount(0)
+  console.log('Object action checks: New Database… comes first on Databases, names files after the database, adds and removes files with the caret kept and buttons named, keeps names and paths readable at 1024 x 768, changes autogrowth, browses the server for a path, scripts, creates and selects the database, stops a create, numbers a second tab, and takes Enter, Ctrl+S and Escape.')
 
   // 6. A database: SSMS's two options (backup history checked, Close existing connections not), then a lost server
   // leaves only Close. Databases has just reloaded after Database Properties' Apply, so the press repeats until its row's menu opens.

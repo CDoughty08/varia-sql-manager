@@ -12,32 +12,67 @@ import { explorerStatics } from './explorer-tree.mjs'
  * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
  * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
- * and its setup answers CATALOG_EXISTS. Create Catalog with the password "Weak" fails at the master key and removes what
+ * and its setup answers CATALOG_EXISTS. New Database reads model as Database Properties reads AppData, with the default data folder
+ * for data and logs; its Script is `newDatabaseScript`; OK on a database named "Held" waits until its Stop arrives, and any other
+ * appears under Databases. Create Catalog with the password "Weak" fails at the master key and removes what
  * it made; "Held" waits until its Stop arrives and answers as the backend does before the restore.
+ * The server file picker ('serverFiles') lists `stubServerFiles`: drive C:\, the default data and backup folders, the backup
+ * folder's Nightly, Empty and Slow (which answers after 1.5 s), a share, and C:\Legacy\ as SQL Server 2016 answers a login
+ * outside sysadmin (legacyEmpty); any other folder is PATH_NOT_FOUND. A check (`exists`) finds a name in those folders, the
+ * type filter aside, and under C:\Legacy\ answers legacyEmpty.
  */
 export function actionsStubData() {
-  return { statics: explorerStatics() }
+  return { statics: explorerStatics(), serverFiles: stubServerFiles }
+}
+const backupFolder = String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\Backup` + '\\'
+const dataFolder = String.raw`C:\Program Files\Microsoft SQL Server\MSSQL17.MSSQLSERVER\MSSQL\DATA` + '\\'
+const stubFile = (name, sizeBytes) => ({ name, directory: false, sizeBytes, modified: '2026-10-12T14:03:05' })
+export const stubServerFiles = {
+  backupFolder,
+  roots: [{ path: 'C:\\', kind: 'drive', freeMb: 217_088 }, { path: dataFolder, kind: 'folder', defaults: ['data', 'log'] }, { path: backupFolder, kind: 'folder', defaults: ['backup'] }],
+  /** Folders by lower-case path. */
+  folders: {
+    'c:\\': [{ name: 'Program Files', directory: true }, { name: 'Legacy', directory: true }],
+    [backupFolder.toLowerCase()]: [{ name: 'Empty', directory: true }, { name: 'Nightly', directory: true }, { name: 'Slow', directory: true },
+      stubFile('AppData.bak', 15 * 1024 * 1024), stubFile('AppData_log.trn', 2 * 1024 * 1024), stubFile('readme.txt', 512)],
+    [(backupFolder + 'Nightly\\').toLowerCase()]: [stubFile('Sales.bak', 4 * 1024 * 1024)],
+    [(backupFolder + 'Empty\\').toLowerCase()]: [],
+    [(backupFolder + 'Slow\\').toLowerCase()]: [stubFile('Old.bak', 1024)],
+    [dataFolder.toLowerCase()]: [stubFile('master.mdf', 4 * 1024 * 1024), stubFile('mastlog.ldf', 1024 * 1024)],
+    '\\\\files\\share\\': [stubFile('Shared.bak', 8 * 1024 * 1024)],
+    'c:\\legacy\\': []
+  }
 }
 export const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
 export const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+export const newDatabaseScript = name => `CREATE DATABASE [${name}]
+ CONTAINMENT = NONE
+ ON PRIMARY
+GO
+`
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
-export function installActionsStub({ ipcMain }, { statics }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], blocked: new Map(), catalog: false }
+export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], blocked: new Map(), catalog: false }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
   const dependentsMessage = "Could not drop object 'dbo.Lines' because it is referenced by a FOREIGN KEY constraint."
   const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
+  const newDatabaseScript = name => `CREATE DATABASE [${name}]
+ CONTAINMENT = NONE
+ ON PRIMARY
+GO
+`
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
-    databases: () => [object({ kind: 'database', name: 'AppData' }, 'AppData', 'database')],
+    databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database')),
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
     views: owner => [object({ kind: 'view', database: owner.name, schema: 'dbo', name: 'OrderSummary' }, 'dbo.OrderSummary', 'eye')],
@@ -116,8 +151,16 @@ export function installActionsStub({ ipcMain }, { statics }) {
     stub.catalog = true
     return ok({ steps: titles.map(title => ({ status: 'done', title })), elapsedMs: 1 })
   }
+  /** New Database's OK: a wait until Stop for "Held" (SQL Server cancelled CREATE DATABASE), otherwise the database under Databases. */
+  function createDatabase({ target, requestId }) {
+    if (target.name === 'Held') return new Promise(resolve => stub.blocked.set(requestId, () => resolve(ok({ steps: [{ status: 'cancelled', title: 'Create the database' }], messages: [], elapsedMs: 1,
+      error: { code: 'CANCELLED', message: 'The action was stopped at "Create the database"; SQL Server cancelled that statement.', retryable: true } }))))
+    stub.databases = [...stub.databases, target.name]
+    return ok({ steps: [{ status: 'done', title: 'Create the database' }], messages: [], elapsedMs: 1 })
+  }
   function execute(params) {
     const { target } = params
+    if (params.action === 'createDatabase') return createDatabase(params)
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
     if (params.action === 'rename') {
@@ -131,6 +174,30 @@ export function installActionsStub({ ipcMain }, { statics }) {
     stub.tables = stub.tables.filter(name => name !== target.name)
     return ok({ steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
   }
+  /** One folder of `serverFiles`, filtered by the purpose's extensions as the backend filters; Slow waits 1.5 s (or its cancel). */
+  function listServerFiles({ files, requestId }) {
+    if (files.path === undefined) return ok({ serverFiles: { separator: '\\', roots: serverFiles.roots, entries: [], truncated: false }, elapsedMs: 1 })
+    if (files.exists) {
+      // A check of one path: its own entry, none, or under C:\Legacy\ SQL Server 2016's silence (legacyEmpty).
+      const path = files.path.replaceAll('/', '\\').replace(/\\$/, '')
+      const at = path.lastIndexOf('\\')
+      const parent = path.slice(0, at + 1).toLowerCase()
+      const legacy = parent.startsWith('c:\\legacy\\')
+      const own = legacy ? undefined : serverFiles.folders[parent]?.find(entry => entry.name.toLowerCase() === path.slice(at + 1).toLowerCase())
+      return ok({ serverFiles: { separator: '\\', path, roots: [], entries: own ? [{ name: own.name, directory: own.directory }] : [], truncated: false, ...(legacy ? { notice: 'legacyEmpty' } : {}) }, elapsedMs: 1 })
+    }
+    const folder = files.path.replaceAll('/', '\\').replace(/\\?$/, '\\')
+    const entries = serverFiles.folders[folder.toLowerCase()]
+    if (!entries) return ok({ elapsedMs: 1, error: { code: 'PATH_NOT_FOUND', message: `The folder ${folder} does not exist, or SQL Server's service account cannot see it.`, retryable: false } })
+    const extensions = { backup: ['.bak', '.trn'], database: ['.mdf'], log: ['.ldf'], folder: [] }[files.purpose]
+    const listed = entries.filter(entry => entry.directory || (files.allFiles || extensions.some(extension => entry.name.toLowerCase().endsWith(extension))))
+    const answer = ok({ serverFiles: { separator: '\\', path: folder, roots: [], entries: listed, truncated: false, ...(folder.toLowerCase() === 'c:\\legacy\\' ? { notice: 'legacyEmpty' } : {}) }, elapsedMs: 1 })
+    if (!folder.toLowerCase().endsWith('\\slow\\')) return answer
+    return new Promise(resolve => {
+      const timer = setTimeout(() => { stub.blocked.delete(requestId); resolve(answer) }, 1500)
+      stub.blocked.set(requestId, () => { clearTimeout(timer); resolve(ok({ elapsedMs: 1, error: { code: 'CANCELLED', message: 'Cancelled.', retryable: true } })) })
+    })
+  }
   ipcMain.removeHandler('varia:request')
   ipcMain.handle('varia:request', async (_event, method, params) => {
     stub.calls.push({ method, params: method === 'connections.connect' ? { server: params.server } : params })
@@ -138,7 +205,7 @@ export function installActionsStub({ ipcMain }, { statics }) {
       case 'system.health': return ok({ protocolVersion: 2, runtime: 'stub', platform: process.platform, smoVersion: 'stub', sqlClientVersion: 'stub' })
       case 'connections.connect': return ok({ id: crypto.randomUUID(), server: params.server, database: params.database || 'master', serverVersion: '16.00.4135', productVersion: '16.0.4135.4', login: 'sa', engineEdition: 3, generation: 1 })
       case 'connections.disconnect': return ok({ disconnected: true })
-      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, { name: 'AppData', isSystem: false, isSnapshot: false }])
+      case 'databases.list': return ok([{ name: 'master', isSystem: true, isSnapshot: false }, ...stub.databases.map(name => ({ name, isSystem: false, isSnapshot: false }))])
       case 'explorer.children': return children(params)
       case 'tables.columns': return ok({ columns: [{ name: 'OrderId', dataType: 'int' }, { name: 'Total', dataType: 'money' }], truncated: false })
       case 'query.execute': return ok({
@@ -151,12 +218,18 @@ export function installActionsStub({ ipcMain }, { statics }) {
         switch (params.dialog) {
           case 'tableDesigner': return ok({ tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', caseSensitiveNames: false, accentSensitiveNames: true, canCreate: true }, elapsedMs: 1 })
           case 'databaseProperties': return properties(params)
+          case 'newDatabase': {
+            const folder = serverFiles.roots[1].path
+            return ok({ newDatabase: { model: properties({ target: { name: 'model' } }).value.databaseProperties, dataPath: folder, logPath: folder, serverCollation: 'Latin1_General_CI_AS', canCreate: true, masterLevel: 160, linux: false }, elapsedMs: 1 })
+          }
+          case 'serverFiles': return listServerFiles(params)
           default: return describe(params)
         }
       case 'actions.script':
         switch (params.action) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
+          case 'createDatabase': return ok({ text: newDatabaseScript(params.target.name), database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params)

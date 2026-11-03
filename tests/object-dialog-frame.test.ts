@@ -58,10 +58,13 @@ describe('object dialog frame', () => {
   })
   it('lists a run\'s steps with their state in words, and nothing before the run reports any', () => {
     expect(html(createElement(StepsPanel, { steps: [] }))).toBe('')
-    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline' }, { status: 'skipped', title: 'Restore access' }] }))
+    const panel = html(createElement(StepsPanel, { steps: [{ status: 'done', title: 'Close connections' }, { status: 'failed', title: 'Take database offline', message: 'Msg 5070: Database state cannot be changed while other users are using the database' }, { status: 'skipped', title: 'Restore access' }] }))
     expect(panel).toContain('<section class="object-dialog-steps" aria-labelledby="object-dialog-steps"><div class="object-dialog-caption" id="object-dialog-steps">Steps</div>')
     expect([...panel.matchAll(/data-status="(\w+)"/g)].map(match => match[1])).toEqual(['done', 'failed', 'skipped'])
     expect(panel).toContain('<span class="visually-hidden">Failed: </span>Take database offline')
+    // Every step reads as its title (a done step has no message); the failure's text belongs to the message bar.
+    expect(panel).toContain('<span class="visually-hidden">Done: </span>Close connections')
+    expect(panel).not.toContain('Msg 5070')
   })
 })
 

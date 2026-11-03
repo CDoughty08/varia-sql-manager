@@ -8,14 +8,14 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 
 ## Actions
 
-| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Runs on | Context key |
+| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Servers | Context key |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 2 | w | — | — | SQL Server, Managed Instance, Azure SQL Database | `explorerActionSelectTop` |
+| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 3 | w | — | — | SQL Server, Managed Instance, Azure SQL Database | `explorerActionSelectTop` |
 | `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | SQL Server, Managed Instance | `explorerActionRename` |
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
 
-"Runs on" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
+"Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
 connection. The table designer's `createTable` runs on SQL Server and Managed Instance.
 
@@ -57,8 +57,9 @@ A database row carries its runtime state as listed (state, user access, read-onl
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
 No rule narrows a database's actions yet.
 
-An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
-the Runs on column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Servers column above says which, and on another server the menu hides the item. Menus read the server through
+`explorerServerEngine` and `explorerServerLinux`.
 
 ## Dialogs
 
@@ -66,6 +67,7 @@ the Runs on column above says which. Menus read the server through `explorerServ
 | --- | --- | --- | --- | --- | --- |
 | `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
+| `newDatabase` | New Database | Document tab | `createDatabase` | General (`settings-gear`), Options (`settings-gear`), Filegroups (`settings-gear`) | No |
 
 A modal dialog is for a confirmation (Delete Object). A property sheet opens as a document tab instead (U1 D2): its
 pages are sections in one scrolling column with a section list beside it, and a Script drawer under it.
@@ -87,6 +89,33 @@ confirmation.
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
 [docs/table-designer.md](table-designer.md) describes them.
+
+## Server file picker
+
+`actions.describe` with `serverFiles`, the server as its target and a `files` member (`purpose`, `path`,
+`allFiles`, `exists`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default
+data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past
+its limit or outside the type filter): the answer's entries hold that path's own entry, or none when it does not exist.
+Paths are the server's, with its separator; SQL Server's service account must be able to read them.
+
+| Purpose | Title | Files of type | Extensions |
+| --- | --- | --- | --- |
+| `backup` | Locate Backup File - <server> | Backup Files(*.bak;*.trn), All Files(*.*) | .bak, .trn |
+| `database` | Locate Database Files - <server> | Database Data Files(*.mdf), All Files(*.*) | .mdf |
+| `log` | Locate Database Files - <server> | Database Log Files(*.ldf), All Files(*.*) | .ldf |
+| `folder` | Locate Folder - <server> | Folders only | — |
+
+A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and
+times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,
+`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with
+nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant
+statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A
+missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and
+Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s. Listings take
+a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog's describe.
+
+The picker's titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of
+type, File name, Folder name) are SSMS's as recalled, not yet checked against SSMS 22.
 
 ## Confirmations
 
@@ -127,7 +156,7 @@ last resort.
 | `backup` | A backup |
 | `shrink` | A shrink |
 
-Create Catalog is the only long run so far; the others are reserved for the actions that will use them.
+Create Catalog and New Database are the long runs so far; the others are reserved for the actions that will use them.
 
 A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
 shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
@@ -281,6 +310,43 @@ choosing Yes only after an exclusive change made without closing connections; ot
 type with other sessions, which SSMS does not close connections for) it advises closing them first. Script never
 asks: it always writes WITH NO_WAIT, as SSMS does.
 
+## New Database
+
+A server action makes something on the server rather than acting on an object row, so no row offers it and no
+`explorerAction*` key gates it: its item reads the node it is on, and its describe's target is the server.
+
+| Action | Menu title | Command | Document | On | Group | Mnemonic | Servers | Long run |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `createDatabase` | New Database… | `explorer.newDatabase` | `newDatabase` | the `databases` folder, a `database` node | `0_new` 1; on a node, `1_query` 1, as the menu-only `explorer.newDatabaseOnDatabase` | n | SQL Server | `newDatabase` |
+
+New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel, Escape or closing it
+discards it, as SSMS's Cancel does, and Save (Ctrl+S), or Enter outside its grids, is OK). A second one open is titled
+New Database (2), and so on. Its describe reads model as Database Properties reads it (a new database starts as a copy of
+model), the instance's default data and log folders, the server's collation, whether the login may create a database,
+master's compatibility level and the platform. The document sends the files, filegroups, collation, containment and
+ledger, and only the options and scoped configurations that differ from model: Script writes those, never every option as
+SSMS does. A file's default name is its logical name with .mdf, .ndf or .ldf, made safe for the server's platform
+(critic A23); a FILESTREAM or memory-optimized container is a folder named after it and grows as it needs. SQL Server on
+Linux has no FILESTREAM, so its filegroups are not offered there.
+
+OK runs the steps "Create the database", then Database Properties' own ALTER steps for the options (titled by option),
+the filegroup changes (Autogrow all files, Set the default filegroup, Make the filegroup read-only) and "Set the owner".
+A failure after CREATE leaves the database, as SSMS does, and the steps say what completed. OK registers the
+`newDatabase` long run while it runs, and Stop cancels the running statement. On success the document closes, Object
+Explorer reloads the Databases folder (the one above System Databases, when it was opened on a system database) and
+selects the new database, and the toolbar's database list refreshes.
+
+The builder has SQL Server compose CREATE DATABASE from one JSON parameter: names through `QUOTENAME`, file names and
+paths as N'' literals quoted on the server (`REPLACE` under `Latin1_General_BIN2`), sizes through `CONVERT` of typed
+numbers (in KB up to 2,097,151 MB, as SQL Server reads a size as an int, and in MB above), the collation only as
+`sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution
+form, `EXEC @module @stmt` with `@module = QUOTENAME(@db) + N'.sys.sp_executesql'`. Before it, the preflight refuses a
+name in use, a login without CREATE ANY DATABASE, a missing owner or collation, a folder that does not exist or a file
+that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM where it is off, ledger before SQL Server
+2022, and Partial containment without contained database authentication. `CreateDatabaseSql.Lint` checks the builder
+with the table designer's OPENJSON rules (`JsonBuilderLint`): every column a number or `nvarchar(max)`, text only inside
+`QUOTENAME` (or the quoted-literal form), and JSON columns only into the arrays it shreds again.
+
 ## SQL
 
 DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer's or
@@ -395,6 +461,7 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `BLOCKED` | Yes |
 | `DEPENDENTS` | No |
 | `NAME_IN_USE` | No |
+| `PATH_NOT_FOUND` | No |
 | `DATABASE_UNAVAILABLE` | Yes |
 | `TIMEOUT` | Yes |
 | `CONNECTION_LOST` | Yes |
@@ -433,9 +500,19 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a state action (a rename, a login's Disable or Enable) runs before the status bar shows it with Stop, in ms |
+| `serverPath` | 260 | UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260)) |
+| `browseEntries` | 2,000 | Entries the server file picker lists per folder; more set `truncated` |
+| `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
+| `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
 | `progressEventMs` | 250 | How often a long step's progress (SQL Server's message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms |
 | `progressPerSecond` | 4 | Progress updates main pushes to the window per request each second, at most; the first of each step always goes |
 | `longPerConnection` | 1 | Long actions (a restore or backup) running at once per connection; another waits `gateWaitMs`, then `BUSY` |
 | `longTotal` | 2 | Long actions running at once in total |
 | `drainMarginMs` | 5,000 | What main adds to a long action's Stop wait (`stopGraceMs` plus its cleanup budget) when it lets a closing backend finish, in ms |
+| `newDatabaseFiles` | 256 | Files one New Database request may create |
+| `newDatabaseFilegroups` | 256 | Filegroups one New Database request may create, PRIMARY included |
+| `dataFileMb` | 16,777,215 | A data file's initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server's ceiling for a file, just under 16 TB) |
+| `logFileMb` | 2,097,152 | A log file's initial and maximum size in New Database, in MB (2 TB, SQL Server's ceiling for a log file) |
+| `growthMb` | 2,097,152 | A file's autogrowth in MB, in New Database |
+| `growthPercent` | 100 | A file's autogrowth in percent, in New Database |

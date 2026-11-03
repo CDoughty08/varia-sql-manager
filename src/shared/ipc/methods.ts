@@ -44,6 +44,8 @@ const signIn = (params: { authentication: string }) => params.authentication ===
 /** A closing generation's grace while Create Catalog runs: the backend's own wait for one past its restore (the SSIS catalogue's
  *  createDrainMs, 120 s) plus room for the rest of its shutdown. */
 export const createCatalogDrainMs = 130_000
+/** One server file picker listing: the backend's own 10 s budget (actionLimits.browseMs) plus room for its answer. */
+export const serverFilesDeadlineMs = 15_000
 
 export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } = {
   'system.health': control,
@@ -77,10 +79,11 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'scripting.script': { kind: 'unary', lane: 'metadata', deadlineMs: 60_000 },
   // Object actions: describe and script answer their own 40 s and 25 s budgets as TIMEOUT values. DDL waits for locks as
   // SSMS does, without a deadline; Stop (varia:actions-cancel) always ends it. Database Properties uses the same three
-  // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes.
+  // methods (describe 'databaseProperties', action 'properties'), so its reads and DDL keep these deadlines and lanes. The
+  // server file picker's listing (describe 'serverFiles') answers its own 10 s budget the same way, inside 15 s.
   // actions.execute is sensitive as a whole (critic A3): New Login and Login Properties carry passwords in it, and a
   // per-request flag would leave the frame unzeroed the day an action forgets to set it.
-  'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
+  'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.dialog === 'serverFiles' ? serverFilesDeadlineMs : 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
   // A long action (a restore or backup) stops itself and runs its cleanup when its generation is closed, so main waits that long.
   'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true, drainMs: params => actionDrainMs(params.action) },

@@ -64,13 +64,15 @@ export const databasePropertiesDefinition: ObjectDialogDefinition<DatabaseProper
   afterSuccess: effects => effects.refreshListing()
 }
 
+/** The dialogs this module defines: New Database is a document with a service of its own (src/renderer/src/new-database). */
+export type DefinedDialogId = Exclude<DialogId, 'newDatabase'>
 export interface DialogModels { readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel }
 export interface DialogDrafts { readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft }
-export type DialogModel = DialogModels[DialogId]
-export type DialogDraft = DialogDrafts[DialogId]
-export const dialogDefinitions: { readonly [D in DialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
+export type DialogModel = DialogModels[DefinedDialogId]
+export type DialogDraft = DialogDrafts[DefinedDialogId]
+export const dialogDefinitions: { readonly [D in DefinedDialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
   deleteObject: deleteObjectDefinition,
   databaseProperties: databasePropertiesDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
-export const definitionOf = (dialog: DialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>
+export const definitionOf = (dialog: DefinedDialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

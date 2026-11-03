@@ -51,6 +51,7 @@ import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
 import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
+import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
 import { actionsContribution } from '../contributions/actions'
@@ -61,6 +62,7 @@ import { ssisFocuser } from '../ssis/focus'
 import { SsisPropertiesService } from '../ssis/SsisPropertiesService'
 import { ssisContribution } from '../contributions/ssis'
 import { DatabasePropertiesService } from '../properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../new-database/NewDatabaseService'
 import { SsisOperationsService } from '../ssis/SsisOperationsService'
 import { MenuService } from '../menus/MenuService'
 import { trackWindowFocus } from '../menus/menubar'
@@ -141,6 +143,8 @@ export interface Workbench extends Disposable {
   readonly actionProgress: ActionProgressService
   /** The object dialog that is open (Delete Object), its requests and its phase. */
   readonly dialogs: ObjectDialogService
+  /** The server file picker (Locate Backup File, Locate Database Files, Locate Folder) that a dialog's "…" button opens. */
+  readonly serverFiles: ServerFilePickerService
   /** Integration Services Catalogs › Create Catalog…: its dialog, the server's setup and the create request. */
   readonly ssisCatalog: CreateCatalogService
   /** The long runs (Create Catalog, later a restore): they refuse a window close, a Disconnect of their server and Restart. */
@@ -151,6 +155,8 @@ export interface Workbench extends Disposable {
   readonly ssisProperties: SsisPropertiesService
   /** Database Properties documents: their drafts, Apply, Script previews and frames. */
   readonly properties: DatabasePropertiesService
+  /** New Database documents (D1b): their designs, OK as a long run, Script previews and frames. */
+  readonly newDatabase: NewDatabaseService
   /** The Activity Monitors: one per connection, each a live view of its server. */
   readonly activity: ActivityMonitorService
   /** Integration Services Operations (Active Operations, All Executions…): each connection's document, filters and Stop Operation. */
@@ -215,6 +221,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -232,6 +239,16 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+  })
+  const newDatabase = new NewDatabaseService({
+    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    // The database name, once the first read has drawn it; until then the document's first section in its list.
+    focus: id => nextFrame(() => {
+      if (modalOpen()) return
+      const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
+      const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
+      ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
+    })
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
@@ -260,6 +277,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -326,11 +344,13 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
     actions,
     actionProgress,
     dialogs,
+    serverFiles,
     ssisCatalog,
     longRuns,
     designers,
     ssisProperties,
     properties,
+    newDatabase,
     activity,
     operations,
     theme,
@@ -367,6 +387,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       ssisFocus.dispose()
       ssisProperties.dispose()
       properties.dispose()
+      newDatabase.dispose()
       documents.dispose()
       backend.dispose()
       explorer.dispose()
@@ -374,6 +395,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
       scripting.dispose()
       actions.dispose()
       dialogs.dispose()
+      serverFiles.dispose()
       ssisCatalog.dispose()
       longRuns.dispose()
       connections.dispose()

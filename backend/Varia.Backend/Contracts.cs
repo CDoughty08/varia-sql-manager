@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Varia.Backend.Activity;
 
 namespace Varia.Backend;
@@ -187,12 +188,64 @@ internal sealed record ScriptError(string Code, string Message, bool Retryable);
 internal sealed record ScriptResult(string? Text, string Database, List<string> Warnings, int Commands, long ElapsedMs, ScriptError? Error = null);
 
 /// <summary>actions.describe: what an object dialog shows (deleteObject: Delete Object's row; databaseProperties: Database Properties' pages),
-/// or what the table designer needs of a database (tableDesigner).</summary>
-internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
+/// what the table designer needs of a database (tableDesigner), or the server's folders (serverFiles, the server as Target, with Files).</summary>
+internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target, ServerFilesArgsDto? Files = null);
+/// <summary>The server file picker's request (src/shared/actions/files.ts): Purpose backup, database, log or folder; Path the folder
+/// to list (at most 260 UTF-16 units; absent for the drives and default folders); AllFiles lists every file, not the purpose's;
+/// Exists asks whether Path itself (a file or a folder) exists rather than listing it.</summary>
+internal sealed record ServerFilesArgsDto(string Purpose, string? Path = null, bool? AllFiles = null, bool? Exists = null);
+/// <summary>A drive or default folder: Kind drive or folder, Defaults data, log and backup.</summary>
+internal sealed record ServerRootDto(string Path, string Kind, List<string>? Defaults = null, long? FreeMb = null);
+/// <summary>Modified is the server's local time as yyyy-MM-ddTHH:mm:ss.</summary>
+internal sealed record ServerFileEntryDto(string Name, bool Directory, long? SizeBytes = null, string? Modified = null);
+/// <summary>One listing: Separator \ or /, Path the folder listed (ending with it), Roots only without a path, Notice legacyEmpty.
+/// For Exists, Path is the path checked and Entries its own entry when it exists (none when it does not, or with legacyEmpty when
+/// SQL Server 2016 will not tell a login outside sysadmin).</summary>
+internal sealed record ServerFilesDto(string Separator, string? Path, List<ServerRootDto> Roots, List<ServerFileEntryDto> Entries, bool Truncated, string? Notice = null);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
-/// CloseConnections and Changes, createTable (Target the database) Design; Validate refuses the rest.</summary>
+/// CloseConnections and Changes, createTable (Target the database) and createDatabase (Target the new database) Design; Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
-    DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+    DatabaseChangesDto? Changes = null, ActionDesign? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null);
+/// <summary>An action's design, whose shape is the action's: the table designer's (TableDesignDto) or New Database's
+/// (NewDatabaseDesignDto). STJ reads an object's members in no fixed order, so the member stays JSON until the action's validator
+/// reads it with the request's own strict options (unknown members refused, as everywhere).</summary>
+[JsonConverter(typeof(ActionDesignConverter))]
+internal sealed class ActionDesign
+{
+    /// <summary>The protocol's options (Program.cs), for designs the checks build in C#.</summary>
+    internal static readonly JsonSerializerOptions Strict = new(JsonSerializerDefaults.Web) { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow };
+    private readonly JsonElement element;
+    private readonly JsonSerializerOptions options;
+
+    public ActionDesign(JsonElement element, JsonSerializerOptions? options = null)
+    {
+        this.element = element.Clone();
+        this.options = options ?? Strict;
+    }
+
+    /// <summary>The design as <typeparamref name="T"/>; INVALID_PARAMS when it is not one (a member another design has, a wrong type).</summary>
+    public T? As<T>() where T : class
+    {
+        try { return element.ValueKind == JsonValueKind.Null ? null : element.Deserialize<T>(options); }
+        catch (JsonException) { throw new RequestException("INVALID_PARAMS", "Invalid object action request: design."); }
+    }
+
+    internal void WriteTo(Utf8JsonWriter writer) => element.WriteTo(writer);
+    public static implicit operator ActionDesign?(TableDesignDto? design) => design is null ? null : new(JsonSerializer.SerializeToElement(design, Strict));
+    public static implicit operator ActionDesign?(NewDatabaseDesignDto? design) => design is null ? null : new(JsonSerializer.SerializeToElement(design, Strict));
+}
+
+internal sealed class ActionDesignConverter : JsonConverter<ActionDesign>
+{
+    public override ActionDesign Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        return new ActionDesign(document.RootElement, options);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ActionDesign value, JsonSerializerOptions options) => value.WriteTo(writer);
+}
+
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
 /// Never logged, echoed or persisted; ActionService.Validate bounds them. The record never prints them, so neither does an ActionArgs.</summary>
@@ -228,7 +281,18 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null);
+    TableDesignerModelDto? TableDesigner = null, ServerFilesDto? ServerFiles = null, NewDatabaseModelDto? NewDatabase = null);
+/// <summary>New Database's file (src/shared/actions/new-database.ts): Type rows, log or filestream; Filegroup none for a log; SizeMb none
+/// for a container; Path the folder and FileName the file (a container's folder) in it.</summary>
+internal sealed record NewDatabaseFileDto(string Name, string Type, GrowthDto Growth, string Path, string FileName, string? Filegroup = null, long? SizeMb = null);
+/// <summary>Type rows, filestream or memoryOptimized; PRIMARY first.</summary>
+internal sealed record NewDatabaseFilegroupDto(string Name, string Type, bool? ReadOnly = null, bool? IsDefault = null, bool? AutogrowAllFiles = null);
+/// <summary>New Database's design: Containment NONE or PARTIAL; Options and Scoped only what differs from model, as tokens.</summary>
+internal sealed record NewDatabaseDesignDto(List<NewDatabaseFileDto> Files, List<NewDatabaseFilegroupDto> Filegroups, string Containment, Dictionary<string, string> Options,
+    Dictionary<string, string> Scoped, string? Owner = null, string? Collation = null, bool? Ledger = null);
+/// <summary>What New Database reads: model as Database Properties reads it, the default folders, the server's collation, whether the
+/// login may create a database (CREATE ANY DATABASE), master's compatibility level and whether the server runs on Linux.</summary>
+internal sealed record NewDatabaseModelDto(DatabasePropertiesDto Model, string DataPath, string LogPath, string ServerCollation, bool CanCreate, int MasterLevel, bool Linux);
 /// <summary>The table designer's new table (src/shared/designer/schema.ts): columns in order and the primary key as column indexes in key order.</summary>
 internal sealed record TableDesignDto(string Schema, string Name, List<DesignColumnDto> Columns, List<int> PrimaryKey);
 internal sealed record DesignColumnDto(string Name, DesignTypeDto Type, bool AllowNulls, DesignIdentityDto? Identity = null);

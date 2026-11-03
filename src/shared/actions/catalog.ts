@@ -3,11 +3,12 @@
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
 // for an action its catalogue does not offer. Erasable TypeScript (no enums), so Node's type stripping can load it too.
-import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
+import { kindSpecs, nodeKinds, nodeStatuses, serverEngines, type FolderId, type NodeKind, type NodeStatus, type NodeSubtype, type ServerEngine } from '../explorer/catalog.ts'
 import type { DatabaseRuntime } from '../explorer/status.ts'
 import type { IconId } from '../icons.ts'
 import type { ScriptDestination } from '../scripting/catalog.ts'
 import { compatibilityLevels, databaseOptionDefs, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
+import type { LongRunKind } from '../long-runs.ts'
 import { loginsCatalog } from './logins.ts'
 
 // One entry per line, so later actions and dialogs append cleanly.
@@ -22,7 +23,8 @@ export type ObjectAction = typeof objectActions[number]
 export type ActionClass = 'query' | 'inline' | 'dialog'
 export const dialogIds = [
   'deleteObject',
-  'databaseProperties'
+  'databaseProperties',
+  'newDatabase'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** The menus an action can be placed in: Object Explorer's context menu and its Tasks submenus (src/shared/commands/menus.ts). */
@@ -43,8 +45,8 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** The servers it runs on (critic A1). On another, the menu hides the item, and the backend refuses it before opening a
-   *  connection. */
+  /** The servers that offer it (critic A1). On another, the menu hides the item, and the backend refuses a request for it
+   *  before opening a connection (it reads this list from actions-catalog.json). */
   readonly engines: readonly ServerEngine[]
   /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
    *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
@@ -58,7 +60,7 @@ export interface ObjectActionSpec {
  *  actions are a follow-up. */
 const onServers: readonly ServerEngine[] = ['box', 'managedInstance']
 const actionSpecData = {
-  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 2, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
+  selectTop: { title: 'Select Top 1000 Rows', mnemonic: 'w', group: '1_query', order: 3, class: 'query', command: 'explorer.selectTopRows', engines: serverEngines },
   rename: { title: 'Rename', mnemonic: 'm', group: '7_edit', order: 1, class: 'inline', command: 'explorer.rename', engines: onServers },
   // SSMS underlines D, which Disconnect has in Varia's one Object Explorer menu (access keys are unique per menu).
   delete: { title: 'Delete', mnemonic: 'e', group: '7_edit', order: 2, class: 'dialog', dialog: 'deleteObject', command: 'explorer.delete', engines: onServers },
@@ -68,6 +70,57 @@ const actionSpecData = {
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */
 export type ActionCommandId = typeof actionSpecData[ObjectAction]['command']
+
+// Server-scope actions: no object's row offers them, since what they make does not exist yet. A folder's menu and its
+// nodes' menus place them, the server is their describe's target, and OK runs them with the new object's name (New
+// Database; Attach and Restore Database follow in later PRs). One entry per line, so later actions append cleanly.
+export const serverActions = [
+  'createDatabase'
+] as const
+export type ServerAction = typeof serverActions[number]
+/** Every action actions.execute runs from this catalogue (the table designer's createTable is the designer catalogue's). */
+export type CatalogAction = ObjectAction | ServerAction
+export interface ServerActionSpec {
+  /** The palette's and the menu's title. */
+  readonly title: string
+  readonly mnemonic: string
+  readonly group: string
+  readonly order: number
+  /** The document or dialog the command opens; its OK runs the action. */
+  readonly dialog: DialogId
+  readonly command: `explorer.${string}`
+  /** The servers it runs on (critic A1); elsewhere the menu hides it and the backend refuses it. */
+  readonly engines: readonly ServerEngine[]
+  /** The folders whose menu offers it (in `group` at `order`), and the node kinds whose menu does (SSMS offers New Database on a database too). */
+  readonly folders: readonly FolderId[]
+  readonly kinds: readonly NodeKind[]
+  /**
+   * Where a node of `kinds` places it instead, when SSMS groups it with the node's own items there. The catalogue places a
+   * command once per menu (macOS's native context menus show a command wherever it is placed, since main sees no target),
+   * so this place is a menu-only command of its own that runs the same; the palette offers only `command`.
+   */
+  readonly nodePlace?: { readonly command: `explorer.${string}`; readonly group: string; readonly order: number }
+  /** It registers with the long-run registry while OK runs, never with the document task. */
+  readonly longRun: LongRunKind
+  /** As ObjectActionSpec.cleanupMs. */
+  readonly cleanupMs?: number
+}
+const serverActionSpecData = {
+  // SSMS 22's Databases menu: New Database…, Attach…, Restore Database…, Restore Files and Filegroups…; its access key for New
+  // Database is recalled as N. On a database SSMS's first group is New Database…, New Query and Script Database as (Microsoft
+  // Learn's SSMS 17 and 19 screenshots), so there it joins New Query's group, first. Azure SQL Managed Instance creates
+  // databases without files, so it is a follow-up.
+  createDatabase: {
+    title: 'New Database…', mnemonic: 'n', group: '0_new', order: 1, dialog: 'newDatabase', command: 'explorer.newDatabase', engines: ['box'], folders: ['databases'], kinds: ['database'],
+    nodePlace: { command: 'explorer.newDatabaseOnDatabase', group: '1_query', order: 1 }, longRun: 'newDatabase'
+  }
+} as const satisfies { readonly [A in ServerAction]: ServerActionSpec }
+export const serverActionSpecs: { readonly [A in ServerAction]: ServerActionSpec & { readonly command: typeof serverActionSpecData[A]['command'] } } = serverActionSpecData
+type NodePlaceCommands = { readonly [A in ServerAction]: typeof serverActionSpecData[A] extends { readonly nodePlace: { readonly command: infer C } } ? C : never }[ServerAction]
+export type ServerActionCommandId = typeof serverActionSpecData[ServerAction]['command'] | NodePlaceCommands
+export const isServerAction = (action: string): action is ServerAction => (serverActions as readonly string[]).includes(action)
+/** An action's servers, from whichever list declares it. */
+export const catalogActionEngines = (action: CatalogAction): readonly ServerEngine[] => isServerAction(action) ? serverActionSpecs[action].engines : objectActionSpecs[action].engines
 
 /** '' = not offered (hidden); 'disabled' = shown greyed, as SSMS shows Rename and Delete on system objects. */
 export type ActionState = '' | 'disabled' | 'enabled'
@@ -235,6 +288,8 @@ export interface ActionCommandEntry {
   readonly titleSetting?: { readonly setting: 'objectExplorer.selectTopRows'; readonly template: string }
   readonly keybindings?: readonly ActionKeybinding[]
   readonly menus: readonly [ActionMenuPlacement, ...ActionMenuPlacement[]]
+  /** Only a server action's menu-only command for its node place (ServerActionSpec.nodePlace) sets it. */
+  readonly palette?: false
 }
 const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'title' | 'category' | 'precondition' | 'menus'> & { readonly documentTask: boolean } } = {
   selectTop: {
@@ -273,6 +328,63 @@ export function actionCommandEntries(): { readonly [K in ActionCommandId]: Actio
     }
     return [spec.command, entry]
   })) as { readonly [K in ActionCommandId]: ActionCommandEntry }
+}
+
+const anyOf = (clauses: readonly string[]) => clauses.length === 1 ? clauses[0] : `(${clauses.join(' || ')})`
+const serverCommandData: { readonly [A in ServerAction]: Pick<ActionCommandEntry, 'icon' | 'keywords' | 'unavailableHint'> } = {
+  createDatabase: { icon: 'database', keywords: ['create', 'database', 'add', 'files'], unavailableHint: 'Select the Databases folder, or a database, of a SQL Server in Object Explorer.' }
+}
+/**
+ * The server actions' commands. The menu offers one on its folders and node kinds, on a server it serves that is not lost;
+ * the palette, on a selection of the same kind. Like a long-running object action, none holds the document task. An action
+ * with a node place has a second, menu-only command for it, with the same title, precondition and handler.
+ */
+export function serverActionCommandEntries(): { readonly [K in ServerActionCommandId]: ActionCommandEntry } {
+  return Object.fromEntries(serverActions.flatMap(action => {
+    const spec: ServerActionSpec = serverActionSpecs[action], { nodePlace } = spec
+    const engines = (key: string) => anyOf(spec.engines.map(engine => `${key} == '${engine}'`))
+    const folderPlaces = spec.folders.map(folder => `explorerNode == 'folder' && explorerFolder == '${folder}'`), kindPlaces = spec.kinds.map(kind => `explorerNode == '${kind}'`)
+    const selectionPlaces = anyOf([...spec.folders.map(folder => `explorerSelectionFolder == '${folder}'`), ...spec.kinds.map(kind => `explorerSelectionKind == '${kind}'`)])
+    const entry = (group: string, order: number, places: readonly string[]): ActionCommandEntry => ({
+      title: spec.title, category: 'Object Explorer', ...serverCommandData[action],
+      precondition: `backendReady && ${selectionPlaces} && ${engines('explorerSelectionServerEngine')}`,
+      menus: [{ menu: 'explorer.context', group, order, mnemonic: spec.mnemonic, when: `${anyOf(places)} && !explorerServerLost && ${engines('explorerServerEngine')}` }]
+    })
+    if (!nodePlace) return [[spec.command, entry(spec.group, spec.order, [...folderPlaces, ...kindPlaces])]]
+    return [[spec.command, entry(spec.group, spec.order, folderPlaces)], [nodePlace.command, { ...entry(nodePlace.group, nodePlace.order, kindPlaces), palette: false }]]
+  })) as { readonly [K in ServerActionCommandId]: ActionCommandEntry }
+}
+
+/** The New Database document's header verbs: catalogue commands, so the palette offers them too. */
+export type NewDatabaseCommandId = 'newDatabase.ok' | 'newDatabase.cancel' | 'newDatabase.stop'
+export interface NewDatabaseCommandEntry {
+  readonly title: string
+  readonly category: 'New Database'
+  readonly icon: 'check' | 'close' | 'debug-stop'
+  readonly keywords: readonly string[]
+  readonly precondition: string
+  readonly unavailableHint: string
+}
+/**
+ * OK creates the database and closes the document; Cancel closes it; Stop cancels a running OK in SQL Server. The header
+ * shows SSMS's OK and Cancel, while the palette's titles say what they do: a bare "Cancel", the shorter label, would rank
+ * above Cancel Executing Query wherever both are unavailable.
+ */
+export function newDatabaseCommandEntries(): { readonly [K in NewDatabaseCommandId]: NewDatabaseCommandEntry } {
+  return {
+    'newDatabase.ok': {
+      title: 'Create Database', category: 'New Database', icon: 'check', keywords: ['ok', 'create', 'new', 'database'],
+      precondition: 'activeDocumentIsNewDatabase && newDatabaseCreatable', unavailableHint: 'Fill in the New Database document on a connected server first.'
+    },
+    'newDatabase.cancel': {
+      title: 'Cancel New Database', category: 'New Database', icon: 'close', keywords: ['close', 'discard'],
+      precondition: 'activeDocumentIsNewDatabase && !newDatabaseCreating', unavailableHint: 'Stop the database being created first.'
+    },
+    'newDatabase.stop': {
+      title: 'Stop', category: 'New Database', icon: 'debug-stop', keywords: ['cancel', 'create'],
+      precondition: 'activeDocumentIsNewDatabase && newDatabaseCreating', unavailableHint: 'The database is not being created.'
+    }
+  }
 }
 
 /** The Database Properties document's header verbs: catalogue commands, so the palette offers them too. */
@@ -341,8 +453,8 @@ export interface DialogSpec {
   /** 'withName': SSMS's "Database Properties - AppData". */
   readonly titleFormat: 'plain' | 'withName'
   readonly size: 'compact' | 'large'
-  /** The action OK runs and Script scripts; its catalogue row decides where the dialog opens. */
-  readonly action: ObjectAction
+  /** The action OK runs and Script scripts; its catalogue row (or, for a server action, its folders) decides where the dialog opens. */
+  readonly action: CatalogAction
   readonly pages: readonly DialogPageSpec[]
   /** A modal dialog whose run has several steps lists them under its message bar once the run reports them. */
   readonly steps?: true
@@ -358,6 +470,11 @@ const dialogSpecData = {
   databaseProperties: {
     title: 'Database Properties', surface: 'document', titleFormat: 'withName', size: 'large', action: 'properties',
     pages: [page('general', 'General'), page('files', 'Files'), page('filegroups', 'Filegroups'), page('options', 'Options')]
+  },
+  // SSMS's New Database pages: General (the name, the owner and the files), Options and Filegroups.
+  newDatabase: {
+    title: 'New Database', surface: 'document', titleFormat: 'plain', size: 'large', action: 'createDatabase',
+    pages: [page('general', 'General'), page('options', 'Options'), page('filegroups', 'Filegroups')]
   }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
@@ -372,9 +489,41 @@ export const scriptActionTitles: { readonly [D in ScriptDestination]: string } =
   newQuery: 'Script Action to New Query Window', file: 'Script Action to File', clipboard: 'Script Action to Clipboard'
 }
 
+/**
+ * The server file picker (SSMS's Locate Backup File, Locate Database Files and Locate Folder): `actions.describe` with this
+ * id, the server as the target and a `files` member lists the server's drives and default folders, or one folder. Paths
+ * are the server's, never the client's, and the listing's type filter runs in the backend over constant SQL.
+ */
+export const serverFilesDescribeId = 'serverFiles'
+export const serverFilePurposes = ['backup', 'database', 'log', 'folder'] as const
+export type ServerFilePurpose = typeof serverFilePurposes[number]
+export interface ServerFilePurposeSpec {
+  /** The picker's title, before " - <server>" (SSMS's, recalled). */
+  readonly title: string
+  /** Files of type's first entry, with the extensions in brackets; a folder picker lists folders only. */
+  readonly types?: string
+  /** Lower-case extensions, dot included, that the type filter keeps (at most two: the listing's SQL binds @e1 and @e2). */
+  readonly extensions: readonly string[]
+}
+export const serverFilePurposeSpecs: { readonly [P in ServerFilePurpose]: ServerFilePurposeSpec } = {
+  backup: { title: 'Locate Backup File', types: 'Backup Files', extensions: ['.bak', '.trn'] },
+  database: { title: 'Locate Database Files', types: 'Database Data Files', extensions: ['.mdf'] },
+  log: { title: 'Locate Database Files', types: 'Database Log Files', extensions: ['.ldf'] },
+  folder: { title: 'Locate Folder', extensions: [] }
+}
+/** Files of type's second entry, which lists every file. */
+export const allFilesType = 'All Files(*.*)'
+/** Files of type's entry for a purpose, as SSMS words it: "Backup Files(*.bak;*.trn)". */
+export const serverFileTypesLabel = (purpose: ServerFilePurpose): string | undefined => {
+  const spec = serverFilePurposeSpecs[purpose]
+  return spec.types && `${spec.types}(${spec.extensions.map(extension => '*' + extension).join(';')})`
+}
+
 /** Why an action failed, as a value; `retryable` says whether trying again can help. */
 export const actionErrorRetryable = {
   NOT_FOUND: false, NOT_SUPPORTED: false, PERMISSION_DENIED: true, IN_USE: true, BLOCKED: true, DEPENDENTS: false, NAME_IN_USE: false,
+  // The server file picker's folder does not exist, or the server's account cannot see it.
+  PATH_NOT_FOUND: false,
   DATABASE_UNAVAILABLE: true, TIMEOUT: true, CONNECTION_LOST: true, SQL_ERROR: true,
   // Stop cancelled the statement in SQL Server; the steps say what completed before it.
   CANCELLED: true,
@@ -401,6 +550,11 @@ export const actionLimits = {
   stopGraceMs: 10_000,
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
+  /** The server file picker: UTF-16 units in a server path (sys.master_files.physical_name is nvarchar(260)), entries one folder
+   *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
+   *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
+   *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
+  serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1,
   /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
   cleanupMs: 10_000,
   /** A long step's progress (SQL Server's 3211 STATS messages): EVENTs at most this often, pushed to the page at most this many a second. */
@@ -408,11 +562,14 @@ export const actionLimits = {
   /** The long-job gate, per Varia connection and in all (critic A26): long actions take it instead of the execute gate. */
   longPerConnection: 1, longTotal: 2,
   /** What a closing generation's grace adds to a long action's own Stop wait (stopGraceMs plus its cleanup budget). */
-  drainMarginMs: 5_000
+  drainMarginMs: 5_000,
+  /** New Database: files and filegroups one design holds, sizes in MB (a data file up to 16 TB, a log file and a growth up to
+   *  2 TB, as SQL Server bounds them), and a growth in percent. */
+  newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
 } as const
 
 /** Whether an action runs on a server of this engine. */
-export const actionServes = (action: ObjectAction, engine: ServerEngine): boolean => objectActionSpecs[action].engines.includes(engine)
+export const actionServes = (action: CatalogAction, engine: ServerEngine): boolean => catalogActionEngines(action).includes(engine)
 
 /** How long main lets a closing generation run while this action executes (methodPolicies' drainMs): for a long action, the
  *  backend's own wait for it (stopGraceMs, then its cleanup budget) plus a margin; 0 (main's usual grace) for the others. */
@@ -454,9 +611,14 @@ export function actionsCatalogJson(): string {
     const spec: ObjectActionSpec = objectActionSpecs[action]
     return { action, class: spec.class, title: spec.title, systemObjects: spec.systemObjects, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, long: spec.long }
   }
+  // A server action belongs to no row: `scope` says so, and C# validates its target itself.
+  const serverActionJson = (action: ServerAction) => {
+    const spec: ServerActionSpec = serverActionSpecs[action]
+    return { action, class: 'dialog', title: spec.title, engines: spec.engines, cleanupMs: spec.cleanupMs ?? actionLimits.cleanupMs, scope: 'server' }
+  }
   return [
     '{',
-    `  "actions": ${block(objectActions.map(actionJson))},`,
+    `  "actions": ${block([...objectActions.map(actionJson), ...serverActions.map(serverActionJson)])},`,
     `  "compatibilityLevels": ${line(compatibilityLevels)},`,
     `  "databaseOptions": ${block(databaseOptionDefs.map(optionJson))},`,
     `  "dialogs": ${block(dialogIds.map(dialog => ({ dialog, action: dialogSpecs[dialog].action, pages: dialogSpecs[dialog].pages.map(page => page.id) })))},`,
@@ -466,6 +628,7 @@ export function actionsCatalogJson(): string {
     `  "ownerNotOn": ${line(ownerNotOn)},`,
     `  "rows": ${block(rows)},`,
     `  "scopedConfigurations": ${block(scopedConfigurationDefs.map(optionJson))},`,
+    `  "serverFiles": ${block(serverFilePurposes.map(purpose => ({ purpose, extensions: serverFilePurposeSpecs[purpose].extensions })))},`,
     '  "version": 3',
     '}',
     ''

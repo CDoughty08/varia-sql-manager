@@ -52,6 +52,12 @@ internal sealed class ActionServiceOptions
     public int MaxRegistered { get; init; } = 128;
     public TimeSpan DescribeBudget { get; set; } = TimeSpan.FromSeconds(40);
     public TimeSpan ScriptBudget { get; set; } = TimeSpan.FromSeconds(25);
+    /// <summary>The server file picker's budget for one listing (actionLimits.browseMs).</summary>
+    public TimeSpan BrowseBudget { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>The picker's listings run one at a time per connection under a gate of their own, outside the read gates: SQL
+    /// Server honours an attention only once a file-system call returns (about 21 s for an unreachable share), so a listing
+    /// past its budget still holds its gate, and must not hold one that Database Properties or Delete Object waits for.</summary>
+    public int BrowsePerConnection { get; init; } = 1;
     public TimeSpan GateWait { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>How long Stop on DDL waits for SQL Server to end the statement before the request answers CANCELLED; the
     /// action's cleanup budget (its compensation and cleanup steps) is added to it.</summary>
@@ -85,6 +91,7 @@ internal sealed partial class ActionService : IDisposable
     private readonly ConcurrentDictionary<string, SemaphoreSlim> readGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> executeGates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> longGates = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> browseGates = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim readTotal;
     private readonly SemaphoreSlim executeTotal;
     private readonly SemaphoreSlim longTotal;
@@ -93,6 +100,9 @@ internal sealed partial class ActionService : IDisposable
     private int activeJobs;
 
     public const string CloudMessage = "Object actions on Azure SQL Database are not supported yet.";
+    /// <summary>The describe id of the server file picker (src/shared/actions/catalog.ts serverFilesDescribeId).</summary>
+    public const string ServerFilesDescribe = "serverFiles";
+    public const string ManagedInstanceFilesMessage = "Azure SQL Managed Instance does not let Varia browse its folders.";
     public const string ManagedInstanceMessage = "This object action is not available on Azure SQL Managed Instance.";
 
     /// <summary>Why an action does not run on a server of this engine (its catalogue `engines`, critic A1).</summary>
@@ -155,12 +165,33 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
+    /// dialog and a target its action serves, the table designer and a database, SQL Server's own included, or the server
+    /// file picker, the server and what to list (a known purpose and a server path, without All Files for a folder).</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
+        if ((args.Dialog == ServerFilesDescribe) != (args.Files is not null)) throw Invalid("files.");
+        if (args.Files is { } files)
+        {
+            if (!catalog.ServerFilePurposes.ContainsKey(files.Purpose ?? "")) throw Invalid("purpose.");
+            if (files.Path is not null && !ServerPath.Valid(files.Path, catalog.Limit("serverPath"))) throw Invalid("path.");
+            if (files.Purpose == "folder" && files.AllFiles == true) throw Invalid("a folder picker lists folders only.");
+            if (files.Exists == true && (files.Path is null || files.AllFiles is not null)) throw Invalid("exists checks one path.");
+            if (args.Target is not { Kind: "server" }) throw Invalid("target.");
+            try { ExplorerRefs.Object(args.Target, explorer); }
+            catch (RequestException) { throw Invalid("target."); }
+            return args.Target;
+        }
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
+        // A server action's document (New Database) describes the server it makes something on.
+        if (catalog.IsServerAction(catalog.ActionOf(args.Dialog)))
+        {
+            if (args.Target is not { Kind: "server" }) throw Invalid("target.");
+            try { ExplorerRefs.Object(args.Target, explorer); }
+            catch (RequestException) { throw Invalid("target."); }
+            return args.Target;
+        }
         return Target(args.Target, catalog.ActionOf(args.Dialog));
     }
 
@@ -205,8 +236,14 @@ internal sealed partial class ActionService : IDisposable
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
-                TableDesignValidator.Validate(designer, args.Design);
+                TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
                 return database;
+            case "createDatabase":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createDatabase takes only a design.");
+                // The new database's name is the target's; it is no object yet, so no row offers the action.
+                if (args.Target is not { Kind: "database", Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null } created || !ExplorerRefs.Ident(created.Name)) throw Invalid("target.");
+                NewDatabaseValidator.Validate(catalog, created.Name!, args.Design?.As<NewDatabaseDesignDto>());
+                return created;
             default:
                 throw Invalid("action.");
         }
@@ -225,12 +262,27 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        if (args.Files is { } files)
+        {
+            // The picker is no catalogue action, so it names its own engines: Azure SQL Database has no server disks to browse,
+            // and Managed Instance keeps its files to itself (no RESTORE FROM DISK, attach or file specs).
+            var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
+            if (engine != "box") return Task.FromResult(new ActionDescribeResult(null, 0, Error("NOT_SUPPORTED", engine == "managedInstance" ? ManagedInstanceFilesMessage : CloudMessage)));
+            return RunAsync(args.ConnectionId, args.RequestId, null, read: true, Options.BrowseBudget, token,
+                async (connection, profile, band, job) =>
+                {
+                    var (listing, error) = await ServerFiles.ListAsync(connection, catalog, files, profile.Linux, job);
+                    return new ActionDescribeResult(null, watch.ElapsedMilliseconds, error, ServerFiles: listing);
+                },
+                error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error), "Listing the folder", browse: true);
+        }
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
                 "tableDesigner" => DescribeDesignerJobAsync(connection, target, band, job),
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
+                "newDatabase" => DescribeNewDatabaseJobAsync(connection, profile, band, job),
                 _ => DescribeJobAsync(connection, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -246,6 +298,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                "createDatabase" => ScriptNewDatabaseJobAsync(connection, args, profile, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -263,6 +316,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, progress, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, progress, job),
+                "createDatabase" => ExecuteNewDatabaseJobAsync(connection, args, profile, band, progress, job),
                 _ => ExecuteJobAsync(connection, args, target, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -274,15 +328,16 @@ internal sealed partial class ActionService : IDisposable
     /// Stop on DDL (the request's own token) has already sent SQL Server an attention through the job's token; the reply then
     /// waits up to StopGrace plus the action's cleanup budget for the job, whose steps say what completed and what Varia
     /// undid, and past it answers CANCELLED, an unknown outcome. A long action's DDL takes the long gate instead of the execute
-    /// gate, and a shutdown waits for its job (DrainLong), so its cleanup still runs when the backend is closed under it.</summary>
-    private async Task<T> RunAsync<T>(string connectionId, string requestId, string action, bool read, TimeSpan? budget, CancellationToken token,
-        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed)
+    /// gate, and a shutdown waits for its job (DrainLong), so its cleanup still runs when the backend is closed under it. A null
+    /// action is the server file picker's listing, which checks its own engines first and takes only the browse gate.</summary>
+    private async Task<T> RunAsync<T>(string connectionId, string requestId, string? action, bool read, TimeSpan? budget, CancellationToken token,
+        Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", bool browse = false)
     {
         var profile = host.Profile(connectionId);
         var served = profile.Explorer(explorer);
         // Each action declares the engines it runs on: Azure SQL Database reaches one database per connection and refuses USE,
         // and Managed Instance cannot set SINGLE_USER, attach, detach or restore from a disk.
-        if (!Serves(action, served.ServerEngine)) return failed(ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine)));
+        if (action is not null && !Serves(action, served.ServerEngine)) return failed(ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine)));
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(requestId, connectionId, source);
         try
@@ -290,23 +345,23 @@ internal sealed partial class ActionService : IDisposable
             token.ThrowIfCancellationRequested();
             if (budget is { } limit) source.CancelAfter(limit);
             var jobSource = CancellationTokenSource.CreateLinkedTokenSource(source.Token);
-            var gate = read ? ActionGate.Read : catalog.IsLong(action) ? ActionGate.Long : ActionGate.Execute;
+            var gate = browse ? ActionGate.Browse : read ? ActionGate.Read : action is not null && catalog.IsLong(action) ? ActionGate.Long : ActionGate.Execute;
             var job = Task.Run(() => JobAsync(connectionId, gate, profile, served.Band, work, failed, jobSource), CancellationToken.None);
             _ = job.ContinueWith(done => _ = done.Exception, CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             if (gate == ActionGate.Long)
             {
-                longJobs[job] = StopWait(action);
+                longJobs[job] = StopWait(action!);
                 _ = job.ContinueWith(done => longJobs.TryRemove(done, out _), CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
             }
             try { return await job.WaitAsync(source.Token); }
             catch (OperationCanceledException) when (source.IsCancellationRequested && !token.IsCancellationRequested)
             {
                 if (entry.Forgotten) throw new RequestException("CANCELLED", "The operation was cancelled.");
-                return failed(ActionErrors.Create(catalog, "TIMEOUT", "Reading the object took longer than " + (int)budget!.Value.TotalSeconds + " seconds. Try again."));
+                return failed(ActionErrors.Create(catalog, "TIMEOUT", reading + " took longer than " + (int)budget!.Value.TotalSeconds + " seconds. Try again."));
             }
             catch (OperationCanceledException) when (!read && token.IsCancellationRequested && !entry.Forgotten)
             {
-                try { return await job.WaitAsync(StopWait(action), CancellationToken.None); }
+                try { return await job.WaitAsync(action is null ? Options.StopGrace : StopWait(action), CancellationToken.None); }
                 catch (TimeoutException) { throw new OperationCanceledException(token); }
                 // Only the preflight, the gates or the sign-in can throw on cancellation: no DDL had started.
                 catch (Exception error) when (error is OperationCanceledException or SqlException) { return failed(Error("CANCELLED", "The action was stopped before it changed anything.")); }
@@ -322,9 +377,11 @@ internal sealed partial class ActionService : IDisposable
         try
         {
             var token = jobSource.Token;
-            var read = kind == ActionGate.Read;
+            var read = kind is ActionGate.Read or ActionGate.Browse;
+            // The picker's listings take only their own gate (ActionServiceOptions.BrowsePerConnection), never a read gate or a total slot.
             var (gates, perConnection, total) = kind switch
             {
+                ActionGate.Browse => (browseGates, Options.BrowsePerConnection, (SemaphoreSlim?)null),
                 ActionGate.Read => (readGates, Options.ReadPerConnection, readTotal),
                 ActionGate.Long => (longGates, Options.LongPerConnection, longTotal),
                 _ => (executeGates, Options.ExecutePerConnection, executeTotal)
@@ -333,7 +390,7 @@ internal sealed partial class ActionService : IDisposable
             if (!await gate.WaitAsync(Options.GateWait, token)) throw Busy(kind, total: false);
             try
             {
-                if (!await total.WaitAsync(Options.GateWait, token)) throw Busy(kind, total: true);
+                if (total is not null && !await total.WaitAsync(Options.GateWait, token)) throw Busy(kind, total: true);
                 try
                 {
                     await using var connection = host.Connection(connectionId);
@@ -348,7 +405,7 @@ internal sealed partial class ActionService : IDisposable
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
                 }
-                finally { total.Release(); }
+                finally { total?.Release(); }
             }
             finally { gate.Release(); }
         }
@@ -359,8 +416,9 @@ internal sealed partial class ActionService : IDisposable
         }
     }
 
-    /// <summary>Which gates a request takes: describe and script the read gates, DDL the execute gates, a long action's DDL the long ones.</summary>
-    private enum ActionGate { Read, Execute, Long }
+    /// <summary>Which gates a request takes: describe and script the read gates, DDL the execute gates, a long action's DDL the long
+    /// ones, and the server file picker's listings only the browse gate.</summary>
+    private enum ActionGate { Read, Execute, Long, Browse }
 
     /// <summary>The gates are per Varia connection (critic A26): two connections to one server have a gate each. A request that
     /// holds its connection's gate but not a total slot waits on actions of other connections, so the message says so: the user
@@ -919,6 +977,16 @@ internal sealed partial class ActionService : IDisposable
         return await RunStatementAsync(connection, statement, dryRun: true, token);
     }
 
+    /// <summary>The live checks' only way to list with SQL Server 2016's statements on a newer server, or under another catalogue's
+    /// limits (a smaller browseEntries), on a connection of its own. Not reachable from the wire.</summary>
+    internal async Task<(ServerFilesDto? Listing, ActionError? Error)> ListServerFilesAsync(string connectionId, ServerFilesArgsDto files, bool legacy, ActionsCatalog? limits, CancellationToken token)
+    {
+        await using var connection = host.Connection(connectionId);
+        await host.OpenAsync(connection, token);
+        await RunAsync(connection, ActionSql.ReadPrologue, token);
+        return await ServerFiles.ListAsync(connection, limits ?? catalog, files, host.Profile(connectionId).Linux, token, legacy);
+    }
+
     /// <summary>Cancels a disconnected connection's requests and drops its gates.</summary>
     public void Forget(string connectionId)
     {
@@ -926,6 +994,7 @@ internal sealed partial class ActionService : IDisposable
         readGates.TryRemove(connectionId, out _);
         executeGates.TryRemove(connectionId, out _);
         longGates.TryRemove(connectionId, out _);
+        browseGates.TryRemove(connectionId, out _);
     }
 
     public void CancelAll() => running.ForgetAll();
@@ -936,5 +1005,6 @@ internal sealed partial class ActionService : IDisposable
         readGates.Clear();
         executeGates.Clear();
         longGates.Clear();
+        browseGates.Clear();
     }
 }

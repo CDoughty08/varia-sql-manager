@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (184)
+## Commands (189)
 
 ### File
 
@@ -142,6 +142,8 @@ keys it uses are listed below.
 | Rename | `explorer.rename` | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | F2 (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionRename == 'enabled'` | Object Explorer context menu › Rename |
 | Delete | `explorer.delete` | Delete (`activePanel == 'explorer' && !textInputFocus`) | Delete (`activePanel == 'explorer' && !textInputFocus`) | ⌘⌫ (`activePanel == 'explorer' && !textInputFocus`), ⌦ (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionDelete == 'enabled'` | Object Explorer context menu › Delete |
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
+| New Database… | `explorer.newDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
+| New Database… (not in the palette) | `explorer.newDatabaseOnDatabase` | — | — | — | `backendReady && (explorerSelectionFolder == 'databases' \|\| explorerSelectionKind == 'database') && explorerSelectionServerEngine == 'box'` | Object Explorer context menu › New Database… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
@@ -198,6 +200,14 @@ keys it uses are listed below.
 | Discard Changes | `databaseProperties.discard` | — | — | — | `activeDocumentIsProperties && propertiesChanged && !propertiesApplying` | — |
 | Refresh | `databaseProperties.refresh` | — | — | — | `activeDocumentIsProperties && propertiesRefreshable` | — |
 | Stop | `databaseProperties.stop` | — | — | — | `activeDocumentIsProperties && propertiesApplying` | — |
+
+### New Database
+
+| Command | Id | Windows | Linux | macOS | Available when | Menus |
+| --- | --- | --- | --- | --- | --- | --- |
+| Create Database | `newDatabase.ok` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreatable` | — |
+| Cancel New Database | `newDatabase.cancel` | — | — | — | `activeDocumentIsNewDatabase && !newDatabaseCreating` | — |
+| Stop | `newDatabase.stop` | — | — | — | `activeDocumentIsNewDatabase && newDatabaseCreating` | — |
 
 ### Integration Services
 
@@ -474,12 +484,14 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_connect` | **R**econnect… | `connection.reconnect` | `explorerServerLost` |
 | `0_connect` | Rem**o**ve | `connection.removeLost` | `explorerServerLost` |
 | `0_connect` | En**v**ironment… | `connection.environment` | `explorerNode == 'server' && !explorerServerLost` |
-| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
+| `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerNode == 'folder' && explorerFolder == 'tables'` |
+| `0_new` | **N**ew Database… | `explorer.newDatabase` | `explorerNode == 'folder' && explorerFolder == 'databases' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All O**p**erations | `ssis.allOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
+| `1_query` | **N**ew Database… | `explorer.newDatabaseOnDatabase` | `explorerNode == 'database' && !explorerServerLost && explorerServerEngine == 'box'` |
 | `1_query` | New **Q**uery | `explorer.newQuery` | `(explorerNode == 'server' && !explorerServerLost) \|\| explorerNode == 'database'` |
 | `1_query` | Select Top 1000 Ro**w**s | `explorer.selectTopRows` | `explorerActionSelectTop != '' && explorerNode != 'background'` |
 | `1_query` | Modif**y** | `explorer.modify` | `explorerSelectionModifiable && explorerNode != 'background'` |
@@ -692,7 +704,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (101)
+## Context keys (104)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -734,6 +746,9 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `propertiesApplicable` | boolean | state | The active Database Properties document can apply its changes now: it has loaded and has changes, nothing runs in it, it does not need reading again, and its server is connected. |
 | `propertiesApplying` | boolean | state | The active Database Properties document is applying its changes (Stop cancels them in SQL Server). |
 | `propertiesRefreshable` | boolean | state | The active Database Properties document can read the database again: its server is connected, nothing runs in it, and it has no changes that are not applied. |
+| `activeDocumentIsNewDatabase` | boolean | state | The active document is New Database. |
+| `newDatabaseCreatable` | boolean | state | The active New Database document can create its database now: it has read the server, nothing runs in it, and its server is connected. |
+| `newDatabaseCreating` | boolean | state | The active New Database document is creating its database (Stop cancels it in SQL Server). |
 | `activeDocumentIsActivityMonitor` | boolean | state | The active document is an Activity Monitor. |
 | `activityPaused` | boolean | state | The active Activity Monitor is paused: it runs no SQL until Resume. |
 | `activitySplit` | boolean | state | The active Activity Monitor shows two panes (Split View). |

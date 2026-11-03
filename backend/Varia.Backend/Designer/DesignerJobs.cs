@@ -138,7 +138,7 @@ internal sealed partial class ActionService
 
     private async Task<ActionScriptResult> ScriptDesignerJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
-        var plan = TableDesignValidator.Validate(designer, args.Design);
+        var plan = TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
         var (filegroup, error, warnings) = await PlanDesignerAsync(connection, plan, target.Name!, band, execute: false, token);
         if (filegroup is null) return new(null, target.Name!, [], error);
         var text = DesignerSql.Script(designer, plan, filegroup);
@@ -151,7 +151,7 @@ internal sealed partial class ActionService
     /// session and rolls it back); only a commit the connection broke during leaves the outcome unknown.</summary>
     private async Task<ActionExecuteResult> ExecuteDesignerJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, ActionProgress progress, CancellationToken token)
     {
-        var plan = TableDesignValidator.Validate(designer, args.Design);
+        var plan = TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
         var messages = CollectMessages(connection, progress);
         var (filegroup, refused, _) = await PlanDesignerAsync(connection, plan, target.Name!, band, execute: true, token);
         if (filegroup is null) return new([], [], 0, refused);

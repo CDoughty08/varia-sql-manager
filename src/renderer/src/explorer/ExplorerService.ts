@@ -503,6 +503,14 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     const node = this.nodes.get(nodeId), parent = node?.parent ? this.nodes.get(node.parent) : undefined
     return parent?.kind === 'folder' && this.attached(parent) ? parent.id : undefined
   }
+  /** The server's Databases folder above a node: a database under System Databases or Database Snapshots too, whose own
+   *  listing folder is not where a new database appears (New Database reloads this one). */
+  databasesFolderOf(nodeId: number): number | undefined {
+    for (let node = this.nodes.get(nodeId); node; node = node.parent ? this.nodes.get(node.parent) : undefined) {
+      if (node.kind === 'folder' && node.folder === 'databases') return this.attached(node) ? node.id : undefined
+    }
+    return undefined
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)

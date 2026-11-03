@@ -231,7 +231,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `results.copy` | main only (`varia:results-copy`) | stream, with EVENTs | results | 120 s |
 | `results.export` | main only (`varia:results-save`) | unary with EVENTs | results | none, and no backstop: only CANCEL (reason 1) ends it |
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
-| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`) |
+| `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`). The server file picker (`dialog: 'serverFiles'`): 15 s around the backend's 10 s budget per listing |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
 | `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop); progress through `onActionProgress` | unary with EVENTs | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). A long action's steps send droppable `action.progress` EVENTs (below), and while one is pending main closes its generation with a grace of 10 s plus its `cleanupMs` plus 5 s (`drainMs`, `actionDrainMs`), because the backend's shutdown stops it and waits for its cleanup. Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
@@ -329,7 +329,7 @@ the same connection; describe and script use `LOCK_TIMEOUT 10000`. A lost backen
 renderer reports as an unknown outcome ("Refresh Object Explorer to check"), since main never sends a request twice.
 Failures the user can act on are `result.error` values, not envelope codes: `NOT_FOUND`, `NOT_SUPPORTED` (also every
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
-`NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
+`NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
 in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
@@ -542,6 +542,50 @@ created." (a Stop during a statement marks that step `cancelled` and the rest `s
 with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON parameter, which constant builder batches shred
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
+
+**New Database** (D1b) uses the same three methods, again with no new method. `actions.describe { connectionId, requestId,
+dialog: 'newDatabase', target: { kind: 'server' } }` (only a server target; SQL Server only, `NOT_SUPPORTED` on Azure SQL
+Database and Managed Instance) answers `{ newDatabase: { model (model as `databaseProperties` describes it), dataPath, logPath,
+serverCollation, canCreate, masterLevel, linux }, elapsedMs }`, read in master. `actions.script` and `actions.execute` take
+`{ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name }, design: { owner?, files: [{ name,
+type: 'rows' | 'log' | 'filestream', filegroup?, sizeMb?, growth, path, fileName }] (2 to 256), filegroups: [{ name, type:
+'rows' | 'filestream' | 'memoryOptimized', readOnly?, isDefault?, autogrowAllFiles? }] (PRIMARY first, 1 to 256), collation?,
+containment: 'NONE' | 'PARTIAL', ledger?, options, scoped } }`, strict at every level (the design is read as the action's own
+type, so a table design's members are refused) and checked by `newDatabaseProblems` in main and `NewDatabaseValidator` in
+the backend: sizes are whole MB (data 1 – 16,777,215, 2,147,483,647 pages; log 1 – 2,097,152), growth 1 – 2,097,152 MB or
+1 – 100 %, a maximum no smaller than the size and, in MB, no smaller than the growth (SQL Server's 5169), file names the
+server's platform allows (no `\` on Linux either, which SQL Server there reads as a separator), distinct names and paths, every filegroup with a file, and
+options only those Database Properties sets but collation and containment, which CREATE DATABASE writes. Script answers
+CREATE DATABASE as SSMS lays it out, then Database Properties' ALTER statements, with `database: 'master'` and, as warnings,
+what OK would refuse; it runs nothing. Execute refuses those first (`NAME_IN_USE` for a database or file that exists,
+`PATH_NOT_FOUND` for a missing folder from SQL Server 2017, `NOT_FOUND` for an owner or collation, `PERMISSION_DENIED`
+without CREATE DATABASE), then runs "Create the database", each option's step, the filegroup steps and "Set the owner"; it
+never compensates, so a later failure leaves the database created and says so. The design reaches SQL Server only as one
+JSON parameter; a constant builder (`CreateDatabaseSql`, checked by its own `Lint` with the table designer's OPENJSON rules in
+`JsonBuilderLint`) shreds it with OPENJSON, quotes names with `QUOTENAME` and file names and paths on the server (`REPLACE`
+under a binary collation), writes sizes as typed numbers with a unit (KB up to 2,097,151 MB, since SQL Server reads a size as
+an int, and MB above), takes the collation only as
+`sys.fn_helpcollations()` names it, and runs the statement through `QUOTENAME(@db) + N'.sys.sp_executesql'` in master. It
+is a long run (`LongRunService`, kind `newDatabase`).
+
+The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
+no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
+'database' | 'log' | 'folder', path?, allFiles?, exists? } }` (`files` only with that dialog, `allFiles` never with `folder`,
+`exists` only with a path and no `allFiles`; a path
+is `serverPathSchema` in `src/shared/actions/schema.ts` and `ServerPath.Valid` in C#: 1 – 260 UTF-16 code units, well formed,
+no control characters or `*?"<>|`, a drive, a share or `/`). It answers `{ serverFiles: { separator, path?, roots: [{ path,
+kind: 'drive' | 'folder', defaults?: ('data' | 'log' | 'backup')[], freeMb? }], entries: [{ name, directory, sizeBytes?,
+modified? }] (≤ 2,000, folders first), truncated, notice?: 'legacyEmpty' }, elapsedMs }`: with no path the drives (`/` on
+Linux) and default folders, else one level of the folder, typed with the server's separator. With `exists` it checks the
+path itself, for a typed name a listing does not show (past its limit or outside the type filter): `path` is the path
+checked and `entries` its own entry, or none (`legacyEmpty` when SQL Server 2016 will not tell a login outside sysadmin).
+Its deadline is a function of the request (`methodPolicies`), 15 s instead of 45 s. Listings run under a gate of their
+own, one per connection (`browsePerConnection`), outside the describe and script gates: SQL Server honours the attention
+only once a file-system call returns (about 21 s for an unreachable share), so a listing past its budget keeps its gate
+until then, and the picker runs one listing at a time and cancels those it no longer needs. A missing folder, a file or
+another platform's path is `PATH_NOT_FOUND`; Azure SQL Database and Managed Instance are `NOT_SUPPORTED` before any
+connection opens.
+docs/object-actions.md lists the statements by version.
 
 ## Streams and credits
 
@@ -1677,6 +1721,7 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Files main opens | 32 at a time (an Open selection, the command line, a second instance, macOS open-file, a drop); paths ≤ 4,096 characters; errors ≤ 600 characters; change checks 2 comparisons at a time (counting those that outlived their 2 s) and none again for a file whose last one has not settled | zod and main |
 | Recent Files | 50 entries in `recent-files.json` (≤ 256 KiB); 1 – 24 shown; names ≤ 260 characters; menu paths ≤ 60 | zod and main |
 | AutoRecover | 64 records and 256 MiB in `AutoRecover/`, 32 MiB each, read or written; text ≤ the kind's limit (5,000,000 characters for a query, 4,194,304 for a value); names ≤ 512, servers ≤ 256, databases ≤ 128, paths ≤ 4,096 characters; 256 ids a discard; every 1 – 60 minutes, kept 1 – 90 days | zod, renderer and main |
+| Server file picker | paths 1 – 260 UTF-16 code units, no U+0000 – U+001F or `*?"<>|`, absolute; ≤ 2,000 entries a folder (`truncated`), 10 s a listing (15 s deadline) | zod and backend |
 | Object Explorer requests | node names 1 – 128 UTF-16 code units, or a kind's own bound up to 260 (`maxName`, only for a kind without folders or rows of its own); other identity names, SSIS folders and projects included, 1 – 128; no U+0000; pages of 1 – 2,000 nodes; cursors ≤ 1,650 characters; 1 – 256 ids a cancel | zod and backend |
 | SSIS requests | folder, project, environment and other names 1 – 128 UTF-16 code units, package names 1 – 260, no U+0000; 1 – 64 ids a cancel; describe lists ≤ 2,048 rows, values ≤ 4,000 characters, answers ≤ about 4,000,000 bytes; revisions 64 lowercase hex characters, only for a write verb that takes one; Stop Operation ids 1 – 2^53 − 1; Create Catalog passwords 1 – 128 UTF-16 code units, no U+0000, no lone surrogate, and the server paths it reads ≤ 1,024 characters; error messages ≤ 2,048. `ssis.operations` args: kinds 1 – 4 and statuses 1 – 9, distinct; folder, project and caller 1 – 128, package 1 – 260; windowHours 1 – 8,760; limit 1 – 10,000 (100 – 10,000 in Tools › Options): a window of at most 10,000 rows, at most 20,000 (2 × limit) read a sample and as many open ones with a baseline, at most 256 open ids read again a sample | zod and backend |
 | Backend concurrency | 288 requests in flight; 8 metadata slots; 1,000 query sessions; 16 concurrent `results.read`; Object Explorer statements 4 per connection and 8 in all, 1,024 registered loads; SSIS reads 2 per connection and 4 in all, 256 registered; SSIS writes 1 per connection and 2 in all, 64 registered | backend |

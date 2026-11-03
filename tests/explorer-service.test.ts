@@ -241,6 +241,18 @@ describe('ExplorerService: loading', () => {
     expect(f.calls().at(-1)).toMatchObject({ node: { type: 'object', object: { kind: 'database', name: 'master' } }, subtype: 'system' })
     expect(f.calls().at(-2)).not.toHaveProperty('subtype')
   })
+  it('finds the Databases folder above a system database, whose own listing folder is System Databases', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const system = await f.open('Databases', 'System Databases')
+    const databases = f.find('Databases'), master = f.find('master', system)
+    expect(f.explorer.listingFolderOf(master)).toBe(system)
+    expect(f.explorer.databasesFolderOf(master)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('AppData', databases))).toBe(databases)
+    expect(f.explorer.databasesFolderOf(databases)).toBe(databases)
+    expect(f.explorer.databasesFolderOf(f.find('Security'))).toBeUndefined()
+  })
   it('shows a loading row only when the first page takes longer than 150 ms', async () => {
     const f = fixture()
     f.connect()

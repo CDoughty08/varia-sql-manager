@@ -1,14 +1,14 @@
 import type { Platform } from './keybindings'
 import type { MenuId } from './menus'
 import type { SettingKey } from '../settings/catalog'
-import { actionCommandEntries, propertiesCommandEntries } from '../actions/catalog.ts'
+import { actionCommandEntries, newDatabaseCommandEntries, propertiesCommandEntries, serverActionCommandEntries } from '../actions/catalog.ts'
 import { designerCommandEntries } from '../designer/catalog.ts'
 import { scriptCommandEntries, scriptUnavailableHint } from '../scripting/catalog.ts'
 import { operationsCommandEntries } from '../ssis/operations.ts'
 import type { IconId } from '../icons.ts'
 import { ssisCommandEntries } from '../ssis/catalog.ts'
 
-export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
+export type Category = 'File' | 'Edit' | 'View' | 'Query' | 'Connection' | 'Object Explorer' | 'Table Designer' | 'Database Properties' | 'New Database' | 'Integration Services' | 'Tools' | 'Activity Monitor' | 'Preferences' | 'Developer' | 'Help'
 /** Electron roles a command can stand for: native menus show `{ role }`, while custom menus and the palette run its handler. */
 export type RoleName = 'cut' | 'copy' | 'paste' | 'delete' | 'selectAll' | 'reload' | 'toggleDevTools' | 'resetZoom' | 'zoomIn' | 'zoomOut' | 'togglefullscreen' | 'quit'
 /** The roles the renderer may ask main to run (`varia:run-role`); quitting goes through the renderer's own close flow instead. */
@@ -327,13 +327,16 @@ export const commandCatalog = {
   'explorer.collapseAll': { title: 'Collapse All', category: 'Object Explorer', icon: 'collapse-all', precondition: 'hasConnection', unavailableHint: noServer },
   'explorer.newQuery': {
     title: 'New Query', category: 'Object Explorer', icon: 'new-file', precondition: '!documentBusy', unavailableHint: 'Select a server or database in Object Explorer.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 1, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 2, mnemonic: 'q', when: "(explorerNode == 'server' && !explorerServerLost) || explorerNode == 'database'" }]
   },
   // Select Top 1000 Rows, Rename and Delete: generated from src/shared/actions/catalog.ts. Each acts on its menu's node,
   // else the selection; explorer.selectTopRows keeps PR4's id.
   ...actionCommandEntries(),
   // The Database Properties document's verbs (Apply, Discard, Refresh, Stop): also from src/shared/actions/catalog.ts.
   ...propertiesCommandEntries(),
+  // Databases › New Database…, and the New Database document's verbs (OK, Cancel, Stop): also from src/shared/actions/catalog.ts.
+  ...serverActionCommandEntries(),
+  ...newDatabaseCommandEntries(),
   // New › Table… and the table designer's commands: generated from src/shared/designer/catalog.ts.
   ...designerCommandEntries(),
   // The Integration Services Operations document: its presets on the SSISDB node and View, and its own commands, generated
@@ -354,7 +357,7 @@ export const commandCatalog = {
   'explorer.modify': {
     title: 'Modify', category: 'Object Explorer', icon: 'edit', precondition: "backendReady && explorerSelectionModifiable && explorerScriptAlter == 'enabled' && !documentBusy",
     unavailableHint: 'Select a stored procedure, function, or trigger.',
-    menus: [{ menu: 'explorer.context', group: '1_query', order: 3, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
+    menus: [{ menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 'y', when: "explorerSelectionModifiable && explorerNode != 'background'" }]
   },
   'explorer.cancelScripting': { title: 'Cancel Scripting', category: 'Object Explorer', icon: 'debug-stop', keywords: ['script', 'stop'], precondition: 'scriptingRunning', unavailableHint: 'Nothing is being scripted.' },
   'explorer.copyName': {
@@ -500,7 +503,7 @@ export const commandCatalog = {
     menus: [
       // 'm', not 'a': View › Search already has 'a' (tests/command-catalog.test.ts).
       { menu: 'view', group: '2_monitor', order: 1, mnemonic: 'm' },
-      { menu: 'explorer.context', group: '1_query', order: 4, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
+      { menu: 'explorer.context', group: '1_query', order: 5, mnemonic: 't', when: "explorerNode == 'server' && !explorerServerLost" }
     ]
   },
   // The monitor's header verbs and keys act on the active monitor. Pause stops collecting (no SQL), as SSMS's does.

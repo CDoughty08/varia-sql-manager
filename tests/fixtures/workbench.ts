@@ -55,6 +55,7 @@ import { TableDesignerService } from '../../src/renderer/src/designer/TableDesig
 import { SsisPropertiesService } from '../../src/renderer/src/ssis/SsisPropertiesService'
 import { ssisContribution } from '../../src/renderer/src/contributions/ssis'
 import { DatabasePropertiesService } from '../../src/renderer/src/properties/DatabasePropertiesService'
+import { NewDatabaseService } from '../../src/renderer/src/new-database/NewDatabaseService'
 import { ActivityMonitorService } from '../../src/renderer/src/activity/ActivityMonitorService'
 import { activityContribution } from '../../src/renderer/src/contributions/activity'
 import { documentOwner } from '../../src/renderer/src/live/LiveService'
@@ -261,7 +262,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     describeObject: vi.fn<VariaApi['describeObject']>(async params => ({
       ok: true, value: { deleteTarget: { name: [params.target.schema, params.target.name].filter(Boolean).join('.'), type: kindSpecs[params.target.kind].title, owner: 'dbo', warnings: [], dependentsTruncated: false }, elapsedMs: 1 }
     })),
-    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.target.database ?? 'master', warnings: [] } })),
+    scriptObjectAction: vi.fn<VariaApi['scriptObjectAction']>(async params => ({ ok: true, value: { text: `-- ${params.action} ${params.target.name}`, database: params.action === 'createTable' ? params.target.name : params.action === 'createDatabase' ? 'master' : params.target.database ?? 'master', warnings: [] } })),
     executeObjectAction: vi.fn<VariaApi['executeObjectAction']>(async () => ({ ok: true, value: { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 } })),
     cancelObjectActions: vi.fn<VariaApi['cancelObjectActions']>(async requestIds => ({ ok: true, value: { cancelled: requestIds.length } })),
     // Create Catalog: a server without a catalog and with CLR off; creating it succeeds.
@@ -315,6 +316,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
   const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const newDatabase = new NewDatabaseService({ api, documents, files, connections, explorer, longRuns, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -341,6 +343,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     recovery,
     designer: designers.context,
     properties: properties.context,
+    newDatabase: newDatabase.context,
     notifications,
     activity: activity.context,
     ssis: operations.context,
@@ -402,6 +405,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
     notifications,
     activity,
     operations
@@ -461,6 +465,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     ssisProperties.dispose()
     activity.dispose()
     properties.dispose()
+    newDatabase.dispose()
     operations.dispose()
     bookmarks.dispose()
     editorDialogs.dispose()
@@ -495,6 +500,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     designers,
     ssisProperties,
     properties,
+    newDatabase,
     activity,
     liveViews,
     operations,
