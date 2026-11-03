@@ -2,41 +2,54 @@
 // the tree for suites that answer explorer.children in main instead of through a backend.
 import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { explorerCovers, explorerOutline, findExplorerPath } from './explorer-outline.ts'
 import { explorerTree, menuItemNames, part } from './ui.mjs'
 
 export { explorerTree }
 
 /**
- * The row at a path of labels from a server down (`'server-a', 'Databases', 'AppData'`), once it is rendered: rows are
- * windowed, so the path must be in or near view. Matching is by each row's label, without its sublabel. An options
- * object last sets the wait (`{ timeout }`).
+ * The tree's rendered rows (explorer-outline.ts's OutlineRow), each with its offset from the top of the tree's content, not
+ * the viewport, so rows read at different scroll positions line up.
+ */
+const renderedRows = page => page.evaluate(part => {
+  const tree = document.querySelector(part.explorerTree)
+  if (!tree) return []
+  const origin = tree.getBoundingClientRect().top + tree.clientTop - tree.scrollTop
+  return [...tree.querySelectorAll('[role="treeitem"]')].map(row => {
+    const box = row.getBoundingClientRect()
+    return {
+      id: row.id, top: Math.round(box.top - origin), height: Math.round(box.height), level: Number(row.getAttribute('aria-level')),
+      label: row.querySelector(part.explorerLabel)?.textContent ?? row.querySelector(part.explorerText)?.textContent ?? ''
+    }
+  })
+}, part)
+
+/**
+ * The row at a path of labels from a server down (`'server-a', 'Databases', 'AppData'`), once it is rendered with its
+ * ancestors: rows are windowed, so the path must be in or near view (revealExplorerRow finds one whose ancestors are out of
+ * the window). Matching is by each row's label, without its sublabel, through adjacent rows only (findExplorerPath), so the
+ * selected row, which is rendered wherever it is, never stands in for another row's ancestor. An options object last sets
+ * the wait (`{ timeout }`).
  */
 export async function explorerRow(page, ...path) {
   const options = typeof path.at(-1) === 'object' ? path.pop() : {}, labels = path
   let id = null
   await expect.poll(async () => {
-    id = await page.evaluate(({ path, part }) => {
-      const rows = [...document.querySelectorAll(part.explorerTree + ' [role="treeitem"]')].sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
-      const stack = []
-      for (const row of rows) {
-        const level = Number(row.getAttribute('aria-level'))
-        stack.length = level - 1
-        stack[level - 1] = row.querySelector(part.explorerLabel)?.textContent ?? row.querySelector(part.explorerText)?.textContent ?? ''
-        if (level === path.length && path.every((label, index) => stack[index] === label)) return row.id
-      }
-      return null
-    }, { path: labels, part })
+    id = findExplorerPath(await renderedRows(page), labels)?.id ?? null
     return id
   }, { message: 'Object Explorer row ' + labels.join(' › '), ...options }).not.toBeNull()
   return page.locator('#' + id)
 }
 
 /**
- * The row at a path, scrolled into the tree's rendered rows first when it is not among them. The tree renders a window of
- * rows around its viewport and re-windows on its scroll event, which Chromium dispatches with a frame: in a short window
- * an earlier step's scroll can leave the row outside, and a window that draws few frames (a hidden or occluded one) can
- * keep a stale window for long. So the scan sends the scroll event too, from the current position and then from the top,
- * half a viewport at a time, and the tree's geometry and rendered rows are logged first.
+ * The row at a path, scrolled into the tree's rendered rows first when it is not among them with its ancestors. The tree
+ * renders a window of rows around its viewport, so a row far below its server (server-a › Security under an expanded
+ * Databases) is never rendered with it. The scan therefore reads the tree from the top, half a viewport at a time, joins
+ * the windows into an outline by each row's offset (explorerOutline), finds the path there (findExplorerPath), and scrolls
+ * to that row's offset; the row returned is the one rendered there with the path's label and level, once the window read
+ * there agrees with the outline. The tree re-windows on its scroll event, which Chromium dispatches with a frame, and a
+ * window that draws few frames (a hidden or occluded one) can keep a stale window for long, so each step sends the scroll
+ * event too and waits until the rendered rows cover the viewport. The tree's geometry and rendered rows are logged first.
  */
 export async function revealExplorerRow(page, ...path) {
   const found = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
@@ -45,11 +58,33 @@ export async function revealExplorerRow(page, ...path) {
   const state = () => tree.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight, scrollHeight: element.scrollHeight }))
   const before = await state()
   console.log(`Object Explorer row ${label} was not rendered (scrollTop ${before.top}, height ${before.height}, scroll height ${before.scrollHeight}; rows: ${(await explorerLines(page)).join(' | ')}); scrolling to it.`)
-  const step = Math.max(22, Math.floor(before.height / 2))
-  for (let index = -1, top = before.top; top < before.scrollHeight; top = ++index * step) {
-    await tree.evaluate((element, top) => { element.scrollTop = top; element.dispatchEvent(new Event('scroll')) }, top)
-    const row = await explorerRow(page, ...path, { timeout: 2000 }).catch(() => null)
-    if (row) return row
+  /** Scrolls to `top` and returns the rows rendered for it, once they cover the viewport (or what is rendered after 2 s). */
+  const windowAt = async top => {
+    const view = await tree.evaluate((element, top) => {
+      element.scrollTop = top
+      element.dispatchEvent(new Event('scroll'))
+      return { top: element.scrollTop, bottom: Math.min(element.scrollTop + element.clientHeight, element.scrollHeight) }
+    }, top)
+    let rows = []
+    await expect.poll(async () => explorerCovers(rows = await renderedRows(page), view.top, view.bottom), { timeout: 2000 }).toBe(true).catch(() => {})
+    return { view, rows }
+  }
+  const step = Math.max(22, Math.floor(before.height / 2)), windows = [await renderedRows(page)]
+  for (let top = 0; ; top += step) {
+    const { view, rows } = await windowAt(top)
+    windows.push(rows)
+    const target = findExplorerPath(explorerOutline(windows), path)
+    if (target) {
+      // In view, then the row rendered at its offset, once that window agrees with the outline.
+      const { rows: there } = await windowAt(Math.max(0, target.top - Math.floor(before.height / 2)))
+      const row = there.find(row => Math.abs(row.top - target.top) <= 1 && row.level === target.level && row.label === target.label)
+      if (row && Math.abs((findExplorerPath(explorerOutline([...windows, there]), path)?.top ?? -2) - target.top) <= 1) {
+        console.log(`Object Explorer row ${label} found at offset ${target.top} in an outline of ${windows.length} windows.`)
+        return page.locator('#' + row.id)
+      }
+      break
+    }
+    if (view.bottom >= (await state()).scrollHeight) break
   }
   const after = await state()
   throw new Error(`Object Explorer row ${label} is not in the tree (scrollTop ${after.top}, height ${after.height}, scroll height ${after.scrollHeight}): ${(await explorerLines(page)).join(' | ')}`)
