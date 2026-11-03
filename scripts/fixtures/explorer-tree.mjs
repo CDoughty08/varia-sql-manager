@@ -2,7 +2,7 @@
 // the tree for suites that answer explorer.children in main instead of through a backend.
 import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
-import { explorerTree, part } from './ui.mjs'
+import { explorerTree, menuItemNames, part } from './ui.mjs'
 
 export { explorerTree }
 
@@ -110,6 +110,23 @@ export async function openExplorerMenu(page, ...path) {
   }).toPass({ timeout: process.platform === 'win32' ? 30000 : 15000, intervals: [100, 250, 500] })
   if (presses > 1) console.log(`Object Explorer row ${path.join(' › ')} took ${presses} right-clicks to open its menu.`)
   return menu
+}
+
+/**
+ * The item names of the row's context menu (openExplorerMenu), and those greyed, read while it is open; the menu stays
+ * open. A menu shows only with items and never changes them while open, so an empty read is a menu that closed between
+ * opening and the read (a PR #78 run read none so): it opens again.
+ */
+export async function explorerMenuItems(page, ...path) {
+  let items
+  await expect(async () => {
+    const menu = await openExplorerMenu(page, ...path)
+    const [names, disabled] = await Promise.all([menuItemNames(menu), menuItemNames(menu, { disabled: true })])
+    expect(names.length, `items of the menu of ${path.join(' › ')}`).toBeGreaterThan(0)
+    await expect(menu).toBeVisible({ timeout: 1000 })
+    items = { names, disabled }
+  }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
+  return items
 }
 
 /**

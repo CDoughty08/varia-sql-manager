@@ -1,12 +1,12 @@
 import { electron, expect } from './fixtures/smoke.mjs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { chooseExplorerMenuItem, expandExplorerPath, explorerRow, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
+import { chooseExplorerMenuItem, expandExplorerPath, explorerMenuItems, explorerRow, explorerTree, openExplorerMenu, revealExplorerRow } from './fixtures/explorer-tree.mjs'
 import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, propertiesScript, scriptText, stubServerFiles } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, objectDialogConnection, objectDialogPage, objectDialogProgress, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -26,8 +26,6 @@ const watchdog = setTimeout(() => { console.error('Object actions suite exceeded
 const menuNamed = name => page.getByRole('menu', { name, exact: true })
 const explorerMenu = () => menuNamed('Object Explorer')
 const openMenus = () => openMenusOf(page)
-const labels = () => menuItemNames(explorerMenu())
-const disabled = () => menuItemNames(explorerMenu(), { disabled: true })
 const dialog = () => page.getByRole('dialog', { name: 'Delete Object', exact: true })
 const commandBanner = () => errorBanner(page)
 const warningBanner = () => warningBannerOf(page)
@@ -47,10 +45,9 @@ async function connect(server) {
   await connectDialog.getByRole('button', { name: 'Connect', exact: true }).click()
   await expect(connectDialog).toHaveCount(0, { timeout: 30000 })
 }
-/** Opens a row's menu (openExplorerMenu) and returns its item labels. */
+/** Opens a row's menu (explorerMenuItems) and returns its item labels; the menu stays open. */
 async function menuOf(...path) {
-  await openExplorerMenu(page, ...path)
-  return labels()
+  return (await explorerMenuItems(page, ...path)).names
 }
 async function closeMenu() {
   await page.keyboard.press('Escape')
@@ -100,8 +97,9 @@ try {
   expect(await menuOf(...appData)).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
   await closeMenu()
   // SSMS offers Properties on its own databases too: only Rename and Delete are greyed.
-  expect(await menuOf('server-a', 'Databases', 'System Databases', 'master')).toEqual(['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'])
-  expect(await disabled()).toEqual(['Rename', 'Delete'])
+  expect(await explorerMenuItems(page, 'server-a', 'Databases', 'System Databases', 'master')).toEqual({
+    names: ['New Query', 'Script Database as', 'Copy Name', 'Rename', 'Delete', 'Refresh', 'Properties'], disabled: ['Rename', 'Delete']
+  })
   await closeMenu()
   await select('server-a', 'Databases', 'System Databases', 'master')
   await page.keyboard.press('F2')
