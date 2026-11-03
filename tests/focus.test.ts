@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { domFocusAdapter } from '../src/renderer/src/core/focus'
 import { focusWhenDrawn } from '../src/renderer/src/core/modal'
 import { fakeDocument, FakeElement } from './fixtures/elements'
@@ -92,5 +93,13 @@ describe('focusWhenDrawn', () => {
     openDialog()
     drawn()
     expect([doc.activeElement, control.focusCalls]).toEqual([field, 0])
+  })
+})
+
+describe('deferred focus in the workbench', () => {
+  it('goes only through focusWhenDrawn, so no document takes focus from the palette, a menu or a dialog', () => {
+    // A document service that focused itself through nextFrame and modalOpen alone pulled focus out of the palette.
+    const source = readFileSync(new URL('../src/renderer/src/core/workbench.ts', import.meta.url), 'utf8')
+    expect(source.match(/nextFrame\(\(\) =>[^\n]*/g) ?? []).toEqual([])
   })
 })
