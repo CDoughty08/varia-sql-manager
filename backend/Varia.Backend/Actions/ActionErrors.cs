@@ -35,8 +35,10 @@ internal static class ActionErrors
         // by D2): 15099 MUST_CHANGE without CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a
         // SQL login, 15407 not DOMAIN\name, 37525 Microsoft Entra not set up on the server.
         ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525],
-        // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough.
-        ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118],
+        // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough
+        // (Windows' policy); SQL Server's own policy, which SQL Server on Linux applies, answers 33062 too short, 33063 too long and
+        // 33064 not complex enough (a password that contains the login name too).
+        ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118, 33062, 33063, 33064],
         // 5133: a file's folder does not exist (attach).
         ["PATH_NOT_FOUND"] = [5133],
         // 5120 and 5123: SQL Server could not open a database or backup file (missing, in use, or denied to its service account).
