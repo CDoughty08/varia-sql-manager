@@ -75,6 +75,8 @@ export interface TreeNode {
   /** A database row's runtime state as its listing read it, and when that row arrived (epoch ms). */
   database?: DatabaseRuntime
   listedAt?: number
+  /** A login denied CONNECT SQL, as its listing read it (with `status` 'disabled' when it is disabled too). */
+  connectDenied?: boolean
   note?: NodeNote
 }
 export interface NodeTable { get(id: number): TreeNode | undefined }

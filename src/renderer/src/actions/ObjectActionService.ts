@@ -118,9 +118,13 @@ export class ObjectActionService extends SnapshotStore<ObjectActionSnapshot> imp
 
   /** Each action's state for a node: what the context keys say for the selection. */
   state(target: ActionTarget | undefined): Readonly<Record<ObjectAction, ActionState>> { return actionMenuState(target) }
-  /** Whether `action` is enabled for the node now: its kind and subtype offer it, and its server is live. */
+  /** Whether `action` can run on `node` now: its kind and subtype offer it, on its row or its folder, and its server is live. */
   canRun(action: ObjectAction, node: ExplorerMenuNode | undefined): node is ExplorerMenuNode {
-    return !!node && !node.lost && node.ref.type === 'object' && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
+    // A folder action (Databases › Attach… and Restore Database…) runs on its folder, and on object rows only where it places itself
+    // on them (`rows`: a database's Tasks › Restore › Database…); actionMenuState says which rows enable it.
+    const { folder, rows } = objectActionSpecs[action]
+    const placed = (node: ExplorerMenuNode) => folder ? node.ref.type === 'folder' && node.ref.folder === folder || !!rows && node.ref.type === 'object' : node.ref.type === 'object'
+    return !!node && !node.lost && placed(node) && actionMenuState(node)[action] === 'enabled' && this.isLive(node.connectionId)
   }
 
   /** SSMS's Select Top N Rows: the columns, one per line, in a new unmarked query on the object's database, run at once. */

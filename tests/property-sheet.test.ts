@@ -7,7 +7,7 @@ import { densityUse } from '../src/shared/theme/metrics'
 import { databaseChanged, initialDatabaseDraft, setOption } from '../src/renderer/src/dialogs/database-properties'
 import { initialFrameState } from '../src/renderer/src/kit/document-frame'
 import PropertyField, { FactList, FieldHintStrip, fieldAria, nextHints, shownHint } from '../src/renderer/src/kit/PropertyField'
-import { FilesSection, OptionField, type SectionProps } from '../src/renderer/src/properties/DatabaseProperties'
+import { FilesSection, OptionField, optionProps, type SectionProps } from '../src/renderer/src/properties/DatabaseProperties'
 import type { DatabasePropertiesService, PropertiesState } from '../src/renderer/src/properties/DatabasePropertiesService'
 import Segmented, { segmentedMaximum, segmentKey } from '../src/renderer/src/kit/Segmented'
 import Switch from '../src/renderer/src/kit/Switch'
@@ -118,7 +118,7 @@ describe('property sheet hints and sections', () => {
     expect(facts.length).toBeGreaterThan(3)
     expect(facts.some(def => def.description)).toBe(true)
     for (const def of facts) {
-      const field = html(createElement(OptionField, { ...props, def })), id = `properties-doc-${def.key}`
+      const field = html(createElement(OptionField, { ...optionProps(props), def })), id = `properties-doc-${def.key}`
       expect(field, def.key).not.toMatch(/<output|role="status"|aria-live/)
       // A stop of its own, as SSMS's read-only rows can be selected: focus fills the hint strip, and a screen reader hears
       // the label, the value and the description rather than run-on text.

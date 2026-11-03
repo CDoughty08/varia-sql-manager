@@ -184,7 +184,18 @@ internal static class DesignerChecks
             ("a comment literal", good.Replace("N' NOT NULL'", "N' NOT NULL --'", StringComparison.Ordinal)),
             ("an unknown type keyword", good.Replace("N'bigint'", "N'bogus'", StringComparison.Ordinal)),
             ("no quoting guard", good.Replace(ActionSql.Guard, "", StringComparison.Ordinal)),
-            ("a format hole", good.Replace("N'CREATE TABLE '", "N'CREATE TABLE {0}'", StringComparison.Ordinal))
+            ("a format hole", good.Replace("N'CREATE TABLE '", "N'CREATE TABLE {0}'", StringComparison.Ordinal)),
+            // Request text of another type, or read through a variable, is still request text.
+            ("a raw column name as nvarchar(128)", good.Replace("WITH ([name] nvarchar(max), [type] int", "WITH ([name] nvarchar(128), [type] int", StringComparison.Ordinal)
+                .Replace("QUOTENAME(j.[name]) + N' ' + t.keyword", "j.[name] + N' ' + t.keyword", StringComparison.Ordinal)),
+            ("a raw column name as sysname", good.Replace("WITH ([name] nvarchar(max), [type] int", "WITH ([name] sysname, [type] int", StringComparison.Ordinal)
+                .Replace("QUOTENAME(j.[name]) + N' ' + t.keyword", "j.[name] + N' ' + t.keyword", StringComparison.Ordinal)),
+            ("a raw schema as varchar(max)", good.Replace("WITH ([schema] nvarchar(max)", "WITH ([schema] varchar(max)", StringComparison.Ordinal)
+                .Replace("QUOTENAME(d.[schema])", "d.[schema]", StringComparison.Ordinal)),
+            ("a variable read from a short text column", good.Replace("DECLARE @stmt nvarchar(max)",
+                "DECLARE @raw nvarchar(max) = (SELECT TOP (1) x.[name] FROM OPENJSON(@columns) WITH ([name] nvarchar(128)) AS x ORDER BY x.[name]);\nDECLARE @stmt nvarchar(max)", StringComparison.Ordinal)
+                .Replace("N'CREATE TABLE ' + @table", "N'CREATE TABLE ' + @raw", StringComparison.Ordinal)),
+            ("a request column without its alias", good.Replace("@pk = QUOTENAME(d.pk)", "@pk = pk", StringComparison.Ordinal))
         };
         var missed = mutations.Where(mutation => mutation.Text == good || ActionSql.LintExecutable(mutation.Text, rules).Count == 0).Select(mutation => mutation.Name).ToList();
         check(missed.Count == 0 && ActionSql.LintExecutable(good, rules).Count == 0, "the designer builder lint catches every mutation that would let request text reach a statement: " + string.Join(", ", missed));

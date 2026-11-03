@@ -6,7 +6,7 @@ import { jobProgressSchema, portRequestSchema, queryEventSchema, queryResultSche
 import { explorerCancelParamsSchema } from '../src/shared/explorer/schema'
 import { deadlineFor, mainOnlyMethods, methodPolicies } from '../src/shared/ipc/methods'
 import { scriptCancelSchema } from '../src/shared/scripting/schema'
-import { actionCancelSchema } from '../src/shared/actions/schema'
+import { actionCancelSchema, type ActionDescribeRequest } from '../src/shared/actions/schema'
 import { defaultScriptingOptions } from '../src/shared/scripting/options'
 
 describe('IPC validation', () => {
@@ -140,6 +140,19 @@ describe('IPC validation', () => {
     expect(validateResult('actions.execute', renamedReply)).toEqual(renamedReply)
     for (const bad of [{ ...identity, id: 0 }, { ...identity, created: '2026-01-02 03:04:05' }, { ...identity, extra: 1 }])
       expect(() => validateResult('actions.execute', { ...renamedReply, identity: bad }), JSON.stringify(bad)).toThrow()
+    // Detach (D3b): both boxes, Detach while offline when the describe asked for it, and the identity; nothing else takes them.
+    const detach = { action: 'detach', ...ids, target: database, dropConnections: true, updateStatistics: false, identity }
+    expect(validateRequest('actions.execute', detach)).toEqual(detach)
+    expect(validateRequest('actions.execute', { ...detach, detachOffline: true })).toMatchObject({ detachOffline: true })
+    expect(validateRequest('actions.script', { ...detach, updateStatistics: true })).toMatchObject({ updateStatistics: true })
+    expect(validateRequest('actions.describe', { ...ids, dialog: 'detachDatabase', target: database })).toMatchObject({ dialog: 'detachDatabase' })
+    for (const [method, value] of [
+      ['actions.execute', { ...detach, updateStatistics: undefined }], ['actions.execute', { ...detach, dropConnections: undefined }], ['actions.execute', { ...detach, target }],
+      ['actions.execute', { ...detach, target: { kind: 'database', name: 'model' } }], ['actions.execute', { ...detach, newName: 'x' }], ['actions.execute', { ...detach, closeConnections: true }],
+      ['actions.execute', { ...detach, detachOffline: 'yes' }], ['actions.execute', { ...detach, identity: { ...identity, id: 0 } }],
+      ['actions.execute', { ...takeOffline, updateStatistics: false }], ['actions.execute', { ...bringOnline, detachOffline: true }], ['actions.execute', { ...remove, updateStatistics: true }],
+      ['actions.describe', { ...ids, dialog: 'detachDatabase', target }], ['actions.describe', { ...ids, dialog: 'detachDatabase', target: { kind: 'database', name: 'tempdb' } }]
+    ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // The table designer: describe and createTable take a database, SQL Server's own included; main refuses malformed designs.
     const design = { schema: 'dbo', name: "q]'); DROP TABLE x; --", columns: [{ name: 'Id', type: { system: 'int' }, allowNulls: false, identity: { seed: '1', increment: '1' } }], primaryKey: [0] }
     const createTable = { action: 'createTable', ...ids, target: { kind: 'database', name: 'master' }, design }
@@ -153,8 +166,26 @@ describe('IPC validation', () => {
       ['actions.describe', { ...ids, dialog: 'tableDesigner', target }]
     ] as const) expect(() => validateRequest(method, value), JSON.stringify(value).slice(0, 80)).toThrow('Invalid request')
     // DDL runs on its own lane, without a deadline (Stop ends a lock wait); reads keep metadata deadlines around their budgets.
-    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true })
-    expect(methodPolicies['actions.describe']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 45_000 })
+    // A long action (D1c) also lets a closing backend finish its cleanup (drainMs; tests/action-progress.test.ts).
+    expect(methodPolicies['actions.execute']).toEqual({ kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true, drainMs: expect.any(Function) })
+    expect(methodPolicies['actions.describe']).toMatchObject({ kind: 'unary', lane: 'metadata' })
+    expect(deadlineFor('actions.describe', describe as ActionDescribeRequest).deadlineMs).toBe(45_000)
+    // The server file picker: one folder of the server, typed paths verbatim, a 15 s deadline around the backend's 10 s budget.
+    const files = { ...ids, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup', path: "\\\\files\\O'Brien ]] --\\", allFiles: true } }
+    expect(validateRequest('actions.describe', files)).toEqual(files)
+    expect(validateRequest('actions.describe', { ...files, files: { purpose: 'folder' } })).toEqual({ ...files, files: { purpose: 'folder' } })
+    expect(validateRequest('actions.describe', { ...files, files: { purpose: 'database', path: '/var/opt/mssql/data/' } })).toBeTruthy()
+    // A check of one path, for a typed name the listing does not show: a path, and no type filter.
+    const exists = { ...files, files: { purpose: 'backup', path: 'D:\\Backups\\x.bak', exists: true } }
+    expect(validateRequest('actions.describe', exists)).toEqual(exists)
+    expect(deadlineFor('actions.describe', files as ActionDescribeRequest).deadlineMs).toBe(15_000)
+    for (const value of [
+      { ...files, files: undefined }, { ...describe, files: files.files }, { ...files, target }, { ...files, target: { kind: 'database', name: 'master' } },
+      { ...files, files: { purpose: 'archive' } }, { ...files, files: { purpose: 'folder', allFiles: true } }, { ...files, files: { ...files.files, extra: 1 } },
+      { ...files, files: { purpose: 'backup', path: 'Backups' } }, { ...files, files: { purpose: 'backup', path: 'C:\\*.bak' } }, { ...files, files: { purpose: 'backup', path: 'C:\\a\nb' } },
+      { ...files, files: { purpose: 'backup', path: 'C:\\' + 'x'.repeat(258) } }, { ...files, files: { purpose: 'backup', path: '' } }, { ...files, files: { purpose: 'backup', path: 'C:\\\uD800' } },
+      { ...files, files: { purpose: 'backup', exists: true } }, { ...files, files: { ...exists.files, allFiles: false } }, { ...files, files: { ...exists.files, exists: 'yes' } }
+    ]) expect(() => validateRequest('actions.describe', value), JSON.stringify(value).slice(0, 120)).toThrow('Invalid request')
     expect(methodPolicies['actions.script']).toEqual({ kind: 'unary', lane: 'metadata', deadlineMs: 30_000 })
     // Stop is main's own channel (varia:actions-cancel), not a backend method.
     expect(() => validateRequest('actions.cancel', { requestIds: [ids.requestId] })).toThrow('Unsupported backend method')

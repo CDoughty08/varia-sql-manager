@@ -189,7 +189,7 @@ internal static class RenameDatabaseLiveChecks
         ActionExecuteResult? late = null;
         using (var context = new RequestContext(1, "actions.execute", RequestLane.Actions, 0))
         {
-            service.Actions.Options.AfterStep = title => { if (title == "Rename") context.Cancel(CancelReason.User); };
+            service.Actions.Options.AfterStep = (title, _) => { if (title == "Rename") context.Cancel(CancelReason.User); return Task.CompletedTask; };
             try { late = await Execute(Rename(db, renamed, close: true), context); }
             catch (OperationCanceledException) { }
             finally { service.Actions.Options.AfterStep = null; }

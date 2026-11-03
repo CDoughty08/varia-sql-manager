@@ -195,6 +195,21 @@ internal static class ExplorerChecks
             "gated columns keep their predicates with the fallback substituted");
         check(!ExplorerQueries.All["constraints"].Render(new SqlRender(14, ParentKind: "table")).Contains("sys.edge_constraints")
             && ExplorerQueries.All["constraints"].Render(new SqlRender(15, ParentKind: "table")).Contains("sys.edge_constraints"), "the edge-constraint arm appears from SQL Server 2019");
+
+        // D4a: the Logins listing reads the policy flags from sys.sql_logins (catalog views only) and keeps Disabled and Connect
+        // denied apart, in the words logins.ts gives them.
+        var logins = ExplorerQueries.All["logins"].Render(new SqlRender(16));
+        var rules = Varia.Backend.Actions.ActionsCatalog.Current.Logins;
+        check(logins.Contains("FROM sys.server_principals AS p LEFT JOIN sys.sql_logins AS l ON l.principal_id = p.principal_id", StringComparison.Ordinal)
+            && logins.Contains("p.principal_id, p.type, l.is_policy_checked, l.is_expiration_checked", StringComparison.Ordinal) && !logins.Contains("LOGINPROPERTY", StringComparison.OrdinalIgnoreCase)
+            && rules.StatusOf(false, false) is null && rules.StatusOf(true, false) == "disabled" && rules.StatusOf(false, true) == "noAccess" && rules.StatusOf(true, true) == "disabled",
+            "the Logins listing joins sys.sql_logins for the policy flags, and a login denied permission to connect is noAccess, not disabled");
+        check(rules.Detail("S ", false, false, true, true) == "SQL Server authentication · Password policy enforced · Password expiration enforced"
+            && rules.Detail("G", true, true, false, false) == "Windows group · Disabled · Permission to connect denied" && rules.Detail("U", false, false, false, false) == "Windows user"
+            && rules.Detail("C", false, true, false, false) == "Mapped to certificate · Permission to connect denied" && rules.Detail("K", true, false, false, false) == "Mapped to asymmetric key · Disabled"
+            && rules.Detail("E", false, false, false, false) == "Microsoft Entra user or application" && rules.Detail("X", false, false, false, false) == "Microsoft Entra group"
+            && rules.Detail("R", false, false, false, false) == "",
+            "a login's detail names its kind, then Disabled and Permission to connect denied (both when both apply) and its password policy, in logins.ts's words");
     }
 
     private static void Labels(Action<bool, string> check)
@@ -624,6 +639,10 @@ internal static class ExplorerChecks
         var databaseBytes = JsonBridge.Encode(database, Json).Length;
         check(JsonBridge.Encode(database with { Database = null }, Json).Length + ExplorerService.DatabaseEstimate >= databaseBytes && ExplorerService.Estimate(database) >= databaseBytes,
             "a database row's runtime state counts toward the size cut at least as much as it adds to the page");
+        var login = new ExplorerNode(new NodeRefDto("object", new ObjectRefDto("login", Name: new string('l', 128))), new string('l', 128), "login", false) { ConnectDenied = true };
+        check(JsonBridge.Encode(login with { ConnectDenied = null }, Json).Length + ExplorerService.ConnectDeniedEstimate >= JsonBridge.Encode(login, Json).Length
+                && ExplorerService.Estimate(login) - ExplorerService.Estimate(login with { ConnectDenied = null }) == ExplorerService.ConnectDeniedEstimate,
+            "a login's connectDenied counts toward the size cut at least as much as it adds to the page");
     }
 
     /// <summary>A host whose connections never reach a server; <see cref="Hold"/> blocks connection requests until released.</summary>

@@ -5,8 +5,8 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
-import { actionLimits, actionServes, actionsCatalogJson, objectActions, objectActionSpecs } from '../src/shared/actions/catalog'
-import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepSchema } from '../src/shared/actions/schema'
+import { actionLimits, actionServes, actionsCatalogJson, catalogActionEngines, objectActions, type CatalogAction } from '../src/shared/actions/catalog'
+import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepLimit, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
 } from '../src/shared/actions/logins'
@@ -23,15 +23,22 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    // Managed Instance cannot SET OFFLINE or ONLINE: Take Offline and Bring Online run on box servers only.
+    // Attach is SQL Server's box editions' alone (decision 10), Managed Instance cannot SET OFFLINE or ONLINE, nor run sp_detach_db
+    // (Take Offline, Bring Online and Detach run on box servers only), and it restores from URL only, which neither Restore Database nor Restore Files and
+    // Filegroups offers.
     expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(['selectTop', 'rename', 'delete', 'properties'])
-    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['takeOffline', 'bringOnline'])
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach', 'takeOffline', 'bringOnline', 'detach', 'restore', 'restoreFiles'])
+    // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
+    expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
-    expect(json.version).toBe(3)
+    expect(json.version).toBe(4)
     for (const row of json.actions) {
-      expect(row.engines, row.action).toEqual([...objectActionSpecs[row.action as keyof typeof objectActionSpecs].engines])
-      expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
+      expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
+      // A restore's cleanup drops a partly restored database, which a large one takes a while to do.
+      expect(row.cleanupMs, row.action).toBe(row.action === 'restore' ? 30_000 : actionLimits.cleanupMs)
     }
+    // New Login (D2a) runs on SQL Server only until D2e.
+    expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])
@@ -83,7 +90,7 @@ describe('action steps and secrets', () => {
     expect(resultSchemas['actions.execute']).toBe(actionExecuteResultSchema)
     expect(validateResult('actions.execute', answer)).toEqual(answer)
     expect(() => validateResult('actions.execute', { ...answer, steps: [{ status: 'done', message: 'Rename' }] })).toThrow()
-    expect(() => validateResult('actions.execute', { ...answer, steps: Array.from({ length: actionLimits.statements + 9 }, () => ({ status: 'done', title: 'x' })) })).toThrow()
+    expect(() => validateResult('actions.execute', { ...answer, steps: Array.from({ length: actionStepLimit + 1 }, () => ({ status: 'done', title: 'x' })) })).toThrow()
     expect(() => validateResult('actions.execute', { ...answer, error: { code: 'NOPE', message: 'x', retryable: false } })).toThrow()
   })
   it('never lets a secret cross on actions.script, and zeroes actions.execute\'s frames as a whole', () => {
@@ -119,7 +126,8 @@ describe('password hashes', () => {
         if (/sql_logins/i.test(line) && /(?<!\(\s*)\*/.test(line) && !comment && !lint) offending.push(`${name}:${index + 1} (*)`)
         if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const list = line.includes('"LOGINPROPERTY(", "password_hash", "PasswordHash"')
-        const docs = name === 'src/shared/actions/docs.ts' && !/password_?hash/i.test(line)
+        // Generated docs may name LOGINPROPERTY to say why it is not used; never a password hash.
+        const docs = (name === 'src/shared/actions/docs.ts' || name === 'src/shared/explorer/docs.ts') && !/password_?hash/i.test(line)
         if (!comment && !list && !docs && !lint) offending.push(`${name}:${index + 1}`)
       })
     }

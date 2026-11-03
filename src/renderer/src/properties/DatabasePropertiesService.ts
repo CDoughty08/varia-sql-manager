@@ -54,6 +54,8 @@ export interface PropertiesState {
    *  online elsewhere (a query, another connection) never leaves the changes stuck. A document without changes reads the
    *  database again instead (its readOnlyReason says it). */
   readonly offline?: boolean
+  /** Varia deleted or detached the database (D3 §8): the document is an orphan, read-only with no Refresh, until it is closed. */
+  readonly gone?: boolean
   readonly error?: ActionError
   /** An info line: the changes applied, a script delivered. */
   readonly notice?: string
@@ -79,8 +81,12 @@ export interface DatabasePropertiesServiceOptions {
   readonly focus?: (id: string) => void
   readonly timers?: Timers
   readonly newId?: () => string
+  /** Closes a document (FileService.close): the orphan banner's Close. */
+  readonly close?: (id: string) => void
 }
 
+/** An orphaned document's banner: the server as connected to. */
+export const goneMessage = (server: string): string => `This database no longer exists on ${server}.`
 export const propertiesMessages = {
   applied: 'The changes were applied.',
   disconnected: 'The server was disconnected. Reconnect, or connect to it again and choose Properties on this database, to read it again.',
@@ -155,6 +161,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     if (!connection) throw new Error('Connect to the server first.')
     const documents = Object.values(this.getSnapshot().documents).filter(state => state.target.name === target.name)
     const existing = documents.find(state => this.connectionOf(state.id) === node.connectionId)
+    // An orphan whose name a new database has taken since reads that one.
+    if (existing?.gone) this.revive(existing.id)
     if (existing) { this.options.documents.activate(existing.id); return existing.id }
     // A document whose server was disconnected (or lost) is the one Properties on that database brings back, moved to the
     // new connection: connecting again makes a new connection, and nothing else would ever move it there.
@@ -176,7 +184,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /** Whether the fields take edits now: loaded, nothing running, not waiting for a Refresh, a database that can change. */
   canEdit(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.stale && !state.model.readOnlyReason
+    return !!state?.model && !!state.draft && state.phase === 'ready' && !state.stale && !state.gone && !state.model.readOnlyReason
   }
   updateDraft(id: string, patch: Partial<DatabaseDraft>): void {
     const state = this.get(id)
@@ -188,7 +196,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   }
   canDiscard(id: string): boolean {
     const state = this.get(id)
-    return !!state?.model && !!state.draft && state.changed && state.phase !== 'applying' && state.phase !== 'confirming'
+    return !!state?.model && !!state.draft && state.changed && !state.gone && state.phase !== 'applying' && state.phase !== 'confirming'
   }
   /**
    * Discard Changes: the draft goes back to what was read. While the last outcome is unknown, or the database read is gone
@@ -219,7 +227,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   }
   canRefresh(id: string): boolean {
     const state = this.get(id)
-    return !!state && this.live(id) && (state.phase === 'ready' || state.phase === 'loadFailed') && !state.changed
+    return !!state && !state.gone && this.live(id) && (state.phase === 'ready' || state.phase === 'loadFailed') && !state.changed
   }
   private async describe(id: string, notice?: string): Promise<void> {
     const state = this.get(id), connectionId = this.connectionOf(id)
@@ -250,7 +258,39 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   /** Whether Apply can run now: loaded with changes, nothing running, not stale, its server connected. */
   canApply(id: string): boolean {
     const state = this.get(id)
-    return !!state && state.phase === 'ready' && state.changed && !state.stale && this.live(id) && !state.model?.readOnlyReason
+    return !!state && state.phase === 'ready' && state.changed && !state.stale && !state.gone && this.live(id) && !state.model?.readOnlyReason
+  }
+
+  // --- A deleted or detached database ------------------------------------------------------------------------------------
+
+  /**
+   * Varia deleted or detached the database (Delete Object, D3 §8; Detach Database, D3b): each of its documents on that connection turns orphan. What it showed
+   * stays, read-only, under "This database no longer exists on <server>." with Close and no Refresh, since a database that
+   * takes the name later is another one; its requests are cancelled and its changes dropped, so closing it asks nothing.
+   */
+  databaseGone(connectionId: string, database: string): void {
+    for (const state of Object.values(this.getSnapshot().documents)) {
+      if (state.target.name !== database || this.connectionOf(state.id) !== connectionId || state.gone) continue
+      const request = this.requests.get(state.id), preview = this.previews.get(state.id)
+      // A read or Apply still in flight answers for a database that is gone: its answer is dropped.
+      if (request) request.dropped = true
+      this.cancel([request?.id, preview].filter((value): value is string => !!value))
+      this.requests.delete(state.id)
+      this.previews.delete(state.id)
+      this.clearPreviewTimer(state.id)
+      this.patch(state.id, {
+        gone: true, offline: undefined, phase: state.model ? 'ready' : 'loadFailed', changed: false, error: error('NOT_FOUND', goneMessage(state.server)), notice: undefined, steps: undefined,
+        script: { state: 'idle', message: goneMessage(state.server) }, scriptRevision: undefined, scriptNotice: undefined
+      })
+      this.options.documents.setDirty(state.id, false)
+    }
+  }
+  /** The orphan banner's Close. */
+  closeGone(id: string): void { if (this.get(id)?.gone) this.options.close?.(id) }
+  /** Properties on a database that took an orphan's name: the document reads it. */
+  private revive(id: string): void {
+    this.patch(id, { gone: undefined, error: undefined })
+    if (this.canRefresh(id)) this.refresh(id)
   }
   /**
    * A dialog took a database offline or brought it online on a connection (D3a): each of its documents on that server, through
@@ -260,7 +300,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   databaseStateChanged(connectionId: string, database: string, offline: boolean): void {
     const server = this.options.connections.getSnapshot().find(connection => connection.id === connectionId)?.server
     for (const state of Object.values(this.getSnapshot().documents)) {
-      if (state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
+      if (state.gone || state.target.name !== database || (this.connectionOf(state.id) !== connectionId && (server === undefined || !this.follows(state.id, server)))) continue
       if (!state.changed && this.canRefresh(state.id)) { this.patch(state.id, { offline: undefined }); this.refresh(state.id) }
       else if (!!state.offline !== offline) this.patch(state.id, { offline: offline || undefined })
     }
@@ -386,7 +426,7 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
   }
   private schedulePreview(id: string, delay = previewDelayMs): void {
     const state = this.get(id)
-    if (!state?.frame.scriptOpen || state.scriptRevision === state.revision && state.script.state !== 'failed') return
+    if (!state?.frame.scriptOpen || state.gone || state.scriptRevision === state.revision && state.script.state !== 'failed') return
     const pending = this.previewTimers.get(id)
     if (pending !== undefined) this.timers.clearTimeout(pending)
     this.previewTimers.set(id, this.timers.setTimeout(() => { this.previewTimers.delete(id); void this.preview(id) }, delay))
@@ -526,6 +566,8 @@ export class DatabasePropertiesService extends SnapshotStore<PropertiesSnapshot>
     if (!state) return
     // The login can differ from the one it was read with; a message that only said the server went no longer applies.
     this.patch(id, { login: connection.login, ...!state.stale && state.error?.code === 'CONNECTION_LOST' ? { error: undefined } : {} })
+    // Only Properties brings a document here: on an orphan, it is asked for the database that has the name now.
+    if (state.gone) this.patch(id, { gone: undefined, error: undefined })
     this.options.documents.activate(id)
     if (this.canRefresh(id)) this.refresh(id)
   }

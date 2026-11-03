@@ -504,8 +504,14 @@ explorer.context, for a database
       C&lipboard
   ---
   &Tasks >
+    &Detach…
+    ---
     &Take Offline
     Bring &Online
+    ---
+    &Restore >
+      &Database…
+      &Files and Filegroups…
   ---
   Copy N&ame
   ---

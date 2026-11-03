@@ -31,6 +31,7 @@ internal static class ActionChecks
         Errors(check);
         Validation(check);
         await RenameWaitAsync(check);
+        Detach(check);
         await ServiceAsync(check);
     }
 
@@ -38,7 +39,7 @@ internal static class ActionChecks
     {
         var rows = Catalog.Rows.ToList();
         check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
-            "the embedded actions catalogue loads at version 3 and every row names an Object Explorer kind and subtype");
+            "the embedded actions catalogue loads and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
@@ -49,14 +50,15 @@ internal static class ActionChecks
             && Catalog.Limit("scriptMs") == (long)options.ScriptBudget.TotalMilliseconds && Catalog.Limit("gateWaitMs") == (long)options.GateWait.TotalMilliseconds
             && Catalog.Limit("messageChars") == ActionErrors.MaxMessage && Catalog.Limit("newName") == ExplorerRefs.MaxIdentifier
             && Catalog.Limit("stopGraceMs") == (long)options.StopGrace.TotalMilliseconds, "the backend's limits are the catalogue's");
-        check(Catalog.ErrorCodes.Count() == 15 && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
-            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "takeOffline", "bringOnline"]) && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline",
-            "the catalogue lists the action error codes and the Delete Object, Database Properties, Take Offline and Bring Online dialogs");
         check(Catalog.Describes.Keys.SequenceEqual(["renameDatabase"]) && Catalog.Describes["renameDatabase"].SequenceEqual(["database"]) && Catalog.ActionOf("renameDatabase") == "rename"
             && !Catalog.Dialogs.ContainsKey("renameDatabase") && Catalog.DatabaseRefusal("rename", 0, 1, false, false) is null && Catalog.DatabaseRefusal("rename", 0, 2, false, false) is null
             && Catalog.DatabaseRefusal("rename", 0, 0, true, false) == "A read-only database cannot be renamed." && Catalog.DatabaseRefusal("rename", 0, 0, false, true) == "A read-only database cannot be renamed."
             && new[] { 1, 2, 3, 4, 5, 6, 7, 10, 42 }.All(state => Catalog.DatabaseRefusal("rename", state, 0, true, false) == "The database must be online to be renamed."),
             "the renameDatabase describe serves Rename on databases, which the catalogue refuses for a database that is not online, or is read-only or standby (902) (D3c)");
+        check(Catalog.ErrorCodes.Count() == 22 && Catalog.ErrorCodes.Contains("FILE_ACCESS") && Catalog.Retryable("FILE_ACCESS") && !Catalog.Retryable("MEDIA") && !Catalog.Retryable("BACKUP_MISMATCH") && !Catalog.Retryable("TAIL_LOG_NEEDED") && !Catalog.Retryable("RESTORE_SEQUENCE") && Catalog.Retryable("PASSWORD_POLICY") && Catalog.Retryable("IN_USE") && Catalog.Retryable("AUTH_ENTRA") && !Catalog.Retryable("DEPENDENTS") && Catalog.Retryable("CANCELLED") && !Catalog.ErrorCodes.Contains("INVALID_NAME")
+            && Catalog.Dialogs.Keys.SequenceEqual(["deleteObject", "databaseProperties", "newDatabase", "attachDatabase", "newLogin", "takeOffline", "bringOnline", "detachDatabase"]) && Catalog.IsServerAction("createDatabase") && !Catalog.IsServerAction("properties")
+            && Catalog.ActionOf("takeOffline") == "takeOffline" && Catalog.ActionOf("bringOnline") == "bringOnline" && Catalog.ActionOf("detachDatabase") == "detach",
+            "the catalogue lists the action error codes (a file SQL Server cannot open, FILE_ACCESS, retryable once fixed; restore's MEDIA, BACKUP_MISMATCH, TAIL_LOG_NEEDED and RESTORE_SEQUENCE not; New Login's PASSWORD_POLICY retryable) and the Delete Object, Database Properties, New Database, Attach Databases, New Login, Take Offline, Bring Online and Detach Database dialogs, New Database's createDatabase a server action");
         // The database rules are the menu's (databaseActionState, tests/object-actions-catalog.test.ts): the preflight refuses what the menu greys.
         check(Catalog.DatabaseStateOf(0) == "online" && Catalog.DatabaseStateOf(6) == "offline" && Catalog.DatabaseStateOf(10) == "offlineSecondary" && Catalog.DatabaseStateOf(42) == "other"
             && Catalog.DatabaseRefusal("takeOffline", 0, 0, false, false) is null && Catalog.DatabaseRefusal("takeOffline", 6, 0, false, false) == "The database is offline."
@@ -87,7 +89,12 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 8 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 13 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 6 + AttachSql.LintAll().Count() + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band, New Database's, Attach's and New Login's builders and facts and User Mapping's reads included (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
+        // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
+        check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions, ActionSql.DatabaseSessions, ActionSql.DatabaseAccess }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
+            && new[] { ActionSql.DatabaseUse, ActionSql.DatabaseUseSessions, ActionSql.TransactionSessions }.All(statement => statement.Contains("sys.dm_tran_session_transactions", StringComparison.Ordinal)),
+            "only Delete Object's session counts and lists read the transaction DMVs, never the statements every action runs");
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -122,7 +129,9 @@ internal static class ActionChecks
                 new PlannedStatement(ActionTemplate.GrantConnect, "master", [name]), new PlannedStatement(ActionTemplate.DropUser, name, [name]),
                 // Take Offline and Bring Online.
                 new PlannedStatement(ActionTemplate.SetOffline, "master", [name]), new PlannedStatement(ActionTemplate.SetOfflineRollback, "master", [name]),
-                new PlannedStatement(ActionTemplate.SetOnline, "master", [name])
+                new PlannedStatement(ActionTemplate.SetOnline, "master", [name]),
+                // Restore Database's cleanup (D1f).
+                ActionSql.DropRestoring(name, 2_147_483_647)
             };
             foreach (var plan in plans)
             {
@@ -156,6 +165,24 @@ internal static class ActionChecks
             "the backup history step runs only after the DROP");
         check(ActionService.Plan(Delete(database), database).Select(plan => plan.Template).SequenceEqual([ActionTemplate.DropDatabase]),
             "without its options, deleting a database only drops it (Close existing connections is off by default, as in SSMS)");
+        // D3 §8: a DROP that fails after SINGLE_USER restores the access the database had; only main steps are scripted.
+        var multi = ActionService.Plan(Delete(database, close: true, history: true), database, new(false, 0));
+        var restricted = ActionService.Plan(Delete(database, close: true), database, new(false, 2));
+        var compensation = multi.Single(plan => plan.Kind == StepKind.Compensation);
+        check(compensation is { Template: ActionTemplate.SetMultiUser, Database: "master", Undoes: 0, When: { } due } && compensation.Names.SequenceEqual(["AppData"])
+            && due(["done", "failed", "skipped"]) && due(["done", "cancelled", "skipped"]) && !due(["done", "done", "failed"])
+            && restricted.Single(plan => plan.Kind == StepKind.Compensation).Template == ActionTemplate.SetRestrictedUser
+            && ActionService.Plan(Delete(database, close: true), database, new(false, 1)).All(plan => plan.Kind == StepKind.Main)
+            && ActionService.Plan(Delete(database), database, new(false, 0)).All(plan => plan.Kind == StepKind.Main)
+            && ActionService.ScriptText(multi) == full,
+            "closing connections before a DROP restores multi-user or restricted access when the DROP does not complete, never after it, and is never scripted");
+        check(ActionService.Plan(Delete(database, close: true, history: true), database, new(true, 0)).Select(plan => plan.Template)
+                .SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
+            "an offline database has no sessions to close: its Delete runs no SINGLE_USER and nothing to restore");
+        check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
+            && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
+            && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,
+            "Delete Object greys Close existing connections with a reason for an offline database and on Managed Instance (a snapshot greys it by itself), and offers it elsewhere");
         var view = new ObjectRefDto("view", "AppData", "dbo", "V");
         check(ActionService.Plan(Rename(view, "W"), view).Single() is { Template: ActionTemplate.RenameObject, Database: "AppData" } renamed && renamed.Names.SequenceEqual(["dbo", "V", "W"])
             && ActionService.Plan(Rename(database, "B"), database).Single() is { Template: ActionTemplate.RenameDatabase, Database: "master" }
@@ -170,10 +197,10 @@ internal static class ActionChecks
         // put the access back under the old name (the rename failed or was stopped) or the new one (only the restore did not complete).
         var close = Rename(database, "B") with { CloseConnections = true };
         check(ActionService.ScriptText(ActionService.Plan(close, database)) == Use("ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE") + Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
-            + Use("ALTER DATABASE [B] SET  MULTI_USER") && ActionService.ScriptText(ActionService.Plan(close, database, userAccess: 2)).EndsWith(Use("ALTER DATABASE [B] SET  RESTRICTED_USER"), StringComparison.Ordinal),
+            + Use("ALTER DATABASE [B] SET  MULTI_USER") && ActionService.ScriptText(ActionService.Plan(close, database, new ActionService.DeleteFacts(false, 2))).EndsWith(Use("ALTER DATABASE [B] SET  RESTRICTED_USER"), StringComparison.Ordinal),
             "Close Connections and Rename scripts SINGLE_USER, MODIFY NAME and the original access under the new name, compensation left out");
         check(Script(Rename(database, "B")) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]") && Script(Rename(database, "B") with { CloseConnections = false }) == Use("ALTER DATABASE [AppData] MODIFY NAME = [B]")
-            && ActionService.Plan(close, database, userAccess: 1).Select(plan => plan.Template).SequenceEqual([ActionTemplate.RenameDatabase]),
+            && ActionService.Plan(close, database, new ActionService.DeleteFacts(false, 1)).Select(plan => plan.Template).SequenceEqual([ActionTemplate.RenameDatabase]),
             "Rename When Free, and a database already in SINGLE_USER, run MODIFY NAME alone");
         var plan = ActionService.Plan(close, database);
         var compensations = plan.Where(statement => statement.Kind == StepKind.Compensation).ToList();
@@ -190,6 +217,8 @@ internal static class ActionChecks
             && ActionService.StepTitle(ActionTemplate.SetOnline) == "Bring database online", "the state steps have their own titles");
     }
 
+    private static ActionArgs DetachArgs(ObjectRefDto target, bool? drop, bool? statistics, bool? offline = null, DatabaseIdentityDto? identity = null) =>
+        new("detach", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, Identity: identity, DropConnections: drop, UpdateStatistics: statistics, DetachOffline: offline);
     private static ActionArgs TakeOffline(ObjectRefDto target, bool? drop, DatabaseIdentityDto? identity = null) =>
         new("takeOffline", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, Identity: identity, DropConnections: drop);
     private static ActionArgs BringOnline(ObjectRefDto target, DatabaseIdentityDto? identity = null) => new("bringOnline", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), target, Identity: identity);
@@ -204,9 +233,15 @@ internal static class ActionChecks
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
             [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
             // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
-            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED",
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [3709] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED",
             // Take Offline and Bring Online (D3a).
-            [5011] = "PERMISSION_DENIED"
+            [5011] = "PERMISSION_DENIED",
+            // New Login's password policy: Windows' (15114 to 15118) and SQL Server's own, which SQL Server on Linux applies (33062 too
+            // short, 33063 too long, 33064 not complex enough; probed on SQL Server 2022 CU27 on Linux, where CI's 'zq' answered 33062).
+            [15114] = "PASSWORD_POLICY", [15116] = "PASSWORD_POLICY", [15118] = "PASSWORD_POLICY", [33062] = "PASSWORD_POLICY", [33063] = "PASSWORD_POLICY",
+            [33064] = "PASSWORD_POLICY",
+            // Detach Database (D3b).
+            [3703] = "IN_USE", [3707] = "NOT_SUPPORTED", [7983] = "PERMISSION_DENIED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
@@ -308,6 +343,121 @@ internal static class ActionChecks
             "Select Top's column read on Azure SQL Database runs in the object's database with no cross-database call; box servers use QUOTENAME(@db)'s sp_executesql");
     }
 
+    /// <summary>Detach Database (D3b): its catalogue rows and rules, its plan and script, Validate, and its execute-time verdict.</summary>
+    private static void Detach(Action<bool, string> check)
+    {
+        var database = new ObjectRefDto("database", Name: "AppData");
+        check(Catalog.Allows("database", "", "detach") && !Catalog.Allows("database", "system", "detach") && !Catalog.Allows("database", "snapshot", "detach")
+            && Catalog.Serves("detach", "box") && !Catalog.Serves("detach", "managedInstance") && !Catalog.Serves("detach", "cloud")
+            && Catalog.DatabaseRefusal("detach", 0, 0, false, false) is null && Catalog.DatabaseRefusal("detach", 6, 1, true, false) is null
+            && Catalog.DatabaseRefusal("detach", 1, 0, false, false) == "Wait until it finishes restoring or recovering."
+            && Catalog.DatabaseRefusal("detach", 4, 0, false, false) == "Set the database to EMERGENCY with T-SQL before you detach it."
+            && Catalog.DatabaseRefusal("detach", 3, 0, false, false) == Catalog.DatabaseRefusal("detach", 4, 0, false, false) && Catalog.DatabaseRefusal("detach", 5, 0, false, false) is null,
+            "Detach is a user database's box-only action, greyed while restoring, recovering, copying, suspect or recovery pending, with the menu's reasons");
+        // Drop Connections: SINGLE_USER first; a failure or Stop after it gives the database back the access it had.
+        static string Shape(IEnumerable<PlannedStatement> plan) => string.Join(", ", plan.Select(item => item.Template + (item.Kind == StepKind.Main ? "" : " " + item.Kind + " of " + item.Undoes)
+            + (item.Template == ActionTemplate.DetachDatabase ? " " + item.Names[1] : "")));
+        check(Shape(ActionService.Plan(DetachArgs(database, true, false), database)) == "SetSingleUser, DetachDatabase true, SetMultiUser Compensation of 0"
+            && Shape(ActionService.Plan(DetachArgs(database, true, true), database, new ActionService.DeleteFacts(false, 2))) == "SetSingleUser, DetachDatabase false, SetRestrictedUser Compensation of 0"
+            && Shape(ActionService.Plan(DetachArgs(database, true, false), database, new ActionService.DeleteFacts(false, 1))) == "SetSingleUser, DetachDatabase true"
+            && Shape(ActionService.Plan(DetachArgs(database, false, true), database)) == "DetachDatabase false"
+            && ActionService.Plan(DetachArgs(database, true, false), database).All(item => item.Database == "master" && item.Names[0] == "AppData"),
+            "Detach plans SINGLE_USER with Drop Connections, then sp_detach_db with @skipchecks from Update Statistics, and restores multi-user or restricted access after a failure");
+        string Use(string statement) => "USE [master]" + NL + "GO" + NL + statement + NL + "GO" + NL;
+        check(ActionService.ScriptText(ActionService.Plan(DetachArgs(database, true, true), database)) == Use("ALTER DATABASE [AppData] SET  SINGLE_USER WITH ROLLBACK IMMEDIATE")
+                + Use("EXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = 'false'")
+            && ActionService.ScriptText(ActionService.Plan(DetachArgs(database, false, false), database)) == Use("EXEC master.dbo.sp_detach_db @dbname = N'AppData', @skipchecks = 'true'")
+            && ActionService.DetachSkipChecksComment.StartsWith("-- ", StringComparison.Ordinal) && ActionService.DetachSkipChecksComment.EndsWith(NL, StringComparison.Ordinal)
+            && SqlScript.Parse(ActionService.DetachSkipChecksComment + Use("SELECT 1")).Count == 2,
+            "Detach scripts SSMS's statements, @skipchecks 'true' when Update Statistics is cleared (with a one-line comment), never the compensation");
+        check(ActionService.StepTitle(ActionTemplate.SetSingleUser) == "Close existing connections" && ActionService.StepTitle(ActionTemplate.DetachDatabase) == "Detach the database"
+            && ActionService.StepTitle(ActionTemplate.SetMultiUser) == "Restore multi-user access" && ActionService.StepTitle(ActionTemplate.SetRestrictedUser) == "Restore restricted user access",
+            "Detach's steps have the shared templates' titles (src/shared/actions/schema.ts detachDatabaseStepTitle names the detach)");
+
+        using var service = new ActionService(new FakeHost());
+        var table = new ObjectRefDto("table", "AppData", "dbo", "Orders");
+        string Refused(ActionArgs args, bool script = false)
+        {
+            try { service.Validate(args, script); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        var invalid = new (string Name, ActionArgs Args)[]
+        {
+            ("detach without dropConnections", DetachArgs(database, null, false)), ("detach without updateStatistics", DetachArgs(database, true, null)),
+            ("detach of a table", DetachArgs(table, false, false)), ("detach of master", DetachArgs(new ObjectRefDto("database", Name: "master"), false, false)),
+            ("detach of model", DetachArgs(new ObjectRefDto("database", Name: "model"), true, true)), ("detach with a new name", DetachArgs(database, false, false) with { NewName = "x" }),
+            ("detach with closeConnections", DetachArgs(database, false, false) with { CloseConnections = true }), ("detach with deleteHistory", DetachArgs(database, false, false) with { DeleteHistory = false }),
+            ("detach with changes", DetachArgs(database, false, false) with { Changes = new() }), ("detach with an identity of id 0", DetachArgs(database, false, false, identity: new(0, "2026-01-02T03:04:05.678"))),
+            ("updateStatistics on take offline", TakeOffline(database, false) with { UpdateStatistics = false }), ("detachOffline on bring online", BringOnline(database) with { DetachOffline = true }),
+            ("updateStatistics on a delete", Delete(database) with { UpdateStatistics = true }), ("detachOffline on a rename", Rename(database, "x") with { DetachOffline = false }),
+            ("updateStatistics on properties", new ActionArgs("properties", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), database, CloseConnections: false,
+                Changes: new(Options: new() { ["autoUpdateStatistics"] = "false" }), UpdateStatistics: true))
+        };
+        var accepted = invalid.Where(item => Refused(item.Args) != "INVALID_PARAMS").Select(item => item.Name).ToList();
+        check(accepted.Count == 0, "Validate refuses what detachSchema refuses, and the detach members on every other action: " + string.Join(", ", accepted));
+        var hostile = new ObjectRefDto("database", Name: Long("q]'); --"));
+        check(Refused(DetachArgs(hostile, true, true)) == "accepted" && Refused(DetachArgs(database, false, false, offline: true, identity: new(5, "2026-01-02T03:04:05.678"))) == "accepted"
+            && Refused(DetachArgs(database, true, false), script: true) == "accepted",
+            "Detach accepts a user database's name verbatim, Detach while offline and the identity a describe wrote, for execute and script");
+        string DescribeRefused(ObjectRefDto target)
+        {
+            try { service.Validate(new ActionDescribeArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "detachDatabase", target)); return "accepted"; }
+            catch (RequestException error) { return error.Code; }
+        }
+        check(DescribeRefused(database) == "accepted" && DescribeRefused(new ObjectRefDto("database", Name: "msdb")) == "INVALID_PARAMS" && DescribeRefused(table) == "INVALID_PARAMS",
+            "Detach Database's describe serves user databases only");
+
+        // The execute-time verdict over a preflight row (StateRefusal, DetachBlockers, critic A27).
+        ActionSubject Subject(Dictionary<string, object?> changes, string subtype = "")
+        {
+            var values = new Dictionary<string, object?>
+            {
+                ["database_id"] = 7, ["create_date"] = new DateTime(2026, 1, 2, 3, 4, 5, 678), ["state"] = 0, ["user_access"] = 0, ["is_read_only"] = false, ["is_in_standby"] = false,
+                ["is_system"] = false, ["replicated"] = false, ["has_snapshots"] = false, ["in_availability_group"] = false, ["mirrored"] = false, ["can_alter_state"] = true
+            };
+            foreach (var (key, value) in changes) values[key] = value;
+            return new(database, "AppData", "Database", subtype, new Varia.Backend.Scripting.ScriptPreflight.Row(values), [], false);
+        }
+        string Verdict(Dictionary<string, object?> changes, bool linux = false, bool offline = false, DatabaseIdentityDto? read = null, string subtype = "", bool statistics = false,
+            ActionError? permission = null) =>
+            service.DetachRefusal(Subject(changes, subtype), read, linux, offline, statistics, permission) is { } error ? error.Code + ": " + error.Message : "runs";
+        var offlineMessage = "NOT_SUPPORTED: The database AppData is offline. Bring it online first, or check Detach while offline.";
+        var denied = new ActionError("PERMISSION_DENIED", "You do not have permission to detach AppData: that needs its db_owner role, or sysadmin.", false);
+        check(Verdict([]) == "runs" && Verdict([], read: new(7, "2026-01-02T03:04:05.678")) == "runs" && Verdict([], read: new(8, "2026-01-02T03:04:05.678")).StartsWith("NOT_FOUND: ", StringComparison.Ordinal)
+            && Verdict(new() { ["state"] = 6 }) == offlineMessage && Verdict(new() { ["state"] = 6 }, offline: true) == "runs" && Verdict(new() { ["state"] = 6 }, linux: true) == "runs"
+            && Verdict(new() { ["has_snapshots"] = true }) == "NOT_SUPPORTED: A database snapshot of this database exists; drop the snapshot before you detach it."
+            && Verdict(new() { ["replicated"] = true }).StartsWith("NOT_SUPPORTED: The database is used for replication", StringComparison.Ordinal)
+            && Verdict(new() { ["in_availability_group"] = true }).StartsWith("NOT_SUPPORTED: The database is in an availability group", StringComparison.Ordinal)
+            && Verdict(new() { ["mirrored"] = true }).StartsWith("NOT_SUPPORTED: The database is mirrored", StringComparison.Ordinal)
+            && Verdict(new() { ["is_system"] = true }) == "NOT_SUPPORTED: AppData belongs to SQL Server and cannot be detached."
+            && Verdict([], subtype: "snapshot") == "NOT_SUPPORTED: A database snapshot cannot be detached."
+            && Verdict(new() { ["state"] = 1 }) == "NOT_SUPPORTED: Wait until it finishes restoring or recovering."
+            && Verdict([], permission: denied) == "PERMISSION_DENIED: " + denied.Message && Verdict(new() { ["has_snapshots"] = true }, permission: denied).StartsWith("PERMISSION_DENIED: ", StringComparison.Ordinal),
+            "Detach refuses a replaced database, what SQL Server refuses (replication, a snapshot, an availability group, mirroring), the menu's states, no permission, and an offline database on Windows without Detach while offline");
+        // DBCC DETACHDB needs db_owner or sysadmin, which SET OFFLINE's ALTER (can_alter_state) does not imply: Detach's own permission decides.
+        check(Verdict(new() { ["can_alter_state"] = false }) == "runs" && Verdict(new() { ["can_alter_state"] = true }, permission: denied) == "PERMISSION_DENIED: " + denied.Message,
+            "Detach's permission is db_owner or sysadmin (DetachFactsAsync), not Take Offline's ALTER on the database");
+        // EMERGENCY on Windows leaves files as an offline detach does (probed): it waits for its own box; Linux only notes it.
+        check(Verdict(new() { ["state"] = 5 }) == "NOT_SUPPORTED: The database AppData is in EMERGENCY mode. Bring it online first, or check Detach anyway."
+            && Verdict(new() { ["state"] = 5 }, offline: true) == "runs" && Verdict(new() { ["state"] = 5 }, linux: true) == "runs"
+            && service.DetachConfirmLabel(6) == "Detach while offline" && service.DetachConfirmLabel(5) == "Detach anyway",
+            "Detach of a database in EMERGENCY on Windows waits for Detach anyway, as an offline one waits for Detach while offline (critic A27)");
+        // sp_updatestats cannot run on a read-only, standby, EMERGENCY or offline database: 15635 (and the detach happens anyway) or 942.
+        check(Verdict([], statistics: true) == "runs" && Verdict(new() { ["is_read_only"] = true }, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run on a read-only or standby database; clear it."
+            && Verdict(new() { ["is_in_standby"] = true }, statistics: true) == Verdict(new() { ["is_read_only"] = true }, statistics: true) && Verdict(new() { ["is_read_only"] = true }) == "runs"
+            && Verdict(new() { ["state"] = 6 }, offline: true, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run while the database is offline; clear it."
+            && Verdict(new() { ["state"] = 5 }, linux: true, statistics: true) == "NOT_SUPPORTED: Update Statistics cannot run while the database is in EMERGENCY mode; clear it.",
+            "Detach refuses Update Statistics on a database sp_updatestats cannot run in, and runs with it cleared");
+        string Notes(Dictionary<string, object?> changes, bool linux, bool hidden = false) => string.Join(" | ", service.DetachNotes(Subject(changes).Row, linux, hidden).Select(note => (note.Blocking ? "!" : "") + note.Text));
+        check(Notes([], linux: false) == "" && Notes([], linux: true) == "" && Notes(new() { ["state"] = 6 }, linux: true) == ActionService.DetachOfflineNote
+            && Notes(new() { ["state"] = 5 }, linux: true) == "This database is in EMERGENCY mode. On Windows, SQL Server may restrict access to its files when it is detached in this state; bring it online first if you will attach it again."
+            && Notes(new() { ["state"] = 6 }, linux: false) == "" && Notes(new() { ["sql_login"] = true }, linux: false) == ActionService.DetachSqlLoginNote
+            && Notes(new() { ["sql_login"] = true }, linux: true) == "" && Notes([], linux: false, hidden: true) == ActionService.DetachFilesHiddenNote,
+            "Detach notes a database that is not online on Linux, a SQL Server login on Windows (its files open only to the service account) and files SQL Server did not show, never as blocking");
+        check(ActionService.DetachBlockers(Subject([]).Row).Count == 0 && ActionService.DetachBlockers(Subject(new() { ["has_snapshots"] = true, ["mirrored"] = true }).Row) is [{ Blocking: true }, { Blocking: true }],
+            "the describe's blocking warnings are the execute's refusals");
+    }
+
     private sealed class FakeHost(int edition = 3) : IActionHost
     {
         public int Connections;
@@ -336,6 +486,14 @@ internal static class ActionChecks
         var execute = await cloud.ExecuteAsync(Rename(table, "Orders2"), CancellationToken.None);
         check(describe.Error?.Code == "NOT_SUPPORTED" && script.Error?.Code == "NOT_SUPPORTED" && execute.Error?.Code == "NOT_SUPPORTED" && execute.Steps.Count == 0
             && execute.Error.Message == ActionService.CloudMessage && cloudHost.Connections == 0 && cloud.RunningCount == 0, "Azure SQL Database answers NOT_SUPPORTED before any connection opens");
+        var managedHost = new FakeHost(8);
+        using var managed = new ActionService(managedHost);
+        var database = new ObjectRefDto("database", Name: "AppData");
+        var single = await managed.ExecuteAsync(Delete(database, close: true), CancellationToken.None);
+        var plain = await managed.ExecuteAsync(Delete(database), CancellationToken.None);
+        check(single.Error is { Code: "NOT_SUPPORTED" } && single.Error.Message == ActionService.ManagedInstanceCloseNote && single.Steps.Count == 0 && managedHost.Connections == 1
+            && plain.Error?.Code != "NOT_SUPPORTED" && managed.RunningCount == 0,
+            "on Managed Instance, Delete with Close existing connections answers NOT_SUPPORTED before any connection opens; without it, Delete runs");
         var host = new FakeHost();
         using var service = new ActionService(host);
         var unreachable = await service.ExecuteAsync(Rename(table, "Orders2"), CancellationToken.None);
@@ -350,5 +508,13 @@ internal static class ActionChecks
         held.Cancel();
         try { await first; } catch (OperationCanceledException) { } catch (RequestException) { }
         check(second == "DUPLICATE_REQUEST", "a request id runs once at a time");
+        // Managed Instance cannot run sp_detach_db: refused before any connection opens (critic A1).
+        var detachHost = new FakeHost(8);
+        using var detachManaged = new ActionService(detachHost);
+        var appData = new ObjectRefDto("database", Name: "AppData");
+        var detached = await detachManaged.ExecuteAsync(DetachArgs(appData, true, false), CancellationToken.None);
+        var detachDescribe = await detachManaged.DescribeAsync(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "detachDatabase", appData), CancellationToken.None);
+        check(detached.Error?.Code == "NOT_SUPPORTED" && detached.Error.Message == ActionService.ManagedInstanceMessage && detachDescribe.Error?.Code == "NOT_SUPPORTED" && detachHost.Connections == 0,
+            "Managed Instance answers Detach NOT_SUPPORTED before any connection opens");
     }
 }
