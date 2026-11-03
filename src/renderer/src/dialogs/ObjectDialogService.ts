@@ -1,4 +1,4 @@
-import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
+import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, isServerAction, objectActionSpecs, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import type { ActionDescribeRequest, ActionDescribeResult, ActionError, ActionExecuteResult, ActionRequest, ActionStep } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -96,7 +96,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (this.disposed) return
     if (!isModalDialog(dialog)) throw new Error('That dialog opens as a document.')
     if (this.current) throw new Error('Close the open dialog first.')
-    const folder = objectActionSpecs[dialogSpecs[dialog].action].folder
+    const action = dialogSpecs[dialog].action
+    const folder = isServerAction(action) ? undefined : objectActionSpecs[action].folder
     const target = node.ref.type === 'object' ? (folder ? undefined : node.ref.object) : folder && node.ref.folder === folder ? node.ref.owner : undefined
     const connection = this.options.connections.getSnapshot().find(item => item.id === node.connectionId && !item.lost)
     if (!target || !connection) throw new Error('Connect to the server first.')

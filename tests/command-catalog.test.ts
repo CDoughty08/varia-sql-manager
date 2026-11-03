@@ -49,8 +49,8 @@ function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, and Integration Services Operations' nine.
-    expect(commandIds).toHaveLength(185)
+    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id), New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, New Database (with its database menu's own command) and its document's three verbs, Attach Database, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, and Integration Services Operations' nine.
+    expect(commandIds).toHaveLength(190)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {

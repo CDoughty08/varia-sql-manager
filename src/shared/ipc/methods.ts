@@ -1,7 +1,8 @@
 // How main sends each backend method over protocol v2 (docs/ipc.md). Erasable TypeScript with type-only imports, so
-// the fake backend (tests/fixtures/backend.mjs) can load it through Node's type stripping.
+// the fake backend (tests/fixtures/backend.mjs) can load it through Node's type stripping; value imports name their .ts file.
 // A new unary method needs one entry here, usually `metadata`; the C# lane table is SqlService.LaneOf.
 import type { BackendMethod, BackendMethods } from '../contracts'
+import { actionDrainMs } from '../actions/catalog.ts'
 
 export type MethodKind = 'unary' | 'stream'
 /** Backend scheduling: control runs at once, metadata waits for one of 8 slots, query takes the session path, results
@@ -84,7 +85,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // per-request flag would leave the frame unzeroed the day an action forgets to set it.
   'actions.describe': { kind: 'unary', lane: 'metadata', deadlineMs: params => params.dialog === 'serverFiles' ? serverFilesDeadlineMs : 45_000 },
   'actions.script': { kind: 'unary', lane: 'metadata', deadlineMs: 30_000 },
-  'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true },
+  // A long action (a restore or backup) stops itself and runs its cleanup when its generation is closed, so main waits that long.
+  'actions.execute': { kind: 'unary', lane: 'actions', deadlineMs: 0, sensitive: true, drainMs: params => actionDrainMs(params.action) },
   // SSIS Catalog reads answer their own 40 s budget as a TIMEOUT value; main cancels them from the renderer (varia:ssis-cancel).
   'ssis.describe': { kind: 'unary', lane: 'ssis', deadlineMs: 45_000 },
   // SSIS Catalog writes wait for locks as SSMS does, without a deadline; Stop (varia:ssis-cancel) ends them, except Create

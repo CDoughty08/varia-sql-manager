@@ -196,8 +196,9 @@ JavaScript and .NET strings they came from cannot be zeroed. Main zeroes the met
 backend schedules it: `control` runs at once, `metadata` waits for one of 8 slots (at most 30 s or the remaining
 deadline, then `BUSY`), `query` uses the per-tab session path, `results` takes one of 16 read slots, `explorer`
 runs at once under Object Explorer's own gates (4 statements per connection, 8 in all; static folders need neither), and
-`actions` runs object action DDL at once under the action service's own gates (1 per connection, 2 in all, each waited
-for at most 30 s, then `BUSY`), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
+`actions` runs object action DDL at once under the action service's own gates (1 per Varia connection, 2 in all, each waited
+for at most 30 s, then `BUSY`; a long action, a restore or backup, takes the long gate instead, also 1 per connection and 2 in
+all), so a DROP waiting on a lock never holds a metadata slot; Kill Process (`activity.kill`)
 runs there too, under gates of its own (1 per connection, 2 in all, waited for at most 5 s, then `BUSY`), so it never queues behind a
 DROP that may be waiting on the very session it kills. `live` takes no slot either: a live subscription samples on its
 own task, and its statements, like those of a unary method on lane `live` (`activity.details`, through
@@ -232,7 +233,7 @@ writes 1 and 2, each waited for at most 30 s, then `BUSY`), so a request waiting
 | `scripting.script` | invoke; cancelled with `cancelScripting` | unary | metadata | 60 s; the backend answers its own 55 s budget as an `error: TIMEOUT` value |
 | `actions.describe` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 10 s for a lock: `BLOCKED`). The server file picker (`dialog: 'serverFiles'`): 15 s around the backend's 10 s budget per listing |
 | `actions.script` | invoke; cancelled with `cancelObjectActions` | unary | metadata | 30 s; the backend answers its own 25 s budget as an `error: TIMEOUT` value |
-| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop) | unary | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
+| `actions.execute` | invoke; cancelled with `cancelObjectActions` (Stop); progress through `onActionProgress` | unary with EVENTs | actions | none, and no backstop: DDL waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement and the action's compensation and cleanup steps have run (at most 10 s plus its `cleanupMs` later). A long action's steps send droppable `action.progress` EVENTs (below), and while one is pending main closes its generation with a grace of 10 s plus its `cleanupMs` plus 5 s (`drainMs`, `actionDrainMs`), because the backend's shutdown stops it and waits for its cleanup. Sensitive (frame zeroed). Main checks the answer (`actionExecuteResultSchema`: each step's title, message, detail and progress bounded). Never re-sent |
 | `ssis.describe` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (reads wait at most 5 s for a lock, the profile's role checks 1 s: `BLOCKED`) |
 | `ssis.execute` | invoke; cancelled with `cancelSsis` (Stop) | unary | ssis | none, and no backstop: a write waits for locks as SSMS does, and only CANCEL (reason 1) ends it, answered with its steps once SQL Server has ended the statement (at most 10 s later); its preflight answers its own 25 s budget as `error: TIMEOUT` (10 s lock timeout: `BLOCKED`). Sensitive (frame zeroed). Never re-sent. Create Catalog: Stop ends it at any statement but its restore, and its reply waits (past the grace, a disconnect included) for the restore to end and for the removal of what was created; while one is pending, main closes its generation with a 130 s grace instead of 2 s (`drainMs`), because the backend's shutdown waits up to 120 s for it |
 | `ssis.catalogSetup` | invoke; cancelled with `cancelSsis` | unary | ssis | 45 s; the backend answers its own 40 s budget as an `error: TIMEOUT` value (10 s lock timeout: `BLOCKED`) |
@@ -330,9 +331,29 @@ Failures the user can act on are `result.error` values, not envelope codes: `NOT
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
 `NAME_IN_USE`, `PATH_NOT_FOUND` (the server file picker), `FILE_ACCESS` (a database file SQL Server cannot open), `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
-cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
-failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
-not reachable from the wire.
+cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
+in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
+the .NET checks and is not reachable from the wire.
+
+**Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
+gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this
+connection.", or "Restores or backups are already running on other connections." when the two slots are taken elsewhere; the
+execute gate words its two cases the same way), not the execute gate, so a rename on the same connection still runs. Every
+action statement runs through a data reader, never `ExecuteNonQuery` (`tests/action-reader-lint.test.ts`), because SqlClient
+raises informational messages as they arrive only for a reader; SQL Server's message 3211 ("n percent processed.", from
+`STATS`) becomes the running step's percent, and a long action's request sends droppable `{ type: 'action.progress', step,
+percent }` EVENTs (`step` is the step's index in the reply, 0 – 519; `percent` 0 – 100): each step's start at once as percent 0,
+then its percents at most every 250 ms (`progressEventMs`, on a Stopwatch), a percent held inside the interval going out when it
+ends or before the next step's start. 3211 lines are not among the 32 kept messages; the reply's steps carry the last percent each
+reached (`progress`). Main checks each EVENT (`actionProgressEventSchema`); an invalid one is dropped, not a protocol failure,
+because failing the request would CANCEL a restore part way. It pushes `varia:actions-progress { requestId, step, percent }`
+(`actionProgressSchema`) only to the window that sent the request, at most 4 a second per request: a new step at once, and the
+latest percent held inside the interval when it ends, never after the request ended (`actionProgressRelay`); the preload's `onActionProgress(listener)` passes on only those three fields and returns its
+unsubscribe. The renderer's `ActionProgressService` keeps the latest percent of each request it tracks (at most 128) and fills
+the running step's progress bar in a `StepList`. Like `job.progress`, these EVENTs are per request and droppable, not periodic
+data (live data flows only through the results port). When a generation closes, the backend's CancelAll stops its long
+actions, and its shutdown waits (`DrainCommitted`, beside Create Catalog's) for each to end and run its cleanup steps, within 10 s
+plus its cleanup budget.
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
 serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
@@ -521,6 +542,31 @@ created." (a Stop during a statement marks that step `cancelled` and the rest `s
 with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON parameter, which constant builder batches shred
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
+
+**New Database** (D1b) uses the same three methods, again with no new method. `actions.describe { connectionId, requestId,
+dialog: 'newDatabase', target: { kind: 'server' } }` (only a server target; SQL Server only, `NOT_SUPPORTED` on Azure SQL
+Database and Managed Instance) answers `{ newDatabase: { model (model as `databaseProperties` describes it), dataPath, logPath,
+serverCollation, canCreate, masterLevel, linux }, elapsedMs }`, read in master. `actions.script` and `actions.execute` take
+`{ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name }, design: { owner?, files: [{ name,
+type: 'rows' | 'log' | 'filestream', filegroup?, sizeMb?, growth, path, fileName }] (2 to 256), filegroups: [{ name, type:
+'rows' | 'filestream' | 'memoryOptimized', readOnly?, isDefault?, autogrowAllFiles? }] (PRIMARY first, 1 to 256), collation?,
+containment: 'NONE' | 'PARTIAL', ledger?, options, scoped } }`, strict at every level (the design is read as the action's own
+type, so a table design's members are refused) and checked by `newDatabaseProblems` in main and `NewDatabaseValidator` in
+the backend: sizes are whole MB (data 1 – 16,777,215, 2,147,483,647 pages; log 1 – 2,097,152), growth 1 – 2,097,152 MB or
+1 – 100 %, a maximum no smaller than the size and, in MB, no smaller than the growth (SQL Server's 5169), file names the
+server's platform allows (no `\` on Linux either, which SQL Server there reads as a separator), distinct names and paths, every filegroup with a file, and
+options only those Database Properties sets but collation and containment, which CREATE DATABASE writes. Script answers
+CREATE DATABASE as SSMS lays it out, then Database Properties' ALTER statements, with `database: 'master'` and, as warnings,
+what OK would refuse; it runs nothing. Execute refuses those first (`NAME_IN_USE` for a database or file that exists,
+`PATH_NOT_FOUND` for a missing folder from SQL Server 2017, `NOT_FOUND` for an owner or collation, `PERMISSION_DENIED`
+without CREATE DATABASE), then runs "Create the database", each option's step, the filegroup steps and "Set the owner"; it
+never compensates, so a later failure leaves the database created and says so. The design reaches SQL Server only as one
+JSON parameter; a constant builder (`CreateDatabaseSql`, checked by its own `Lint` with the table designer's OPENJSON rules in
+`JsonBuilderLint`) shreds it with OPENJSON, quotes names with `QUOTENAME` and file names and paths on the server (`REPLACE`
+under a binary collation), writes sizes as typed numbers with a unit (KB up to 2,097,151 MB, since SQL Server reads a size as
+an int, and MB above), takes the collation only as
+`sys.fn_helpcollations()` names it, and runs the statement through `QUOTENAME(@db) + N'.sys.sp_executesql'` in master. It
+is a long run (`LongRunService`, kind `newDatabase`).
 
 The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
 no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
@@ -1686,6 +1732,8 @@ Error details carry only a kind, an offset and a code: never bytes, SQL or serve
 | Copy | 64 MiB of UTF-8 (estimated before any work; main cancels past 65 MiB received); DATA ≤ 1 MiB; 16 MiB initial credit; 120 s; one per window | backend and main |
 | Save Results As | one per window; 1 MiB writes; no deadline; suggested name ≤ 128 characters, path ≤ 32,767 | main and backend |
 | Job progress | EVENTs every ≥ 250 ms; pushed to the renderer ≤ 4 a second | backend and main |
+| Action progress | EVENTs every ≥ 250 ms besides each step's start, the last held one at the interval's end; pushed ≤ 4 a second per request (a new step at once, the latest held one at the interval's end); step 0 – 519, percent 0 – 100; the renderer tracks ≤ 128 requests | backend, main and renderer |
+| Long object actions | 1 per Varia connection, 2 in all, waited for ≤ 30 s, then `BUSY`; a closing generation waits 10 s plus the action's cleanup budget plus 5 s | backend and main |
 | Pending requests in main | 256 per generation plus 32 for control-lane methods; 32 MiB queued for stdin | main |
 | Connection environment | `environment` in the connection options: absent (None) or 1 – 32 characters after trimming, without control, format, line or paragraph separator characters; stored in `connections.json` (Set Connection Environment, `varia:connections-environment`, takes the same label and the live connection's options, and changes only that entry's label), never in the connection string | zod (main) and backend |
 | Session prompts | 1,024 queries, names ≤ 512 characters, 10 listed by name; 15 s for cancelled queries to stop | zod and renderer |

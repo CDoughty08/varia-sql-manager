@@ -251,7 +251,8 @@ internal sealed partial class ActionService
         }, step.Kind, step.Undoes, Detail: step.Database, Confirm: step.Mdf is { } mdf ? context => IsAttachedAsync(connection, step.Database, mdf, context.Token) : null))
     ];
 
-    /// <summary>Whether <paramref name="name"/> is attached from <paramref name="mdf"/> (AttachSql.Attached).</summary>
+    /// <summary>Whether <paramref name="name"/> is attached from <paramref name="mdf"/> (AttachSql.Attached), read through a reader as
+    /// every action statement is (tests/action-reader-lint.test.ts).</summary>
     private static async Task<bool> IsAttachedAsync(SqlConnection connection, string name, string mdf, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
@@ -259,7 +260,8 @@ internal sealed partial class ActionService
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         Add(command, "@mdf", SqlDbType.NVarChar, 260, mdf);
-        return await command.ExecuteScalarAsync(token) is true;
+        await using var reader = await command.ExecuteReaderAsync(token);
+        return await reader.ReadAsync(token) && !reader.IsDBNull(0) && reader.GetBoolean(0);
     }
 
     private static async Task<List<string?>> RunAttachAsync(SqlConnection connection, AttachStatement statement, bool dryRun, CancellationToken token)
@@ -270,14 +272,7 @@ internal sealed partial class ActionService
         Add(command, "@db", SqlDbType.NVarChar, 128, "master");
         Add(command, "@p1", SqlDbType.NVarChar, 128, statement.Name);
         Add(command, "@design", SqlDbType.NVarChar, -1, AttachSql.Design(statement));
-        var values = new List<string?>();
-        await using var reader = await command.ExecuteReaderAsync(token);
-        do
-        {
-            while (await reader.ReadAsync(token))
-                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
-        } while (await reader.NextResultAsync(token));
-        return values;
+        return await ReadAllAsync(command, token);
     }
 
     /// <summary>The live checks' only way to see the CREATE DATABASE … FOR ATTACH the server would build (never the wire).</summary>

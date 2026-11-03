@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
-import { actionLimits, actionServes, actionsCatalogJson, objectActions, objectActionSpecs } from '../src/shared/actions/catalog'
+import { actionLimits, actionServes, actionsCatalogJson, catalogActionEngines, objectActions, type CatalogAction } from '../src/shared/actions/catalog'
 import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
@@ -26,10 +26,12 @@ describe('server engines', () => {
     // Attach is SQL Server's box editions' alone (decision 10).
     expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'attach'))
     expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach'])
+    // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
+    expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(3)
     for (const row of json.actions) {
-      expect(row.engines, row.action).toEqual([...objectActionSpecs[row.action as keyof typeof objectActionSpecs].engines])
+      expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
     }
     expect(json.limits.cleanupMs).toBe(10_000)

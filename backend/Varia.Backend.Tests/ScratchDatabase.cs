@@ -69,12 +69,16 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string? Login { get; private set; }
     /// <summary>Where the live table checks read a message log and a snapshot table (created on demand).</summary>
     public string Live => Name + "_live";
+    /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
+    public string Files => Name + "_files";
     /// <summary>Where the wave 5 seam checks run runner v2's compensation, the shared templates and the pre-move (created on demand).</summary>
     public string Seam => Name + "_seam";
     /// <summary>The name the seam checks' rename collides with (created on demand, with <see cref="Seam"/>).</summary>
     public string SeamTaken => Name + "_seamt";
-    /// <summary>The server file picker's database, whose backup file (on Linux) the backup folder's listing must show.</summary>
-    public string Files => Name + "_files";
+    /// <summary>New Database's database (D1b), which OK itself creates; the checks mark it at once and adopt it.</summary>
+    public string NewDatabase => Name + "_nd";
+    /// <summary>Where the action progress checks back up with STATS and hold a lock (D1c; created on demand).</summary>
+    public string Progress => Name + "_ap";
     /// <summary>Attach Databases' database: three files the attach checks detach and attach again (created on demand, by
     /// CreateAttachAsync). A run that crashes while it is detached leaves its files; the next dispose of the same run attaches
     /// them again to drop them, but the sweep cannot see a detached database.</summary>
@@ -94,9 +98,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _act and _actr are the object-action checks' database and the name they rename it to (PR17), so a run that crashes
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
-    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks', _files the server file picker's,
+    // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
     // and _at, _at'] and _at2 Attach Databases'.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_files|_at|_at'\]|_at2)?$")]
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}$")]
     private static partial Regex LoginPattern();
@@ -358,14 +362,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     /// <summary>Creates the empty, marked live tables database.</summary>
     public Task<string> CreateLiveAsync() => CreateMarkedAsync(Live);
 
+    /// <summary>Creates the empty, marked server file picker database.</summary>
+    public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
     /// <summary>Creates the empty, marked seam database and the one whose name its rename collides with.</summary>
     public async Task<string> CreateSeamAsync()
     {
         await CreateMarkedAsync(SeamTaken);
         return await CreateMarkedAsync(Seam);
     }
-    /// <summary>Creates the empty, marked server file picker database.</summary>
-    public Task<string> CreateFilesAsync() => CreateMarkedAsync(Files);
+
+    /// <summary>Creates the empty, marked action progress database.</summary>
+    public Task<string> CreateProgressAsync() => CreateMarkedAsync(Progress);
 
     /// <summary>Creates the marked <see cref="Attach"/> database with a primary data file and a second data file in
     /// <paramref name="dataFolder"/> and its log in <paramref name="logFolder"/> (each ending with the server's separator), named

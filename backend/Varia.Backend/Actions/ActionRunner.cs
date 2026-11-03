@@ -42,9 +42,10 @@ internal sealed partial class ActionService
     /// rolls it back (within StopGrace, else closing the unpooled connection ends the session, which rolls it back);
     /// <paramref name="rolledBack"/> then joins the failure's message. After a failure or Stop, the compensation and cleanup
     /// steps that are due run in order under a fresh token bounded by <paramref name="cleanupBudget"/>, so a Stop's reply (which
-    /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates.</summary>
+    /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates. With
+    /// <paramref name="progress"/>, each step's 3211 messages count for its index in the reply, and the step carries its last percent.</summary>
     internal async Task<RunOutcome> RunStepsAsync(SqlConnection connection, IReadOnlyList<RunStep> plan, string? inUseAdvice, CancellationToken token, TimeSpan cleanupBudget,
-        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null)
+        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, ActionProgress? progress = null)
     {
         var mains = plan.Where(step => step.Kind == StepKind.Main).ToList();
         var after = plan.Where(step => step.Kind != StepKind.Main).ToList();
@@ -65,7 +66,7 @@ internal sealed partial class ActionService
         }
         void Add(string status, RunStep step, string? message = null)
         {
-            steps.Add(ActionSteps.Bound(new(status, step.Title, message, step.Detail, step.Kind == StepKind.Main ? null : true)));
+            steps.Add(ActionSteps.Bound(new(status, step.Title, message, step.Detail, step.Kind == StepKind.Main ? null : true, progress?.PercentOf(steps.Count))));
             if (step.Kind == StepKind.Main) statuses.Add(status);
         }
         List<string> Done() => [.. mains.Take(statuses.Count).Where((_, index) => statuses[index] == "done").Select(step => step.Title)];
@@ -78,6 +79,7 @@ internal sealed partial class ActionService
                 {
                     if (Options.BeforeStep is { } before) await before(step.Title, token);
                     token.ThrowIfCancellationRequested();
+                    progress?.Begin(steps.Count);
                     await step.Run(new(open, token));
                     Add("done", step);
                     completed++;
@@ -129,6 +131,7 @@ internal sealed partial class ActionService
                 if (connection.State != ConnectionState.Open) throw new InvalidOperationException("The connection is closed.");
                 if (confirm && !await step.Confirm!(new(null, budget.Token))) continue;
                 if (Options.BeforeCleanup is { } before) await before(step.Title, budget.Token);
+                progress?.Begin(steps.Count);
                 await step.Run(new(null, budget.Token));
                 Add("done", step);
                 outcomes.Add("\"" + step.Title + "\" completed");

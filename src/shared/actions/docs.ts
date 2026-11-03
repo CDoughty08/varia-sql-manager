@@ -2,9 +2,9 @@
 import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explorer/catalog.ts'
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
-  actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  dialogIds, dialogSpecs, objectActions, objectActionSpecs, allFilesType, scriptActionTitles,
-  serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
+  actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, allFilesType, databaseActionRules,
+  databaseStateIds, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel,
+  unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
@@ -22,9 +22,9 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   scriptMs: 'The backend\'s budget for building a script, in ms; then `TIMEOUT`',
   readLockTimeoutMs: '`LOCK_TIMEOUT` while reading for a dialog or a script, in ms; then `BLOCKED`. DDL itself waits without one',
   gateWaitMs: 'How long a request waits for its gate before the backend answers `BUSY`, in ms',
-  readPerConnection: 'Describe and script requests at once per server',
+  readPerConnection: 'Describe and script requests at once per connection',
   readTotal: 'Describe and script requests at once in total',
-  executePerConnection: 'Actions running at once per server',
+  executePerConnection: 'Actions running at once per connection; long actions take the long gate instead',
   executeTotal: 'Actions running at once in total',
   registered: 'Requests the backend tracks; more fail with `BUSY`',
   cancelIds: 'Request ids per cancellation',
@@ -43,13 +43,24 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
   statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
-  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
   serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
   browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
   browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
   browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
   attachDatabases: 'Databases one Attach Databases OK attaches',
-  attachFiles: 'Files one database to attach lists (a primary file that records more is refused)'
+  attachFiles: 'Files one database to attach lists (a primary file that records more is refused)',
+  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
+  progressEventMs: 'How often a long step\'s progress (SQL Server\'s message 3211, from `STATS`) may reach main as a droppable `action.progress` EVENT, at most, in ms',
+  progressPerSecond: 'Progress updates main pushes to the window per request each second, at most; the first of each step always goes',
+  longPerConnection: 'Long actions (a restore or backup) running at once per connection; another waits `gateWaitMs`, then `BUSY`',
+  longTotal: 'Long actions running at once in total',
+  drainMarginMs: 'What main adds to a long action\'s Stop wait (`stopGraceMs` plus its cleanup budget) when it lets a closing backend finish, in ms',
+  newDatabaseFiles: 'Files one New Database request may create',
+  newDatabaseFilegroups: 'Filegroups one New Database request may create, PRIMARY included',
+  dataFileMb: 'A data file\'s initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server\'s ceiling for a file, just under 16 TB)',
+  logFileMb: 'A log file\'s initial and maximum size in New Database, in MB (2 TB, SQL Server\'s ceiling for a log file)',
+  growthMb: 'A file\'s autogrowth in MB, in New Database',
+  growthPercent: 'A file\'s autogrowth in percent, in New Database'
 }
 const engineNames = { box: 'SQL Server', managedInstance: 'Managed Instance', cloud: 'Azure SQL Database' } as const
 const loginLimitNotes: Readonly<Record<keyof typeof loginLimits, string>> = {
@@ -98,8 +109,9 @@ function narrowingDocs(): string[] {
         rule.readOnly === undefined ? 'Any' : yesNo(rule.readOnly), rule.hide ? 'Hidden' : 'Greyed', rule.reason]))
       : 'No rule narrows a database\'s actions yet.',
     '',
-    `An action can name the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
-    'the Runs on column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.',
+    `Each action names the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
+    'the Servers column above says which, and on another server the menu hides the item. Menus read the server through',
+    '`explorerServerEngine` and `explorerServerLinux`.',
     ''
   ]
 }
@@ -147,11 +159,42 @@ function longRunDocs(): string[] {
     '',
     table(['Kind', 'Named as'], longRunKinds.map(kind => [code(kind), longRunSubjects[kind]])),
     '',
-    'Create Catalog and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.',
+    'Create Catalog, New Database and Attach Databases are the long runs so far; the others are reserved for the actions that will use them.',
     '',
     'A short state action (a rename; later a login\'s Disable and Enable) runs as a status-bar job instead: one per node,',
     'shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing',
     'connections…").',
+    '',
+    ...longActionDocs()
+  ]
+}
+
+/** The long gate, STATS progress and the drain of a closing backend (D1 §3.3, §9.4, §9.5). */
+function longActionDocs(): string[] {
+  const long = objectActions.filter(action => objectActionSpecs[action].long)
+  return [
+    '### Long actions and progress',
+    '',
+    'An action marked long in the catalogue (a restore, a verify or a backup) takes the long gate instead of the execute gate:',
+    `${actionLimits.longPerConnection} per Varia connection and ${actionLimits.longTotal} in all. Another waits up to \`gateWaitMs\`, then answers \`BUSY\``,
+    '("Another restore or backup is running on this connection.", or "Restores or backups are already running on other',
+    'connections." when long actions elsewhere hold every slot), so a long run never blocks a rename or a delete.',
+    'Its steps run through a data reader, never `ExecuteNonQuery`, because SqlClient raises informational messages as they',
+    'arrive only for a reader: SQL Server\'s message 3211 ("n percent processed.", from `STATS`) becomes a droppable',
+    `\`action.progress\` EVENT \`{step, percent}\` at most every ${actionLimits.progressEventMs} ms, and is never one of the ${actionLimits.infoMessages} messages the reply keeps.`,
+    'Each step\'s start goes out at once as percent 0, and a percent the interval held back goes out when the interval ends (or',
+    'before the next step\'s start), so a step\'s last percent is not lost and a finished step never looks stuck while the next waits.',
+    `Main checks each EVENT and pushes \`varia:actions-progress {requestId, step, percent}\` only to the window that sent the request, at most ${actionLimits.progressPerSecond} a`,
+    'second: a new step at once, and the latest percent held inside the interval when it ends (`actionProgressRelay`); an',
+    'invalid EVENT is dropped, never a reason to stop the run. The page keeps',
+    'the latest percent per request (`ActionProgressService`) and draws it under the running step of its `StepList`; the',
+    'reply\'s steps carry the last percent each step reached as `progress`.',
+    '',
+    'When the backend\'s generation is closed (a quit, a reload, Restart SQL Backend), it stops its long actions itself and',
+    `runs their cleanup steps within their budgets; main lets that generation run \`stopGraceMs\` plus the action's cleanup budget plus ${actionLimits.drainMarginMs / 1000} s`,
+    'before it kills it (`actionDrainMs`, methodPolicies\' `drainMs`).',
+    '',
+    long.length ? `Long actions: ${long.map(action => objectActionSpecs[action].title).join(', ')}.` : 'No action is long yet; the restore, verify and backup actions that will be are still to come.',
     ''
   ]
 }
@@ -191,13 +234,13 @@ export function renderObjectActionsDocs(): string {
     '',
     '## Actions',
     '',
-    table(['Action', 'Menu title', 'Command', 'Kind', 'Menu', 'Group', 'Mnemonic', 'Windows and Linux', 'macOS', 'Runs on', 'Context key'], objectActions.map(action => {
+    table(['Action', 'Menu title', 'Command', 'Kind', 'Menu', 'Group', 'Mnemonic', 'Windows and Linux', 'macOS', 'Servers', 'Context key'], objectActions.map(action => {
       const spec: (typeof objectActionSpecs)[typeof action] & { readonly menuTitle?: string; readonly menu?: string } = objectActionSpecs[action]
       return [code(action), spec.menuTitle ?? spec.title, code(spec.command), spec.class + (spec.dialog ? ` (${code(spec.dialog)})` : ''), code(spec.menu ?? 'explorer.context'), `${code(spec.group)} ${spec.order}`, spec.mnemonic,
         keys(action, false), keys(action, true), spec.engines.map(engine => engineNames[engine]).join(', '), code(actionContextKey(action))]
     })),
     '',
-    '"Runs on" is each action\'s `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL',
+    '"Servers" is each action\'s `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL',
     'Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a',
     `connection. The table designer's \`createTable\` runs on ${designerEngines.map(engine => engineNames[engine]).join(' and ')}.`,
     '',
@@ -219,7 +262,7 @@ export function renderObjectActionsDocs(): string {
     'These are offered on an Object Explorer folder instead of object rows; their target is the folder\'s server (`{ kind: \'server\' }`),',
     'and the backend refuses any other target.',
     '',
-    table(['Action', 'Folder', 'Runs on'], folderActions.map(action => [objectActionSpecs[action].title, code(objectActionSpecs[action].folder ?? ''),
+    table(['Action', 'Folder', 'Servers'], folderActions.map(action => [objectActionSpecs[action].title, code(objectActionSpecs[action].folder ?? ''),
       objectActionSpecs[action].engines.map(engine => engineNames[engine]).join(', ')])),
     '',
     ...narrowingDocs(),
@@ -252,11 +295,12 @@ export function renderObjectActionsDocs(): string {
     '`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and',
     '[docs/table-designer.md](table-designer.md) describes them.',
     '',
+    ...serverFilesDocs(),
     ...promptDocs(),
     ...longRunDocs(),
-    ...serverFilesDocs(),
-    ...attachDocs(),
     ...databasePropertiesDocs(),
+    ...newDatabaseDocs(),
+    ...attachDocs(),
     '## SQL',
     '',
     'DDL runs on its own unpooled connection (the program name plus " - Object Actions"), never Object Explorer\'s or',
@@ -324,35 +368,6 @@ export function renderObjectActionsDocs(): string {
   ].join('\n')
 }
 
-const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
-const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
-/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
-function loginDocs(): string[] {
-  const types = Object.entries(loginTypeSubtypes)
-  return [
-    '## Logins',
-    '',
-    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
-    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
-    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
-    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
-    'another session is changing, and never a password hash, which no Varia statement may name.',
-    '',
-    '✓ allowed, ○ shown greyed and refused, – not offered.',
-    '',
-    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
-      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
-    '',
-    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
-    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
-    '',
-    '### Login limits',
-    '',
-    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
-    ''
-  ]
-}
-
 /** The server file picker (`actions.describe` with `serverFiles`), which New Database, Attach and Restore will open from a "…" button. */
 function serverFilesDocs(): string[] {
   return [
@@ -381,6 +396,35 @@ function serverFilesDocs(): string[] {
     '',
     'The picker\'s titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of',
     'type, File name, Folder name) are SSMS\'s as recalled, not yet checked against SSMS 22.',
+    ''
+  ]
+}
+
+const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
+const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
+/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
+function loginDocs(): string[] {
+  const types = Object.entries(loginTypeSubtypes)
+  return [
+    '## Logins',
+    '',
+    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
+    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
+    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
+    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
+    'another session is changing, and never a password hash, which no Varia statement may name.',
+    '',
+    '✓ allowed, ○ shown greyed and refused, – not offered.',
+    '',
+    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
+      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
+    '',
+    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
+    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
+    '',
+    '### Login limits',
+    '',
+    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     ''
   ]
 }
@@ -444,6 +488,54 @@ const optionRow = (def: DatabaseOptionDef): string[] =>
   [def.label, def.category === 'header' ? 'Header' : def.category, yesNo(def.settable), optionSql(def), def.exclusive ? 'Yes' : '', def.settable && def.refusedReadOnly ? 'Yes' : '', def.since ? String(def.since) : '', notOnText(def)]
 
 /** Database Properties: its pages, the options it changes, the order its statements run in, and the Open Connections rule. */
+/** Server actions: New Database. */
+function newDatabaseDocs(): string[] {
+  const places = (spec: typeof serverActionSpecs[typeof serverActions[number]]) =>
+    [...spec.folders.map(folder => `the ${code(folder)} folder`), ...spec.kinds.map(kind => `a ${code(kind)} node`)].join(', ')
+  return [
+    '## New Database',
+    '',
+    'A server action makes something on the server rather than acting on an object row, so no row offers it and no',
+    '`explorerAction*` key gates it: its item reads the node it is on, and its describe\'s target is the server.',
+    '',
+    table(['Action', 'Menu title', 'Command', 'Document', 'On', 'Group', 'Mnemonic', 'Servers', 'Long run'], serverActions.map(action => {
+      const spec = serverActionSpecs[action], { nodePlace } = spec
+      const group = `${code(spec.group)} ${spec.order}` + (nodePlace ? `; on a node, ${code(nodePlace.group)} ${nodePlace.order}, as the menu-only ${code(nodePlace.command)}` : '')
+      return [code(action), spec.title, code(spec.command), code(spec.dialog), places(spec), group, spec.mnemonic,
+        spec.engines.map(engine => engineNames[engine]).join(', '), code(spec.longRun)]
+    })),
+    '',
+    'New Database opens as a document tab (`newDatabase`, never dirty and never in Save All; Cancel, Escape or closing it',
+    'discards it, as SSMS\'s Cancel does, and Save (Ctrl+S), or Enter outside its grids, is OK). A second one open is titled',
+    'New Database (2), and so on. Its describe reads model as Database Properties reads it (a new database starts as a copy of',
+    'model), the instance\'s default data and log folders, the server\'s collation, whether the login may create a database,',
+    'master\'s compatibility level and the platform. The document sends the files, filegroups, collation, containment and',
+    'ledger, and only the options and scoped configurations that differ from model: Script writes those, never every option as',
+    'SSMS does. A file\'s default name is its logical name with .mdf, .ndf or .ldf, made safe for the server\'s platform',
+    '(critic A23); a FILESTREAM or memory-optimized container is a folder named after it and grows as it needs. SQL Server on',
+    'Linux has no FILESTREAM, so its filegroups are not offered there.',
+    '',
+    'OK runs the steps "Create the database", then Database Properties\' own ALTER steps for the options (titled by option),',
+    'the filegroup changes (Autogrow all files, Set the default filegroup, Make the filegroup read-only) and "Set the owner".',
+    'A failure after CREATE leaves the database, as SSMS does, and the steps say what completed. OK registers the',
+    '`newDatabase` long run while it runs, and Stop cancels the running statement. On success the document closes, Object',
+    'Explorer reloads the Databases folder (the one above System Databases, when it was opened on a system database) and',
+    'selects the new database, and the toolbar\'s database list refreshes.',
+    '',
+    'The builder has SQL Server compose CREATE DATABASE from one JSON parameter: names through `QUOTENAME`, file names and',
+    'paths as N\'\' literals quoted on the server (`REPLACE` under `Latin1_General_BIN2`), sizes through `CONVERT` of typed',
+    'numbers (in KB up to 2,097,151 MB, as SQL Server reads a size as an int, and in MB above), the collation only as',
+    '`sys.fn_helpcollations()` names it, files joined without `STRING_AGG`, and one execution',
+    'form, `EXEC @module @stmt` with `@module = QUOTENAME(@db) + N\'.sys.sp_executesql\'`. Before it, the preflight refuses a',
+    'name in use, a login without CREATE ANY DATABASE, a missing owner or collation, a folder that does not exist or a file',
+    'that does (from SQL Server 2017, through `sys.dm_os_file_exists`), FILESTREAM where it is off, ledger before SQL Server',
+    '2022, and Partial containment without contained database authentication. `CreateDatabaseSql.Lint` checks the builder',
+    'with the table designer\'s OPENJSON rules (`JsonBuilderLint`): every column a number or `nvarchar(max)`, text only inside',
+    '`QUOTENAME` (or the quoted-literal form), and JSON columns only into the arrays it shreds again.',
+    ''
+  ]
+}
+
 function databasePropertiesDocs(): string[] {
   return [
     '## Database Properties',

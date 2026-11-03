@@ -119,7 +119,7 @@ export const densityUse: Readonly<Record<keyof DensityMetrics, readonly string[]
   header: ['.title-bar'],
   bar: ['.query-tabs', '.explorer-header', '.query-bar', '.output-toolbar', '.document-script-head', '.activity-pane-tabs [role="tab"]'],
   control: ['.icon-button', '.explorer-filter', '.command-centre', '.query-bar-action', '.query-connection', '.document-verb', '.property-input', '.activity-select', '.activity-tile-toggle'],
-  row: ['.explorer-row', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.attach-database-grid .attach-database-cell'],
+  row: ['.explorer-row', '.skeleton-row', '.document-nav-item', '.server-files-head', '.server-files-row', '.new-database-cell', '.attach-database-grid .attach-database-cell'],
   status: ['.status-bar', '.query-status-bar']
 }
 /** Bar and row heights in px. Compact is the default and the only one :root sets; Comfortable is the planned option. */

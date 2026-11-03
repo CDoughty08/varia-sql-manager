@@ -12,7 +12,7 @@ import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
-import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionProgress, ActionRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
@@ -421,6 +421,9 @@ export interface VariaApi {
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** A long object action's progress (a restore or backup step's STATS percent), at most 4 a second per request and only
+   *  for requests this window sent; droppable, so the latest value is all that counts. Returns the unsubscribe. */
+  onActionProgress(listener: (progress: ActionProgress) => void): () => void
   /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
   describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
   /** Runs an SSIS Catalog action (Stop Operation, Create Catalog). Refusals and failures come back as `result.error` with the

@@ -1334,6 +1334,30 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .properties-table > .object-dialog-grid [data-wrap="anywhere"] { overflow-wrap: anywhere; }
 .properties-table > .object-dialog-grid [data-wrap="never"] { white-space: nowrap; }
 .properties-table + .field-note, .properties-filegroups > .field-note { margin-top: var(--varia-space-2); }
+/* New Database (D1b): its grids edit in place, so a cell holds a borderless field that fills it; the File Name's
+   default shows as an italic placeholder, as SSMS shows <default> names. */
+.new-database-cell { width: 100%; min-width: 0; height: var(--varia-row); padding: 0 var(--varia-space-1); border-color: transparent; background: transparent; }
+.new-database-cell:hover:not(:disabled), .new-database-cell:focus { border-color: var(--varia-input-border); background: var(--varia-input-background); }
+.new-database-cell[aria-invalid="true"] { border-color: var(--varia-errorForeground); }
+.new-database-number { min-width: 9ch; font-variant-numeric: tabular-nums; }
+.new-database-file-name::placeholder { font-style: italic; color: var(--varia-descriptionForeground); }
+.object-dialog-grid tr[data-selected] > td { background: var(--varia-list-inactiveSelectionBackground); }
+.new-database-browse { display: flex; align-items: center; gap: var(--varia-space-1); min-width: 0; }
+.new-database-browse > .new-database-cell, .new-database-growth { flex: 1; min-width: 0; }
+/* Each field keeps room for a readable name or path at any width: past that the grid scrolls (.properties-table) rather
+   than squeezing a field to a few letters. Its title shows the whole value. */
+.new-database-cell.new-database-name { min-width: 16ch; }
+.new-database-cell.new-database-file-name { min-width: 20ch; }
+.new-database-browse > .new-database-path { min-width: 24ch; }
+/* Forced colours drop the selection's fill, the only sign of the row Remove takes. */
+@media (forced-colors: active) { .object-dialog-grid tr[data-selected] { outline: 2px solid Highlight; outline-offset: -2px; } }
+.new-database-muted { color: var(--varia-descriptionForeground); }
+.new-database-grid-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--varia-space-2); margin-top: var(--varia-space-2); }
+.new-database-grid-bar > .field-note { margin: 0; }
+.new-database-problems { margin: var(--varia-space-2) 0 0; padding: 0; list-style: none; }
+.new-database-check { display: flex; align-items: center; gap: var(--varia-space-1); }
+.new-database-fieldset { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0; padding: var(--varia-space-2); border: 1px solid var(--varia-input-border); border-radius: var(--varia-radius-sm); }
+.new-database-fieldset:disabled { opacity: .5; }
 /* A switch: a checkbox drawn as a track and thumb. On, the thumb moves right and the track fills; the words beside it
    say the state too. State changes are instant, as selection is. */
 .switch-field { display: inline-flex; align-items: center; gap: var(--varia-space-2); }

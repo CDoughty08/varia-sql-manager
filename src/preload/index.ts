@@ -5,6 +5,7 @@ import type { CommandId } from '../shared/commands/catalog'
 import type { ContextMenuCommand } from '../shared/commands/menus'
 import { menuStyleFromArgv } from '../shared/menu-style'
 import type { ThemeState } from '../shared/theme/types'
+import type { ActionProgress } from '../shared/actions/schema'
 import type { SettingsState } from '../shared/settings/schema'
 // Bundled into this one file: a sandboxed preload can require only electron and a few Node built-ins.
 import { installFileDrop } from './drop'
@@ -48,6 +49,12 @@ const api: VariaApi = {
   scriptObjectAction: params => request('actions.script', params),
   executeObjectAction: params => request('actions.execute', params),
   cancelObjectActions: requestIds => ipcRenderer.invoke('varia:actions-cancel', { requestIds }),
+  // Only the three fields cross to the page, whatever main sent.
+  onActionProgress: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: ActionProgress) => callback({ requestId: progress.requestId, step: progress.step, percent: progress.percent })
+    ipcRenderer.on('varia:actions-progress', listener)
+    return () => { ipcRenderer.removeListener('varia:actions-progress', listener) }
+  },
   describeSsis: params => request('ssis.describe', params),
   executeSsis: params => request('ssis.execute', params),
   catalogSetupSsis: params => request('ssis.catalogSetup', params),
