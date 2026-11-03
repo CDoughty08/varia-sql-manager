@@ -226,6 +226,12 @@ describe('object action catalogue', () => {
     expect(actionMenuState({ kind: 'database', subtype: 'system', database: { ...online, state: 6 } })).toMatchObject({ takeOffline: 'disabled', bringOnline: 'disabled' })
     for (const engine of ['managedInstance', 'cloud'] as const) expect(actionMenuState({ kind: 'database', engine }), engine).toMatchObject({ takeOffline: '', bringOnline: '' })
   })
+  it('keeps Take Offline and Bring Online alone in one Tasks group, as SSMS separates Detach… above them', () => {
+    // SSMS's Tasks (Learn's SSMS 17 and 19 screenshots): Detach…, a separator, Take Offline and Bring Online, a separator. So
+    // 1_state holds these two alone, first and second, and Detach… (D3b) needs a group of its own before it.
+    const state = commandIds.flatMap(id => (commandDescriptor(id).menus ?? []).filter(place => place.menu === 'explorer.tasks' && place.group === '1_state').map(place => [place.order, id]))
+    expect(state.sort(([a], [b]) => Number(a) - Number(b))).toEqual([[1, 'explorer.takeOffline'], [2, 'explorer.bringOnline']])
+  })
   it('offers an action with engines only on those servers, and everywhere when the engine is unknown', () => {
     expect(offeredOnEngine(undefined, 'cloud')).toBe(true)
     expect(offeredOnEngine(['box', 'managedInstance'], undefined)).toBe(true)

@@ -102,10 +102,11 @@ const actionSpecData = {
     title: 'Attach Database…', menuTitle: 'Attach…', mnemonic: 'a', group: '0_new', order: 2, class: 'dialog', dialog: 'attachDatabase', command: 'explorer.attachDatabase', folder: 'databases',
     engines: ['box']
   },
-  // Tasks › Take Offline and Bring Online (SSMS's Tasks order, recalled: Detach…, Take Offline, Bring Online). Managed Instance
-  // cannot set OFFLINE or ONLINE (Learn, T-SQL differences), so they are box-only.
-  takeOffline: { title: 'Take Database Offline', menuTitle: 'Take Offline', mnemonic: 't', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'takeOffline', command: 'explorer.takeOffline', engines: ['box'] },
-  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 3, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] }
+  // Tasks › Take Offline and Bring Online share one group. SSMS's Tasks (Microsoft Learn's SSMS 17 and 19 screenshots) shows
+  // Detach…, a separator, Take Offline and Bring Online, a separator: Detach… (D3b) goes alone in a group before 1_state.
+  // Managed Instance cannot set OFFLINE or ONLINE (Learn, T-SQL differences), so they are box-only.
+  takeOffline: { title: 'Take Database Offline', menuTitle: 'Take Offline', mnemonic: 't', menu: 'explorer.tasks', group: '1_state', order: 1, class: 'dialog', dialog: 'takeOffline', command: 'explorer.takeOffline', engines: ['box'] },
+  bringOnline: { title: 'Bring Database Online', menuTitle: 'Bring Online', mnemonic: 'o', menu: 'explorer.tasks', group: '1_state', order: 2, class: 'dialog', dialog: 'bringOnline', command: 'explorer.bringOnline', engines: ['box'] }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
 /** The action commands' ids, derived from the specs, so a new action declares its command in one place. */

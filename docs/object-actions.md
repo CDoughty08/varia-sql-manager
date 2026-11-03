@@ -16,8 +16,8 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
 | `attach` | Attach… | `explorer.attachDatabase` | dialog (`attachDatabase`) | `explorer.context` | `0_new` 2 | a | — | — | SQL Server | `explorerActionAttach` |
-| `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 2 | t | — | — | SQL Server | `explorerActionTakeOffline` |
-| `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 3 | o | — | — | SQL Server | `explorerActionBringOnline` |
+| `takeOffline` | Take Offline | `explorer.takeOffline` | dialog (`takeOffline`) | `explorer.tasks` | `1_state` 1 | t | — | — | SQL Server | `explorerActionTakeOffline` |
+| `bringOnline` | Bring Online | `explorer.bringOnline` | dialog (`bringOnline`) | `explorer.tasks` | `1_state` 2 | o | — | — | SQL Server | `explorerActionBringOnline` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
