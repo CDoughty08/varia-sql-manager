@@ -5,7 +5,7 @@ import { cssVariable, type ColorKey } from '../../../shared/theme/registry'
 import SubDialog from '../dialogs/SubDialog'
 import { useForcedColors } from '../live/LiveChart'
 import { draftPlan, restoreToText, sourceSets } from './model'
-import type { SectionProps } from './RestoreDatabase'
+import type { SectionProps } from './fields'
 import { coverage, position, stepPoint, timeMs, timelineWindow, timeText } from './timeline'
 
 const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`

@@ -1469,6 +1469,15 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .restore-timeline-mode { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: 0 0 var(--varia-space-2); padding: 0; border: 0; }
 .restore-timeline-mode > legend { margin-bottom: var(--varia-space-1); padding: 0; font-size: var(--varia-size-xs); }
 .restore-timeline-mode .checkbox-label { display: flex; align-items: center; gap: var(--varia-space-2); }
+.restore-recovery { display: flex; flex-direction: column; gap: var(--varia-space-1); margin: var(--varia-space-2) 0; padding: 0; border: 0; min-width: 0; }
+.restore-recovery > legend { padding: 0; }
+.restore-recovery .checkbox-label { display: flex; align-items: flex-start; gap: var(--varia-space-2); overflow-wrap: anywhere; }
+.restore-recovery .checkbox-label > input { flex: none; margin-top: 2px; }
+/* The options' labels and the grid's title take the fields' body size (they would inherit the page's 16 px). */
+.restore-grid-title, .restore-files > .checkbox-label, .restore-options > .checkbox-label, .restore-plan-row > .checkbox-label, .restore-recovery .checkbox-label { font-size: var(--varia-size-md); line-height: var(--varia-line-md); }
+/* A greyed option looks greyed; the note under it says why. */
+.restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .restore-files .checkbox-label:has(> input:disabled), .restore-options .checkbox-label:has(> input:disabled), .restore-plan-row > .checkbox-label:has(> input:disabled) { color: GrayText; } }
 .restore-timeline-box { margin-top: var(--varia-space-3); min-width: 0; }
 .restore-timeline-track { display: block; cursor: pointer; }
 .restore-timeline-track:focus-visible { outline: 2px solid var(--varia-focusBorder); outline-offset: 2px; }

@@ -8,6 +8,7 @@ import {
 import { dependants, lastBackupTaken, orderSelection, planRestore, reachesPoint, selectionProblem, usableSet } from '../../../shared/actions/restore-plan.ts'
 import { restoreOptionsProblems, type RestoreRequest } from '../../../shared/actions/restore-schema.ts'
 import { folderPath, sameServerPath, serverPathKey, serverPathProblem } from '../../../shared/actions/files.ts'
+import type { RestoreFilesDraft } from './files'
 
 export type RestoreSourceKind = 'database' | 'device'
 /** What the person chose on the three pages; everything else (the plan, the moves) follows from it and the describe. */
@@ -41,6 +42,8 @@ export interface RestoreDraft {
   readonly leaveRestoring: boolean
   readonly tailLogFile: string
   readonly closeConnections: boolean
+  /** Restore Files and Filegroups (mode 'files'): the checked files and Varia's log backup. */
+  readonly files?: RestoreFilesDraft
 }
 /** What the describes answered: the server, msdb's databases, the sets of the source, and the files of the plan's full backup. */
 export interface RestoreFacts {
@@ -51,6 +54,8 @@ export interface RestoreFacts {
   /** The files of `filesFor` (a set id), the plan's full backup. */
   readonly files: readonly BackupFileRow[]
   readonly filesFor?: string
+  /** Restore Files and Filegroups: the files of each of the newest full and file backups, by set id, as they are read. */
+  readonly setFiles?: Readonly<Record<string, readonly BackupFileRow[]>>
 }
 
 export function initialDraft(database: string, facts: RestoreFacts, at: Date): RestoreDraft {

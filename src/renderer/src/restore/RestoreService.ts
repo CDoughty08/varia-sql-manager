@@ -1,6 +1,8 @@
 import { actionLimits } from '../../../shared/actions/catalog.ts'
-import { restoreMessages, restoreSections, restoreSetIdPattern, type RestoreModel, type RestoreSource } from '../../../shared/actions/restore.ts'
-import type { RestoreRequest } from '../../../shared/actions/restore-schema.ts'
+import {
+  isRestoreSystemDatabase, restoreFilesSections, restoreMessages, restoreModeTitles, restoreSections, restoreSetIdPattern, type RestoreMode, type RestoreModel, type RestoreSource
+} from '../../../shared/actions/restore.ts'
+import type { RestoreFilesRequest, RestoreRequest } from '../../../shared/actions/restore-schema.ts'
 import type { ActionError, ActionExecuteResult, ActionStep, RestoredDatabase } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import { displayText, type ExplorerNodeRef } from '../../../shared/explorer/refs.ts'
@@ -17,6 +19,7 @@ import type { LiveConnection } from '../services/connections'
 import type { CustomDocumentProvider, DocumentService } from '../services/documents'
 import { destinationOf, draftPlan, initialDraft, restoreRequest, sourceDatabase, sourceSets, tailLogPossible, type RestoreDraft, type RestoreFacts } from './model'
 import { confirmLines, outcomeOf, plannedSteps, type PlannedStep, type RunOutcome } from './run'
+import { filesBaseSets, filesConfirmLines, logBackupPossible, plannedFileSteps, restoreFilesRequest } from './files'
 
 /** loading (the server and msdb's databases) → ready, or loadFailed; the sets and files load beside it as the source changes. */
 export type RestorePhase = 'loading' | 'ready' | 'loadFailed'
@@ -51,6 +54,8 @@ export interface RestoreRun {
 }
 export interface RestoreState {
   readonly id: string
+  /** Restore Database, or Restore Files and Filegroups (D1g): one document, its sections and request by mode. */
+  readonly mode: RestoreMode
   readonly server: string
   readonly login?: string
   readonly phase: RestorePhase
@@ -75,8 +80,10 @@ export interface RestoreState {
   /** Why a window close, Disconnect or Restart was just refused while this restore runs. */
   readonly refusal?: string
 }
-/** The tab's title: "Restore Database - <destination>", or "Restore Database" before there is one. */
-export const restoreTabTitle = (destination: string | undefined) => destination ? `Restore Database - ${displayText(destination)}` : 'Restore Database'
+/** The tab's title: "Restore Database - <destination>" (or "Restore Files and Filegroups - <database>"), or the bare title before there is one. */
+export const restoreTabTitle = (destination: string | undefined, mode: RestoreMode = 'database') => destination ? `${restoreModeTitles[mode]} - ${displayText(destination)}` : restoreModeTitles[mode]
+/** A restore request of either mode. */
+export type AnyRestoreRequest = RestoreRequest | RestoreFilesRequest
 
 export interface RestoreSnapshot { readonly documents: Readonly<Record<string, RestoreState>> }
 
@@ -101,7 +108,7 @@ export interface RestoreServiceOptions {
 }
 
 export const restoreServiceMessages = {
-  disconnected: 'The server was disconnected. Reconnect, or open Restore Database again on a connected server.',
+  disconnected: 'The server was disconnected. Reconnect, or open the restore again on a connected server.',
   readFailed: 'The backups could not be read.',
   noScript: 'Choose what to restore to script it.',
   /** A close of the tab while it restores. */
@@ -141,7 +148,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   private readonly previews = new Map<string, string>()
   private readonly previewTimers = new Map<string, unknown>()
   /** The request a confirm bar waits on, by document. */
-  private readonly pending = new Map<string, RestoreRequest>()
+  private readonly pending = new Map<string, AnyRestoreRequest>()
   private readonly contextStore = new (class extends SnapshotStore<RestoreContextState> { set(value: RestoreContextState) { this.publish(value) } clear() { this.clearListeners() } })({ byDocument: {} })
   private disposed = false
 
@@ -161,15 +168,18 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   get context(): ExternalStore<RestoreContextState> { return this.contextStore }
   get(id: string): RestoreState | undefined { return this.getSnapshot().documents[id] }
 
-  /** Opens a Restore Database document on a connection, its source the database (when msdb has backups of it); `folderNodeId` is the Databases folder to reconcile after a run. */
-  open(connectionId: string, database?: string, folderNodeId?: number): string {
-    if (this.disposed) throw new Error('Restore Database is not available.')
+  /**
+   * Opens a Restore Database document on a connection, its source the database (when msdb has backups of it), or with `mode`
+   * 'files' a Restore Files and Filegroups document for the database; `folderNodeId` is the Databases folder to reconcile after a run.
+   */
+  open(connectionId: string, database?: string, folderNodeId?: number, mode: RestoreMode = 'database'): string {
+    if (this.disposed) throw new Error(`${restoreModeTitles[mode]} is not available.`)
     const connection = this.options.connections.getSnapshot().find(item => item.id === connectionId && !item.lost)
     if (!connection) throw new Error('Connect to the server first.')
-    const document = this.options.documents.openCustom('restoreDatabase', restoreTabTitle(database), connection.id, 'master')
+    const document = this.options.documents.openCustom('restoreDatabase', restoreTabTitle(database, mode), connection.id, 'master')
     this.put({
-      id: document.id, server: connection.server, ...connection.login ? { login: connection.login } : {}, phase: 'loading', facts: emptyFacts, sets: 'idle', files: 'idle', revision: 0,
-      frame: initialFrameState(restoreSections), script: { state: 'idle', message: restoreServiceMessages.noScript }, ...folderNodeId !== undefined ? { folderNodeId } : {}
+      id: document.id, mode, server: connection.server, ...connection.login ? { login: connection.login } : {}, phase: 'loading', facts: emptyFacts, sets: 'idle', files: 'idle', revision: 0,
+      frame: initialFrameState(mode === 'files' ? restoreFilesSections : restoreSections), script: { state: 'idle', message: restoreServiceMessages.noScript }, ...folderNodeId !== undefined ? { folderNodeId } : {}
     })
     void this.start(document.id, database)
     return document.id
@@ -183,10 +193,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (!state || model === undefined) return
     if ('code' in model) { this.patch(id, { phase: 'loadFailed', error: model }); return }
     const historyDatabases = model.historyDatabases ?? []
-    const chosen = database ?? historyDatabases[0] ?? ''
     const facts: RestoreFacts = { ...emptyFacts, ...model.server ? { server: model.server } : {}, historyDatabases }
+    // Files restore into an existing database from its own backups: from the Databases folder, the first user database msdb has backups of.
+    const chosen = database ?? (state.mode === 'files' ? historyDatabases.find(name => !isRestoreSystemDatabase(name) && destinationOf(facts, name)) : historyDatabases[0]) ?? ''
     const draft = initialDraft(chosen, facts, this.now())
-    this.patch(id, { phase: 'ready', facts, draft: { ...draft, tailLog: tailLogPossible(draft, facts) }, error: undefined, revision: state.revision + 1 })
+    this.patch(id, { phase: 'ready', facts, draft: state.mode === 'files' ? filesDraft(draft, facts) : { ...draft, tailLog: tailLogPossible(draft, facts) }, error: undefined, revision: state.revision + 1 })
     if (chosen) void this.loadSets(id)
   }
 
@@ -196,20 +207,41 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (!state || !wanted) return
     const source: RestoreSource | undefined = wanted.source === 'database' ? (wanted.database ? { kind: 'history', database: wanted.database } : undefined)
       : wanted.devices.length > 0 ? { kind: 'devices', devices: wanted.devices } : undefined
-    if (!source) { this.patch(id, { sets: 'idle', files: 'idle', facts: { ...state.facts, sets: [], setsTruncated: false, files: [], filesFor: undefined }, revision: state.revision + 1 }); return }
+    if (!source) { this.patch(id, { sets: 'idle', files: 'idle', facts: { ...state.facts, sets: [], setsTruncated: false, files: [], filesFor: undefined, setFiles: {} }, revision: state.revision + 1 }); return }
     this.patch(id, { sets: 'loading', error: undefined })
     const model = await this.read(id, 'sets', source)
     const current = this.get(id)
     if (!current?.draft || model === undefined) return
-    if ('code' in model) { this.patch(id, { sets: 'failed', error: model, facts: { ...current.facts, sets: [], setsTruncated: false, files: [], filesFor: undefined }, revision: current.revision + 1 }); return }
-    const facts: RestoreFacts = { ...current.facts, ...source.kind === 'history' && model.server ? { server: model.server } : {}, sets: model.sets ?? [], setsTruncated: !!model.setsTruncated, files: [], filesFor: undefined }
+    if ('code' in model) { this.patch(id, { sets: 'failed', error: model, facts: { ...current.facts, sets: [], setsTruncated: false, files: [], filesFor: undefined, setFiles: {} }, revision: current.revision + 1 }); return }
+    const facts: RestoreFacts = { ...current.facts, ...source.kind === 'history' && model.server ? { server: model.server } : {}, sets: model.sets ?? [], setsTruncated: !!model.setsTruncated, files: [], filesFor: undefined, setFiles: {} }
     // Device: the destination follows the database the backups are of, unless the person typed one.
     const before = sourceDatabase(current.draft, current.facts)
     let draft = current.draft
-    if (draft.source === 'device' && (!draft.destination || draft.destination === before)) draft = { ...draft, destination: sourceDatabase(draft, facts) }
-    draft = { ...draft, tailLog: tailLogPossible(draft, facts) }
+    if (draft.source === 'device' && (!draft.destination || draft.destination === before) && (current.mode === 'database' || destinationOf(facts, sourceDatabase(draft, facts)))) draft = { ...draft, destination: sourceDatabase(draft, facts) }
+    draft = current.mode === 'files' ? { ...draft, files: { ...draft.files!, logBackup: logBackupPossible(draft, facts) && draft.files!.logBackup } } : { ...draft, tailLog: tailLogPossible(draft, facts) }
     this.patch(id, { sets: 'ready', facts, draft, revision: current.revision + 1, ...facts.sets.length === 0 ? { error: error('NOT_FOUND', source.kind === 'history' ? restoreMessages.noHistory : restoreMessages.noSets) } : {} })
-    void this.loadFiles(id)
+    void (current.mode === 'files' ? this.loadSetFiles(id) : this.loadFiles(id))
+  }
+
+  /** Restore Files and Filegroups: the files of each of the newest full and file backups, one describe after another, for the grid. */
+  private async loadSetFiles(id: string): Promise<void> {
+    const state = this.get(id)
+    if (!state?.draft || state.mode !== 'files') return
+    const wanted = filesBaseSets(state.draft, state.facts).filter(set => !state.facts.setFiles?.[set.id])
+    if (wanted.length === 0) { if (state.files !== 'ready') this.patch(id, { files: 'ready' }); return }
+    this.patch(id, { files: 'loading' })
+    for (const set of wanted) {
+      const source: RestoreSource = uuid.test(set.id) && restoreSetIdPattern.test(set.id) ? { kind: 'historyFiles', setId: set.id } : { kind: 'mediaFiles', devices: set.devices, file: set.position }
+      const model = await this.read(id, 'files', source)
+      const current = this.get(id)
+      if (!current?.draft || model === undefined) return
+      if ('code' in model) { this.patch(id, { files: 'failed', error: model }); return }
+      // A new source read meanwhile: these files are of a set it no longer lists.
+      if (!sourceSets(current.draft, current.facts).some(item => item.id === set.id)) return
+      this.patch(id, { facts: { ...current.facts, setFiles: { ...current.facts.setFiles, [set.id]: model.files ?? [] } }, revision: current.revision + 1 })
+    }
+    this.patch(id, { files: 'ready' })
+    this.schedulePreview(id)
   }
 
   /** The files of the plan's full backup, for the Files page: msdb's record of a history set, or FILELISTONLY on the media. */
@@ -266,6 +298,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (!state?.draft || state.phase !== 'ready' || busyRun(state.run)) return
     // A confirm bar asks about the choices it was shown for: a change withdraws it.
     if (state.run?.phase === 'confirm') this.dropConfirm(id)
+    // Files restore from the database's own backups: From database and To database are one choice.
+    if (state.mode === 'files' && state.draft.source === 'database' && patch.source === undefined) {
+      if (patch.destination !== undefined && patch.database === undefined) patch = { ...patch, database: patch.destination }
+      else if (patch.database !== undefined && patch.destination === undefined) patch = { ...patch, destination: patch.database }
+    }
     let draft: RestoreDraft = { ...state.draft, ...patch }
     for (const key of Object.keys(patch) as (keyof RestoreDraft)[]) if (patch[key] === undefined) delete (draft as Partial<Record<keyof RestoreDraft, unknown>>)[key]
     const reread = (patch.database !== undefined && patch.database !== state.draft.database) || (patch.source !== undefined && patch.source !== state.draft.source)
@@ -280,10 +317,14 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
       delete (draft as { stopAt?: unknown }).stopAt
       if (rechosen && following) draft = { ...draft, destination: sourceDatabase(draft, state.facts) }
     }
-    if (patch.destination !== undefined || reread || rechosen) draft = { ...draft, tailLog: tailLogPossible(draft, state.facts) && (patch.tailLog ?? true) }
+    if (state.mode === 'files') {
+      // Another source's sets, or rows that name filegroups instead of files: nothing stays checked.
+      if (reread || rechosen || (patch.files && patch.files.asFilegroup !== state.draft.files!.asFilegroup)) draft = { ...draft, files: { ...draft.files!, set: undefined, chosen: [] } }
+      if (patch.destination !== undefined && patch.destination !== state.draft.destination) draft = { ...draft, files: { ...draft.files!, logBackup: logBackupPossible(draft, state.facts) } }
+    } else if (patch.destination !== undefined || reread || rechosen) draft = { ...draft, tailLog: tailLogPossible(draft, state.facts) && (patch.tailLog ?? true) }
     this.patch(id, { draft, revision: (this.get(id)?.revision ?? state.revision) + 1, scriptNotice: undefined, runNotice: undefined })
     if (reread) void this.loadSets(id)
-    else { this.schedulePreview(id); void this.loadFiles(id) }
+    else { this.schedulePreview(id); if (state.mode === 'database') void this.loadFiles(id) }
   }
   openDialog(id: string, dialog: RestoreSubDialog | undefined): void {
     const state = this.get(id)
@@ -308,7 +349,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (this.get(id)?.run?.phase === 'confirm') this.dropConfirm(id)
     const state = this.get(id)!
     if (!state.draft) { this.patch(id, { phase: 'loading', error: undefined }); void this.start(id); return }
-    this.patch(id, { facts: { ...state.facts, filesFor: undefined }, runNotice: undefined })
+    this.patch(id, { facts: { ...state.facts, filesFor: undefined, setFiles: {} }, runNotice: undefined })
     void this.loadSets(id)
   }
 
@@ -319,7 +360,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     const state = this.get(id), connectionId = this.connectionOf(id)
     // While the confirm bar asks, its own Restore and Cancel are the only answers: the header's Restore would only ask again.
     if (!state?.draft || !connectionId || this.disposed || state.phase !== 'ready' || state.sets !== 'ready' || state.files === 'loading' || busyRun(state.run) || state.run?.phase === 'confirm' || !this.live(id)) return false
-    return !('problem' in restoreRequest(state.draft, state.facts, { connectionId, requestId: 'check' }))
+    return !('problem' in this.request(state, { connectionId, requestId: 'check' }))
+  }
+  /** The document's request: a restore, or a file restore. */
+  private request(state: RestoreState, ids: { readonly connectionId: string; readonly requestId: string }): AnyRestoreRequest | { readonly problem: string } {
+    return state.mode === 'files' ? restoreFilesRequest(state.draft!, state.facts, ids) : restoreRequest(state.draft!, state.facts, ids)
   }
   isRunning(id: string): boolean { return this.get(id)?.run?.phase === 'running' }
 
@@ -336,8 +381,17 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     const state = this.get(id), connectionId = this.connectionOf(id)
     if (!state?.draft || state.run?.phase !== 'checking' || !connectionId) return
     if (read !== 'read') { this.patch(id, { run: undefined, ...read ? { error: read } : {} }); return }
-    const request = restoreRequest(state.draft, state.facts, { connectionId, requestId: this.newId() })
+    const request = this.request(state, { connectionId, requestId: this.newId() })
     if ('problem' in request) { this.patch(id, { run: undefined, runNotice: request.problem }); return }
+    // A file restore closes no connections and never creates the database: it asks only about REPLACE and files left restoring.
+    if (request.action === 'restoreFiles') {
+      const run: RestoreRun = { phase: 'checking', database: request.target.name, existed: true, replace: request.restoreFiles.replace, planned: plannedFileSteps(request) }
+      const lines = filesConfirmLines(state.draft, state.facts)
+      if (lines.length === 0) { await this.execute(id, request, run); return }
+      this.pending.set(id, request)
+      this.patch(id, { run: { ...run, phase: 'confirm', confirm: lines } })
+      return
+    }
     const destination = destinationOf(state.facts, state.draft.destination)
     let tabs: string[] = []
     if (destination && state.draft.closeConnections && this.options.transactions) {
@@ -390,7 +444,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
   }
 
   /** Runs the restore as a long run with its progress tracked, then shows how it ended and reconciles the Databases folder. */
-  private async execute(id: string, request: RestoreRequest, run: RestoreRun): Promise<void> {
+  private async execute(id: string, request: AnyRestoreRequest, run: RestoreRun): Promise<void> {
     const state = this.get(id)
     if (!state) return
     const requestId = request.requestId
@@ -436,7 +490,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (!current || this.disposed) return
     if (text === undefined) { this.patch(id, { scriptNotice: current.script.state === 'failed' ? current.script.error.message : current.script.state === 'idle' ? current.script.message : 'No script was produced.' }); return }
     try {
-      const notice = await deliverScript({ destination, text, database: 'master', connectionId, fileName: `Restore ${current.draft?.destination || 'Database'}.sql` }, this.options)
+      const notice = await deliverScript({ destination, text, database: 'master', connectionId, fileName: current.mode === 'files' ? `Restore Files ${current.draft?.destination || 'and Filegroups'}.sql` : `Restore ${current.draft?.destination || 'Database'}.sql` }, this.options)
       this.patch(id, { scriptNotice: notice })
     } catch (failure) { this.patch(id, { scriptNotice: failure instanceof Error ? failure.message : 'The script could not be delivered.' }) }
   }
@@ -455,7 +509,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     if (previous) { this.previews.delete(id); this.cancel([previous]) }
     if (!this.live(id)) { this.patch(id, { script: { state: 'failed', error: { message: restoreServiceMessages.disconnected, code: 'CONNECTION_LOST' } }, scriptRevision: revision }); return undefined }
     const requestId = this.newId()
-    const request = restoreRequest(state.draft, state.facts, { connectionId, requestId })
+    const request = this.request(state, { connectionId, requestId })
     if ('problem' in request) { this.patch(id, { script: { state: 'idle', message: request.problem }, scriptRevision: revision }); return undefined }
     this.previews.set(id, requestId)
     this.patch(id, { script: { state: 'loading' } })
@@ -517,7 +571,7 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
     this.publish({ documents: { ...this.getSnapshot().documents, [state.id]: state } })
     // The tab names the destination, as SSMS's window title does, also when it opened from the Databases folder with none.
     const destination = state.draft?.destination
-    if (destination !== undefined && destination !== before && this.options.documents.get(state.id)) this.options.documents.update?.(state.id, { name: restoreTabTitle(destination) })
+    if (destination !== undefined && destination !== before && this.options.documents.get(state.id)) this.options.documents.update?.(state.id, { name: restoreTabTitle(destination, state.mode) })
     this.publishContext()
   }
   private publishContext(): void {
@@ -563,4 +617,11 @@ export class RestoreService extends SnapshotStore<RestoreSnapshot> implements Di
       try { void this.options.api.cancelObjectActions(ids.slice(start, start + actionLimits.cancelIds)).then(result => { if (!result.ok) onUnexpectedError(new Error(result.error)) }, onUnexpectedError) } catch (failure) { onUnexpectedError(failure) }
     }
   }
+}
+
+/** A Restore Files and Filegroups draft: To database and From database are the database, nothing checked yet, and Varia's log
+ *  backup on where an online file restore needs it to end (logBackupPossible), to SSMS's default tail-log file name. */
+function filesDraft(draft: RestoreDraft, facts: RestoreFacts): RestoreDraft {
+  const next: RestoreDraft = { ...draft, tailLog: false, files: { chosen: [], asFilegroup: false, logBackup: false, logBackupFile: draft.tailLogFile } }
+  return { ...next, files: { ...next.files!, logBackup: logBackupPossible(next, facts) } }
 }

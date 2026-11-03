@@ -8,9 +8,10 @@ import { newLoginTarget } from '../dialogs/new-login'
  * Object Explorer's object actions (src/shared/actions/catalog.ts): Select Top 1000 Rows, Rename, Delete, Properties, and
  * Tasks › Take Offline and Bring Online, and Integration Services Catalogs › Create Catalog… (S9a), and Security › New ›
  * Login… (D2a). Each acts on the node its menu was opened for, otherwise on the selected node (F2, Delete, the palette), on a
- * live server. The Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) and the Restore Database
- * document's (Restore, Stop, Refresh) come from the same catalogue. Databases › Attach… (D1d) opens on the folder, and Restore
- * Database… on the Databases folder or as a database's Tasks › Restore › Database….
+ * live server. The Database Properties document's verbs (Apply, Discard Changes, Refresh, Stop) and the restore documents'
+ * (Restore, Stop, Refresh) come from the same catalogue. Databases › Attach… (D1d) opens on the folder, and Restore Database…
+ * and Restore Files and Filegroups… on the Databases folder or as a database's Tasks › Restore › Database… and Files and
+ * Filegroups….
  */
 export function actionsContribution({ commands, explorer, actions, dialogs, properties, newDatabase, restore, documents, ssisCatalog, connections }: Pick<Workbench, 'commands' | 'explorer' | 'actions' | 'dialogs' | 'properties' | 'newDatabase' | 'restore' | 'documents' | 'ssisCatalog' | 'connections'>): Disposable {
   // The verbs act on the document whose header runs them (`tabId`), else the active one.
@@ -85,6 +86,17 @@ export function actionsContribution({ commands, explorer, actions, dialogs, prop
         if (!node) return
         const database = node.ref.type === 'object' ? node.ref.object.name : undefined
         restore.open(node.connectionId, database, node.ref.type === 'folder' ? node.id : explorer.listingFolderOf(node.id))
+        documents.focusActive()
+      }
+    })),
+    // Restore Files and Filegroups… (D1g): from a database, its files; from the Databases folder, the first user database msdb has backups of.
+    ...(['explorer.restoreFiles', 'explorer.tasks.restoreFiles'] as const).map(id => commands.register(id, {
+      when: args => actions.canRun('restoreFiles', nodeOf(args)),
+      run: args => {
+        const node = nodeOf(args)
+        if (!node) return
+        const database = node.ref.type === 'object' ? node.ref.object.name : undefined
+        restore.open(node.connectionId, database, node.ref.type === 'folder' ? node.id : explorer.listingFolderOf(node.id), 'files')
         documents.focusActive()
       }
     })),

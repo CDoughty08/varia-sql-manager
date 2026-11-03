@@ -164,3 +164,28 @@ export function pointAllowed(sets: readonly BackupSetRow[], point: string): bool
 export function lastBackupTaken(sets: readonly BackupSetRow[], ids: readonly string[]): string | undefined {
   return sets.find(set => set.id === ids.at(-1))?.finish
 }
+
+// --- Restore Files and Filegroups (D1g) ---------------------------------------------------------------------------------
+
+/** A set files restore from: a full or file backup on disk, not damaged. */
+export const fileBaseSet = (set: BackupSetRow): boolean => (set.type === 'full' || set.type === 'file') && !set.problem && !set.damaged
+/** The sets files can restore from, newest first, at most `limit`: the document reads each one's files. */
+export function fileBaseSets(sets: readonly BackupSetRow[], limit: number): BackupSetRow[] {
+  return sets.filter(fileBaseSet).sort(latest).slice(0, limit)
+}
+/**
+ * The log backups that restore after a file restore from `base`, in order: from the base, each next log that continues the set
+ * before it (the newest when a fork offers two), until none does. A file restore rolls its files forward through every log there
+ * is, so the person does not choose them (SSMS's grid checks them); copy-only and damaged logs never chain.
+ */
+export function fileRestoreLogs(sets: readonly BackupSetRow[], base: BackupSetRow): BackupSetRow[] {
+  const logs = sets.filter(set => set.type === 'log' && usableSet(set))
+  const chain: BackupSetRow[] = []
+  let previous = base
+  for (;;) {
+    const next = logs.filter(log => !chain.includes(log) && continues(log, previous)).sort(latest)[0]
+    if (!next) return chain
+    chain.push(next)
+    previous = next
+  }
+}

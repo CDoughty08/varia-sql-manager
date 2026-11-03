@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online, the Databases folder's Attach and Restore Database, which kinds, subtypes and folders offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties, Take Offline, Bring Online, the Databases folder's Attach, Restore Database and Restore Files and Filegroups, which kinds, subtypes and folders offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -21,7 +21,8 @@ export const objectActions = [
   'attach',
   'takeOffline',
   'bringOnline',
-  'restore'
+  'restore',
+  'restoreFiles'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` edits the tree row, `dialog` opens an object dialog, `create` makes a new
@@ -118,6 +119,12 @@ const actionSpecData = {
   restore: {
     title: 'Restore Database…', mnemonic: 'r', group: '0_new', order: 3, class: 'dialog', command: 'explorer.restoreDatabase', folder: 'databases',
     rows: { command: 'explorer.tasks.restoreDatabase', menu: 'explorer.tasks.restore', title: 'Database…', group: '1_restore', order: 1, mnemonic: 'd' }, engines: ['box'], cleanupMs: 30_000, long: true
+  },
+  // SSMS: right-click Databases › Restore Files and Filegroups… (E, recalled), and a database's Tasks › Restore › Files and Filegroups… (F;
+  // Learn documents this one). The same document in its files mode. It never drops a database, so it has no cleanup of its own.
+  restoreFiles: {
+    title: 'Restore Files and Filegroups…', mnemonic: 'e', group: '0_new', order: 4, class: 'dialog', command: 'explorer.restoreFiles', folder: 'databases',
+    rows: { command: 'explorer.tasks.restoreFiles', menu: 'explorer.tasks.restore', title: 'Files and Filegroups…', group: '1_restore', order: 2, mnemonic: 'f' }, engines: ['box'], long: true
   }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 export const objectActionSpecs: { readonly [A in ObjectAction]: ObjectActionSpec & { readonly command: typeof actionSpecData[A]['command'] } } = actionSpecData
@@ -210,10 +217,10 @@ export const actionKindSpecs: { readonly [K in NodeKind]?: ActionKindSpec } = {
   function: { row: editable, subtypes: { aggregate: { rename: 'enabled', delete: 'disabled' } } },
   // Properties opens for every database, SQL Server's own included; a snapshot's opens read-only. SQL Server's own databases
   // cannot be taken offline (Learn: not master or tempdb; Varia greys all four, as SSMS does), and a snapshot never can.
-  // Restoring SQL Server's own databases is greyed in wave 5 (critic A19, restoreMessages.systemDatabase); a snapshot cannot be restored over.
+  // Restoring SQL Server's own databases, or their files, is greyed in wave 5 (critic A19, restoreMessages.systemDatabase); a snapshot cannot be restored over.
   database: {
-    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled', restore: 'enabled' },
-    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled', restore: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
+    row: { ...editable, properties: 'enabled', takeOffline: 'enabled', bringOnline: 'enabled', restore: 'enabled', restoreFiles: 'enabled' },
+    subtypes: { system: { ...locked, properties: 'enabled', takeOffline: 'disabled', bringOnline: 'disabled', restore: 'disabled', restoreFiles: 'disabled' }, snapshot: { rename: 'disabled', delete: 'enabled', properties: 'enabled' } }
   }
 }
 
@@ -392,6 +399,10 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   // No key, as in SSMS. A restore is a long run (LongRunService), never a document task.
   restore: {
     icon: 'history', keywords: ['backup', 'recover', 'recovery', 'bak', 'tail', 'log'], documentTask: false,
+    unavailableHint: `Select the Databases folder or a user database on SQL Server. ${restoreMessages.systemDatabase}`
+  },
+  restoreFiles: {
+    icon: 'history', keywords: ['backup', 'recover', 'file', 'filegroup', 'piecemeal', 'online'], documentTask: false,
     unavailableHint: `Select the Databases folder or a user database on SQL Server. ${restoreMessages.systemDatabase}`
   }
 }

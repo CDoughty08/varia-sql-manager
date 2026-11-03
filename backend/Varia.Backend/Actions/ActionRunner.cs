@@ -23,6 +23,13 @@ internal sealed class StepNotDueException : Exception
     public StepNotDueException() : base("The step is not due.") { }
 }
 
+/// <summary>Thrown by a main step that finds, when it runs, that it must not go on (a file restore whose database's log was backed up
+/// during the run): the runner reports its error as the step's failure, as it does a SqlException.</summary>
+internal sealed class StepRefusedException(ActionError error) : Exception(error.Message)
+{
+    public ActionError Error { get; } = error;
+}
+
 /// <summary>A runner's answer: the steps as the reply lists them, the failure (null when every main step completed), and how many
 /// main steps completed (none once a transaction rolled back).</summary>
 internal sealed record RunOutcome(List<ActionStepDto> Steps, ActionError? Failure, int Done);
@@ -100,6 +107,12 @@ internal sealed partial class ActionService
                     var done = Done();
                     failure = Error("CANCELLED", "The action was stopped at \"" + step.Title + "\"; SQL Server cancelled that statement."
                         + (done.Count == 0 ? "" : " Completed before Stop: " + string.Join(", ", done) + "."));
+                }
+                catch (StepRefusedException refused)
+                {
+                    Add("failed", step, refused.Error.Message);
+                    var done = Done();
+                    failure = done.Count == 0 ? refused.Error : refused.Error with { Message = ScriptingErrors.Clip(refused.Error.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
                 }
                 catch (SqlException sql)
                 {

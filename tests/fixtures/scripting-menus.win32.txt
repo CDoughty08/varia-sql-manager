@@ -509,6 +509,7 @@ explorer.context, for a database
     ---
     &Restore >
       &Database…
+      &Files and Filegroups…
   ---
   Copy N&ame
   ---

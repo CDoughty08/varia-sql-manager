@@ -66,7 +66,7 @@ internal static partial class RestoreRunChecks
         check(Restore.Step("close") == ActionService.StepTitle(ActionTemplate.SetSingleUser) && Restore.Step("multiUser") == ActionService.StepTitle(ActionTemplate.SetMultiUser)
             && Restore.Step("multiUserBack") == ActionService.StepTitle(ActionTemplate.SetMultiUser) && Restore.Step("restrictedUserBack") == ActionService.StepTitle(ActionTemplate.SetRestrictedUser)
             && Restore.Step("remove") == ActionService.StepTitle(ActionTemplate.DropRestoring) && log.Length <= ActionSteps.MaxTitle
-            && Restore.Steps.Values.All(title => title.Length is > 0 and <= ActionSteps.MaxTitle) && Restore.Steps.Count == 10,
+            && Restore.Steps.Values.All(title => title.Length is > 0 and <= ActionSteps.MaxTitle) && Restore.Steps.Count == 13,
             "the run's step titles are restoreStepTitles, the shared templates' where it runs them, and fit the reply's 64 characters with a 1,024-set plan");
         var finished = Restore.Message("finishedAtStop");
         check(finished.Split("{database}").Length == 2 && finished.Replace("{database}", new string('x', 128), StringComparison.Ordinal).Length <= ActionErrors.MaxMessage,

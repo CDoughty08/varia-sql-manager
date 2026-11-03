@@ -130,6 +130,7 @@ explorer.context, for a server whose connection was lost
 explorer.context, for the Databases folder
   &Attach…  -+++
   &Restore Database…  -+++
+  R&estore Files and Filegroups…  -+++
   ---
   F&ilter Settings…  -+++
   ---
@@ -161,6 +162,7 @@ explorer.context, for a database
     ---
     &Restore >
       &Database…  -+++
+      &Files and Filegroups…  -+++
   ---
   Copy N&ame  -+++
   ---

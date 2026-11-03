@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { isRestoreSystemDatabase, restoreLimits, restoreMessages, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery } from '../../../shared/actions/restore.ts'
-import type { ServerFilePurpose } from '../../../shared/actions/catalog.ts'
+import {
+  isRestoreSystemDatabase, restoreFilesSections, restoreLimits, restoreMessages, restoreDevicePickerTitles, restoreModeTitles, restoreRecoveryLabels, restoreRecoveryStates, restoreSections, restoreTargetProblem, type RestoreRecovery
+} from '../../../shared/actions/restore.ts'
 import { displayText } from '../../../shared/explorer/refs.ts'
 import type { CommandId } from '../../../shared/commands/catalog.ts'
 import type { IconId } from '../../../shared/icons.ts'
@@ -20,40 +21,16 @@ import StepList from '../kit/StepList'
 import { formatElapsed } from '../results/status'
 import {
   checkable, destinationNote, destinationOf, deviceDatabases, draftPlan, draftProblems, fileRows, restoreToText, setCells, setColumns, setManual, setReason, sourceDatabase, sourceSets,
-  tailLogPossible, toggleSet, type RestoreDraft, type RestoreFacts
+  tailLogPossible, toggleSet, type RestoreDraft
 } from './model'
 import type { RestoreRun, RestoreService, RestoreState } from './RestoreService'
 import BackupTimeline from './BackupTimeline'
 import { outcomeTitle, overallPercent, restoredText, runNote, runSteps, sectionSummaries, stopQuestion, type RunOutcome } from './run'
+import { fieldId, PathField, Problems, type SectionProps } from './fields'
+import { filesProblems, filesRestoringText, filesRunNote, filesSectionSummaries, filesStopQuestion } from './files'
+import { FilesGeneralSection, FilesOptionsSection } from './RestoreFiles'
 
-const fieldId = (documentId: string, key: string) => `restore-${documentId}-${key}`
-
-export interface SectionProps {
-  readonly state: RestoreState
-  readonly draft: RestoreDraft
-  readonly facts: RestoreFacts
-  readonly service: RestoreService
-  readonly problems: readonly string[]
-  readonly browse: (purpose: ServerFilePurpose, initialPath?: string) => Promise<string | undefined>
-}
-
-function Problems({ problems }: { readonly problems: readonly string[] }) {
-  return problems.length === 0 ? null : <ul className="restore-problems">{problems.map(problem => <li key={problem}><Icon name="error" />{problem}</li>)}</ul>
-}
-
-/** A path field with SSMS's "…" button, which opens the server file picker. */
-function PathField({ id, label, value, disabled, note, purpose, browse, onChange }: {
-  readonly id: string; readonly label: string; readonly value: string; readonly disabled?: boolean; readonly note?: string; readonly purpose: ServerFilePurpose
-  readonly browse: SectionProps['browse']; readonly onChange: (value: string) => void
-}) {
-  return <PropertyField id={id} label={label} note={note}>
-    <span className="property-input-action">
-      <input id={id} className="property-input" type="text" spellCheck={false} maxLength={260} value={value} title={value} disabled={disabled} onChange={event => onChange(event.target.value)} />
-      <button type="button" className="property-browse" aria-label={`Browse for ${label.replace(/:$/, '').toLowerCase()}`} title={`Browse for ${label.replace(/:$/, '').toLowerCase()}`} disabled={disabled}
-        onClick={() => void browse(purpose, value || undefined).then(path => { if (path) onChange(path) })}>…</button>
-    </span>
-  </PropertyField>
-}
+export type { SectionProps } from './fields'
 
 /** General: Source (Database, or Device and the database on it), Destination (Database, Restore to and Timeline…), and the Restore plan's sets. */
 function GeneralSection({ state, draft, facts, service, problems }: SectionProps) {
@@ -85,7 +62,7 @@ function GeneralSection({ state, draft, facts, service, problems }: SectionProps
           <PropertyField id={deviceId} label="Device:">
             <span className="property-input-action">
               <input id={deviceId} className="property-input" type="text" readOnly value={draft.devices.join(', ')} title={draft.devices.join('\n')} />
-              <button type="button" className="property-browse" aria-label="Select backup devices" title="Select backup devices" onClick={() => service.openDialog(state.id, 'devices')}>…</button>
+              <button type="button" className="property-browse" aria-label={restoreDevicePickerTitles.database} title={restoreDevicePickerTitles.database} onClick={() => service.openDialog(state.id, 'devices')}>…</button>
             </span>
           </PropertyField>
           {onMedia.length > 0 && <PropertyField id={mediaDatabaseId} label="Database:" note={mediaNote}>
@@ -198,13 +175,14 @@ function OptionsSection({ state, draft, facts, service, problems, browse }: Sect
   </div>
 }
 
-/** Select backup devices: File media only, the files in the order added (SSMS's sub-dialog, recalled). */
+/** Select backup devices (Specify backup devices in Restore Files and Filegroups, restoreDevicePickerTitles): File media only, the files in the order
+ *  added (SSMS's sub-dialog, recalled). */
 function SelectBackupDevices({ state, draft, service, browse }: Pick<SectionProps, 'state' | 'draft' | 'service' | 'browse'>) {
   const [devices, setDevices] = useState<readonly string[]>(draft.devices)
   const [chosen, setChosen] = useState<string>('')
   const listId = fieldId(state.id, 'media'), typeId = fieldId(state.id, 'mediaType')
   const add = () => void browse('backup').then(path => { if (path && !devices.includes(path)) { setDevices([...devices, path]); setChosen(path) } })
-  return <SubDialog title="Select backup devices" okDisabled={devices.length === 0} onCancel={() => service.openDialog(state.id, undefined)}
+  return <SubDialog title={restoreDevicePickerTitles[state.mode]} okDisabled={devices.length === 0} onCancel={() => service.openDialog(state.id, undefined)}
     onOk={() => { service.openDialog(state.id, undefined); service.updateDraft(state.id, { source: 'device', devices }) }} initialFocus={listId} className="restore-devices">
     <div className="property-row"><label htmlFor={typeId}>Backup media type:</label><select id={typeId} value="file" onChange={() => {}}><option value="file">File</option></select></div>
     <label htmlFor={listId}>Backup media:</label>
@@ -258,7 +236,7 @@ function ConfirmBar({ documentId, label, textId, children, danger, safe, onDange
 
 /** The confirm bar before a restore runs (owner decision 4): its lines, then Restore and Cancel (the default). */
 function RunConfirm({ state, lines, service }: { readonly state: RestoreState; readonly lines: readonly string[]; readonly service: RestoreService }) {
-  return <ConfirmBar documentId={state.id} label="Restore Database" textId={`restore-${state.id}-confirm`} danger="Restore" safe="Cancel"
+  return <ConfirmBar documentId={state.id} label={restoreModeTitles[state.mode]} textId={`restore-${state.id}-confirm`} danger="Restore" safe="Cancel"
     onDanger={() => { void service.confirmRun(state.id); focusAfter(state.id, 'run') }} onSafe={() => { service.cancelRun(state.id); focusAfter(state.id, 'restoreDatabase.run') }}>
     {lines.map(line => <p key={line}>{line}</p>)}
   </ConfirmBar>
@@ -268,7 +246,7 @@ function RunConfirm({ state, lines, service }: { readonly state: RestoreState; r
 function StopConfirm({ state, run, service }: { readonly state: RestoreState; readonly run: RestoreRun; readonly service: RestoreService }) {
   return <ConfirmBar documentId={state.id} label="Stop the restore" textId={`restore-${state.id}-stop`} danger="Stop" safe="Keep restoring"
     onDanger={() => { service.answerStop(state.id, true); focusAfter(state.id, 'run') }} onSafe={() => { service.answerStop(state.id, false); focusAfter(state.id, 'restoreDatabase.stop') }}>
-    <p>{stopQuestion(run.database, run.replace)}</p>
+    <p>{state.mode === 'files' ? filesStopQuestion(run.database) : stopQuestion(run.database, run.replace)}</p>
   </ConfirmBar>
 }
 
@@ -290,8 +268,15 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
   const elapsed = run.startedAt === undefined ? 0 : (run.endedAt ?? now) - run.startedAt
   const overall = overallPercent(run.planned, progress)
   const steps = runSteps(run.planned, run.steps, progress, running)
-  const left = outcome ? restoredText(run.database, run.restored, run.steps) : undefined
+  const restoring = outcome && state.mode === 'files' ? filesRestoringText(run.database, run.restored) : undefined
+  const left = outcome ? [restoredText(run.database, run.restored, run.steps), restoring].filter(Boolean).join(' ') || undefined : undefined
   const again = service.canRun(state.id) ? [{ label: 'Restore again', run: () => void service.run(state.id) }] : []
+  // A restore that runs at once (no confirm bar) replaces the verb that had focus with Stop, and Restore again goes with the panel it
+  // was in: the panel's title takes focus once drawn, so it never drops to the page. Focus elsewhere in the window stays where it is.
+  useEffect(() => {
+    const active = document.activeElement
+    if (!active || active === document.body || !active.isConnected) focusAfter(state.id, 'run')
+  }, [state.id])
   return <section className="restore-run" aria-labelledby={titleId} data-run={run.phase}>
     <div className="restore-run-head">
       <Icon name={outcome ? outcomeIcons[outcome] : 'loading'} spin={!outcome} className={outcome ? `restore-run-${outcome}` : undefined} />
@@ -306,7 +291,7 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
     </div>
     {running && run.stopConfirm && <StopConfirm state={state} run={run} service={service} />}
     <StepList steps={steps} labelledBy={titleId} />
-    {outcome === 'failed' && run.error && <InlineError message={run.error.message} code={run.error.code} role="alert" context={`Restore Database on ${state.server}`} note={left} actions={again} />}
+    {outcome === 'failed' && run.error && <InlineError message={run.error.message} code={run.error.code} role="alert" context={`${restoreModeTitles[state.mode]} on ${state.server}`} note={left} actions={again} />}
     {/* A Stop is the user's own, and an unknown outcome no failure: a status in the warning tone, not an error. */}
     {(outcome === 'stopped' || outcome === 'unknown') && run.error && <div className="restore-run-outcome restore-run-warning">
       <Icon name="warning" />
@@ -316,7 +301,7 @@ function RunPanel({ state, run, service }: { readonly state: RestoreState; reado
       </div>
     </div>}
     {outcome === 'done' && <p className="restore-run-outcome" role="status"><Icon name="pass" />{left ?? `Restored ${displayText(run.database)}.`}</p>}
-    {running && <p className="document-status"><Icon name="info" />{run.stopping ? 'Stopping: SQL Server ends the running statement, then Varia undoes what this restore changed.' : runNote(run.database, run.existed)}</p>}
+    {running && <p className="document-status"><Icon name="info" />{run.stopping ? state.mode === 'files' ? 'Stopping: SQL Server ends the running statement.' : 'Stopping: SQL Server ends the running statement, then Varia undoes what this restore changed.' : state.mode === 'files' ? filesRunNote(run.database) : runNote(run.database, run.existed)}</p>}
   </section>
 }
 
@@ -342,21 +327,23 @@ export default function RestoreDatabase({ documentId }: { documentId: string }) 
   const connectionId = workbench.documents.get(state.id)?.connectionId
   const browse: SectionProps['browse'] = (purpose, initialPath) => connectionId ? workbench.serverFiles.pick({ connectionId, purpose, ...initialPath ? { initialPath } : {} }) : Promise.resolve(undefined)
   const { draft, facts, run } = state
-  const problems = draft ? draftProblems(draft, facts) : { general: [], files: [], options: [] }
+  const files = state.mode === 'files', title = restoreModeTitles[state.mode]
+  const problems: Readonly<Record<'general' | 'files' | 'options', readonly string[]>> = !draft ? { general: [], files: [], options: [] } : files ? { ...filesProblems(draft, facts), files: [] } : draftProblems(draft, facts)
   const busy = run?.phase === 'running' || run?.phase === 'checking'
-  const summaries = busy && draft ? sectionSummaries(draft, facts) : undefined
+  const summaries: Readonly<Partial<Record<'general' | 'files' | 'options', string>>> | undefined = busy && draft ? files ? filesSectionSummaries(draft, facts) : sectionSummaries(draft, facts) : undefined
   const content = (section: 'general' | 'files' | 'options') => {
     if (!draft) return state.phase === 'loading' ? <Skeleton rows={4} label="Reading the backups" /> : <p className="field-note">Nothing to show: the backups could not be read.</p>
     // While it runs, the choices stay as they were sent: each section says them in a line, and the steps stay in view.
     if (summaries) return <p className="restore-summary">{summaries[section]}</p>
     const props: SectionProps = { state, draft, facts, service: restore, problems: problems[section], browse }
+    if (files) return section === 'general' ? <FilesGeneralSection {...props} /> : <FilesOptionsSection {...props} />
     switch (section) {
       case 'general': return <GeneralSection {...props} />
       case 'files': return <FilesSection {...props} />
       case 'options': return <OptionsSection {...props} />
     }
   }
-  const sections: FrameSection[] = restoreSections.map(section => ({ id: section.id, title: section.title, problem: !summaries && problems[section.id].length > 0, content: content(section.id) }))
+  const sections: FrameSection[] = (files ? restoreFilesSections : restoreSections).map(section => ({ id: section.id, title: section.title, problem: !summaries && problems[section.id].length > 0, content: content(section.id) }))
   const loading = state.phase === 'loading' ? 'Reading the backups…' : state.sets === 'loading' ? 'Reading the backup sets…' : run?.phase === 'checking' ? 'Reading the server before the restore…' : undefined
   const source = draft ? sourceDatabase(draft, facts) : ''
   const args = { tabId: state.id }
@@ -368,13 +355,13 @@ export default function RestoreDatabase({ documentId }: { documentId: string }) 
     : outcome ? <StatusPill tone={outcomeTones[outcome]} size="small" label={{ done: 'Restored', failed: 'Failed', stopped: 'Stopped', unknown: 'Unknown' }[outcome]} /> : undefined
   const banner = <>
     {loading && <p className="document-status" role="status"><Icon name="loading" spin />{loading}</p>}
-    {state.error && <InlineError message={state.error.message} code={state.error.code} role="alert" context={`Restore Database on ${state.server}`} actions={restore.canRefresh(state.id) ? [{ label: 'Refresh', run: () => restore.refresh(state.id) }] : []} />}
+    {state.error && <InlineError message={state.error.message} code={state.error.code} role="alert" context={`${title} on ${state.server}`} actions={restore.canRefresh(state.id) ? [{ label: 'Refresh', run: () => restore.refresh(state.id) }] : []} />}
     {state.runNotice && <p className="document-status" role="status"><Icon name="warning" />{state.runNotice}</p>}
     {state.refusal && <p className="document-status" role="alert"><Icon name="warning" />{state.refusal}</p>}
     {run?.phase === 'confirm' && run.confirm && <RunConfirm state={state} lines={run.confirm} service={restore} />}
     {run && run.phase !== 'checking' && run.phase !== 'confirm' && <RunPanel state={state} run={run} service={restore} />}
   </>
-  return <><DocumentFrame id={`restore-${state.id}`} title={draft?.destination ? `Restore Database - ${draft.destination}` : 'Restore Database'} subtitle={source && source !== draft?.destination ? `from ${source}` : undefined}
+  return <><DocumentFrame id={`restore-${state.id}`} title={draft?.destination ? `${title} - ${draft.destination}` : title} subtitle={source && source !== draft?.destination ? `from ${source}` : undefined}
     crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'Databases' }]} state={pill} verbs={verbs} banner={banner} sections={sections} frame={state.frame}
     onFrame={frame => restore.setFrame(state.id, frame)} attributes={{ 'data-restore': state.id }}
     script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void restore.deliver(state.id, destination) }} />

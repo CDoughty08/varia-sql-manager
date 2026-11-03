@@ -342,6 +342,14 @@ internal static class SeamChecks
             "runner v2 skips the rest after a failure and runs only the compensations of completed steps and the cleanups their condition allows, listed as compensating: "
             + string.Join(", ", outcome.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + outcome.Failure?.Code + " " + outcome.Failure?.Message);
         ran.Clear();
+        // A main step that finds it must not go on (StepRefusedException) fails with its own error, as a SqlException does.
+        var refusal = ActionErrors.Create(ActionsCatalog.Current, "RESTORE_SEQUENCE", "The log was backed up during the run.");
+        var refused = await service.RunStepsAsync(connection, [Step("Restore"), Step("Back up", new StepRefusedException(refusal)), Step("Restore it")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        check(refused.Steps.Select(step => step.Status + ":" + step.Title + ":" + step.Message).SequenceEqual(["done:Restore:", "failed:Back up:The log was backed up during the run.", "skipped:Restore it:"])
+            && refused.Failure is { Code: "RESTORE_SEQUENCE" } && refused.Failure.Message == "The log was backed up during the run. Completed before the failure: Restore." && refused.Done == 1
+            && ran.SequenceEqual(["Restore", "Back up"]),
+            "a step that refuses to go on fails with its own error, the rest skipped and the steps completed named: " + string.Join(", ", refused.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + refused.Failure?.Message);
+        ran.Clear();
         using var stopped = new CancellationTokenSource();
         stopped.Cancel();
         var cancelled = await service.RunStepsAsync(connection, plan, null, stopped.Token, TimeSpan.FromSeconds(1));

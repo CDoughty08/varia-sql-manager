@@ -54,7 +54,7 @@ internal static partial class RestoreDescribe
                     await using var reader = await command.ExecuteReaderAsync(token);
                     while (await reader.ReadAsync(token))
                         files.Add(new(reader.GetString(0), Text(reader, 1), FileType(Text(reader, 2)), reader.IsDBNull(4) ? 0 : Long(reader.GetValue(4)), reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture),
-                            reader.IsDBNull(3) ? null : reader.GetString(3)));
+                            reader.IsDBNull(3) ? null : reader.GetString(3), Absent(reader, 6)));
                     return (new(Files: Clip(files, take), FilesTruncated: files.Count > take), null);
                 }
                 case "mediaFiles":
@@ -66,10 +66,10 @@ internal static partial class RestoreDescribe
                     Add(command, "@file", SqlDbType.Int, 0, source.File!.Value);
                     await using var reader = await command.ExecuteReaderAsync(token);
                     int Column(string name) => reader.GetOrdinal(name);
-                    var (logical, physical, type, group, size, id) = (Column("LogicalName"), Column("PhysicalName"), Column("Type"), Column("FileGroupName"), Column("Size"), Column("FileId"));
+                    var (logical, physical, type, group, size, id, present) = (Column("LogicalName"), Column("PhysicalName"), Column("Type"), Column("FileGroupName"), Column("Size"), Column("FileId"), Column("IsPresent"));
                     while (await reader.ReadAsync(token))
                         files.Add(new(reader.GetString(logical), Text(reader, physical), FileType(Text(reader, type)), reader.IsDBNull(size) ? 0 : Long(reader.GetValue(size)),
-                            reader.IsDBNull(id) ? 0 : Convert.ToInt32(reader.GetValue(id), CultureInfo.InvariantCulture), reader.IsDBNull(group) ? null : reader.GetString(group)));
+                            reader.IsDBNull(id) ? 0 : Convert.ToInt32(reader.GetValue(id), CultureInfo.InvariantCulture), reader.IsDBNull(group) ? null : reader.GetString(group), Absent(reader, present)));
                     return (new(Files: Clip(files, take), FilesTruncated: files.Count > take), null);
                 }
                 default:
@@ -123,6 +123,8 @@ internal static partial class RestoreDescribe
         for (var index = 0; index < devices.Count; index++) Add(command, "@d" + (index + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, devices[index]);
     }
 
+    /// <summary>True for a file the set does not hold (is_present or IsPresent 0: a file backup lists every file of the database), else null.</summary>
+    private static bool? Absent(SqlDataReader reader, int ordinal) => !reader.IsDBNull(ordinal) && !Convert.ToBoolean(reader.GetValue(ordinal), CultureInfo.InvariantCulture) ? true : null;
     private static string Text(SqlDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? "" : Convert.ToString(reader.GetValue(ordinal), CultureInfo.InvariantCulture) ?? "";
     private static long Long(object value) => value switch
     {

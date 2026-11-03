@@ -100,35 +100,47 @@ internal sealed partial class ActionService
     /// tail-log backup can be taken, the media hold the planned chain (RestoreChain), a database of another backup is replaced only with
     /// WITH REPLACE, and no file the restore writes (each of the full backup's files where it restores it, the standby file, the tail-log
     /// backup) is another database's file, however the path is spelled, nor a file already on disk that is not the destination's own.</summary>
+    /// <summary>What RestoreSql.Preflight reads: the destination's row (null when no database has the name), every database id, and the login's rights.</summary>
+    private sealed record PreflightRead(ScriptPreflight.Row? Row, HashSet<int> Ids, bool CanRestore, bool Sysadmin, bool FileViews);
+
+    private async Task<PreflightRead> ReadPreflightAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        ScriptPreflight.Row? row = null;
+        var ids = new HashSet<int>();
+        bool canRestore = false, sysadmin = false, views = false;
+        await using var command = connection.CreateCommand();
+        command.CommandText = RestoreSql.Preflight;
+        command.CommandTimeout = 0;
+        Add(command, "@db", SqlDbType.NVarChar, 128, database);
+        Add(command, "@take", SqlDbType.Int, 0, (int)Restore.Limit("databases") + 1);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        if (await reader.ReadAsync(token)) row = ReadRow(reader);
+        await reader.NextResultAsync(token);
+        while (await reader.ReadAsync(token)) ids.Add(reader.GetInt32(0));
+        await reader.NextResultAsync(token);
+        if (await reader.ReadAsync(token))
+        {
+            canRestore = !reader.IsDBNull(0) && reader.GetBoolean(0);
+            sysadmin = !reader.IsDBNull(1) && reader.GetBoolean(1);
+            views = !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) > 0;
+        }
+        return new(row, ids, canRestore, sysadmin, views);
+    }
+
+    /// <summary>Whether the preflight's row is the database the document read (DatabaseIdentity), or why not.</summary>
+    private ActionError? IdentityProblem(ScriptPreflight.Row? row, DatabaseIdentityDto identity, string database) =>
+        row is null || row.Int("database_id") != identity.Id || DatabaseProperties.Iso(row.Raw("create_date")) != identity.Created
+            ? Error("NOT_FOUND", "The database " + ScriptingErrors.Display(database) + " is not the one this restore was planned over: it was renamed, dropped or replaced since. Refresh, then check the destination.")
+            : null;
+
     private async Task<(RestoreFacts? Facts, ActionError? Error)> RestorePreflightAsync(SqlConnection connection, ActionArgs args, string database, bool linux, CancellationToken token)
     {
         var display = ScriptingErrors.Display(database);
         var options = args.Restore!;
-        ScriptPreflight.Row? row = null;
-        var ids = new HashSet<int>();
-        bool canRestore = false, sysadmin = false, views = false;
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = RestoreSql.Preflight;
-            command.CommandTimeout = 0;
-            Add(command, "@db", SqlDbType.NVarChar, 128, database);
-            Add(command, "@take", SqlDbType.Int, 0, (int)Restore.Limit("databases") + 1);
-            await using var reader = await command.ExecuteReaderAsync(token);
-            if (await reader.ReadAsync(token)) row = ReadRow(reader);
-            await reader.NextResultAsync(token);
-            while (await reader.ReadAsync(token)) ids.Add(reader.GetInt32(0));
-            await reader.NextResultAsync(token);
-            if (await reader.ReadAsync(token))
-            {
-                canRestore = !reader.IsDBNull(0) && reader.GetBoolean(0);
-                sysadmin = !reader.IsDBNull(1) && reader.GetBoolean(1);
-                views = !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture) > 0;
-            }
-        }
+        var (row, ids, canRestore, sysadmin, views) = await ReadPreflightAsync(connection, database, token);
         if (args.Identity is { } identity)
         {
-            if (row is null || row.Int("database_id") != identity.Id || DatabaseProperties.Iso(row.Raw("create_date")) != identity.Created)
-                return (null, Error("NOT_FOUND", "The database " + display + " is not the one this restore was planned over: it was renamed, dropped or replaced since. Refresh, then check the destination."));
+            if (IdentityProblem(row, identity, database) is { } changed) return (null, changed);
         }
         else if (row is not null) return (null, Error("NAME_IN_USE", "A database named " + display + " was created since the server was read. Refresh, then check the destination."));
         var exists = row is not null;
@@ -162,25 +174,48 @@ internal sealed partial class ActionService
     private async Task<ActionError?> RestoreFilesProblemAsync(SqlConnection connection, string database, RestoreOptionsDto options, RestoreFacts facts, bool linux, CancellationToken token)
     {
         // Where the restore writes each of the full backup's files: its Restore As path, or where the backup had it.
-        var listed = new List<(string Logical, string Physical)>();
-        var first = options.Sets[0];
-        try
-        {
-            await using var command = connection.CreateCommand();
-            command.CommandText = RestoreSql.FileList(first.Devices.Count);
-            command.CommandTimeout = 0;
-            for (var index = 0; index < first.Devices.Count; index++) Add(command, "@d" + (index + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, first.Devices[index]);
-            Add(command, "@file", SqlDbType.Int, 0, first.File);
-            await using var reader = await command.ExecuteReaderAsync(token);
-            var (logical, physical) = (reader.GetOrdinal("LogicalName"), reader.GetOrdinal("PhysicalName"));
-            while (await reader.ReadAsync(token)) if (!reader.IsDBNull(logical) && !reader.IsDBNull(physical)) listed.Add((reader.GetString(logical), reader.GetString(physical)));
-        }
-        catch (SqlException error) when (!token.IsCancellationRequested && RestoreDescribe.MediaError(catalog, error, connection) is { } value) { return value; }
-        var moves = options.Relocate.GroupBy(move => move.Logical, StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key, group => group.First().Physical, StringComparer.OrdinalIgnoreCase);
-        var targets = listed.Select(file => moves.TryGetValue(file.Logical, out var to) ? to : file.Physical).Concat(options.Relocate.Select(move => move.Physical)).Distinct(StringComparer.Ordinal).ToList();
+        var (listed, media) = await FileListAsync(connection, options.Sets[0], token);
+        if (listed is null) return media;
         var written = new List<(string Path, string What)>();
         if (options.Recovery == "standby" && options.StandbyFile is { } standby) written.Add((standby, "standby file"));
         if (options.TailLog is { } tail) written.Add((tail.File, "tail-log backup file"));
+        return await WrittenProblemAsync(connection, database, listed, options.Relocate, written, facts, linux, token);
+    }
+
+    /// <summary>A file of a backup set as RESTORE FILELISTONLY lists it: Type its letter (D data, L log, S FILESTREAM, F full-text),
+    /// Present whether the set holds it (a file backup lists every file of the database).</summary>
+    internal sealed record ListedFile(string Logical, string Physical, string Type, string? Filegroup, bool Present);
+
+    /// <summary>The files of a set, read from its media; a media error as a value.</summary>
+    private async Task<(List<ListedFile>? Files, ActionError? Error)> FileListAsync(SqlConnection connection, RestorePlanSetDto set, CancellationToken token)
+    {
+        var listed = new List<ListedFile>();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = RestoreSql.FileList(set.Devices.Count);
+            command.CommandTimeout = 0;
+            for (var index = 0; index < set.Devices.Count; index++) Add(command, "@d" + (index + 1).ToString(CultureInfo.InvariantCulture), SqlDbType.NVarChar, 260, set.Devices[index]);
+            Add(command, "@file", SqlDbType.Int, 0, set.File);
+            await using var reader = await command.ExecuteReaderAsync(token);
+            int Column(string name) => reader.GetOrdinal(name);
+            var (logical, physical, type, group, present) = (Column("LogicalName"), Column("PhysicalName"), Column("Type"), Column("FileGroupName"), Column("IsPresent"));
+            while (await reader.ReadAsync(token))
+                if (!reader.IsDBNull(logical) && !reader.IsDBNull(physical))
+                    listed.Add(new(reader.GetString(logical), reader.GetString(physical), reader.IsDBNull(type) ? "" : reader.GetString(type).Trim(), reader.IsDBNull(group) ? null : reader.GetString(group),
+                        reader.IsDBNull(present) || Convert.ToBoolean(reader.GetValue(present), CultureInfo.InvariantCulture)));
+        }
+        catch (SqlException error) when (!token.IsCancellationRequested && RestoreDescribe.MediaError(catalog, error, connection) is { } value) { return (null, value); }
+        return (listed, null);
+    }
+
+    /// <summary>Why a file a restore writes would overwrite what is not the destination's, or null: each of <paramref name="listed"/>
+    /// where it goes (its move, or where the backup had it), every move's path, and the other files it writes (a standby file, a log backup).</summary>
+    private async Task<ActionError?> WrittenProblemAsync(SqlConnection connection, string database, IReadOnlyList<ListedFile> listed, IReadOnlyList<RestoreMoveDto> relocate,
+        IReadOnlyList<(string Path, string What)> written, RestoreFacts facts, bool linux, CancellationToken token)
+    {
+        var moves = relocate.GroupBy(move => move.Logical, StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key, group => group.First().Physical, StringComparer.OrdinalIgnoreCase);
+        var targets = listed.Select(file => moves.TryGetValue(file.Logical, out var to) ? to : file.Physical).Concat(relocate.Select(move => move.Physical)).Distinct(StringComparer.Ordinal).ToList();
 
         // Every database's files, keyed as the files they name.
         var held = new Dictionary<string, string>(StringComparer.Ordinal);

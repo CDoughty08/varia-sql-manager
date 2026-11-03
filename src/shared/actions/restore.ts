@@ -1,14 +1,15 @@
-// Restore Database (D1e, D1f): its describe id, request action, limits, labels, step titles and messages, and the shapes of
-// what the describe answers. The backend embeds restoreCatalog() in actions-catalog.json, so its limits, refusals and step
-// titles are these. Its menu items and command are objectActions' `restore` (catalog.ts), live since its OK runs (D1f,
-// critic A17). Erasable TypeScript, so Node's type stripping can load it too.
+// Restore Database (D1e, D1f) and Restore Files and Filegroups (D1g): the describe id, request actions, limits, labels, step
+// titles and messages, and the shapes of what the describe answers. The backend embeds restoreCatalog() in actions-catalog.json,
+// so its limits, refusals and step titles are these. Their menu items and commands are objectActions' `restore` and
+// `restoreFiles` (catalog.ts). Erasable TypeScript, so Node's type stripping can load it too.
 import type { ServerEngine } from '../explorer/catalog.ts'
 import type { ServerPathSeparator } from './files.ts'
 
-/** actions.describe's id for the document; its `restore` member says what to read. */
+/** actions.describe's id for both documents; its `restore` member says what to read. */
 export const restoreDescribeId = 'restoreDatabase' as const
-/** actions.script's and actions.execute's action. */
-export const restoreRequestActions = ['restore'] as const
+/** actions.script's and actions.execute's actions: a database restore, and a restore of some of a database's files. */
+export const restoreRequestActions = ['restore', 'restoreFiles'] as const
+export type RestoreRequestAction = typeof restoreRequestActions[number]
 /** RESTORE FROM DISK runs only on SQL Server itself: Managed Instance restores from URL only, and Azure SQL Database has no RESTORE (critic A1). */
 export const restoreEngines: readonly ServerEngine[] = ['box']
 /** SQL Server's own databases. Restoring one needs single-user mode or a stopped Agent, so wave 5 refuses them (critic A19). */
@@ -50,7 +51,13 @@ export const restoreLimits = {
   databases: 32_767,
   /** Restore's Script: every RESTORE repeats the moves, so a long log chain with many files outgrows the object actions' cap;
    *  Script As's cap, which the backend checks as it writes, before the text is whole. */
-  scriptChars: 4_000_000
+  scriptChars: 4_000_000,
+  /** Restore Files and Filegroups: the FILE clauses, and the FILEGROUP clauses, one RESTORE names (form 4's @f1…@f256, @g1…@g256). */
+  restoreFiles: 256,
+  /** Restore Files and Filegroups: the newest full and file backups whose files the document reads, one describe each. */
+  fileSets: 16,
+  /** SQL Server's parameters per statement: a file restore's FILE, FILEGROUP, device and MOVE parameters (two each) stay under them. */
+  parameters: 2_100
 } as const
 
 /** What the document says where SSMS has no words of its own, and the refusals main and the backend share. */
@@ -73,7 +80,31 @@ export const restoreMessages = {
   copyOnlyLog: 'A copy-only log backup is not part of the log chain.',
   /** Stop reached SQL Server only as it finished the last RESTORE WITH RECOVERY: the run's reply says so ({database} shown through displayText). */
   finishedAtStop: 'Stop came as SQL Server finished the restore: {database} is restored and online.',
-  notPlanned: 'File and partial backups restore with T-SQL.'
+  notPlanned: 'File and partial backups restore with T-SQL.',
+  /** Restore Files and Filegroups (Learn, restore-files-and-filegroups-sql-server, quoted). */
+  simpleReadOnly: 'Under the simple recovery model, the file must belong to a read-only filegroup.',
+  /** Restore Files and Filegroups: nothing is checked in the grid. */
+  noFiles: 'Check the files or filegroups to restore.',
+  /** Restore Files and Filegroups: the source holds no full or file backup to restore files from. */
+  noFileBase: 'The backup sets hold no full or file backup to restore files from.',
+  /** Restore Files and Filegroups: files restore only from the database's own backups (another family, SQL Server's 3154). */
+  otherDatabase: 'These backups are of another database: files restore only from the database\'s own backups.',
+  /** Restore Files and Filegroups: why the log rows are checked and cannot be unchecked. */
+  logsFollow: 'The log backups after the chosen backup set restore with its files, to bring them forward.',
+  /** Restore Files and Filegroups' Options page: under FULL or BULK_LOGGED an online file restore ends only with a log backup taken
+   *  after it (probed on 2025: the files stay RESTORING after every earlier log, "Additional roll forward past LSN … is required"). */
+  filesStayRestoring: 'Under the full or bulk-logged recovery model, restored files stay restoring until a log backup taken after they are restored is restored.',
+  /** Restore Files and Filegroups: SQL Server refuses STANDBY on an online database's file restore (4302, probed on 2025), only once the files are restored. */
+  standbyOnline: 'RESTORE WITH STANDBY conflicts with an online restore: choose another recovery state while the database is online.',
+  /** Restore Files and Filegroups: a PRIMARY file restores only offline, which puts the whole database in RESTORING; with no tail-log
+   *  backup its log since the last log backup is lost and it cannot recover (probed on 2025: 4303, then 927), so Varia refuses it on an
+   *  online or offline database and leaves it to Restore Database, which backs up the tail of the log first. */
+  primaryOnline: 'A file of the PRIMARY filegroup restores only offline, which takes the whole database out of use and, without a tail-log backup, loses the changes since the last log backup: restore the database with Restore Database, which backs up the tail of the log first.',
+  /** Restore Files and Filegroups' preflight: the database's log was backed up after the plan's last set (sys.database_recovery_status),
+   *  so the restored files would wait for a log backup the plan lacks, and Varia's log backup would not continue them (4305). */
+  logChainAhead: 'The log has been backed up since the last backup set this restore plans, and restored files roll forward only through every log backup: Refresh to read the backup history again, or add the files of the newer log backups under From device.',
+  /** Restore Files and Filegroups' run: a log backup was taken between the restore's steps and Back up the log. */
+  logBackedUpDuring: 'The log was backed up during the restore, so a log backup taken now would not continue the restored files: restore that log backup, then back up the log and restore it WITH RECOVERY to bring the files online.'
 } as const
 
 /** A backup set's kind, from msdb's type letter or HEADERONLY's BackupType. Only full, differential and log sets are planned. */
@@ -106,9 +137,28 @@ export const timelineIntervalSpecs: { readonly [I in TimelineInterval]: { readon
   hour: { label: 'Hour', ms: 3_600_000 }, sixHours: { label: 'Six Hours', ms: 21_600_000 }, day: { label: 'Day', ms: 86_400_000 }, week: { label: 'Week', ms: 604_800_000 }
 }
 
+/** Restore Files and Filegroups' Recovery state choices: SSMS's long labels, as Learn gives this dialog's Options page (Restore Files and
+ *  Filegroups, both its current procedure and the 2008 R2 reference). They differ from Restore Database's old wording ("do not",
+ *  "Undo … undo actions"), which matches this dialog's "Rollback undo file". */
+export const restoreFilesRecoveryLabels: { readonly [R in RestoreRecovery]: string } = {
+  recovery: 'Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)',
+  norecovery: "Leave the database non-operational, and don't roll back the uncommitted transactions. Additional transaction logs can be restored. (RESTORE WITH NORECOVERY)",
+  standby: 'Leave the database in read-only mode. Roll back the uncommitted transactions, but save the rollback operation in a file so the recovery effects can be undone. (RESTORE WITH STANDBY)'
+}
+
 /** The document's sections, SSMS's pages. */
 export const restoreSections = [{ id: 'general', title: 'General' }, { id: 'files', title: 'Files' }, { id: 'options', title: 'Options' }] as const
 export type RestoreSectionId = typeof restoreSections[number]['id']
+/** Restore Files and Filegroups' sections: SSMS's dialog has a General and an Options page. */
+export const restoreFilesSections = [{ id: 'general', title: 'General' }, { id: 'options', title: 'Options' }] as const
+
+/** Which restore a Restore document makes: a whole database (Restore Database), or some of an existing database's files. */
+export type RestoreMode = 'database' | 'files'
+/** The documents' titles before a database is chosen, and their tabs' "<title> - <database>". */
+export const restoreModeTitles: { readonly [M in RestoreMode]: string } = { database: 'Restore Database', files: 'Restore Files and Filegroups' }
+/** The backup device picker's title (and its "…" button's name) per document: Learn's Restore Database procedure names it Select
+ *  backup devices, and its Restore Files and Filegroups procedure (step 6) Specify backup devices. One sub-dialog, two names. */
+export const restoreDevicePickerTitles: { readonly [M in RestoreMode]: string } = { database: 'Select backup devices', files: 'Specify backup devices' }
 
 // --- Describe -----------------------------------------------------------------------------------------------------------
 
@@ -167,6 +217,8 @@ export interface BackupFileRow {
   readonly filegroup?: string
   readonly sizeBytes: number
   readonly fileId: number
+  /** Not in this backup set: a file backup lists every file of the database and holds only some (msdb's is_present, FILELISTONLY's IsPresent). */
+  readonly absent?: true
 }
 /** A database a restore can overwrite: sys.databases minus master and tempdb (and snapshots). */
 export interface RestoreDestination {
@@ -237,6 +289,33 @@ export interface RestoreOptions {
   readonly closeConnections: boolean
 }
 
+/** Restore Files and Filegroups' sets: a full or file backup to restore the files from, then the log backups after it. */
+export const restoreFilesSetTypes = ['full', 'file', 'log'] as const
+export interface RestoreFilesSet {
+  readonly id: string
+  readonly devices: readonly string[]
+  readonly file: number
+  readonly type: typeof restoreFilesSetTypes[number]
+  readonly name?: string
+}
+/**
+ * What a file restore does (D1g): the files (FILE) and filegroups (FILEGROUP) of an existing database to restore from the first
+ * set, the log backups after it, where restored files go, SSMS's options, and Varia's own last step: a copy-only log backup taken
+ * once the files are restored, restored at once, which an online file restore under FULL or BULK_LOGGED needs to end (probed).
+ */
+export interface RestoreFilesOptions {
+  readonly sets: readonly RestoreFilesSet[]
+  readonly files: readonly string[]
+  readonly filegroups: readonly string[]
+  readonly relocate: readonly RestoreMove[]
+  readonly replace: boolean
+  readonly restrictedUser: boolean
+  readonly recovery: RestoreRecovery
+  readonly standbyFile?: string
+  /** BACKUP LOG … WITH COPY_ONLY to this new file after the sets, then RESTORE LOG from it with the recovery state (RECOVERY only). */
+  readonly logBackup?: { readonly file: string }
+}
+
 /** Whether a name is one of SQL Server's own databases, in any case: a case-insensitive server, the default, matches MSDB too. */
 export const isRestoreSystemDatabase = (name: string): boolean => (restoreSystemDatabases as readonly string[]).includes(name.toLowerCase())
 /** Why a destination name cannot be restored to in wave 5, or undefined. */
@@ -298,7 +377,12 @@ export const restoreStepTitles = {
   multiUserBack: 'Restore multi-user access',
   restrictedUserBack: 'Restore restricted user access',
   /** Cleanup: the restore created the database and stopped or failed part way (critic A11a). */
-  remove: 'Remove the partly restored database'
+  remove: 'Remove the partly restored database',
+  /** Restore Files and Filegroups (D1g): the RESTORE DATABASE … FILE/FILEGROUP of the first set, then its logs (`log`), then Varia's
+   *  copy-only log backup and its restore. */
+  files: 'Restore the files',
+  logBackup: 'Back up the log',
+  logBackupRestore: 'Restore the log backup'
 } as const
 
 // --- Backend copy -------------------------------------------------------------------------------------------------------
@@ -307,10 +391,12 @@ export const restoreStepTitles = {
 export function restoreCatalog() {
   return {
     describe: restoreDescribeId, requests: restoreRequestActions, engines: restoreEngines, limits: restoreLimits, systemDatabases: restoreSystemDatabases,
-    sourceKinds: restoreSourceKinds, recoveryStates: restoreRecoveryStates,
+    sourceKinds: restoreSourceKinds, recoveryStates: restoreRecoveryStates, filesSetTypes: restoreFilesSetTypes,
     messages: {
       systemDatabase: restoreMessages.systemDatabase, notDisk: restoreMessages.notDisk, noSets: restoreMessages.noSets, invalidPlan: restoreMessages.invalidPlan,
-      damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, finishedAtStop: restoreMessages.finishedAtStop
+      damaged: restoreMessages.damaged, copyOnlyLog: restoreMessages.copyOnlyLog, finishedAtStop: restoreMessages.finishedAtStop,
+      simpleReadOnly: restoreMessages.simpleReadOnly, otherDatabase: restoreMessages.otherDatabase, filesStayRestoring: restoreMessages.filesStayRestoring,
+      standbyOnline: restoreMessages.standbyOnline, primaryOnline: restoreMessages.primaryOnline, logChainAhead: restoreMessages.logChainAhead, logBackedUpDuring: restoreMessages.logBackedUpDuring
     },
     steps: restoreStepTitles
   }

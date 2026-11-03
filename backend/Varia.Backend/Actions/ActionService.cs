@@ -250,6 +250,7 @@ internal sealed partial class ActionService : IDisposable
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
         if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
         if (args.DropConnections is not null && args.Action != "takeOffline") throw Invalid("only takeOffline takes dropConnections.");
+        if (args.RestoreFiles is not null && args.Action != "restoreFiles") throw Invalid("only a file restore takes file restore options.");
         switch (args.Action)
         {
             case "rename":
@@ -278,6 +279,8 @@ internal sealed partial class ActionService : IDisposable
                 var server = Target(args.Target, "attach");
                 ValidateAttach(args.Databases);
                 return server;
+            case "restoreFiles":
+                return ValidateRestoreFiles(args);
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null || args.Databases is not null)
                     throw Invalid("createTable takes only a design.");
@@ -310,7 +313,7 @@ internal sealed partial class ActionService : IDisposable
     private long ScriptLimit(string action) => action switch
     {
         "createTable" => designer.Limit("scriptChars"),
-        "restore" => catalog.Restore.Limit("scriptChars"),
+        "restore" or "restoreFiles" => catalog.Restore.Limit("scriptChars"),
         _ => catalog.Limit("scriptChars")
     };
 
@@ -360,12 +363,12 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args, script: true);
         if (args.Action == "createLogin") return Task.FromResult(ScriptNewLogin(args));
-        // Restore's Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
-        if (args.Action == "restore")
+        // The restores' Script reads nothing: it is written from the request and the catalogue, on no connection and under no gate.
+        if (catalog.Restore.Requests.Contains(args.Action))
         {
             var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
             if (!Serves(args.Action, engine)) return Task.FromResult(new ActionScriptResult(null, "master", [], ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(engine))));
-            return Task.FromResult(ScriptRestore(args, target));
+            return Task.FromResult(args.Action == "restoreFiles" ? ScriptRestoreFiles(args, target) : ScriptRestore(args, target));
         }
         // A new table's script runs in its database; a database's, a server object's or the server's action in master.
         var database = args.Action == "createTable" ? target.Name! : args.Action == "attach" ? "master" : ScriptDatabase(target);
@@ -401,6 +404,7 @@ internal sealed partial class ActionService : IDisposable
                 "createDatabase" => ExecuteNewDatabaseJobAsync(connection, args, profile, band, progress, job),
                 "attach" => ExecuteAttachJobAsync(connection, args, job),
                 "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
+                "restoreFiles" => ExecuteRestoreFilesJobAsync(connection, args, target, profile.Linux, progress, job),
                 _ => ExecuteJobAsync(connection, args, target, band, progress, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
