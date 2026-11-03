@@ -65,7 +65,7 @@ describe('ObjectDialogService', () => {
     api.describeObject.mockResolvedValueOnce(row({ isSnapshot: true }))
     dialogs.open('deleteObject', node(databaseRef))
     await settle()
-    expect(dialogs.current?.draft).toEqual({ deleteHistory: false, closeConnections: false })
+    expect(dialogs.current?.draft).toEqual({ deleteHistory: false, closeConnections: false, dropMappedUsers: false })
   })
   it('scripts the action to each destination through Script As\'s delivery and stays open', async () => {
     const { dialogs, api, documents, settle } = setup()

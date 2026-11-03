@@ -48,7 +48,8 @@ import { EditorDialogs } from '../editor/go-to-line'
 import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
-import { ObjectActionService } from '../actions/ObjectActionService'
+import { objectActionNoticeKey, ObjectActionService } from '../actions/ObjectActionService'
+import { databaseGoneHandler } from '../dialogs/database-gone'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../ssis/CreateCatalogService'
 import { LongRunService } from '../services/long-runs'
@@ -212,7 +213,10 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
   const longRuns = new LongRunService({ api })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, longRuns, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  const dialogs = new ObjectDialogService({
+    api, connections, explorer, documents, files, longRuns, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
+  })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
@@ -226,10 +230,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }), close: id => { void files.close(id) },
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
   })
+  // A database Delete removed: its Properties documents turn orphan and a toast counts the query windows left on it (D3 §8).
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
     focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
@@ -277,7 +283,7 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const menuState = new MenuStatePublisher({ commands, context, send: state => api.setMenuState(state) })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) }
   })
   const cleanup = events.subscribe(event => { if (event.type === 'documents.closed') queries.forget(event.tabId) })
   let disposed = false

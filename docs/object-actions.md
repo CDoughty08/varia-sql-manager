@@ -8,12 +8,14 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 
 ## Actions
 
-| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Servers | Context key |
+| Action | Menu title | Command | Kind | Menu | Group | Mnemonic | Windows and Linux | macOS | Context key | Runs on |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 2 | w | — | — | SQL Server, Managed Instance, Azure SQL Database | `explorerActionSelectTop` |
-| `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | SQL Server, Managed Instance | `explorerActionRename` |
-| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
-| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
+| `selectTop` | Select Top 1000 Rows | `explorer.selectTopRows` | query | `explorer.context` | `1_query` 2 | w | — | — | `explorerActionSelectTop` | SQL Server, Managed Instance, Azure SQL Database |
+| `rename` | Rename | `explorer.rename` | inline | `explorer.context` | `7_edit` 1 | m | F2 | F2 | `explorerActionRename` | SQL Server, Managed Instance |
+| `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | `explorerActionDelete` | SQL Server, Managed Instance |
+| `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | `explorerActionProperties` | SQL Server, Managed Instance |
+| `disable` | Disable | `explorer.disable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionDisable` | SQL Server, Managed Instance |
+| `enable` | Enable | `explorer.enable` | inline | `explorer.context` | `6_state` 1 | b | — | — | `explorerActionEnable` | SQL Server, Managed Instance |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -37,41 +39,54 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties |
-| --- | --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ | ✓ |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – |
-| `view` | none | ✓ | ✓ | ✓ | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – |
-| `function` | `aggregate` | – | ✓ | ○ | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Disable Login | Enable Login |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `login` | none | – | – | – | – | – | – |
+| `login` | `sa` | – | ✓ | ○ | – | ✓ | – |
+| `login` | `system` | – | ○ | ○ | – | ○ | – |
+| `login` | `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped` | – | ✓ | ✓ | – | ✓ | – |
+| `login` | `windowsGroup` | – | ✓ | ✓ | – | ○ | – |
+| `login` | `externalUser`, `externalGroup` | – | ○ | ✓ | – | ✓ | – |
+| `database` | none | – | ✓ | ✓ | ✓ | – | – |
+| `database` | `system` | – | ○ | ○ | ✓ | – | – |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
 
 ## Menus, statuses, database states and servers
 
 An action's item goes in `explorer.context`, `explorer.tasks`, `explorer.tasks.restore`: Object Explorer's menu, or its Tasks submenus. Tasks (`explorer.tasks`) and Tasks › Restore (`explorer.tasks.restore`) stay hidden while nothing is placed in them, so they appear with their first action.
 
 A node's status badge (`explorerNodeStatus`) can overlay its row: a disabled login offers Enable in place of Disable.
-No kind changes its actions by status yet.
+
+| Kind | Subtypes | Status | Changes |
+| --- | --- | --- | --- |
+| `login` | `sa`, `sql`, `windowsUser`, `certificateMapped`, `asymmetricKeyMapped`, `externalUser`, `externalGroup` | `disabled` | Disable Login: –, Enable Login: ✓ |
+| `login` | `system` | `disabled` | Disable Login: –, Enable Login: ○ |
+| `login` | `windowsGroup` | `disabled` | Disable Login: –, Enable Login: – |
+
+Only `disabled` changes a login's actions: a login denied permission to connect can still be disabled, as in SSMS.
 
 A database row carries its runtime state as listed (state, user access, read-only, standby); a newer live status sample wins.
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
 No rule narrows a database's actions yet.
 
-An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
-the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+Each action names the servers it runs on (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Runs on column above says which, and the menu hides it elsewhere. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
 
 ## Dialogs
 
 | Dialog | Title | Opens as | Action | Pages | Steps panel |
 | --- | --- | --- | --- | --- | --- |
-| `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | No |
+| `deleteObject` | Delete Object | Modal dialog | `delete` | General (`settings-gear`) | Yes |
 | `databaseProperties` | Database Properties - <name> | Document tab | `properties` | General (`settings-gear`), Files (`settings-gear`), Filegroups (`settings-gear`), Options (`settings-gear`) | No |
 | `newLogin` | Login - New | Modal dialog | `createLogin` | General (`settings-gear`, kept mounted), Server Roles (`settings-gear`), User Mapping (`settings-gear`, kept mounted), Status (`settings-gear`) | Yes |
 
@@ -92,6 +107,26 @@ Delete Object for a database also offers "Delete backup and restore history info
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation.
 
+For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
+is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database
+without deleting its files) and when database snapshots of it exist (the DROP fails until they are deleted). With VIEW
+SERVER STATE it lists the sessions using the database in a "Sessions using <database>" disclosure (session, program,
+host, and whether each has an open transaction; at most 8 of them, never Varia's own pooled sessions). A session
+uses the database when it is in it or has a transaction there from another database: SET SINGLE_USER WITH ROLLBACK
+IMMEDIATE rolls back both. Under Close existing connections the dialog counts the sessions with an open transaction,
+which closing rolls back, and names Varia's own query windows whose session holds one (by session, whatever database
+the window is in). On Azure SQL Managed Instance, which cannot set SINGLE_USER, Close existing connections is greyed
+with that reason, and a request that asks for it is refused before anything runs; where the option is greyed, the dialog
+only counts the open transactions. An offline database has no sessions to close: the option is greyed ("An offline
+database has no connections to close.") and its Delete runs no SINGLE_USER. Without VIEW SERVER STATE (or with VIEW
+SERVER PERFORMANCE STATE denied on SQL Server 2022 and later) the dialog counts and lists no sessions, since SQL Server
+shows such a login only its own, and the database's owner still describes, scripts and deletes it: the transaction DMVs
+that find sessions using the database from elsewhere are read only with the permission.
+
+Once a database is deleted (or its DROP completed before a later step failed), each Database Properties document on it
+turns orphan: what it showed stays, read-only, under "This database no longer exists on <server>." with Close and no
+Refresh, and a toast counts the query windows that were using it ("3 query windows were using SalesDb."), which stay open.
+
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
 [docs/table-designer.md](table-designer.md) describes them.
@@ -107,7 +142,7 @@ choose its default. Database Properties' Open Connections prompt keeps its own c
 | Prompt | Title | Buttons | Example |
 | --- | --- | --- | --- |
 | `renameDatabase` | Rename Database | **Close Connections and Rename**, Rename When Free, Cancel | 3 connections are using Sales (2 query windows in Varia). Close them and rename the database? 1 session has an open transaction, which closing rolls back. Varia's query windows with open transactions: Query 1.sql. Rename When Free waits until they disconnect; Stop in the status bar ends the wait. |
-| `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. |
+| `disableLogin` | Disable Login | Disable, **Cancel** | Disable the login app_user? New connections will be refused. 2 sessions connected as this login stay connected until they end; Activity Monitor can end them. SQL Server Agent (MSSQLSERVER) runs as this account, and cannot connect while it is disabled. Varia's connection Reporting (sql01) signs in as this login, and cannot reconnect while it is disabled. |
 
 The default button is bold. Rename Database defaults to Rename When Free where Varia may not close the connections, and
 Disable Login to Cancel for a login a service runs as.
@@ -137,9 +172,9 @@ last resort.
 
 Create Catalog is the only long run so far; the others are reserved for the actions that will use them.
 
-A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
-shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
-connections…").
+A short state action (a rename, a login's Disable and Enable) runs as a status-bar job instead: one per node, shown
+with Stop after `statusDelayMs` ("Disabling app_user…", Stop disable), naming its step when it has several ("Renaming
+Sales to Sales2: Closing connections…").
 
 ## Database Properties
 
@@ -301,7 +336,9 @@ except for a contained database user or an unread profile. Query windows are the
 Deleting a database runs SSMS's statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK
 IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history
 (`msdb.dbo.sp_delete_database_backuphistory`). SSMS deletes the history first, so a DROP that fails (for example, a
-query window still uses the database) would lose it; Script Action shows the order Varia runs.
+query window still uses the database) would lose it; Script Action shows the order Varia runs. When the DROP fails or is
+stopped after Close existing connections set single-user mode, a compensation step restores the access the database had
+(Restore multi-user access, or Restore restricted user access), so a failed delete never leaves it single-user.
 
 If the backend stops while an action runs: "The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check."
 
@@ -315,7 +352,6 @@ names by a live dry run:
 | Restore multi-user access | `ALTER DATABASE [db] SET  MULTI_USER` |
 | Restore restricted user access | `ALTER DATABASE [db] SET  RESTRICTED_USER` |
 | Detach the database | `EXEC master.dbo.sp_detach_db @dbname = N'db', @skipchecks = 'false'` ('true' when Update Statistics is cleared) |
-| Disable the login, Enable the login | `ALTER LOGIN [login] DISABLE`, `ALTER LOGIN [login] ENABLE` |
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
 | Add to a server role (New Login) | `ALTER SERVER ROLE [role] ADD MEMBER [login]` |
@@ -328,9 +364,91 @@ names by a live dry run:
 
 Object Explorer gives each login a subtype from `sys.server_principals`: `sa` by principal_id 1 whatever its name, `system`
 for SQL Server's own logins (a name that starts and ends with `##`), else by type: `S` `sql`, `U` `windowsUser`, `G` `windowsGroup`, `C` `certificateMapped`, `K` `asymmetricKeyMapped`, `E` `externalUser`, `X` `externalGroup`.
-The login actions arrive in later versions; their rules are data already, and the backend's login preflight reads the
-facts they need in the action's own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login
-another session is changing, and never a password hash, which no Varia statement may name.
+The backend's login preflight reads the facts an action needs in the action's own connection from catalog views only:
+never `LOGINPROPERTY`, which waits on a login another session is changing, and never a password hash, which no Varia
+statement may name. Delete, Unlock and Properties arrive in later versions; their rules are data already.
+
+### Disable, Enable and Rename
+
+Disable and Enable are inline actions in a login's menu after Copy Name, one of them at a time: a disabled login offers
+Enable. Each runs at once as a status-bar job with Stop, from the server's master database, and then Object Explorer
+reselects the login with its new state. Both first read the login's facts (`actions.describe` with `loginFacts`, in the
+action's own connection, under READ UNCOMMITTED so that another session's open change to the login cannot hold it back;
+meanwhile the status bar says "Disabling app_user: Reading the login…" with Stop, and a second request for the login
+says why it waits). Disable then asks (A13 `disableLogin`): the prompt counts the sessions connected as the login, which
+stay connected, warns when it is a member of sysadmin, names the service that runs as it (from
+`sys.dm_server_services`, or an `NT SERVICE\` name), and names Varia's other connections that sign in as it. Enable
+asks nothing; its notice says when permission to connect is still denied. The statement itself waits behind such a
+change, as SSMS's does, until Stop. The facts only advise, since they read past other sessions' open changes, but the
+request names the login they describe (its SID and creation time): when another login has taken the name since,
+the backend refuses before any statement ("Refresh Object Explorer and try again"). Before Disable, Enable and Rename
+run, the preflight reads only the login's own rows, never what it owns, so another session's open change to other
+logins (a New Login in its transaction) holds back neither it nor Script Action.
+
+Rename uses Object Explorer's inline box, as for a table. A SQL Server login's name cannot hold a backslash: "A SQL Server login's name cannot contain a backslash."
+SQL Server would refuse it (15021). No login may take a name in SQL Server's own form: "Names that start and end with ## are reserved for SQL Server's own logins."
+SQL Server would accept it, and Varia would then take the login for one of SQL Server's own. The box stays open with
+either message, which leaves the banner when the box closes. The backend refuses a name another login or server role
+uses (`NAME_IN_USE`). A notice says database users mapped to the login keep their names, and a warning names Varia's
+other connections that sign in under the old name.
+
+| Action | Step | As Script Action writes it |
+| --- | --- | --- |
+| Disable | Disable the login | `ALTER LOGIN [login] DISABLE` |
+| Enable | Enable the login | `ALTER LOGIN [login] ENABLE` |
+| Rename | Rename | `ALTER LOGIN [login] WITH NAME=[new]` |
+
+### Delete
+
+Delete opens Delete Object, as for a table, with the login's row (Object Type Login). Its describe reads the login's
+facts past other sessions' open changes (READ UNCOMMITTED: they only advise), then the database users mapped to its SID:
+one read per online database (no snapshots) the connection can enter and see the users of (VIEW DEFINITION), each under
+the lock timeout, at most 4,096 databases within 20 s. A database it does not reach (offline, restoring,
+not accessible or readable, a failed read, or past the bound or budget) counts as not checked, and the page says how
+many; the server's total is read on its own, so a connection that may read no database is told it checked none, never
+that no user is mapped. The page lists at most 100 users, each as "database: user" ("…and n more" after them), and
+marks the ones a Delete keeps with why: those whose DROP USER would fail (a schema, role or other securable it owns, a
+permission it granted, 15138, 15421, 15183 and 15284), in a read-only database, or where the connection may not drop users
+(ALTER ANY USER).
+
+SSMS deletes the login and says afterwards that its users are left orphaned; Varia says it first: "Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them."
+It offers "Also delete the database users mapped to this login" (unchecked), greyed with its reason when no user is mapped, every
+listed user is kept, more are mapped than it lists, or the connection cannot count the login's sessions (without VIEW
+SERVER STATE a session would fail the login's DROP after its users were gone). SSMS's note shows only where a user may be
+left orphaned. With the option, Delete drops each user it may in its database, then the login in master; the steps name
+each user ("user in database"). The statements are not one transaction (DROP USER in several databases would hold all of
+them until the end), and every partial outcome is coherent: a user dropped and the login kept. After a user was dropped,
+the loaded Users folders of those databases reload, and after a failure or Stop the page reads the login again, so it lists
+only the users still mapped.
+
+The warnings name what SQL Server refuses the DROP for, with the warning icon: the sessions connected as the login (15434;
+Activity Monitor can end them), the databases it owns (15174), its SQL Server Agent jobs (15170), the server roles,
+endpoints and availability groups it owns (15141) and the server permissions it granted to others (15173); the service
+that runs as a Windows login is a note, with the info icon. OK still runs, and the backend refuses any of these before a
+statement runs. A Windows group's members sign in under their own SIDs, so a group counts no sessions. The
+protected-principal rules grey OK with their reason, drawn as an error (sa, the login this connection uses, SQL Server's
+own logins, the permissions); Script Action still works and runs nothing. Varia's other connections that sign in as the
+login are named as warnings: their pools' sessions fail the DROP until they are disconnected, and Activity Monitor neither
+shows nor ends Varia's own sessions. The execute needs the login it read (its SID and creation time) and reads the login
+again under READ COMMITTED: a login that took the name since is refused. With its users, it also refuses, before any
+DDL, a login whose sessions it cannot count (`NOT_SUPPORTED`) and a database its own scan could not read again (`BLOCKED`,
+retryable), whose users would stay orphaned. Each DROP checks, in its own batch, the principal it was planned for: a user
+by its name and the login's SID, the login by its SID, principal id and creation time, again after the DROP in one
+transaction, so a user renamed or remapped in an open transaction while the scan read past it, or a login dropped and
+created again while an earlier step waited, is never dropped in their stead (`NOT_FOUND`). When a session the preflight
+could not count (without VIEW SERVER STATE) fails the DROP, `IN_USE` says to end it first.
+
+| Action | Step | As Script Action writes it |
+| --- | --- | --- |
+| Delete, with the users | Drop the database user (one per user; its detail "user in database") | `DROP USER [user]`, in its database |
+| Delete | Drop the login | `DROP LOGIN [login]`, in master |
+
+SQL Server's errors for logins map to the codes below; without ALTER ANY LOGIN, `PERMISSION_DENIED` also says what
+changing a login needs. SQL Server's own logins (`##…##`, trailing spaces ignored as SQL Server ignores them) are
+refused by the backend as system objects, whatever the page asks: the preflight judges the principal the server
+collation finds by the name the catalog holds, and the statement names exactly that principal, so no other spelling
+(a trailing space, a fullwidth `＃`) reaches one of them. A greyed verb's reason (a Windows group's Disable, SQL
+Server's own logins) is its hint in the command palette.
 
 ✓ allowed, ○ shown greyed and refused, – not offered.
 
@@ -340,7 +458,7 @@ another session is changing, and never a password hash, which no Varia statement
 | `system` | ○ | ○ | ○ | ○ | ○ | This login belongs to SQL Server and cannot be changed. |
 | `sql` | ✓ | ✓ | ✓ | ✓ | ✓ |  |
 | `windowsUser` | ✓ | ✓ | – | ✓ | ✓ |  |
-| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status. |
+| `windowsGroup` | ○ | – | – | ✓ | ✓ | A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead. |
 | `certificateMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `asymmetricKeyMapped` | ✓ | ✓ | – | ✓ | ✓ |  |
 | `externalUser` | ✓ | ✓ | – | ○ | ✓ | A Microsoft Entra login cannot be renamed. |
@@ -370,7 +488,9 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `ownedDatabases` | 100 | Databases a login owns that the login preflight names |
 | `mappedUsers` | 100 | Mapped database users Delete Login lists |
 | `scanDatabases` | 4,096 | Databases the mapped-user scan reads |
+| `scanMs` | 20,000 | How long the mapped-user scan reads databases before it counts the rest as not checked, in ms |
 | `serviceNames` | 4 | Service accounts the service lookup reads |
+| `serviceName` | 256 | Characters of the service name the login facts carry |
 
 ### New Login
 
@@ -507,3 +627,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a state action (a rename, a login's Disable or Enable) runs before the status bar shows it with Stop, in ms |
 | `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
+| `blockers` | 8 | Sessions in a database that Delete Object lists (never Varia's own pooled sessions); more set `blockersTruncated` |
+| `blockerChars` | 128 | Characters of each listed session's program and host names |

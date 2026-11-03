@@ -4,8 +4,8 @@ import { join, resolve } from 'node:path'
 import { explorerLines, explorerRow, explorerTree } from './fixtures/explorer-tree.mjs'
 import {
   activeDocument, anyResultGrid, backendReady, closeDocumentButton, documentTabs, editorText as editorTextOf, emptyState, emptyStateIcon, emptyStateTitle, errorMessages,
-  executingMark, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
-  queryStatus, resultGrid, toolbar, toolbarButton, unsavedMark, workspaceEmpty
+  executingMark, explorerFooter, explorerToolbar, kindIcon, messages, openMenus, outputStatus, outputView, part, primaryAction, queryBar, queryBarButton, queryConnection, queryDatabase, queryServer,
+  queryStatus, resultGrid, statusChips, toolbar, toolbarButton, unsavedMark, workspaceEmpty
 } from './fixtures/ui.mjs'
 
 await mkdir('artifacts', { recursive: true })
@@ -634,6 +634,84 @@ try {
   expect((await loads()).filter(([, node]) => node === 'serverRoles')).toHaveLength(1)
   await toggle('server-a', 'Security', 'Logins')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Logins', 'sa')).toBeVisible()
+  // D4a: a disabled login and one denied permission to connect differ in badge, chip and name; one that can connect has neither.
+  const login = name => explorerRow(page, 'server-a', 'Security', 'Logins', name)
+  await expect(await login('AppUser')).toHaveAttribute('aria-label', 'AppUser')
+  await expect(await login('sa')).toHaveAttribute('aria-label', 'sa, Disabled')
+  await expect(await login('Denied')).toHaveAttribute('aria-label', 'Denied, Permission to connect denied')
+  await expect(statusChips(await login('sa'))).toHaveText(['DISABLED'])
+  await expect(statusChips(await login('Denied'))).toHaveText(['CONNECT DENIED'])
+  await expect(statusChips(await login('AppUser'))).toHaveCount(0)
+  await expect((await login('sa')).locator(part.explorerBadge)).toHaveAttribute('data-badge', 'disabled')
+  await expect((await login('Denied')).locator(part.explorerBadge)).toHaveAttribute('data-badge', 'noAccess')
+  await expect((await login('AppUser')).locator(part.explorerBadge)).toHaveCount(0)
+  await expect(await login('AppUser')).toHaveAttribute('title', 'AppUser\nLogin\nSQL Server authentication · Password policy enforced · Password expiration enforced')
+  await expect(await login('Denied')).toHaveAttribute('aria-description', 'Login\nSQL Server authentication · Permission to connect denied · Password policy enforced\nCONNECT SQL is denied: the login cannot connect.')
+  await expect(await login('CONTOSO\\Ops')).toHaveAttribute('title', 'CONTOSO\\Ops\nLogin\nWindows group')
+  // Disabled and denied: the disabled badge, both chips and both phrases, since Enable alone would leave it unable to connect.
+  await expect(await login('Retired')).toHaveAttribute('aria-label', 'Retired, Permission to connect denied, Disabled')
+  await expect(statusChips(await login('Retired'))).toHaveText(['CONNECT DENIED', 'DISABLED'])
+  await expect((await login('Retired')).locator(part.explorerBadge)).toHaveAttribute('data-badge', 'disabled')
+  // The badge's colour is the theme's: amber for a denied login, red for a disabled one.
+  const badgeColor = async (name, key) => (await login(name)).locator(part.explorerBadge).evaluate((badge, key) => {
+    const probe = document.createElement('span')
+    probe.style.color = `var(--varia-${key})`
+    document.body.append(probe)
+    const expected = getComputedStyle(probe).color
+    probe.remove()
+    return { actual: getComputedStyle(badge).color, expected }
+  }, key)
+  for (const [name, key] of [['Denied', 'warningForeground'], ['sa', 'errorForeground']]) {
+    const { actual, expected } = await badgeColor(name, key)
+    expect(actual, name).toBe(expected)
+  }
+  // M5: beside its chips a login's name stays whole up to 65 % of the row (65cqw: the row is the container), and the chips
+  // give way first; whatever the font, the chips show only once the name has that share, and the row's end stays inside it.
+  const loginFit = async name => (await login(name)).evaluate((row, part) => {
+    const width = element => element.getBoundingClientRect().width
+    const unconstrained = element => {
+      const clone = element.cloneNode(true)
+      Object.assign(clone.style, { position: 'absolute', left: '0', top: '0', width: 'auto', maxWidth: 'none', visibility: 'hidden' })
+      row.append(clone)
+      const size = width(clone)
+      clone.remove()
+      return size
+    }
+    const label = row.querySelector(part.explorerLabel), chips = row.querySelector(part.explorerChips), end = row.querySelector(part.explorerEnd), style = getComputedStyle(row)
+    const content = row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
+    return {
+      label: width(label), needed: unconstrained(label), cap: 0.65 * content, chips: width(chips), endInside: end.getBoundingClientRect().right <= row.getBoundingClientRect().right + 0.5,
+      pills: [...chips.querySelectorAll(part.statusPill)].map(pill => ({ shown: width(pill), needed: unconstrained(pill) }))
+    }
+  }, part)
+  const explorerPane = explorerFooter(page).locator('..')
+  for (const width of [undefined, '200px', '640px']) {
+    if (width) await explorerPane.evaluate((element, value) => { element.style.width = value }, width)
+    for (const name of ['##MS_PolicyTsqlExecutionLogin##', 'Denied', 'Retired']) {
+      const fit = await loginFit(name), share = Math.min(fit.needed, fit.cap)
+      const shown = `${name} at ${width ?? 'the default width'}: ${JSON.stringify(fit)}`
+      expect(fit.label, shown).toBeLessThanOrEqual(share + 0.5)
+      if (fit.chips > 0.5) expect(fit.label, shown).toBeGreaterThanOrEqual(share - 0.5)
+      expect(fit.endInside, shown).toBe(true)
+      // In a wide pane every name and chip shows whole.
+      if (width === '640px') {
+        expect(fit.label, shown).toBeCloseTo(fit.needed, 0)
+        for (const pill of fit.pills) expect(pill.shown, shown).toBeCloseTo(pill.needed, 0)
+      }
+    }
+  }
+  await explorerPane.evaluate(element => { element.style.width = '' })
+  await page.screenshot({ path: artifact('explorer-logins.png') })
+  // The badge's disc is the row's fill on a selected and a hovered row, not a ring of the side bar's.
+  const disc = async name => (await login(name)).evaluate((row, part) => {
+    const fill = getComputedStyle(row).backgroundColor
+    return getComputedStyle(row.querySelector(part.explorerBadge)).backgroundImage === `linear-gradient(${fill}, ${fill})`
+  }, part)
+  await (await login('Denied')).click()
+  await expect(await login('Denied')).toHaveAttribute('aria-selected', 'true')
+  await expect.poll(() => disc('Denied')).toBe(true)
+  await (await login('sa')).hover()
+  await expect.poll(() => disc('sa')).toBe(true)
   // An empty folder loses its chevron.
   await toggle('server-a', 'Security', 'Credentials')
   await expect(await explorerRow(page, 'server-a', 'Security', 'Credentials')).not.toHaveAttribute('aria-expanded')

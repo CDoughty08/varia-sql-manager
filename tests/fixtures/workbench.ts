@@ -45,7 +45,8 @@ import { backendContribution } from '../../src/renderer/src/contributions/backen
 import { helpContribution } from '../../src/renderer/src/contributions/help'
 import { scriptingContribution } from '../../src/renderer/src/contributions/scripting'
 import { ScriptingService } from '../../src/renderer/src/scripting/ScriptingService'
-import { ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { objectActionNoticeKey, ObjectActionService } from '../../src/renderer/src/actions/ObjectActionService'
+import { databaseGoneHandler } from '../../src/renderer/src/dialogs/database-gone'
 import { ObjectDialogService } from '../../src/renderer/src/dialogs/ObjectDialogService'
 import { CreateCatalogService } from '../../src/renderer/src/ssis/CreateCatalogService'
 import { LongRunService } from '../../src/renderer/src/services/long-runs'
@@ -308,12 +309,15 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   const focusEditor = vi.fn()
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor, schedule: callback => callback(), ...(options.timers ? { timers: options.timers } : {}) })
-  const dialogs = new ObjectDialogService({ api, connections, explorer, documents, files, focusEditor })
+  const dialogs = new ObjectDialogService({
+    api, connections, explorer, documents, files, focusEditor,
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
+  })
   const longRuns = new LongRunService({ api })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({ api, documents, files, connections, explorer })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections })
-  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, ...(options.timers ? { timers: options.timers } : {}) })
+  const properties = new DatabasePropertiesService({ api, documents, files, connections, explorer, focusEditor, close: id => { void files.close(id) }, ...(options.timers ? { timers: options.timers } : {}) })
   // Activity Monitors subscribe through a stand-in for LiveService that records each view.
   const liveViews = fakeLiveViews()
   const activity = new ActivityMonitorService({ documents, connections, live: liveViews, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values })
@@ -321,6 +325,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const operations = new SsisOperationsService({ api, documents, panes, live, connections, settings })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
   const context = new ContextKeyService({
     platform,
     documents,
@@ -348,7 +353,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const commands = new CommandService({ state: () => context.getState(), modalOpen: options.modal })
   const actions = new ObjectActionService({
     api, explorer, documents, queries, connections, selectTopCount: () => settings.get('objectExplorer.selectTopRows'),
-    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message) }, ...(options.timers ? { timers: options.timers } : {})
+    report: { error: message => commands.reportError(message), warning: message => commands.reportWarning(message), clear: message => commands.clearError(message), notice: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey }) },
+    ...(options.timers ? { timers: options.timers } : {})
   })
   const keybindings = new KeybindingService({ platform, commands, context, modalOpen: options.modal ?? (() => false), editorHasTextFocus: () => false })
   const host: ShellHost = {

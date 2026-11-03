@@ -6,10 +6,12 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import type { NewLoginModel } from '../../../shared/actions/logins.ts'
-import type { ActionDescribeResult, ActionError, ActionRequest, CreateLoginRequest, DatabasePropertiesModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept, type NewLoginModel } from '../../../shared/actions/logins.ts'
+import {
+  dropDatabaseStepTitle, dropUserStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type CreateLoginRequest, type DatabasePropertiesModel, type DeleteTarget
+} from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
-import type { ObjectRef } from '../../../shared/explorer/refs.ts'
+import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
 import type { ExplorerMenuNode } from '../menus/targets'
 import { afterDatabaseFailure, databaseConfirm, databaseRequest, initialDatabaseDraft, type DatabaseDraft, type DatabaseRequest } from './database-properties'
@@ -44,6 +46,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly secrets?: (draft: Draft) => boolean
   /** A run that window close, Disconnect and Restart must not stop part way (src/shared/long-runs.ts). */
   readonly longRun?: LongRunKind
+  /**
+   * Whether the action's reply says the database it ran on is gone (Delete: a success, or a reply whose DROP completed before a
+   * later step failed or stopped), so its Properties documents turn orphan and the query windows that used it are counted (D3 §8).
+   */
+  readonly removesDatabase?: (target: ObjectRef, steps: readonly ActionStep[], succeeded: boolean) => boolean
   /** The name Script Action to File suggests, when the target has none. */
   readonly fileName?: (draft: Draft) => string
   /** A question to ask before OK sends `request` (never before Script). */
@@ -55,20 +62,87 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest) => void
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
+  /** Why OK is greyed (the protected-principal rules' refusal of a login), shown on the page; Script still works. */
+  readonly blocked?: (model: Model) => string | undefined
+  /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
+   *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
+  readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
+  /** Whether the dialog reads its model again after steps completed before a failure or Stop (ObjectDialogService.reload). */
+  readonly reloadsAfterPartial?: (target: ObjectRef) => boolean
 }
+/** A folder kind and the databases whose folder of that kind changed. */
+export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
 
-/** Delete Object's checkboxes; they apply to databases only. */
-export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
+/** Delete Object's checkboxes: the first two apply to databases only, the last to logins only. */
+export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
+/** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
+export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
+/**
+ * Why Delete Object greys the option to drop the mapped users, or undefined when it offers it: no user is mapped, more are mapped
+ * than it lists (the backend refuses those), every one listed is kept, or the login's sessions cannot be counted (the backend
+ * refuses that too: a session would fail the login's DROP after its users were gone).
+ */
+export const dropMappedUsersNote = (model: DeleteTarget): string | undefined => {
+  const mapped = model.mappings?.mapped ?? 0, listed = model.mappings?.users.length ?? 0
+  if (mapped === 0) return loginDeleteText.noneToDrop
+  if (mapped > listed) return loginDeleteText.tooMany
+  if (droppableUsers(model).length === 0) return loginDeleteText.allKept
+  if (model.login?.sessions === undefined) return loginDeleteText.sessionsUncounted
+  return undefined
+}
+/** Whether Delete Object offers to drop the mapped users: nothing greys it (dropMappedUsersNote). */
+export const canDropMappedUsers = (model: DeleteTarget): boolean => !!model.mappings && dropMappedUsersNote(model) === undefined
+/** Why Delete Object greys OK for a login: the protected-principal rules (logins.ts) over the facts it read (own, sa, system, permissions). */
+export const loginDeleteRefusal = (model: DeleteTarget): string | undefined => {
+  const refused = model.login && loginRefusal(model.login, 'delete')
+  return refused ? loginMessages[refused] : undefined
+}
+/** Whether Delete Object can close the database's connections: not for a snapshot, nor where the describe says why not (Managed Instance cannot set SINGLE_USER; an offline database has none). */
+export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
+const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** Varia's query tabs whose session holds an open transaction in the database, as `promptTabFacts` bounds them. */
+export interface TabTransactions { readonly tabsWithTransactions?: readonly string[]; readonly moreTabsWithTransactions?: number }
+/**
+ * What Close existing connections rolls back (A7): how many sessions hold an open transaction, and which of Varia's query
+ * windows. Where the option is greyed (Managed Instance, an offline database, a snapshot) it names no option the user cannot
+ * choose and only counts them.
+ */
+export function rollbackNote(model: DeleteTarget, tabs: TabTransactions): string {
+  const named = tabs.tabsWithTransactions ?? [], more = tabs.moreTabsWithTransactions ?? 0
+  return [
+    model.withTransaction ? `${count(model.withTransaction, 'session has an open transaction', 'sessions have open transactions')}${canCloseConnections(model) ? ', which Close existing connections rolls back' : ''}.` : '',
+    named.length ? `Varia's query windows with an open transaction: ${named.map(name => displayText(name)).join(', ')}${more > 0 ? ` and ${more.toLocaleString('en-US')} more` : ''}.` : ''
+  ].filter(Boolean).join(' ')
+}
+/** The ids of the notes that describe Close existing connections: why it is greyed, and what it rolls back. */
+export const closeDescription = (model: DeleteTarget, rollback: string): string | undefined =>
+  [model.closeConnectionsNote ? 'delete-object-close-note' : '', rollback ? 'delete-object-rollback-note' : ''].filter(Boolean).join(' ') || undefined
 export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, DeleteDraft> = {
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,
   // SSMS: Delete backup and restore history is checked (greyed for a snapshot); Close existing connections is not.
-  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false }),
+  // SSMS deletes a login and leaves its users orphaned; Varia offers to delete them too, unchecked (D4 owner question 3).
+  initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false, dropMappedUsers: false }),
   request: (target, model, draft) => {
     const database = target.kind === 'database'
-    return { action: 'delete', target, closeConnections: database && !model.isSnapshot && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
+    const request = { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory } as const
+    // The login the dialog read: the backend refuses one that has taken the name since, whose facts the dialog never showed.
+    return target.kind === 'login' && model.login
+      ? { ...request, dropMappedUsers: canDropMappedUsers(model) && draft.dropMappedUsers, loginIdentity: { sid: model.login.sid, created: model.login.created } }
+      : request
   },
-  afterSuccess: effects => effects.refreshListing()
+  removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
+  afterSuccess: effects => effects.refreshListing(),
+  blocked: model => loginDeleteRefusal(model),
+  // A login's Delete that dropped users and then failed or stopped: the list shows who is still mapped.
+  reloadsAfterPartial: target => target.kind === 'login',
+  // Once a user was dropped, the Users folders of every database the dialog listed a droppable user in: a step's detail is clipped
+  // display text, so it is not matched back to its database, and reconciling an unchanged folder changes nothing.
+  changedFolders: (model, steps) => {
+    if (!steps.some(step => step.status === 'done' && step.title === dropUserStepTitle)) return undefined
+    const databases = [...new Set(droppableUsers(model).map(user => user.database))]
+    return databases.length ? { folder: 'users', databases } : undefined
+  }
 }
 
 const isProperties = (request: BuiltRequest): request is DatabaseRequest => request.action === 'properties'

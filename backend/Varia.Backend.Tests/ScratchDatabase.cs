@@ -87,6 +87,16 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     public string XeSession => Name + "_xe";
     private readonly List<string> ownedLogins = [];
     private bool ownsXeSession;
+    /// <summary>Delete parity (D3d): an offline database Delete drops (its files stay), and one whose snapshot fails its DROP.</summary>
+    public string DeleteOffline => Name + "_del";
+    public string DeleteCompensated => Name + "_delc";
+    public string DeleteSnapshot => Name + "_delcs";
+    /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
+    public string DeleteOwned => Name + "_delo";
+    /// <summary>A login's Delete (D4c): the database whose mapped users a Delete drops or leaves orphaned, and the one whose user owns
+    /// a schema, which a Delete keeps (the login owns it first, so its DROP is refused).</summary>
+    public string LoginDeleteUsers => Name + "_ldu";
+    public string LoginDeleteKept => Name + "_ldk";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -98,11 +108,17 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _seam and _seamt are the wave 5 seam checks';
-    // _lgn is New Login's, _lgm, _lgmo (offline) and _lgmr (read-only) its User Mapping's.
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_lgn|_lgm|_lgmo|_lgmr)?$")]
+    // _del, _delc, _delcs and _delo Delete parity's (D3d): an offline database, a database with its snapshot, and the login's own;
+    // _ldu and _ldk a login's Delete's (D4c): its mapped users' databases; _lgn is New Login's, _lgm, _lgmo (offline) and
+    // _lgmr (read-only) its User Mapping's.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_seam|_seamt|_del|_delc|_delcs|_delo|_ldu|_ldk|_lgn|_lgm|_lgmo|_lgmr)?$")]
     private static partial Regex Pattern();
-    // A run's own login, and New Login's (_l and a tag).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8})?$")]
+    // New Login's logins are _l and a tag of 1 to 8 lowercase letters or digits (_lt, _lsx, _ld2 and _ld3 among them);
+    // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
+    // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
+    // of it would have given it (D4b); _ld]' -- the login a Delete drops with its users, _ld2 the one whose Delete leaves its user
+    // orphaned, and _ld3 the login that deletes without VIEW SERVER STATE (D4c).
+    [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8}|_lr\]' --|_ld\]' --)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.
     [GeneratedRegex(@"^VariaScratch_(\d{14})_[0-9a-f]{8}_xe$")]
@@ -124,10 +140,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     internal static bool Sweepable(string name) => Pattern().IsMatch(name);
 
     /// <summary>Whether a name is a scratch object's, this run's or another's on the same server: the .NET checks'
-    /// VariaScratch_ databases, logins and server objects, and the vitest and smoke suites' varia_scratch_ databases.
-    /// Another run's can be mid-setup, single-user, offline or gone a moment later.</summary>
+    /// VariaScratch_ databases, logins and server objects (and the login actions' ##VariaScratch_…_ls##, in SQL Server's own
+    /// name form), and the vitest and smoke suites' varia_scratch_ databases. Another run's can be mid-setup, single-user,
+    /// offline or gone a moment later.</summary>
     public static bool IsScratchName(string name) =>
-        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
+        name.StartsWith("VariaScratch_", StringComparison.Ordinal) || name.StartsWith("##VariaScratch_", StringComparison.Ordinal)
+        || name.StartsWith("varia_scratch_", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Lists every database by name, for "the server is unchanged" checks through <see cref="Lasting"/>.</summary>
     public const string DatabaseNamesSql = "SELECT name FROM sys.databases ORDER BY name;";
@@ -188,9 +206,9 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
                     log("Could not delete a stale scratch backup file of " + group.Key);
             await run(HistorySql(group.Key), "msdb");
         }
-        var logins = await run("SELECT name FROM sys.server_principals WHERE name LIKE N'VariaScratch[_]%' AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
+        var logins = await run("SELECT name FROM sys.server_principals WHERE (name LIKE N'VariaScratch[_]%' OR name LIKE N'##VariaScratch[_]%') AND type = 'S' AND create_date < DATEADD(hour, -6, GETDATE());", "master");
         foreach (var row in logins.Sets.Count == 0 ? [] : logins.Sets[0])
-            if (LoginPattern().IsMatch(row[0]!))
+            if (SweepableLogin(row[0]!))
             {
                 log("Dropping stale scratch login " + row[0]);
                 await run("DROP LOGIN " + Bracket(row[0]!) + ";", "master");
@@ -278,7 +296,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private static string Bracket(string value) => "[" + value.Replace("]", "]]") + "]";
 
     private static Task<SqlRun> Drop(Func<string, string, Task<SqlRun>> run, string name, bool online) => run(
-        (online ? "" : "ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
+        (online ? "" : "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND state = 6) ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
         + "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND source_database_id IS NULL AND state = 0) ALTER DATABASE " + Bracket(name) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n"
         + "IF DB_ID(" + Quote(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";", "master");
 
@@ -425,6 +443,45 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return true;
     }
 
+    /// <summary>For a bare scratch name, Delete parity's offline database (D3d): marked, then taken offline; its files' physical
+    /// names, which the check deletes (<see cref="DeleteFileSql"/>) once Delete has dropped it and left them.</summary>
+    public async Task<List<string>> CreateDeleteOfflineAsync()
+    {
+        await CreateMarkedAsync(DeleteOffline);
+        var files = await Exec("SELECT physical_name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(DeleteOffline) + ") ORDER BY file_id;");
+        await Exec("ALTER DATABASE " + Bracket(DeleteOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        return [.. files.Sets[0].Select(row => row[0]!)];
+    }
+
+    /// <summary>Deletes a file the server left (sysadmin, SQL Server 2019 and later): an offline-dropped scratch database's, whose
+    /// ACL Windows authentication leaves to the dropping login, so attaching it again fails. Only for paths this run created.</summary>
+    public static string DeleteFileSql(string file) => "EXEC master.sys.xp_delete_files " + Quote(file) + ";";
+
+    /// <summary>For a bare scratch name with its login (<see cref="CreateLoginAsync"/>), Delete parity's database that the login owns (D3d).</summary>
+    public async Task<string> CreateDeleteOwnedAsync()
+    {
+        await CreateMarkedAsync(DeleteOwned);
+        await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
+        return DeleteOwned;
+    }
+
+    /// <summary>For a bare scratch name, a login's Delete's two databases (D4c), marked like the rest.</summary>
+    public async Task CreateLoginDeleteAsync()
+    {
+        await CreateMarkedAsync(LoginDeleteUsers);
+        await CreateMarkedAsync(LoginDeleteKept);
+    }
+
+    /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP
+    /// (3709) and which disposal drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateDeleteCompensatedAsync()
+    {
+        await CreateMarkedAsync(DeleteCompensated);
+        if (!await CreateSnapshotAsync(DeleteCompensated, DeleteSnapshot)) return false;
+        created.Insert(0, DeleteSnapshot);
+        return true;
+    }
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {
@@ -484,7 +541,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     {
         if (ownsXeSession) await run(DropXeSql(XeSession), "master");
         foreach (var login in ownedLogins) await run("IF EXISTS (SELECT 1 FROM sys.server_principals WHERE name = " + Quote(login) + ") DROP LOGIN " + Bracket(login) + ";", "master");
-        foreach (var name in created) await Drop(run, name, name != Offline && name != MappingOffline);
+        foreach (var name in created) await Drop(run, name, name != Offline && name != MappingOffline && name != DeleteOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         if (loginCreated) await run("DROP LOGIN " + Bracket(Login!) + ";", "master");

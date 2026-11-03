@@ -240,6 +240,10 @@ SSIS Catalog objects carry their folder (`ssisFolder`) and project (`ssisProject
 
 A 9 px badge (`--varia-glyph-badge`) at the bottom right of the row icon.
 Disabled, unavailable and inaccessible nodes are dimmed as well; read-only databases are not, because their sublabel says it.
+The badge is red (`errorForeground`) for a disabled node and an error, amber (`warningForeground`) for `noAccess` (a database
+the current login cannot open, a login denied permission to connect), grey (`disabledForeground`) for an unavailable
+database and a lost server, and the icon's colour while loading. It sits on a disc of the row's own fill, hovered and
+selected included, so the icon under it does not show through.
 
 | Status | Badge |
 | --- | --- |
@@ -248,6 +252,37 @@ Disabled, unavailable and inaccessible nodes are dimmed as well; read-only datab
 | `noAccess` | `circle-slash` |
 | `error` | `error` |
 | `loading` | `loading` |
+
+## Login status
+
+Security › Logins reads catalog views only (`sys.server_principals`, `sys.server_permissions` and `sys.sql_logins`), never
+`LOGINPROPERTY`, which waits for another session's open `ALTER LOGIN` whatever the isolation level. A disabled login is
+`disabled`; otherwise one denied permission to connect (`DENY CONNECT SQL`) is `noAccess`. They keep apart, with their own
+badge and chip, because they are lifted apart: Enable leaves a denial in place. A login that is both keeps the `disabled`
+status and badge, and the listing also sends `connectDenied`, so its row shows both chips and says both, the denial first:
+a narrow pane shows only the first chip, and the badge already says Disabled. The chips are static, from the listing (no
+probe), and their words join the row's accessible name ("sa, Disabled"; "x, Permission to connect denied, Disabled");
+their sentences are the tooltip's state. Beside them the name stays whole up to 65 % of the row, and the chips give way
+first, each ending in an ellipsis, down to none. A row's subtype
+comes from `src/shared/actions/logins.ts`: `sa` by principal_id 1 whatever its name, `system` for SQL Server's own `##…##`
+logins, else by type. Its tooltip names its kind, then Disabled and Permission to connect denied (both when both apply),
+then "Password policy enforced" and "Password expiration enforced" for a SQL login whose policy flags are on.
+Lock-out, expiry and must-change are not shown: only LOGINPROPERTY knows them.
+
+| Type | Subtype | Kind in the tooltip |
+| --- | --- | --- |
+| `S` | `sql` | SQL Server authentication |
+| `U` | `windowsUser` | Windows user |
+| `G` | `windowsGroup` | Windows group |
+| `C` | `certificateMapped` | Mapped to a certificate |
+| `K` | `asymmetricKeyMapped` | Mapped to an asymmetric key |
+| `E` | `externalUser` | Microsoft Entra user or application |
+| `X` | `externalGroup` | Microsoft Entra group |
+
+| Status | Chip | Tone | Words | Tooltip |
+| --- | --- | --- | --- | --- |
+| `disabled` | DISABLED | neutral | Disabled | The login is disabled: new connections are refused; open sessions continue. |
+| `noAccess` | CONNECT DENIED | warning | Permission to connect denied | CONNECT SQL is denied: the login cannot connect. |
 
 ## Live status
 

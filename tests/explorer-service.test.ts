@@ -53,7 +53,9 @@ function fakeBackend() {
     /** AppData's row fields (a sublabel, no chevron when offline), table subtypes and other row fields by name. */
     appData: {} as Partial<ExplorerNode>, subtypes: {} as Record<string, NodeSubtype>, tableFields: {} as Record<string, Partial<ExplorerNode>>,
     /** Locked cannot be opened while this holds; `leafTables` lists tables without a chevron. */
-    lockedDenied: true, leafTables: false
+    lockedDenied: true, leafTables: false,
+    /** sa's row fields in Logins. */
+    sa: {} as Partial<ExplorerNode>
   }
   const sent: Sent[] = []
   const holds: ((params: ExplorerChildrenParams) => boolean)[] = []
@@ -82,7 +84,7 @@ function fakeBackend() {
       }
       case 'systemDatabases': return ok(['master', 'model'].map(name => object({ kind: 'database', name }, name, { subtype: 'system' })))
       case 'serverSecurity': return ok([folder(owner, 'logins'), folder(owner, 'audits')])
-      case 'logins': return ok([object({ kind: 'login', name: 'sa' }, 'sa')])
+      case 'logins': return ok([object({ kind: 'login', name: 'sa' }, 'sa', state.sa)])
       case 'audits': return state.auditsDenied ? failure('PERMISSION_DENIED', 'You do not have permission to view Audits.') : ok([object({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit', { hasChildren: false })])
       case 'tables': {
         const offset = params.cursor ? Number(params.cursor.split('.')[2]) : 0
@@ -879,6 +881,28 @@ describe('ExplorerService: reconcile', () => {
     f.explorer.expand(app)
     await settle()
     expect(f.labels()).toContain('      Tables')
+  })
+  it('keeps a login\'s denial of CONNECT SQL beside its status, from the first page and through reconciles', async () => {
+    const f = fixture()
+    f.state.sa = { status: 'disabled', connectDenied: true }
+    f.connect()
+    await settle()
+    await f.open('Security')
+    const logins = await f.open('Logins')
+    const sa = f.find('sa')!
+    expect(f.explorer.node(sa)).toMatchObject({ status: 'disabled', connectDenied: true })
+    const rev = f.explorer.node(sa)!.rev
+    // GRANT CONNECT SQL: still disabled, no longer denied, and the row is drawn again.
+    f.state.sa = { status: 'disabled' }
+    f.explorer.reconcile(logins)
+    await settle()
+    expect(f.find('sa')).toBe(sa)
+    expect(f.explorer.node(sa)!.connectDenied).toBeUndefined()
+    expect(f.explorer.node(sa)!.rev).toBeGreaterThan(rev)
+    f.state.sa = { status: 'noAccess', connectDenied: true }
+    f.explorer.reconcile(logins)
+    await settle()
+    expect(f.explorer.node(sa)).toMatchObject({ status: 'noAccess', connectDenied: true })
   })
   it('drops the error of a row it keeps and loads it again: at once when expanded, else when next expanded', async () => {
     // After DDL (Database Properties set MULTI_USER, say) on the listing folder, with the row expanded.
@@ -1869,5 +1893,21 @@ describe('ExplorerService: Filter loaded objects, server rows and freshness', ()
     f.explorer.setFilter(tables, undefined)
     await settle()
     expect(f.explorer.listingFreshness(tables)).toEqual({ label: 'Tables', updatedAt: loaded + 120_000 })
+  })
+})
+
+describe('ExplorerService: loaded folders', () => {
+  it('finds the loaded folders of a kind under named databases, which a login\'s Delete reloads (D4c)', async () => {
+    const f = fixture()
+    f.connect()
+    await settle()
+    const id = cid('server-a')
+    expect(f.explorer.loadedFolders(id, 'tables', ['AppData'])).toEqual([])
+    const tables = await f.open('Databases', 'AppData', 'Tables')
+    expect(f.explorer.loadedFolders(id, 'tables', ['AppData', 'Other'])).toEqual([tables])
+    expect(f.explorer.loadedFolders(id, 'tables', ['Other'])).toEqual([])
+    // Views is shown but was never opened: it reads the server when it is.
+    expect(f.explorer.loadedFolders(id, 'views', ['AppData'])).toEqual([])
+    expect(f.explorer.loadedFolders(cid('server-b'), 'tables', ['AppData'])).toEqual([])
   })
 })

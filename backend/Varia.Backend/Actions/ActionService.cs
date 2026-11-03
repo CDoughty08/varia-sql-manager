@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Common;
 using Varia.Backend.Designer;
@@ -36,6 +37,12 @@ internal interface IActionHost
     /// those still in a database just after FreeDatabase are Varia's own, which a cleared pool ends within moments. Query tabs
     /// are unpooled and never among them.</summary>
     IReadOnlySet<int> PoolSessions(string connectionId);
+    /// <summary>The session ids of the backend's open query sessions on connections to the same server. SQL Server gives a freed id
+    /// to the next client, and PoolSessions keeps a cleared pool's ids for minutes, so a query tab can hold one of them: it is the
+    /// user's session, never Varia's pool's. Hosts that open no query sessions (the offline checks') have none.</summary>
+    IReadOnlySet<int> QuerySessions(string connectionId) => new HashSet<int>();
+    /// <summary>The backend's open query sessions on connections to the same server, by SPID: each one's session id (its query tab).</summary>
+    IReadOnlyDictionary<int, string> QueryTabs(string connectionId) => new Dictionary<int, string>();
 }
 
 /// <summary>Limits and test seams (live checks set the internal ones through InternalsVisibleTo).</summary>
@@ -54,6 +61,8 @@ internal sealed class ActionServiceOptions
     public TimeSpan StopGrace { get; set; } = TimeSpan.FromSeconds(10);
     /// <summary>How long freeing a database waits for the sessions of the pools it cleared to end (critic A5).</summary>
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How long a login's mapped-user scan reads databases (null: loginLimits.scanMs); the live checks shorten it.</summary>
+    internal TimeSpan? ScanBudget { get; set; }
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
@@ -120,6 +129,9 @@ internal sealed partial class ActionService : IDisposable
     public int ActiveJobs => Volatile.Read(ref activeJobs);
 
     private static RequestException Invalid(string detail) => new("INVALID_PARAMS", "Invalid object action request: " + detail);
+    /// <summary>A SID as CONVERT(varchar(172), sid, 2) writes it (loginLimits.sidHex).</summary>
+    [GeneratedRegex(@"^[0-9A-F]{2,172}\z")]
+    private static partial Regex LoginSid();
 
     // --- Validation -------------------------------------------------------------------------------------------------------
 
@@ -133,6 +145,8 @@ internal sealed partial class ActionService : IDisposable
         catch (RequestException) { throw Invalid("target."); }
         if (!catalog.Offered(target.Kind, action)) throw Invalid("this object does not offer " + action + ".");
         if (catalog.ServesSystemObjects(action)) return target;
+        // SQL Server's own logins by name, as the Logins folder tells them; the preflight re-derives the subtype.
+        if (target.Kind == "login" && LoginRules.SystemName(target.Name!)) throw Invalid("system objects cannot be changed.");
         if (target.Kind == "database" ? SystemDatabases.Contains(target.Name!) : target.Schema is { } schema && SystemSchemas.Contains(schema)) throw Invalid("system objects cannot be changed.");
         return target;
     }
@@ -144,13 +158,19 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates what main's zod schema (src/shared/actions/schema.ts) accepts for actions.describe: a known
-    /// dialog and a target its action serves, or the table designer and a database, SQL Server's own included.</summary>
+    /// dialog and a target its action serves, the table designer and a database, SQL Server's own included, or a describe
+    /// without a dialog (loginFacts) and a target of its kind that its action serves.</summary>
     public ObjectRefDto Validate(ActionDescribeArgs args)
     {
         Ids(args.ConnectionId, args.RequestId);
         // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
+        if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var describe))
+        {
+            if (args.Target?.Kind != describe.Kind) throw Invalid("target.");
+            return Target(args.Target, describe.Action);
+        }
         if (args.Dialog is null || !catalog.Dialogs.ContainsKey(args.Dialog)) throw Invalid("dialog.");
         // New Login opens on the server: its action makes a login rather than acting on a row.
         if (args.Dialog == "newLogin") return ServerTarget(args.Target);
@@ -168,15 +188,20 @@ internal sealed partial class ActionService : IDisposable
     }
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
-    /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, the delete flags only for
-    /// databases, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that
-    /// takes them (critic A3).</summary>
+    /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
+    /// with nothing but a target and the login's identity, the delete flags only for databases and the login's identity and
+    /// dropMappedUsers only for a login's Delete (whose execute needs the identity), Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an
+    /// execute of an action that takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles, mappings or status.");
+        // The login a confirmation or Delete Object was about: Disable, Enable and Delete read it first.
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "delete") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+            || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
+        if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
         switch (args.Action)
         {
             case "rename":
@@ -184,18 +209,29 @@ internal sealed partial class ActionService : IDisposable
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
+                // Varia would take the renamed login for one of SQL Server's own (zod refuses it too).
+                if (renamed.Kind == "login" && LoginRules.SystemName(args.NewName!)) throw Invalid("newName.");
                 return renamed;
             case "delete":
                 if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
+                if (deleted.Kind != "login" && (args.DropMappedUsers is not null || args.LoginIdentity is not null)) throw Invalid("only a login has mapped users and an identity to check.");
+                // DROP LOGIN and every DROP USER bind to the principal Delete Object showed; Script runs nothing and may omit it.
+                if (deleted.Kind == "login" && !script && args.LoginIdentity is null) throw Invalid("a login's delete needs the loginIdentity it read.");
                 return deleted;
             case "properties":
                 if (args.Design is not null) throw Invalid("properties takes no design.");
                 var target = Target(args.Target, "properties");
                 DatabaseAlter.Validate(catalog, args);
                 return target;
+            case "disable" or "enable":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
+                    throw Invalid(args.Action + " takes only a target.");
+                var login = Target(args.Target, args.Action);
+                if (login.Kind != "login") throw Invalid("target.");
+                return login;
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -221,7 +257,8 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
-        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin" : catalog.ActionOf(args.Dialog);
+        var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? "createLogin"
+            : catalog.Describes.TryGetValue(args.Dialog, out var describe) ? describe.Action : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
             {
@@ -229,7 +266,8 @@ internal sealed partial class ActionService : IDisposable
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
-                _ => DescribeJobAsync(connection, target, band, job)
+                "loginFacts" => DescribeLoginJobAsync(connection, target, job),
+                _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
     }
@@ -254,6 +292,10 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        // Managed Instance refuses SINGLE_USER: Delete Object greys the option there (CloseConnectionsNote), and a request that
+        // asks for it anyway is refused before any connection opens.
+        if (args.Action == "delete" && args.CloseConnections == true && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine == "managedInstance")
+            return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
@@ -377,7 +419,7 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Finds the object again in this connection and derives its subtype. <paramref name="take"/> bounds the
     /// dependents read per kind (0 reads none). Returns an error value when it is gone, unavailable or SQL Server's own.</summary>
-    private async Task<(ActionSubject? Subject, ActionError? Error)> ResolveAsync(SqlConnection connection, ObjectRefDto target, string? newName, int band, int take, CancellationToken token)
+    private async Task<(ActionSubject? Subject, ActionError? Error)> ResolveAsync(SqlConnection connection, ObjectRefDto target, string action, string? newName, int band, int take, CancellationToken token)
     {
         var display = Display(target);
         var title = Title(target);
@@ -386,9 +428,12 @@ internal sealed partial class ActionService : IDisposable
         ScriptPreflight.Row? row = null;
         if (target.Kind == "login")
         {
-            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, take == 0 ? 0 : (int)catalog.Logins.Limit("ownedDatabases"), token);
+            // The login's own rows only: the scans that count what it owns would wait behind other principals' changes. Delete reads
+            // those past them afterwards (LoginDeleteFactsAsync).
+            var (facts, loginRow) = await LoginAsync(connection, target.Name!, newName, null, token);
             if (facts is null) return (null, Error("NOT_FOUND", "The login " + display + " no longer exists. Refresh Object Explorer."));
-            return (new ActionSubject(target, display, title, facts.Subtype, loginRow!, warnings, false, facts), null);
+            // The login by the name the catalog holds: the rules judged that principal, so the DDL names exactly it.
+            return (new ActionSubject(target with { Name = loginRow!.Text("name") }, display, title, facts.Subtype, loginRow, warnings, false, facts), null);
         }
         if (target.Kind == "database")
         {
@@ -403,6 +448,9 @@ internal sealed partial class ActionService : IDisposable
             if (row.Bool("replicated")) warnings.Add(new("The database is used for replication; the DROP fails until replication is removed.", true));
             if (row.Bool("in_availability_group")) warnings.Add(new("The database is in an availability group; the DROP fails until it is removed from the group.", true));
             if (row.Bool("mirrored")) warnings.Add(new("The database is mirrored; the DROP fails until mirroring is removed.", true));
+            if (row.Bool("has_snapshots")) warnings.Add(new(SnapshotsWarning, true));
+            // SQL Server leaves an offline database's files where they are when it drops the database (D3 §8).
+            if (row.Int("state") == OfflineState) warnings.Add(new(OfflineWarning, false));
         }
         else
         {
@@ -464,16 +512,17 @@ internal sealed partial class ActionService : IDisposable
         return (new ActionSubject(target, display, title, subtype, row, warnings, truncated), null);
     }
 
-    /// <summary>The login preflight (ActionSql.Login) in master: the login's facts, at most <paramref name="take"/> names of the
-    /// databases it owns, and its row; null facts when no login of a listed type has the name.</summary>
-    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int take, CancellationToken token)
+    /// <summary>The login preflight in master: the login's facts, at most <paramref name="take"/> names of the databases it owns
+    /// (ActionSql.Login), or with a null take nothing it owns (ActionSql.LoginAlter), and its row; null facts when no login of
+    /// a listed type has the name.</summary>
+    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = ActionSql.Login;
+        command.CommandText = take is null ? ActionSql.LoginAlter : ActionSql.Login;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
         Add(command, "@new", SqlDbType.NVarChar, 128, newName);
-        Add(command, "@take", SqlDbType.Int, 0, take);
+        if (take is { } limit) Add(command, "@take", SqlDbType.Int, 0, limit);
         await using var reader = await command.ExecuteReaderAsync(token);
         if (!await reader.ReadAsync(token)) return (null, null);
         var row = ReadRow(reader);
@@ -482,15 +531,41 @@ internal sealed partial class ActionService : IDisposable
             while (await reader.ReadAsync(token)) owned.Add(reader.GetString(0));
         var type = row.Text("principal_type")?.Trim() ?? "";
         var principalId = row.Int("principal_id");
-        var subtype = catalog.Logins.SubtypeOf(principalId, type, name);
+        // By the catalog's name, never the request's: the server collation finds "##x## " and a fullwidth ＃ spelling of
+        // SQL Server's own ##x##, whose subtype the request's spelling would hide.
+        var subtype = catalog.Logins.SubtypeOf(principalId, type, row.Text("name") ?? "");
         if (subtype is null) return (null, null);
         int? sessions = row.Long("sessions") is { } count ? (int)count : null;
         var created = DatabaseProperties.Iso(row.Raw("create_date")) ?? "";
         var facts = new LoginFactsDto(principalId, type, subtype, row.Bool("is_disabled"), row.Text("sid_hex") ?? "", created, row.NullableBool("policy_checked"), row.NullableBool("expiration_checked"),
-            row.Bool("connect_denied"), row.Bool("is_own"), row.Bool("is_sysadmin"), sessions, row.Int("owned_databases"), owned, row.Int("owned_server_objects"), row.Bool("can_alter"),
-            row.Bool("can_control_server"), row.Bool("name_in_use"));
+            row.Bool("connect_denied"), row.Bool("is_own"), row.Bool("is_sysadmin"), sessions, take is null ? null : row.Int("owned_databases"), owned, take is null ? null : row.Int("owned_server_objects"), row.Bool("can_alter"),
+            row.Bool("can_control_server"), row.Bool("name_in_use"), GrantedPermissions: take is null ? null : row.Int("granted_permissions"));
         return (facts, row);
     }
+
+    /// <summary>The services that run as a Windows login (ActionSql.LoginService), joined, else the service an NT SERVICE\ name
+    /// is; null when there is none. A failed read (no VIEW SERVER STATE, or a server without the view) is no answer.</summary>
+    private async Task<string?> LoginServiceAsync(SqlConnection connection, string name, CancellationToken token)
+    {
+        var names = new List<string>();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = ActionSql.LoginService;
+            command.CommandTimeout = 0;
+            Add(command, "@name", SqlDbType.NVarChar, 128, name);
+            Add(command, "@take", SqlDbType.Int, 0, (int)catalog.Logins.Limit("serviceNames"));
+            await using var reader = await command.ExecuteReaderAsync(token);
+            while (await reader.ReadAsync(token)) if (!reader.IsDBNull(0) && reader.GetString(0) is { Length: > 0 } service) names.Add(service);
+        }
+        catch (SqlException) when (!token.IsCancellationRequested) { names.Clear(); }
+        var text = names.Count > 0 ? string.Join(", ", names) : ServiceOfName(name);
+        return text is null ? null : ScriptingErrors.Clip(text, (int)catalog.Logins.Limit("serviceName"));
+    }
+
+    /// <summary>The service a per-service SID login names (NT SERVICE\SQLSERVERAGENT is SQLSERVERAGENT), or null.</summary>
+    internal static string? ServiceOfName(string name) =>
+        name.StartsWith(@"NT SERVICE\", StringComparison.OrdinalIgnoreCase) && name.Length > 11 ? name[11..] : null;
 
     /// <summary>The live checks' only way to read a login's facts as the login actions will (D4b-d), in the action's own connection.</summary>
     internal async Task<LoginFactsDto?> LoginFactsAsync(string connectionId, string name, CancellationToken token)
@@ -506,13 +581,7 @@ internal sealed partial class ActionService : IDisposable
     /// (src/shared/actions/logins.ts).</summary>
     private ActionError? Refusal(ActionSubject subject, ActionArgs args)
     {
-        if (subject.Login is { } login)
-        {
-            if (catalog.Logins.Refusal(login, args.Action) is { } refused)
-                return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
-            if (args.Action == "rename" && login.NameInUse) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(args.NewName!) + " is already used by another login or server role.");
-            return null;
-        }
+        if (subject.Login is { } login) return LoginRefusal(login, args);
         var row = subject.Row;
         var system = subject.Target.Kind == "database" ? row.Bool("is_system") : row.Bool("is_ms_shipped");
         if (system) return Error("NOT_SUPPORTED", subject.Display + " belongs to SQL Server and cannot be " + (args.Action == "rename" ? "renamed." : "deleted."));
@@ -530,9 +599,63 @@ internal sealed partial class ActionService : IDisposable
         return null;
     }
 
-    /// <summary>The statements an action runs, in order.</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target)
+    /// <summary>A login action's refusal from the facts its preflight read: the protected-principal rules (permissions answer
+    /// PERMISSION_DENIED, the rest NOT_SUPPORTED), then a rename's new name: a backslash in a SQL Server login's, or another
+    /// principal's. First, a login the request's identity does not describe: the name now belongs to another principal, whose
+    /// facts the user never saw (a confirmation's warnings were about the one it read).</summary>
+    internal ActionError? LoginRefusal(LoginFactsDto login, ActionArgs args)
     {
+        if (args.LoginIdentity is { } read && (!string.Equals(read.Sid, login.Sid, StringComparison.Ordinal) || !string.Equals(read.Created, login.Created, StringComparison.Ordinal)))
+            return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+        if (catalog.Logins.Refusal(login, args.Action) is { } refused)
+            return Error(refused is "alterAnyLogin" or "controlServer" ? "PERMISSION_DENIED" : "NOT_SUPPORTED", catalog.Logins.Message(refused));
+        if (args.Action != "rename") return null;
+        if (catalog.Logins.NameRefusal(login.Subtype, args.NewName!) is { } name) return Error("NOT_SUPPORTED", catalog.Logins.Message(name));
+        if (login.NameInUse) return Error("NAME_IN_USE", "The name " + ScriptingErrors.Display(args.NewName!) + " is already used by another login or server role.");
+        return null;
+    }
+
+    /// <summary>sys.databases state of an offline database.</summary>
+    internal const int OfflineState = 6;
+    internal const string OfflineWarning = "This database is offline. Deleting it removes it from the server but leaves its files on disk.";
+    internal const string SnapshotsWarning = "The database has database snapshots; the DROP fails until they are deleted.";
+    /// <summary>Why Delete Object greys Close existing connections on Azure SQL Managed Instance.</summary>
+    internal const string ManagedInstanceCloseNote = "Managed Instance cannot set SINGLE_USER.";
+    /// <summary>Why it greys the option for an offline database: no session can be in it, and its Delete runs no SINGLE_USER (Plan).</summary>
+    internal const string OfflineCloseNote = "An offline database has no connections to close.";
+    /// <summary>The most query tabs Delete Object names as holding a transaction in the database (TransactionTabs).</summary>
+    internal const int TransactionTabLimit = 1000;
+
+    /// <summary>Why Delete Object greys Close existing connections, or null where it applies. A snapshot greys it by itself (isSnapshot).</summary>
+    internal static string? CloseConnectionsNote(string engine, bool snapshot, bool offline) =>
+        snapshot ? null : engine == "managedInstance" ? ManagedInstanceCloseNote : offline ? OfflineCloseNote : null;
+
+    /// <summary>What a database's Delete plan needs from its row: whether it is offline, where no session can be (so no SINGLE_USER
+    /// runs), and its user access (sys.databases user_access: 0 multi, 1 single, 2 restricted), which a failed DROP restores.</summary>
+    internal sealed record DeleteFacts(bool Offline, int UserAccess);
+
+    private static DeleteFacts? FactsOf(ActionSubject subject) =>
+        subject.Target.Kind == "database" ? new(subject.Row.Int("state") == OfflineState, subject.Row.Int("user_access")) : null;
+
+    /// <summary>The statements an action runs, in order. A database's Delete that closes connections first undoes SINGLE_USER when
+    /// its DROP did not complete (D3 §8): the compensation restores the access <paramref name="facts"/> read (multi or restricted).
+    /// An offline database has no sessions to close, so its Delete runs no SINGLE_USER. A login's Delete with dropMappedUsers drops
+    /// the mapped <paramref name="users"/> it may (not those Kept) first, each in its database, then the login (D4 §5.4), each DROP bound
+    /// to the principal it was planned for (<paramref name="login"/>; the users by the login's SID). Script Action plans none: it runs nothing.</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null, IReadOnlyList<MappedUserDto>? users = null, PrincipalBinding? login = null)
+    {
+        // A login's statements run in master, as SMO scripts them.
+        if (target.Kind == "login")
+            return args.Action switch
+            {
+                "rename" => [new(ActionTemplate.RenameLogin, "master", [target.Name!, args.NewName!])],
+                "disable" => [new(ActionTemplate.DisableLogin, "master", [target.Name!])],
+                "enable" => [new(ActionTemplate.EnableLogin, "master", [target.Name!])],
+                "delete" => [.. (args.DropMappedUsers == true ? users ?? [] : []).Where(user => !Kept(user))
+                        .Select(user => new PlannedStatement(ActionTemplate.DropMappedUser, user.Database, [user.User], Principal: login is null ? null : new(login.Sid))),
+                    new(ActionTemplate.DropLogin, "master", [target.Name!], Principal: login)],
+                _ => throw new InvalidOperationException("No plan for a login's " + args.Action + ".")
+            };
         if (args.Action == "rename")
             return target.Kind == "database"
                 ? [new(ActionTemplate.RenameDatabase, "master", [target.Name!, args.NewName!])]
@@ -540,9 +663,14 @@ internal sealed partial class ActionService : IDisposable
         if (target.Kind != "database") return [new(ActionSql.DropOf(target.Kind), target.Database!, [target.Schema!, target.Name!])];
         // SSMS deletes the backup history first; deleting it after the DROP keeps it when the DROP fails (IN_USE).
         var plan = new List<PlannedStatement>();
-        if (args.CloseConnections == true) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
+        var close = args.CloseConnections == true && facts?.Offline != true;
+        if (close) plan.Add(new(ActionTemplate.SetSingleUser, "master", [target.Name!]));
         plan.Add(new(ActionTemplate.DropDatabase, "master", [target.Name!]));
         if (args.DeleteHistory == true) plan.Add(new(ActionTemplate.DeleteBackupHistory, "msdb", [target.Name!]));
+        // Due only when the DROP (main step 1) did not complete; a failed history delete after it leaves no database to restore.
+        var restore = facts?.UserAccess switch { 0 => ActionTemplate.SetMultiUser, 2 => ActionTemplate.SetRestrictedUser, _ => (ActionTemplate?)null };
+        if (close && restore is { } undo)
+            plan.Add(new(undo, "master", [target.Name!], StepKind.Compensation, Undoes: 0, When: statuses => statuses.Count < 2 || statuses[1] != "done"));
         return plan;
     }
 
@@ -552,7 +680,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DeleteBackupHistory => "Delete backup and restore history",
         ActionTemplate.SetSingleUser => "Close existing connections",
         ActionTemplate.DropDatabase => "Drop the database",
-        ActionTemplate.RenameDatabase or ActionTemplate.RenameObject => "Rename",
+        ActionTemplate.RenameDatabase or ActionTemplate.RenameObject or ActionTemplate.RenameLogin => "Rename",
         ActionTemplate.SetMultiUser => "Restore multi-user access",
         ActionTemplate.SetRestrictedUser => "Restore restricted user access",
         ActionTemplate.DetachDatabase => "Detach the database",
@@ -560,13 +688,26 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.EnableLogin => "Enable the login",
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
-        ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.DropUser or ActionTemplate.DropMappedUser => "Drop the database user",
+        ActionTemplate.DropLogin => "Drop the login",
         ActionTemplate.AddServerRoleMember => "Add to a server role",
         ActionTemplate.CreateUserForLogin => "Create a user",
         ActionTemplate.AlterUserSchema => "Set the default schema",
         ActionTemplate.CreateSchemaFor => "Create a schema",
         ActionTemplate.AddRoleMember => "Add to a database role",
         _ => "Drop the object"
+    };
+
+    /// <summary>The name a step acts on where its title alone does not say it: a database user's name and database (a login's Delete
+    /// drops one per database: "app_user in AppData", which reads cleanly after the steps panel's "title: "); New Login's server role,
+    /// mapped database, and database role and its database.</summary>
+    internal static string? StepDetail(PlannedStatement statement) => statement.Template switch
+    {
+        ActionTemplate.DropUser or ActionTemplate.DropMappedUser => ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database),
+        ActionTemplate.AddServerRoleMember => statement.Names[0],
+        ActionTemplate.AddRoleMember => statement.Names[0] + " in " + statement.Database,
+        _ when MappingStep(statement.Template) => statement.Database,
+        _ => null
     };
 
     /// <summary>The templates whose statement needs its database (the first name) free of Varia's own idle sessions (critic A5).</summary>
@@ -583,7 +724,7 @@ internal sealed partial class ActionService : IDisposable
             if (statement.Kind == StepKind.Main && NeedsFreeDatabase(statement.Template) && freed.Add(statement.Names[0]))
                 await FreeDatabaseAsync(connection, connectionId, statement.Names[0], context.Token);
             await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction);
-        }, statement.Kind, statement.Undoes, statement.When)).ToList();
+        }, statement.Kind, statement.Undoes, statement.When, StepDetail(statement))).ToList();
         return await RunStepsAsync(connection, steps, inUseAdvice, token, CleanupBudget(action));
     }
 
@@ -642,24 +783,122 @@ internal sealed partial class ActionService : IDisposable
 
     // --- Jobs -------------------------------------------------------------------------------------------------------------
 
-    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionDescribeResult> DescribeJobAsync(SqlConnection connection, string connectionId, string engine, ObjectRefDto target, string action, int band, CancellationToken token)
     {
-        var (subject, error) = await ResolveAsync(connection, target, null, band, (int)catalog.Limit("dependents") + 1, token);
+        if (target.Kind == "login") return await DescribeLoginDeleteAsync(connection, target, token);
+        var (subject, error) = await ResolveAsync(connection, target, action, null, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, 0, error);
         var row = subject.Row;
-        var snapshot = target.Kind == "database" ? row.Bool("is_snapshot") : (bool?)null;
-        int? sessions = target.Kind == "database" && row.Long("sessions") is { } count ? (int)count : null;
         var owner = row.Name("owner_name") is { Length: > 0 } name ? ScriptingErrors.Display(name) : null;
-        var deleted = new DeleteTargetDto(subject.Display, snapshot == true ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions);
+        if (target.Kind != "database") return new(new DeleteTargetDto(subject.Display, subject.Title, owner, subject.Warnings, subject.Truncated), 0);
+        var snapshot = row.Bool("is_snapshot");
+        int? sessions = null, withTransaction = null;
+        List<BlockerDto>? blockers = null;
+        var more = false;
+        List<string>? tabs = null;
+        // Database's count is null without VIEW SERVER STATE, and the transaction DMVs are read only when it is not (ActionSql.InTransaction).
+        if (row.Long("sessions") is not null)
+        {
+            try
+            {
+                (sessions, withTransaction) = await DatabaseUseAsync(connection, target.Name!, token);
+                (blockers, more) = await BlockersAsync(connection, connectionId, target.Name!, token);
+                tabs = await TransactionTabsAsync(connection, connectionId, target.Name!, token);
+            }
+            // VIEW SERVER STATE with VIEW SERVER PERFORMANCE STATE denied (2022 and later): unknown, as without the permission.
+            catch (SqlException denied) when (denied.Number == 300 && !token.IsCancellationRequested)
+            {
+                (sessions, withTransaction, blockers, more, tabs) = (null, null, null, false, null);
+            }
+        }
+        var note = CloseConnectionsNote(engine, snapshot, row.Int("state") == OfflineState);
+        var deleted = new DeleteTargetDto(subject.Display, snapshot ? "Database Snapshot" : subject.Title, owner, subject.Warnings, subject.Truncated, snapshot, sessions,
+            withTransaction, blockers, blockers is null ? null : more, note, tabs);
         return new(deleted, 0);
+    }
+
+    /// <summary>The loginFacts describe: the login preflight's facts (no owned database names) and, for a Windows login, the
+    /// services that run as it, which the Disable prompt names.</summary>
+    private async Task<ActionDescribeResult> DescribeLoginJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
+    {
+        // Behind another session's uncommitted change to the login (D4 P8), a READ COMMITTED read of its row would wait out the
+        // lock timeout before Disable could even ask; the facts only advise, and the execute preflight reads them again.
+        await RunAsync(connection, ActionSql.FactsIsolation, token);
+        var (facts, row) = await LoginAsync(connection, target.Name!, null, 0, token);
+        if (facts is null) return new(null, 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
+        var service = facts.Type == "U" ? await LoginServiceAsync(connection, row!.Text("name") ?? target.Name!, token) : null;
+        return new(null, 0, Login: facts with { Service = service });
+    }
+
+    /// <summary>The sessions using the database and those with an open transaction there (ActionSql.DatabaseUse).</summary>
+    private static async Task<(int? Sessions, int? WithTransaction)> DatabaseUseAsync(SqlConnection connection, string database, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.DatabaseUse;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        if (!await reader.ReadAsync(token)) return (null, null);
+        int? Count(int ordinal) => reader.IsDBNull(ordinal) ? null : Convert.ToInt32(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+        return (Count(0), Count(1));
+    }
+
+    /// <summary>The sessions in the database Delete Object lists (ActionSql.DatabaseSessions), at most the catalogue's blockers, leaving
+    /// out the sessions of this process its pooled connections were given (FreeDatabaseAsync ends those before the DROP) unless a query
+    /// tab holds that id now: More when more exist. Program and host are clipped to blockerChars.</summary>
+    private async Task<(List<BlockerDto>? Blockers, bool More)> BlockersAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    {
+        var limit = (int)catalog.Limit("blockers");
+        var chars = (int)catalog.Limit("blockerChars");
+        var pooled = host.PoolSessions(connectionId);
+        var tabs = host.QuerySessions(connectionId);
+        var blockers = new List<BlockerDto>();
+        var more = false;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.DatabaseSessions;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@take", SqlDbType.Int, 0, limit + 1 + Math.Min(pooled.Count, 1024));
+        await using var reader = await command.ExecuteReaderAsync(token);
+        int Number(int ordinal) => reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
+        string? Clipped(int ordinal) => reader.IsDBNull(ordinal) || reader.GetString(ordinal).Trim() is not { Length: > 0 } text ? null : ScriptingErrors.Clip(text, chars);
+        while (await reader.ReadAsync(token))
+        {
+            var id = Number(0);
+            if (Number(1) == Environment.ProcessId && pooled.Contains(id) && !tabs.Contains(id)) continue;
+            if (blockers.Count == limit) { more = true; break; }
+            blockers.Add(new(id, Clipped(3), Clipped(4), Number(2) > 0));
+        }
+        return (blockers, more);
+    }
+
+    /// <summary>The query tabs (their session ids) whose session has an open transaction in the database or holds one while in it
+    /// (ActionSql.TransactionSessions), at most TransactionTabLimit: Delete Object names them (A7), whatever database each tab is in.</summary>
+    private async Task<List<string>> TransactionTabsAsync(SqlConnection connection, string connectionId, string database, CancellationToken token)
+    {
+        var tabs = host.QueryTabs(connectionId);
+        var named = new List<string>();
+        if (tabs.Count == 0) return named;
+        await using var command = connection.CreateCommand();
+        command.CommandText = ActionSql.TransactionSessions;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, database);
+        Add(command, "@pid", SqlDbType.Int, 0, Environment.ProcessId);
+        // A few more than the tabs: another session of this process (a pool's, mid-transaction) may sort before them.
+        Add(command, "@take", SqlDbType.Int, 0, Math.Min(tabs.Count, TransactionTabLimit) + 64);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token) && named.Count < TransactionTabLimit)
+            if (tabs.TryGetValue(Convert.ToInt32(reader.GetValue(0), System.Globalization.CultureInfo.InvariantCulture), out var tab)) named.Add(tab);
+        return named;
     }
 
     private async Task<ActionScriptResult> ScriptJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
+        if (target.Kind == "login" && args.Action == "delete") return await ScriptLoginDeleteAsync(connection, args, target, token);
         var database = ScriptDatabase(target);
-        var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
+        var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, (int)catalog.Limit("dependents") + 1, token);
         if (subject is null) return new(null, database, [], error);
-        var text = ScriptText(Plan(args, target));
+        var text = ScriptText(Plan(args, subject.Target, FactsOf(subject)));
         if (text.Length > ScriptLimit(args.Action)) return new(null, database, [], Error("SQL_ERROR", "The script is too large."));
         return new(text, database, [.. subject.Warnings.Take(8).Select(warning => warning.Text)]);
     }
@@ -671,17 +910,20 @@ internal sealed partial class ActionService : IDisposable
 
     private async Task<ActionExecuteResult> ExecuteJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
+        if (target.Kind == "login" && args.Action == "delete") return await ExecuteLoginDeleteAsync(connection, args, target, band, token);
         var messages = CollectMessages(connection);
-        var (subject, error) = await ResolveAsync(connection, target, args.NewName, band, 0, token);
+        var (subject, error) = await ResolveAsync(connection, target, args.Action, args.NewName, band, 0, token);
         if (subject is null) return new([], [], 0, error);
         if (Refusal(subject, args) is { } refused) return new([], [], 0, refused);
-        var plan = Plan(args, target);
+        var plan = Plan(args, subject.Target, FactsOf(subject));
         // The backend's own pools leave the database before the first statement that needs it to itself (RunPlannedAsync).
         var (steps, failure, done) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, target.Kind == "database" && args.Action == "delete" ? ActionErrors.CloseConnectionsAdvice : null, token);
         // The database's new name, or its absence, from now on: a connection opened in it must not keep asking for it.
         if (plan.Where(statement => statement.Kind == StepKind.Main).Take(done).Any(statement => statement.Template is ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase))
             host.DatabaseChanged(args.ConnectionId, target.Name!, args.Action == "rename" ? args.NewName : null);
-        return new(steps, messages.Collected(), 0, failure);
+        // 15151 says "does not exist or you do not have permission"; for a login the preflight found, it is the permission.
+        if (subject.Login is not null && failure is { Code: "PERMISSION_DENIED" }) failure = Error(failure.Code, failure.Message + " " + ActionErrors.LoginPermissionAdvice);
+        return new(steps, messages.Collected(), 0, failure, subject.Login?.Sessions);
     }
 
     /// <summary>SQL Server's informational messages (severity 10 and below), such as sp_rename's caution, bounded.</summary>
@@ -839,6 +1081,17 @@ internal sealed partial class ActionService : IDisposable
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, statement.Database);
         for (var index = 0; index < statement.Names.Count; index++) Add(command, "@p" + (index + 1), SqlDbType.NVarChar, 128, statement.Names[index]);
+        // A guarded DROP never runs by its name alone (the dry run selects the DROP and binds nothing).
+        if (ActionSql.Guarded(statement.Template) && !dryRun)
+        {
+            var bound = statement.Principal ?? throw new InvalidOperationException("A guarded DROP needs the principal it was planned for.");
+            Add(command, "@sid", SqlDbType.VarBinary, 85, bound.Sid);
+            if (statement.Template == ActionTemplate.DropLogin)
+            {
+                Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId!.Value);
+                Add(command, "@created", SqlDbType.DateTime, 0, bound.Created!.Value);
+            }
+        }
         var values = new List<string?>();
         await using var reader = await command.ExecuteReaderAsync(token);
         do

@@ -510,6 +510,18 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     for (const node of this.nodes.values()) if (node.kind === 'folder' && node.connectionId === connectionId && !node.lost && refKey(node.connectionId, node.ref) === key && this.attached(node)) return node.id
     return undefined
   }
+  /**
+   * The loaded folders of a kind under these databases on a connection (the Users folders a login's Delete dropped users from),
+   * which a reconcile reloads where they are shown. Folders never loaded are left alone: they read the server when opened.
+   */
+  loadedFolders(connectionId: string, folder: FolderId, databases: readonly string[]): number[] {
+    const names: ReadonlySet<string> = new Set(databases)
+    const found: number[] = []
+    for (const node of this.nodes.values())
+      if (node.connectionId === connectionId && node.folder === folder && node.ref.type === 'folder' && node.ref.owner.kind === 'database' && names.has(node.ref.owner.name ?? '')
+        && node.children !== undefined && !node.lost && this.attached(node)) found.push(node.id)
+    return found
+  }
   /** The folder's filter; filters are kept per connection until it disconnects. */
   filter(folderNodeId: number): ExplorerFilter | undefined {
     const node = this.nodes.get(folderNodeId)
@@ -924,6 +936,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     if (node.detail !== wire.detail) { node.detail = wire.detail; changed = true }
     if (node.icon !== wire.icon) { node.icon = wire.icon; changed = true }
     if (node.status !== wire.status) { node.status = wire.status; changed = true }
+    if (!!node.connectDenied !== !!wire.connectDenied) { node.connectDenied = wire.connectDenied || undefined; changed = true }
     if (node.created !== wire.created) { node.created = wire.created; changed = true }
     this.takeRuntime(node, wire)
     // The subtype picks the folders below (a table's history row), so they are listed again.
@@ -1051,6 +1064,7 @@ export class ExplorerService extends SnapshotStore<ExplorerSnapshot> implements 
     node.detail = wire.detail
     node.subtype = wire.subtype
     node.status = wire.status
+    if (wire.connectDenied) node.connectDenied = true
     node.created = wire.created
     this.takeRuntime(node, wire)
     node.hasChildren = wire.hasChildren

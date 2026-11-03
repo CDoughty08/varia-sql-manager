@@ -36,12 +36,12 @@ internal static class ActionChecks
     private static void CatalogChecks(Action<bool, string> check)
     {
         var rows = Catalog.Rows.ToList();
-        check(rows.Count == 32 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
+        check(rows.Count == 52 && rows.All(row => ExplorerCatalog.Current.Kind(row.Kind) is { } kind && (row.Subtype == "" || kind.Subtypes.Contains(row.Subtype))),
             "the embedded actions catalogue loads at version 3 and every row names an Object Explorer kind and subtype");
         check(Catalog.Allows("table", "", "delete") && Catalog.Allows("table", "graphEdge", "rename") && !Catalog.Allows("table", "system", "rename") && !Catalog.Allows("table", "systemVersioned", "delete")
             && !Catalog.Allows("procedure", "extended", "delete") && !Catalog.Allows("database", "system", "rename") && Catalog.Allows("database", "snapshot", "delete")
             && !Catalog.Allows("database", "snapshot", "rename") && Catalog.Allows("function", "aggregate", "rename") && !Catalog.Allows("function", "aggregate", "delete")
-            && !Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
+            && Catalog.Offered("login", "delete") && Catalog.Offered("view", "selectTop"), "the catalogue's rows decide what each subtype allows");
         var options = new ActionServiceOptions();
         check(Catalog.Limit("readPerConnection") == options.ReadPerConnection && Catalog.Limit("readTotal") == options.ReadTotal && Catalog.Limit("executePerConnection") == options.ExecutePerConnection
             && Catalog.Limit("executeTotal") == options.ExecuteTotal && Catalog.Limit("registered") == options.MaxRegistered && Catalog.Limit("describeMs") == (long)options.DescribeBudget.TotalMilliseconds
@@ -71,7 +71,12 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 4 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 13 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 2 + LoginSql.Corpus().Count() * 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
+        // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
+        check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))
+            && new[] { ActionSql.DatabaseUse, ActionSql.DatabaseSessions, ActionSql.TransactionSessions }.All(statement => statement.Contains("sys.dm_tran_session_transactions", StringComparison.Ordinal)),
+            "only Delete Object's session counts and lists read the transaction DMVs, never the statements every action runs");
         // The lint must catch what it is for: a name spliced into the text, a name parameter outside QUOTENAME, a metadata function.
         check(ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE ' + @p1;\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
             && ActionSql.LintExecutable("DECLARE @stmt nvarchar(max) = N'DROP TABLE [dbo].[x]';\nEXEC (@stmt);", ActionTemplate.DropTable).Count > 0
@@ -137,6 +142,24 @@ internal static class ActionChecks
             "the backup history step runs only after the DROP");
         check(ActionService.Plan(Delete(database), database).Select(plan => plan.Template).SequenceEqual([ActionTemplate.DropDatabase]),
             "without its options, deleting a database only drops it (Close existing connections is off by default, as in SSMS)");
+        // D3 §8: a DROP that fails after SINGLE_USER restores the access the database had; only main steps are scripted.
+        var multi = ActionService.Plan(Delete(database, close: true, history: true), database, new(false, 0));
+        var restricted = ActionService.Plan(Delete(database, close: true), database, new(false, 2));
+        var compensation = multi.Single(plan => plan.Kind == StepKind.Compensation);
+        check(compensation is { Template: ActionTemplate.SetMultiUser, Database: "master", Undoes: 0, When: { } due } && compensation.Names.SequenceEqual(["AppData"])
+            && due(["done", "failed", "skipped"]) && due(["done", "cancelled", "skipped"]) && !due(["done", "done", "failed"])
+            && restricted.Single(plan => plan.Kind == StepKind.Compensation).Template == ActionTemplate.SetRestrictedUser
+            && ActionService.Plan(Delete(database, close: true), database, new(false, 1)).All(plan => plan.Kind == StepKind.Main)
+            && ActionService.Plan(Delete(database), database, new(false, 0)).All(plan => plan.Kind == StepKind.Main)
+            && ActionService.ScriptText(multi) == full,
+            "closing connections before a DROP restores multi-user or restricted access when the DROP does not complete, never after it, and is never scripted");
+        check(ActionService.Plan(Delete(database, close: true, history: true), database, new(true, 0)).Select(plan => plan.Template)
+                .SequenceEqual([ActionTemplate.DropDatabase, ActionTemplate.DeleteBackupHistory]),
+            "an offline database has no sessions to close: its Delete runs no SINGLE_USER and nothing to restore");
+        check(ActionService.CloseConnectionsNote("box", snapshot: false, offline: true) == ActionService.OfflineCloseNote
+            && ActionService.CloseConnectionsNote("managedInstance", snapshot: false, offline: false) == ActionService.ManagedInstanceCloseNote
+            && ActionService.CloseConnectionsNote("box", snapshot: false, offline: false) is null && ActionService.CloseConnectionsNote("managedInstance", snapshot: true, offline: true) is null,
+            "Delete Object greys Close existing connections with a reason for an offline database and on Managed Instance (a snapshot greys it by itself), and offers it elsewhere");
         var view = new ObjectRefDto("view", "AppData", "dbo", "V");
         check(ActionService.Plan(Rename(view, "W"), view).Single() is { Template: ActionTemplate.RenameObject, Database: "AppData" } renamed && renamed.Names.SequenceEqual(["dbo", "V", "W"])
             && ActionService.Plan(Rename(database, "B"), database).Single() is { Template: ActionTemplate.RenameDatabase, Database: "master" }
@@ -153,7 +176,7 @@ internal static class ActionChecks
             [2714] = "NAME_IN_USE", [1801] = "NAME_IN_USE", [15335] = "NAME_IN_USE", [15225] = "NOT_FOUND", [229] = "PERMISSION_DENIED", [262] = "PERMISSION_DENIED",
             [297] = "PERMISSION_DENIED", [3701] = "PERMISSION_DENIED", [15247] = "PERMISSION_DENIED", [15151] = "PERMISSION_DENIED", [208] = "SQL_ERROR",
             // Database Properties (PR-B), and the file and filegroup numbers PR-B2's DDL will meet.
-            [924] = "IN_USE", [5042] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
+            [924] = "IN_USE", [5042] = "DEPENDENTS", [3709] = "DEPENDENTS", [1828] = "NAME_IN_USE", [5170] = "NAME_IN_USE", [15007] = "NOT_FOUND", [5058] = "NOT_SUPPORTED"
         };
         var wrong = expected.Where(pair => ActionErrors.CodeOf(Sql(pair.Key), null) != pair.Value).Select(pair => pair.Key).ToList();
         check(wrong.Count == 0 && ActionErrors.CodeOf(Sql(50000, 20), null) == "CONNECTION_LOST" && ActionErrors.Numbers.Keys.All(Catalog.ErrorCodes.Contains),
@@ -178,7 +201,7 @@ internal static class ActionChecks
         {
             ("unknown action", Rename(table, "x") with { Action = "drop" }), ("connection id", Rename(table, "x") with { ConnectionId = "server-a" }),
             ("request id", Rename(table, "x") with { RequestId = "r1" }), ("ref shape", Rename(new ObjectRefDto("table", "AppData", Name: "Orders"), "x")),
-            ("a kind without rename", Rename(new ObjectRefDto("login", Name: "sa"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
+            ("a kind without rename", Rename(new ObjectRefDto("synonym", "AppData", "dbo", "s"), "x")), ("U+0000", Rename(table, "a\0b")), ("129 units", Rename(table, new string('x', 129))),
             ("empty name", Rename(table, "")), ("the same name", Rename(table, "Orders")), ("delete flags on a rename", Rename(table, "x") with { CloseConnections = false }),
             ("a new name on a delete", Delete(table) with { NewName = "x" }), ("delete flags missing", Delete(table) with { DeleteHistory = null }),
             ("delete flags on a table", Delete(table, close: true)), ("a system database", Rename(new ObjectRefDto("database", Name: "master"), "x")),
@@ -194,8 +217,9 @@ internal static class ActionChecks
             catch (RequestException error) { return error.Code; }
         }
         check(DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "databaseProperties", table)) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "INVALID_PARAMS"
-            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted", "describe refuses unknown dialogs and kinds the dialog does not serve");
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "##MS_PolicyTsqlExecutionLogin##"))) == "INVALID_PARAMS"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", new ObjectRefDto("login", Name: "sa"))) == "accepted"
+            && DescribeRefused(new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "deleteObject", table)) == "accepted", "describe refuses unknown dialogs and kinds the dialog does not serve, and SQL Server's own logins (sa's Delete Object opens to say why OK is greyed)");
         var sql = new SqlService();
         check(sql.LaneOf("actions.execute") == RequestLane.Actions && sql.LaneOf("actions.describe") == RequestLane.Metadata && sql.LaneOf("actions.script") == RequestLane.Metadata
             && new[] { "actions.describe", "actions.script", "actions.execute" }.All(SqlService.MethodNames.Contains), "DDL runs on the actions lane, never holding a metadata slot; HELLO lists the three methods");
@@ -208,7 +232,7 @@ internal static class ActionChecks
             "Select Top's column read on Azure SQL Database runs in the object's database with no cross-database call; box servers use QUOTENAME(@db)'s sp_executesql");
     }
 
-    private sealed class FakeHost(int edition = 3) : IActionHost
+    internal sealed class FakeHost(int edition = 3) : IActionHost
     {
         public int Connections;
         public List<string> Cleared { get; } = [];
@@ -235,6 +259,14 @@ internal static class ActionChecks
         var execute = await cloud.ExecuteAsync(Rename(table, "Orders2"), CancellationToken.None);
         check(describe.Error?.Code == "NOT_SUPPORTED" && script.Error?.Code == "NOT_SUPPORTED" && execute.Error?.Code == "NOT_SUPPORTED" && execute.Steps.Count == 0
             && execute.Error.Message == ActionService.CloudMessage && cloudHost.Connections == 0 && cloud.RunningCount == 0, "Azure SQL Database answers NOT_SUPPORTED before any connection opens");
+        var managedHost = new FakeHost(8);
+        using var managed = new ActionService(managedHost);
+        var database = new ObjectRefDto("database", Name: "AppData");
+        var single = await managed.ExecuteAsync(Delete(database, close: true), CancellationToken.None);
+        var plain = await managed.ExecuteAsync(Delete(database), CancellationToken.None);
+        check(single.Error is { Code: "NOT_SUPPORTED" } && single.Error.Message == ActionService.ManagedInstanceCloseNote && single.Steps.Count == 0 && managedHost.Connections == 1
+            && plain.Error?.Code != "NOT_SUPPORTED" && managed.RunningCount == 0,
+            "on Managed Instance, Delete with Close existing connections answers NOT_SUPPORTED before any connection opens; without it, Delete runs");
         var host = new FakeHost();
         using var service = new ActionService(host);
         var unreachable = await service.ExecuteAsync(Rename(table, "Orders2"), CancellationToken.None);

@@ -26,14 +26,51 @@ export type LoginType = keyof typeof loginTypeSubtypes
 /** sa keeps principal_id 1 whatever it is renamed to. */
 export const saPrincipalId = 1
 
+/** Whether a login's name has SQL Server's own form, `##…##`. SQL Server compares names without trailing spaces, so `##x## `
+ *  names the same login as `##x##` and counts too. C#: LoginRules.SystemName. */
+export function isSystemLoginName(name: string): boolean {
+  const trimmed = name.replace(/ +$/, '')
+  return trimmed.length >= 4 && trimmed.startsWith('##') && trimmed.endsWith('##')
+}
+
 /** A login's subtype: sa by principal_id, SQL Server's own by a name that starts and ends with `##` (checked on the name read
  *  back, never by a SQL literal), else its type. Undefined for a type the Logins folder does not list. */
 export function loginSubtypeOf(principalId: number, type: string, name: string): LoginSubtype | undefined {
   const byType = (loginTypeSubtypes as Readonly<Record<string, LoginSubtype>>)[type.trim()]
   if (!byType) return undefined
   if (principalId === saPrincipalId) return 'sa'
-  if (name.length >= 4 && name.startsWith('##') && name.endsWith('##')) return 'system'
+  if (isSystemLoginName(name)) return 'system'
   return byType
+}
+
+/**
+ * A login row's status in Object Explorer (D4a): `disabled` when the login is disabled, else `noAccess` when CONNECT SQL is
+ * denied to it. They were one status before; they stay apart because they are lifted apart (ENABLE leaves a DENY CONNECT
+ * SQL in place, D4 P18). A login with both is `disabled`, and its detail names both.
+ */
+export function loginStatusOf(disabled: boolean, connectDenied: boolean): 'disabled' | 'noAccess' | undefined {
+  return disabled ? 'disabled' : connectDenied ? 'noAccess' : undefined
+}
+/** The words of a login row's detail (its tooltip): its kind by sys.server_principals.type, then its state and password
+ *  policy, from catalog views only (sys.server_principals, sys.server_permissions and sys.sql_logins). */
+export const loginDetailWords = {
+  types: {
+    S: 'SQL Server authentication', U: 'Windows user', G: 'Windows group', C: 'Mapped to a certificate', K: 'Mapped to an asymmetric key',
+    E: 'Microsoft Entra user or application', X: 'Microsoft Entra group'
+  },
+  disabled: 'Disabled',
+  connectDenied: 'Permission to connect denied',
+  policyChecked: 'Password policy enforced',
+  expirationChecked: 'Password expiration enforced'
+} as const satisfies { readonly types: { readonly [T in LoginType]: string }; readonly disabled: string; readonly connectDenied: string; readonly policyChecked: string; readonly expirationChecked: string }
+/** What a login row's listing reads besides its name. */
+export interface LoginListingFacts { readonly disabled: boolean; readonly connectDenied: boolean; readonly policyChecked: boolean; readonly expirationChecked: boolean }
+/** A login row's detail: its kind, then Disabled and Permission to connect denied (both when both apply), then the password
+ *  policy flags, joined with " · " (C#: LoginRules.Detail, from actions-catalog.json). */
+export function loginDetail(type: string, facts: LoginListingFacts): string {
+  const words = loginDetailWords
+  return [(words.types as Readonly<Record<string, string>>)[type.trim()], facts.disabled && words.disabled, facts.connectDenied && words.connectDenied,
+    facts.policyChecked && words.policyChecked, facts.expirationChecked && words.expirationChecked].filter((part): part is string => !!part).join(' · ')
 }
 
 /** The verbs a login's rules decide (D4b-d, and Properties' Status page in D2c). */
@@ -67,12 +104,19 @@ export const ownLoginRefuses: readonly LoginVerb[] = ['disable', 'rename', 'dele
 export const loginMessages = {
   system: 'This login belongs to SQL Server and cannot be changed.',
   saDelete: 'The sa login cannot be deleted.',
-  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect in Login Properties › Status.',
+  // Login Properties › Status (D2c) is where SSMS denies it; name it there once Varia has that page.
+  windowsGroupDisable: 'A Windows group cannot be disabled. Deny it permission to connect (DENY CONNECT SQL) instead.',
   externalRename: 'A Microsoft Entra login cannot be renamed.',
   notOffered: 'This kind of login does not offer this action.',
   own: 'This is the login this connection uses. Connect with another login to change it.',
   alterAnyLogin: 'You do not have permission to change logins (ALTER ANY LOGIN).',
-  controlServer: 'The login is a member of sysadmin: changing it needs CONTROL SERVER.'
+  controlServer: 'The login is a member of sysadmin: changing it needs CONTROL SERVER.',
+  // SQL Server's own answer is 15021, which does not say what is wrong (D4 P3).
+  sqlBackslash: "A SQL Server login's name cannot contain a backslash.",
+  // SQL Server accepts such a name, and Varia would then take the login for one of SQL Server's own and refuse to change it.
+  systemName: "Names that start and end with ## are reserved for SQL Server's own logins.",
+  // A login's Delete drops its users before the login; a session it cannot see would then fail the login's DROP (15434) after them.
+  sessionsUncounted: "This connection cannot count the login's sessions (that needs VIEW SERVER STATE), and one would make its DROP fail after its users were deleted. Delete the login without its users."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -97,11 +141,17 @@ export const loginLimits = {
   sidHex: 172,
   /** An action step's title and detail (ActionStep). */
   stepTitle: 64, stepDetail: 128,
-  ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4
+  ownedDatabases: 100, mappedUsers: 100, scanDatabases: 4_096, serviceNames: 4,
+  /** How long the mapped-user scan (D4c's, which Login Properties reuses) reads databases before it counts the rest as not
+   *  checked, inside the describe's 40 s. */
+  scanMs: 20_000,
+  /** sys.dm_server_services.servicename, as the login facts carry it. */
+  serviceName: 256
 } as const
 
 /** What the login preflight (ActionSql.Login) reads in the action's own connection, in master. Counts that need VIEW SERVER
- *  STATE are absent without it. */
+ *  STATE are absent without it, and what the login owns is absent where the preflight leaves it out (ActionSql.LoginAlter,
+ *  before an ALTER LOGIN: its scans would wait behind other sessions' changes to any principal). */
 export interface LoginFacts {
   readonly principalId: number
   readonly type: LoginType
@@ -118,11 +168,21 @@ export interface LoginFacts {
   /** The login this connection uses, or a Windows group it gets in through (sys.login_token). */
   readonly own: boolean
   readonly sysadmin: boolean
+  /** User sessions signed in as this login (sys.dm_exec_sessions.security_id). A Windows group's members sign in under their own SIDs,
+   *  so a group counts none of them (critic D4-6): harmless: a group cannot be disabled, and its DROP is not
+   *  refused for its members' sessions (15434; unverified). */
   readonly sessions?: number
-  readonly ownedDatabases: number
+  /** The service that runs as this Windows login (sys.dm_server_services, guarded; or an NT SERVICE\ name), read by the
+   *  loginFacts describe only; at most loginLimits.serviceName characters. */
+  readonly service?: string
+  readonly ownedDatabases?: number
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
-  readonly ownedServerObjects: number
+  readonly ownedServerObjects?: number
+  /** The server permissions it granted to other principals (DROP LOGIN fails on them, 15173); with the owned counts. */
+  readonly grantedPermissions?: number
+  /** The SQL Server Agent jobs it owns (Delete Object's describe only); absent when msdb could not be read. */
+  readonly ownedJobs?: number
   readonly canAlter: boolean
   readonly canControlServer: boolean
   readonly nameInUse: boolean
@@ -139,11 +199,70 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   return undefined
 }
 
+/** A database user mapped to a login (D4c): its database and name, the schemas, roles and other securables it owns, the permissions
+ *  it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY USER).
+ *  C#: MappedUserDto. */
+export interface MappedUser {
+  readonly database: string; readonly user: string; readonly ownedSchemas: number; readonly ownedRoles: number; readonly readOnly: boolean
+  readonly ownedSecurables: number; readonly grantedPermissions: number; readonly canDrop: boolean
+}
+/** The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all, and how many databases it read
+ *  and did not (offline, not accessible or readable, a failed read, or past its bound or budget). C#: LoginMappingsDto. */
+export interface LoginMappings { readonly users: readonly MappedUser[]; readonly mapped: number; readonly checked: number; readonly notChecked: number }
+/** Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138), a role (15421) or
+ *  another securable (15138, 15183), or has granted permissions (15284), cannot run in a read-only database, and needs ALTER ANY
+ *  USER there. C#: ActionService.Kept. */
+export const mappedUserKept = (user: MappedUser): boolean =>
+  user.ownedSchemas > 0 || user.ownedRoles > 0 || user.ownedSecurables > 0 || user.grantedPermissions > 0 || user.readOnly || !user.canDrop
+
+const counted = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** What Delete Object says about a login (D4c). The note is SSMS's, which shows it once the login is gone; Varia shows it before OK
+ *  and offers to delete the users too. */
+export const loginDeleteText = {
+  mappedHeading: 'Database users mapped to this login',
+  noneMapped: 'No database user is mapped to this login.',
+  /** The empty list when some databases were not read. */
+  noneMappedChecked: 'No database user is mapped to this login in the databases checked.',
+  orphanNote: 'Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.',
+  dropOption: 'Also delete the database users mapped to this login',
+  dropHint: 'Users that own schemas or other securables, or have granted permissions, are kept. Transfer or revoke those first, then delete the users in each database.',
+  /** Why the option is greyed: nothing to drop, every mapped user kept, too many to list, or sessions it cannot count. */
+  noneToDrop: 'There is no mapped user to delete.',
+  allKept: 'Every mapped user is kept, as listed: none can be deleted with the login.',
+  sessionsUncounted: loginMessages.sessionsUncounted,
+  more: (count: number) => `…and ${count.toLocaleString('en-US')} more`,
+  notChecked: (count: number) => `${count === 1 ? '1 database was' : `${count.toLocaleString('en-US')} databases were`} not checked (offline or not accessible).`,
+  /** The backend refuses to drop more users than it lists (C#: ActionService.TooManyMappedUsers). */
+  tooMany: `More than ${loginLimits.mappedUsers.toLocaleString('en-US')} users are mapped. Delete them in each database first, or delete the login without them.`,
+  /** Why a Delete keeps a user: every reason its DROP USER would fail, as one note. */
+  kept: (user: MappedUser) => `kept: ${[
+    user.readOnly ? 'the database is read-only' : '',
+    !user.canDrop ? 'you cannot delete users there (ALTER ANY USER)' : '',
+    user.ownedSchemas || user.ownedRoles || user.ownedSecurables ? `owns ${[user.ownedSchemas ? counted(user.ownedSchemas, 'schema', 'schemas') : '', user.ownedRoles ? counted(user.ownedRoles, 'role', 'roles') : '',
+      user.ownedSecurables ? counted(user.ownedSecurables, 'other securable', 'other securables') : ''].filter(Boolean).join(' and ')}` : '',
+    user.grantedPermissions ? `has granted ${counted(user.grantedPermissions, 'permission', 'permissions')}` : ''
+  ].filter(Boolean).join('; ')}`,
+  /** What Varia's other connections that sign in as the login do to its Delete (critic D4-3): their pools' sessions fail the DROP
+   *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
+  connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
+} as const
+
+/** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
+export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
+/** Why a login may not take this new name, or undefined: SQL Server's own form (`##…##`, for every subtype), which would
+ *  make the login look like one of SQL Server's own; and a backslash in a SQL Server login's name (SQL Server answers 15021,
+ *  "Invalid value given for parameter NAME", D4 P3), so Varia says why before sending; a Windows login's name is
+ *  DOMAIN\name. C#: LoginRules.NameRefusal. */
+export const loginNameRefusal = (subtype: LoginSubtype, newName: string): LoginMessageId | undefined =>
+  isSystemLoginName(newName) ? 'systemName' : noBackslashSubtypes.includes(subtype) && newName.includes('\\') ? 'sqlBackslash' : undefined
+
 /** The rules as actions-catalog.json carries them, so C# needs no rules of its own. */
 export function loginsCatalog() {
   return {
+    detail: loginDetailWords,
     limits: loginLimits,
     messages: loginMessages,
+    noBackslash: noBackslashSubtypes,
     ownRefuses: ownLoginRefuses,
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,

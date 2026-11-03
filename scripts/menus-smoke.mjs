@@ -887,7 +887,8 @@ try {
   // A login's name (New Login… first, as in SSMS); the server's Disconnect needs no picker.
   await expandExplorerPath(page, 'server-a', 'Security', 'Logins')
   await (await row('server-a', 'Security', 'Logins', 'sa')).click({ button: 'right', force: true })
-  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Refresh'])
+  // The fixture's sa is disabled, so it offers Enable in place of Disable (D4b).
+  expect(await labels()).toEqual(['New Login…', 'Script Login as', 'Copy Name', 'Enable', 'Rename', 'Refresh'])
   await explorerMenu.getByRole('menuitem', { name: 'Copy Name', exact: true }).click(fast)
   await expect.poll(clipboard).toBe('[sa]')
   await serverA.click({ button: 'right', force: true })

@@ -86,6 +86,15 @@ export class QueryService extends SnapshotStore<QuerySnapshot> implements Dispos
     const document = this.documents.get(id), connectionId = isQueryDocument(document) ? document?.connectionId : undefined, connection = connectionId ? this.getConnection(connectionId) : undefined
     return !this.disposed && !!connection && !connection.lost
   }
+  /**
+   * The names of the open query tabs among `ids`, in tab order. A query's session id is its tab's id, so the backend, which sees
+   * each session's transactions on the server, says which tabs hold one in a database (A7: Delete Object names them), whatever
+   * database the tab is in.
+   */
+  tabNames(ids: readonly string[]): string[] {
+    const wanted = new Set(ids)
+    return this.documents.getSnapshot().documents.filter(document => isQueryDocument(document) && wanted.has(document.id)).map(document => document.name)
+  }
   /** Whether the idle query's session may hold a transaction (read now, as transactionState does). */
   async mayHaveTransaction(id: string): Promise<boolean> {
     const state = await this.transactionState(id)

@@ -268,15 +268,6 @@ internal sealed partial class ActionService
         return new(done, [.. messages.Collected().Select(Scrubbed)], 0, failure);
     }
 
-    /// <summary>What a step acts on: a server role; a mapped database; a database role and its database.</summary>
-    internal static string? StepDetail(PlannedStatement statement) => statement.Template switch
-    {
-        ActionTemplate.AddServerRoleMember => statement.Names[0],
-        ActionTemplate.AddRoleMember => statement.Names[0] + " in " + statement.Database,
-        _ when MappingStep(statement.Template) => statement.Database,
-        _ => null
-    };
-
     /// <summary>A Stop whose CREATE LOGIN completed after all (the login exists): that step is done, and the message says nothing
     /// after it ran.</summary>
     internal static (List<ActionStepDto> Steps, ActionError Failure) StoppedAsCreated(List<ActionStepDto> steps, ActionError failure) =>

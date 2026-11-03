@@ -43,7 +43,7 @@ internal static class LoginLiveChecks
         var edition = (await Sql("SELECT CONVERT(int, SERVERPROPERTY('EngineEdition'));")).Scalar;
         if (!actions.Catalog.Serves("createLogin", edition is "5" or "6" or "9" or "11" ? "cloud" : edition == "8" ? "managedInstance" : "box"))
         {
-            if (required) throw new Exception("--logins-live needs a SQL Server New Login serves (a box edition).");
+            if (required) throw new Exception("--new-login-live needs a SQL Server New Login serves (a box edition).");
             Console.WriteLine("New Login live checks skipped: the server is not one New Login serves yet.");
             return;
         }
@@ -60,7 +60,7 @@ internal static class LoginLiveChecks
         var windowsOnly = facts[0] == "1";
         if (facts[1] != "1")
         {
-            if (required) throw new Exception("--logins-live needs a sysadmin connection.");
+            if (required) throw new Exception("--new-login-live needs a sysadmin connection.");
             Console.WriteLine("New Login scratch checks skipped: they need a sysadmin connection.");
             return;
         }

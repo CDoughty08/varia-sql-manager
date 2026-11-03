@@ -7,6 +7,7 @@ import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import Icon from '../Icon'
 import StepList from '../kit/StepList'
 import { trapFocus } from '../trap-focus'
+import { definitionOf } from './definitions'
 import { dialogEnter } from './dialog-keys'
 import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DeleteObjectPage from './pages/DeleteObjectPage'
@@ -152,6 +153,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const components: Partial<Record<PageId, ComponentType<PageProps>>> = dialogPages[open.dialog]
   const executing = open.phase === 'executing', busy = executing || open.phase === 'loading' || open.phase === 'scripting' || open.phase === 'confirming'
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
+  // The page says why (a login's Delete refused by the protected-principal rules); Script still works.
+  const blocked = !!open.model && !!definitionOf(open.dialog).blocked?.(open.model)
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
@@ -223,7 +226,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     </div>
     <div className="connection-footer">
       <span />
-      <button className="primary" type="submit" disabled={busy || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      <button className="primary" type="submit" disabled={busy || blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

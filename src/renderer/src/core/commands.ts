@@ -7,7 +7,12 @@ import { SnapshotStore } from './store'
 import type { CommandArgs, Disposable } from './types'
 
 export type CommandSource = 'keybinding' | 'menu' | 'palette' | 'toolbar' | 'api'
-export interface CommandHandler { run(args?: CommandArgs): void | Promise<void>; when?(args?: CommandArgs): boolean }
+export interface CommandHandler {
+  run(args?: CommandArgs): void | Promise<void>
+  when?(args?: CommandArgs): boolean
+  /** Why the command cannot run for what it would act on now, when that says more than the catalogue's `unavailableHint`. */
+  unavailableHint?(args?: CommandArgs): string | undefined
+}
 export interface CommandEvent { readonly id: CommandId; readonly source: CommandSource }
 /** The command banner's message; a warning (`kind`) is shown as a notice, not as a failure. */
 export interface CommandSnapshot { readonly error: string; readonly kind?: 'warning' }
@@ -60,6 +65,10 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
       return handler.when?.(args) ?? true
     } catch (error) { onUnexpectedError(error); return false }
   }
+  /** The handler's own reason the command cannot run now (a greyed login's), else undefined: the palette then uses the catalogue's hint. */
+  unavailableHint(id: CommandId, args?: CommandArgs): string | undefined {
+    try { return this.handlers.get(id)?.unavailableHint?.(args) } catch (error) { onUnexpectedError(error); return undefined }
+  }
   isToggled(id: CommandId): boolean {
     const { toggled } = commandDescriptor(id)
     if (toggled === undefined) return false
@@ -95,7 +104,11 @@ export class CommandService extends SnapshotStore<CommandSnapshot> implements Di
   onWillExecute(listener: (event: CommandEvent) => void): Disposable { return this.willExecute.subscribe(listener) }
   onDidExecute(listener: (event: CommandEvent) => void): Disposable { return this.didExecute.subscribe(listener) }
   onDidChangeHandlers(listener: () => void): Disposable { return this.handlersChanged.subscribe(listener) }
-  clearError(): void { if (this.getSnapshot().error) this.publish({ error: '' }) }
+  /** Clears the banner, or only `message` when given, so a box that reported its own refusal takes back that one alone. */
+  clearError(message?: string): void {
+    const { error } = this.getSnapshot()
+    if (error && (message === undefined || error === truncate(message))) this.publish({ error: '' })
+  }
   /** Shows a failure outside a command (a menu that could not render) in the command banner. */
   reportError(message: string): void { this.publish({ error: truncate(message) }) }
   /** Shows a warning in the command banner: something worked, but the user should know more (a script's warnings). */
