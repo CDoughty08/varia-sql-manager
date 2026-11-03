@@ -77,7 +77,7 @@ import { domFocusAdapter } from './focus'
 import { InputModeService } from './input-mode'
 import { KeybindingService } from './keybindings'
 import { MenuStatePublisher } from './menu-state'
-import { modalOpen } from './modal'
+import { focusHeld, focusWhenDrawn, modalOpen } from './modal'
 import { nextFrame as frame } from './frame'
 import type { Disposable } from './types'
 
@@ -223,53 +223,53 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const quickInput = new QuickInputService(focus)
   // Every Script As request carries the Scripting page's options.
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
-  // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
-  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+  // A document focuses itself once drawn, unless a dialog, the palette or a menu has focus by then (focusWhenDrawn).
+  const focusLater = (focus: () => void) => focusWhenDrawn(nextFrame, focus)
+  const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => focusLater(() => documents.focusActive()) })
   const serverFiles = new ServerFilePickerService({ api, connections })
   const longRuns = new LongRunService({ api })
   const dialogs = new ObjectDialogService({
-    api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => focusLater(() => documents.focusActive()),
     // Database Properties documents of a database a dialog took offline or brought online follow it.
     databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
     api, documents, files, connections, explorer,
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus() })
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-designer="${CSS.escape(id)}"] [data-designer-focus]`)?.focus())
   })
   // Focus goes to the document's current section in its list, else to its first button (Refresh), once its first read
   // has drawn them.
   const ssisFocus = ssisFocuser({ get: id => ssisProperties.get(id), subscribe: listener => ssisProperties.subscribe(listener) }, {
     root: id => document.querySelector<HTMLElement>(`[data-ssis-document="${CSS.escape(id)}"]`), activeElement: () => document.activeElement, body: () => document.body,
-    modalOpen, frame
+    focusHeld, frame
   })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, focusEditor: () => focusLater(() => documents.focusActive()),
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const newDatabase = new NewDatabaseService({
-    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
+    api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.
-    focus: id => nextFrame(() => {
-      if (modalOpen()) return
+    focus: id => focusLater(() => {
       const root = document.querySelector<HTMLElement>(`[data-new-database="${CSS.escape(id)}"]`)
       const name = root?.querySelector<HTMLElement>('[data-new-database-focus]:not(:disabled)')
       ;(name ?? root?.querySelector<HTMLElement>('.document-nav-item[tabindex="0"]'))?.focus()
     })
   })
   const restore = new RestoreService({
-    api, documents, files, connections, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus() })
+    api, documents, files, connections, focusEditor: () => focusLater(() => documents.focusActive()),
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-restore="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
   const activity = new ActivityMonitorService({
     documents, connections, live, owner: id => documentOwner(id, documents, panes), settings: () => settings.getSnapshot().values,
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus() })
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-activity-monitor="${CSS.escape(id)}"] [data-activity-focus]`)?.focus())
   })
   const operations = new SsisOperationsService({
     api, documents, panes, live, connections, settings,
-    focus: id => nextFrame(() => { if (!modalOpen()) document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus() })
+    focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-ssis-operations="${CSS.escape(id)}"] [role="grid"]`)?.focus())
   })
   const context = new ContextKeyService({
     platform,

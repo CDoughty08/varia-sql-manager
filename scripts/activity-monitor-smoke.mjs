@@ -156,9 +156,18 @@ try {
   expect(subscribed.at(-1).params).toMatchObject({ source: 'activity', probes: [{ probe: 'activity.overview', intervalMs: 2000 }, { probe: 'activity.sessions', intervalMs: 2000, paused: true }, { probe: 'activity.resources', intervalMs: 5000, paused: true }] })
   expect(subscribed.at(-1).params.probes[0].paused).toBeUndefined()
   // The View menu and the palette open the same monitor: one per connection.
+  await queryTabs().filter({ hasText: 'SQLQuery1' }).click()
+  await expect(queryTabs().filter({ hasText: 'SQLQuery1' })).toHaveAttribute('aria-selected', 'true')
   await menu('activity.open')
+  // Main sends the menu's command to the page, which can take F1 first (input outranks other tasks on a busy page); the
+  // command would then close the palette, as any command run from elsewhere does. The monitor coming forward shows it ran.
+  await expect(queryTabs().filter({ hasText: 'activity-server - Activity Monitor' })).toHaveAttribute('aria-selected', 'true')
   await page.keyboard.press('F1')
   // Typing before the palette has focus loses the keys (a Windows CI run found no option).
+  await expect(page.getByRole('combobox', { name: 'Command Palette', exact: true })).toBeFocused()
+  // The monitor focuses itself once drawn, and the hidden window's throttled frame can come after F1 opened the palette,
+  // which keeps focus (moving it closed the palette). A page timer set now runs after the monitor's.
+  await page.evaluate(() => new Promise(done => setTimeout(done, 100)))
   await expect(page.getByRole('combobox', { name: 'Command Palette', exact: true })).toBeFocused()
   await page.keyboard.type('Activity Monitor')
   await expect(page.getByRole('option', { name: /^Tools: Activity Monitor/ }).first()).toBeVisible()
