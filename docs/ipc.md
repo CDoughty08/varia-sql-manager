@@ -331,8 +331,9 @@ Failures the user can act on are `result.error` values, not envelope codes: `NOT
 action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`, `IN_USE`, `BLOCKED`, `DEPENDENTS`,
 `NAME_IN_USE`, `DATABASE_UNAVAILABLE`, `TIMEOUT`, `CONNECTION_LOST`, `SQL_ERROR`, `CANCELLED` (Stop), `AUTH_KERBEROS`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
-cancelled, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
-failure. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
+cancelled | rolledBack, message? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run in order and stop at the first
+failure. `rolledBack` marks a step that completed in a transaction a later failure or Stop rolled back (the table designer's
+Save, Unlock), whose message then names no step as completed. The backend's DryRun, which selects a statement instead of running it, exists only for the .NET checks and is
 not reachable from the wire.
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
@@ -520,7 +521,11 @@ login rules and the identity, reads the lock-out state again, and refuses before
 enforcing the password policy, one that must change its password (SQL Server would answer 15128, `NOT_SUPPORTED`) and, for
 execute only, one that is not locked out (`NOT_SUPPORTED`). Execute then runs `ALTER LOGIN … WITH CHECK_POLICY = OFF` and
 `… = ON` (with `CHECK_EXPIRATION = ON` when the login had it) through runner v2's transaction mode: steps "Turn off the password
-policy", "Turn the password policy back on" (or "… and expiration back on") and "Commit", rolled back on a failure or Stop.
+policy", "Turn the password policy back on" (or "… and expiration back on") and "Commit", rolled back on a failure or Stop
+(a step that had completed is then `rolledBack`). Catalog reads and `LOGINPROPERTY` hold no lock on the login, so the first step
+reads its facts and lock-out state again inside the transaction and, before its statement, answers the refusal itself (no
+rollback sentence, since nothing changed) when the login is gone, replaced or refused, is no longer locked out, or another session
+changed its policy or expiration since the preflight (`NOT_SUPPORTED`, the catalogue's `unlockChanged`).
 Script answers the same statements as one `SET XACT_ABORT ON; BEGIN TRANSACTION; … COMMIT TRANSACTION;` batch in master.
 
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders

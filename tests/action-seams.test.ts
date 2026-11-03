@@ -73,6 +73,7 @@ describe('action steps and secrets', () => {
   it('checks actions.execute\'s answer in main with the bounds C# clips to (ActionSteps.Bound)', () => {
     const ok = { status: 'failed', title: 'Rename', message: 'm', detail: 'd', compensates: true, progress: 100 }
     expect(actionStepSchema.safeParse(ok).success).toBe(true)
+    expect(actionStepSchema.safeParse({ status: 'rolledBack', title: 'Turn off the password policy' }).success).toBe(true)
     for (const bad of [{ status: 'done' }, { ...ok, title: 't'.repeat(loginLimits.stepTitle + 1) }, { ...ok, detail: 'd'.repeat(loginLimits.stepDetail + 1) },
       { ...ok, message: 'm'.repeat(actionLimits.messageChars + 1) }, { ...ok, progress: 101 }, { ...ok, progress: 1.5 }, { ...ok, status: 'undone' }, { ...ok, extra: 1 }]) {
       expect(actionStepSchema.safeParse(bad).success, JSON.stringify(bad).slice(0, 80)).toBe(false)

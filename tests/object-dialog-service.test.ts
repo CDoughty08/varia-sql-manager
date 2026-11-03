@@ -5,7 +5,7 @@ import type { ActionDescribeResult, ActionExecuteResult, ActionScriptResult, Del
 import type { ApiResult, VariaApi } from '../src/shared/contracts'
 import type { ObjectRef } from '../src/shared/explorer/refs'
 import { dialogMessages, ObjectDialogService } from '../src/renderer/src/dialogs/ObjectDialogService'
-import { unlockSuccessNotice } from '../src/renderer/src/dialogs/definitions'
+import { unlockChooseMode, unlockSuccessNotice } from '../src/renderer/src/dialogs/definitions'
 import { unlockStateLines } from '../src/renderer/src/dialogs/pages/UnlockLoginPage'
 import type { ExplorerMenuNode } from '../src/renderer/src/menus/targets'
 import { ConnectionService } from '../src/renderer/src/services/connections'
@@ -190,14 +190,21 @@ describe('ObjectDialogService: Unlock Login', () => {
     connectDenied: false, own: false, sysadmin: false, ownedDatabaseNames: [], canAlter: true, canControlServer: true, nameInUse: false, ...changes })
   const lock = (changes: Partial<LoginLockFacts> = {}): LoginLockFacts => ({ locked: true, badPasswords: 11, lockoutTime: '2026-11-02T21:07:12.123', mustChange: false, expired: false, daysUntilExpiration: 42, ...changes })
   const described = (login = facts(), state = lock()): ApiResult<ActionDescribeResult> => ({ ok: true, value: { login, lock: state, elapsedMs: 1 } })
-  it('describes the lock-out state of the login, and OK unlocks it keeping the password, bound to the login it read', async () => {
+  it('describes the lock-out state of the login, and OK unlocks it keeping the password once chosen, bound to the login it read', async () => {
     const { dialogs, api, explorer, execute, settle, notify } = setup()
     api.describeObject.mockResolvedValueOnce(described())
     dialogs.open('unlockLogin', node(lockedRef))
     expect(dialogs.current).toMatchObject({ dialog: 'unlockLogin', title: 'Unlock Login - Locked', phase: 'loading' })
     expect(api.describeObject.mock.calls[0][0]).toMatchObject({ dialog: 'unlockLogin', target: lockedRef })
     await settle()
-    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: { mode: 'keepPassword' } })
+    // Nothing is chosen (owner decision 9: keeping the password clears its history, so it is never the default): OK, and Enter,
+    // which runs the same OK, send nothing until the user picks.
+    expect(dialogs.current).toMatchObject({ phase: 'ready', draft: {} })
+    expect(dialogs.unavailable()).toBe(unlockChooseMode)
+    await dialogs.ok()
+    expect(api.executeObjectAction).not.toHaveBeenCalled()
+    expect(dialogs.current?.phase).toBe('ready')
+    dialogs.updateDraft({ mode: 'keepPassword' })
     expect(dialogs.unavailable()).toBeUndefined()
     await dialogs.script('newQuery')
     expect(api.scriptObjectAction.mock.calls[0][0]).toEqual({ action: 'unlock', target: lockedRef, mode: 'keepPassword', loginIdentity: { sid: '0A1B', created: '2026-01-02T03:04:05.000' }, connectionId: 'server-a', requestId: 'id-2' })
@@ -235,8 +242,9 @@ describe('ObjectDialogService: Unlock Login', () => {
     api.describeObject.mockResolvedValueOnce(described())
     dialogs.open('unlockLogin', node(lockedRef))
     await settle()
+    dialogs.updateDraft({ mode: 'keepPassword' })
     const ok = dialogs.ok()
-    execute.resolve({ ok: true, value: { steps: [], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: loginMessages.notLocked, retryable: false } } })
+    execute.resolve({ ok: true, value: { steps: [{ status: 'failed', title: 'Turn off the password policy', message: loginMessages.notLocked }, { status: 'skipped', title: 'Commit' }], messages: [], elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message: loginMessages.notLocked, retryable: false } } })
     await ok
     expect(dialogs.current).toMatchObject({ phase: 'failed', error: { message: loginMessages.notLocked } })
     expect(dialogs.unavailable()).toBe(loginMessages.notLocked)

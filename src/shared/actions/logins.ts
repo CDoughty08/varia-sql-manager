@@ -120,7 +120,10 @@ export const loginMessages = {
   unlockNoPolicy: 'The login does not enforce the password policy, so it is never locked out.',
   // SQL Server refuses CHECK_POLICY = OFF while MUST_CHANGE is set (15128), so only a new password unlocks such a login.
   unlockMustChange: 'The login must change its password at its next sign-in, so its password policy cannot be turned off. Unlock it by setting a new password.',
-  notLocked: 'The login is not locked out.'
+  notLocked: 'The login is not locked out.',
+  // Unlock's plan turns back on the policy and expiration its preflight read; it reads them again in its transaction and stops
+  // there when another session changed them meanwhile, rather than undo that change.
+  unlockChanged: "The login's password policy changed while Unlock ran, so nothing was changed. Try again."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */

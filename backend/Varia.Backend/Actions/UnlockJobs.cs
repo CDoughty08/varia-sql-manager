@@ -7,7 +7,8 @@ namespace Varia.Backend.Actions;
 /// <summary>Unlock Login (D4d, owner decision 9): keeps the login's password and unlocks it the way Learn documents, turning the
 /// password policy off and back on (with expiration, when the login had it) in one transaction, which also clears the password
 /// history. Its describe, script and execute read the login's facts (ActionSql.LoginAlter) and then its lock-out state
-/// (ActionSql.LoginLock, the one LOGINPROPERTY reader) in the action's own connection.</summary>
+/// (ActionSql.LoginLock, the one LOGINPROPERTY reader) in the action's own connection; the execute reads both again inside its
+/// transaction, just before the first statement, since the plan depends on them and no read holds the login until it.</summary>
 internal sealed partial class ActionService
 {
     /// <summary>What a failed or stopped Unlock adds: runner v2's transaction mode rolled both statements back.</summary>
@@ -23,9 +24,10 @@ internal sealed partial class ActionService
 
     /// <summary>The login's lock-out state (ActionSql.LoginLock) by the name the catalog holds. LOGINPROPERTY answers NULL for a
     /// property a login does not have (a Windows login's lock-out), which reads as not locked.</summary>
-    private static async Task<LoginLockFactsDto> LoginLockAsync(SqlConnection connection, string name, CancellationToken token)
+    private static async Task<LoginLockFactsDto> LoginLockAsync(SqlConnection connection, string name, CancellationToken token, SqlTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = ActionSql.LoginLock;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
@@ -67,8 +69,26 @@ internal sealed partial class ActionService
         return new(ActionSql.TransactionScriptText(UnlockPlan(subject.Target.Name!, subject.Login!.ExpirationChecked == true)), "master", []);
     }
 
+    /// <summary>Why Unlock's transaction must stop before its first statement, or null: the login read again there (<paramref name="now"/>,
+    /// with its lock-out state) is gone, is not the principal the plan was built for, is refused now, or no longer has the
+    /// expiration setting the plan turns back on. Catalog reads and LOGINPROPERTY hold no lock on the login (probed: a REPEATABLE
+    /// READ or SERIALIZABLE read in an open transaction does not block another session's ALTER LOGIN), so a change committed after
+    /// the preflight, or while its LoginLock read waited behind another session's open change, would otherwise be undone by the
+    /// stale plan (CHECK_POLICY = OFF also turns expiration off) or clear the history of a login already unlocked.</summary>
+    internal ActionError? UnlockRecheck(ActionArgs args, LoginFactsDto planned, LoginFactsDto? now, LoginLockFactsDto state)
+    {
+        if (now is null) return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " no longer exists. Refresh Object Explorer.");
+        if (now.PrincipalId != planned.PrincipalId || !string.Equals(now.Sid, planned.Sid, StringComparison.Ordinal) || !string.Equals(now.Created, planned.Created, StringComparison.Ordinal))
+            return Error("NOT_FOUND", "The login " + ScriptingErrors.Display(args.Target.Name!) + " is not the one that was read: it was renamed, dropped or replaced since. Refresh Object Explorer and try again.");
+        if (LoginRefusal(now, args) is { } refused) return refused;
+        if (LoginRules.UnlockRefusal(now, state) is { } id) return Error("NOT_SUPPORTED", catalog.Logins.Message(id));
+        return now.PolicyChecked != planned.PolicyChecked || now.ExpirationChecked != planned.ExpirationChecked ? Error("NOT_SUPPORTED", catalog.Logins.Message("unlockChanged")) : null;
+    }
+
     /// <summary>Unlock: the preflight (the identity the dialog read, the login's rules, then its lock-out state read again), then
-    /// both statements and the commit through runner v2's transaction mode, so a failure or Stop rolls them back.</summary>
+    /// both statements and the commit through runner v2's transaction mode, so a failure or Stop rolls them back. The first step
+    /// reads the login's facts and lock-out state again in the transaction and refuses (UnlockRecheck) before its statement when
+    /// they no longer fit the plan.</summary>
     private async Task<ActionExecuteResult> ExecuteUnlockJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
@@ -78,7 +98,18 @@ internal sealed partial class ActionService
         var state = await LoginLockAsync(connection, subject.Target.Name!, token);
         if (LoginRules.UnlockRefusal(subject.Login!, state) is { } id) return new([], [], 0, Error("NOT_SUPPORTED", catalog.Logins.Message(id)));
         var plan = UnlockPlan(subject.Target.Name!, subject.Login!.ExpirationChecked == true).Select(ActionSql.Checked).ToList();
-        var run = plan.Select(statement => new RunStep(StepTitle(statement.Template), context => RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction))).ToList();
+        var planned = subject.Login!;
+        async Task Recheck(StepContext context)
+        {
+            var (now, _) = await LoginAsync(connection, subject.Target.Name!, null, null, context.Token, context.Transaction);
+            var state = now is null ? null : await LoginLockAsync(connection, subject.Target.Name!, context.Token, context.Transaction);
+            if (UnlockRecheck(args, planned, now, state ?? new(false, null, null, false, false, null)) is { } changed) throw new StepRefusedException(changed);
+        }
+        var run = plan.Select((statement, index) => new RunStep(StepTitle(statement.Template), async context =>
+        {
+            if (index == 0) await Recheck(context);
+            await RunStatementAsync(connection, statement, dryRun: false, context.Token, context.Transaction);
+        })).ToList();
         var (steps, failure, _) = await RunStepsAsync(connection, run, null, token, CleanupBudget(args.Action), transaction: true, rolledBack: UnlockRolledBack);
         // 15151 says "does not exist or you do not have permission"; for a login the preflight found, it is the permission.
         if (failure is { Code: "PERMISSION_DENIED" }) failure = Error(failure.Code, failure.Message + " " + ActionErrors.LoginPermissionAdvice);

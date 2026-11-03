@@ -224,8 +224,10 @@ internal static class DesignerLiveChecks
         // A key SQL Server refuses after CREATE TABLE ran (nvarchar(max) cannot be a key column): the transaction rolls back.
         var refused = await client.Save(db, new TableDesignDto("dbo", "Rolled", [Column("a", "nvarchar", max: true, nulls: false)], [0]));
         var rolled = (await Sql("SELECT CASE WHEN OBJECT_ID(N'dbo.Rolled') IS NULL THEN 0 ELSE 1 END;")).Scalar;
-        check(refused is { Error.Code: "SQL_ERROR" } && refused.Steps.Select(step => step.Status).SequenceEqual(["done", "failed", "skipped", "skipped"]) && refused.Error.Message.EndsWith(ActionService.RolledBack, StringComparison.Ordinal)
-            && rolled == "0", "a key SQL Server refuses after CREATE TABLE fails the save, which rolls the table back (" + refused.Error?.Message + ")");
+        // CREATE TABLE completed but was rolled back: its step says so, and the message names no step as completed.
+        check(refused is { Error.Code: "SQL_ERROR" } && refused.Steps.Select(step => step.Status).SequenceEqual(["rolledBack", "failed", "skipped", "skipped"]) && refused.Error.Message.EndsWith(ActionService.RolledBack, StringComparison.Ordinal)
+            && !refused.Error.Message.Contains("Completed before", StringComparison.Ordinal) && rolled == "0",
+            "a key SQL Server refuses after CREATE TABLE fails the save, which rolls the table back, and CREATE TABLE's step is listed as rolled back (" + refused.Error?.Message + ")");
 
         // SQL Server 2025's json is stored off-row: the table gets TEXTIMAGE_ON.
         if (major >= 17)

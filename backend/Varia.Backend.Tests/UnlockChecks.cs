@@ -137,6 +137,26 @@ internal static class UnlockChecks
         };
         var misjudged = rules.Where(item => service.LoginRefusal(item.Facts, item.Args)?.Code != item.Code).Select(item => item.Name).ToList();
         check(misjudged.Count == 0, "Unlock's preflight applies the login rules and the identity before the lock-out state: " + string.Join(", ", misjudged));
+
+        // The recheck in the transaction, before the first statement: the plan was built from `planned`; another session may have
+        // changed the login since (no read holds it), and the stale plan would undo that change.
+        var planned = Facts() with { ExpirationChecked = false };
+        var rechecks = new (string Name, LoginFactsDto? Now, LoginLockFactsDto Lock, string? Code, string? Message)[]
+        {
+            ("the login as planned", planned, Lock(), null, null),
+            ("expiration turned on meanwhile", planned with { ExpirationChecked = true }, Lock(), "NOT_SUPPORTED", Catalog.Logins.Message("unlockChanged")),
+            ("the policy turned off meanwhile", planned with { PolicyChecked = false, ExpirationChecked = false }, Lock(locked: false), "NOT_SUPPORTED", Catalog.Logins.Message("unlockNoPolicy")),
+            ("unlocked meanwhile", planned, Lock(locked: false), "NOT_SUPPORTED", Catalog.Logins.Message("notLocked")),
+            ("must change its password now", planned, Lock(mustChange: true), "NOT_SUPPORTED", Catalog.Logins.Message("unlockMustChange")),
+            ("dropped", null, Lock(), "NOT_FOUND", null),
+            ("replaced by a login of the same name", planned with { Sid = "02" }, Lock(), "NOT_FOUND", null),
+            ("recreated with the same SID", planned with { PrincipalId = 301 }, Lock(), "NOT_FOUND", null),
+            ("ALTER ANY LOGIN revoked meanwhile", planned with { CanAlter = false }, Lock(), "PERMISSION_DENIED", null)
+        };
+        var unseen = rechecks.Where(item => service.UnlockRecheck(Unlock(Locked) with { LoginIdentity = Identity }, planned, item.Now, item.Lock) is var error
+            && (error?.Code != item.Code || item.Message is not null && error?.Message != item.Message)).Select(item => item.Name).ToList();
+        check(unseen.Count == 0 && Catalog.Logins.Message("unlockChanged").Contains("nothing was changed", StringComparison.Ordinal),
+            "Unlock's recheck in its transaction stops before the first statement when the login changed after its preflight: " + string.Join(", ", unseen));
     }
 
     private static void Validation(Action<bool, string> check)

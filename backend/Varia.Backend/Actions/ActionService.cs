@@ -497,10 +497,11 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>The login preflight in master: the login's facts, at most <paramref name="take"/> names of the databases it owns
     /// (ActionSql.Login), or with a null take nothing it owns (ActionSql.LoginAlter), and its row; null facts when no login of
-    /// a listed type has the name.</summary>
-    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token)
+    /// a listed type has the name. <paramref name="transaction"/>: the open transaction it reads in (Unlock's recheck).</summary>
+    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token, SqlTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = take is null ? ActionSql.LoginAlter : ActionSql.Login;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);

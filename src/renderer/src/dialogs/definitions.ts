@@ -38,8 +38,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly withConfirmation?: (request: BuiltRequest, confirmation: DialogConfirmation) => BuiltRequest
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
-  /** Why OK cannot run for this model, shown on the page; OK is greyed while it is set, and Script stays available. */
-  readonly unavailable?: (model: Model) => string | undefined
+  /** Why OK cannot run for this model and draft, shown on the page; OK is greyed while it is set, and Script stays available. */
+  readonly unavailable?: (model: Model, draft?: Draft) => string | undefined
   readonly afterSuccess: (effects: DialogEffects, subject: DialogSubject) => void
 }
 
@@ -73,16 +73,19 @@ export const databasePropertiesDefinition: ObjectDialogDefinition<DatabaseProper
 
 /** Unlock Login (D4d): the login preflight's facts and its lock-out state, as the unlockLogin describe read them. */
 export interface UnlockModel { readonly login: LoginFacts; readonly lock: LoginLockFacts }
-/** How to unlock. Keeping the password is the only way until Login Properties (D2c) adds Set a new password, its default. */
-export interface UnlockDraft { readonly mode: UnlockMode }
+/** How to unlock: none until the user chooses (owner decision 9: keeping the password, which clears its history, is never the
+ *  default). Keeping it is the only way until Login Properties (D2c) adds Set a new password, which is then the default. */
+export interface UnlockDraft { readonly mode?: UnlockMode }
+export const unlockChooseMode = 'Choose how to unlock the login.'
 export const unlockSuccessNotice = (label: string) => `Unlocked the login ${label}. Its password history was cleared.`
 export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDraft> = {
   dialog: 'unlockLogin',
   modelOf: result => result.login && result.lock ? { login: result.login, lock: result.lock } : undefined,
-  initialDraft: () => ({ mode: 'keepPassword' }),
+  initialDraft: () => ({}),
   // The identity binds OK to the login this dialog read: one renamed, dropped or replaced since is refused, not unlocked.
-  request: (target, model, draft) => ({ action: 'unlock', target, mode: draft.mode, ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) }),
-  unavailable: model => { const id = unlockRefusal(model.login, model.lock); return id ? loginMessages[id] : undefined },
+  // OK waits for a choice (unavailable); Script, which runs nothing, shows the only way there is before one.
+  request: (target, model, draft) => ({ action: 'unlock', target, mode: draft.mode ?? 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) }),
+  unavailable: (model, draft) => { const id = unlockRefusal(model.login, model.lock); return id ? loginMessages[id] : draft?.mode ? undefined : unlockChooseMode },
   // Unlocked meanwhile (by its owner's new password, or another admin): the page says so and OK greys, as on a fresh open.
   afterFailure: (model, failure) => failure.code === 'NOT_SUPPORTED' && failure.message === loginMessages.notLocked ? { ...model, lock: { ...model.lock, locked: false } } : model,
   // The Logins folder's row and its status come from the reconciled listing.

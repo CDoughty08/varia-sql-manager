@@ -151,7 +151,8 @@ export interface ActionScriptResult {
   readonly warnings: readonly string[]
   readonly error?: ActionError
 }
-export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled'] as const
+/** A step's status. 'rolledBack': it completed in a transaction that a later failure or Stop rolled back (runner v2's transaction mode). */
+export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled', 'rolledBack'] as const
 export type ActionStepStatus = typeof actionStepStatuses[number]
 /**
  * One step of an action's reply. `title` says what it does (constant text); `message` is SQL Server's text for a failed

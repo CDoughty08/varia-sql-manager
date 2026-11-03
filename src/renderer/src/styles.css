@@ -855,7 +855,7 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .step-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; column-gap: 6px; row-gap: 2px; overflow-wrap: anywhere; user-select: text; }
 .step-list .codicon, .step-list .icon { margin-top: 1px; }
 .step-list-meta { color: var(--varia-descriptionForeground); font-size: var(--varia-size-xs); white-space: nowrap; }
-.step-list li[data-status="pending"], .step-list li[data-status="skipped"] { color: var(--varia-descriptionForeground); }
+.step-list li[data-status="pending"], .step-list li[data-status="skipped"], .step-list li[data-status="rolledBack"] { color: var(--varia-descriptionForeground); }
 .step-list li[data-status="running"] .step-list-text { font-weight: 600; }
 .step-list li[data-status="running"] > .codicon { color: var(--varia-focusBorder); }
 .step-list li[data-status="done"] > .codicon { color: var(--varia-successForeground); }

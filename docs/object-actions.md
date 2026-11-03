@@ -91,7 +91,7 @@ A modal dialog with more than one page lists them beside the page (SSMS's "Selec
 than 720 px (a viewport under 768 CSS px, as when zoomed in: the window is at least 1024 px wide) the list becomes a row of tabs above the page (a `tablist` named "Select a page", arrow keys, Home and End). A
 page marked kept mounted stays in the page once visited, hidden while another shows, so what it holds (a running list,
 a typed value) survives switching away. A dialog with a steps panel shows its plan as a list of steps, scrolling in at most 40 % of the column
-(`kit/StepList.tsx`, Create Catalog's too), each pending, running, done, failed, cancelled or skipped, with an optional
+(`kit/StepList.tsx`, Create Catalog's too), each pending, running, done, failed, cancelled, skipped or rolled back, with an optional
 progress bar under a running step.
 
 In a modal dialog, the Script button scripts to a new query window; its arrow lists Script Action to New Query Window, Script Action to File, Script Action to Clipboard. Script never runs anything.
@@ -287,7 +287,7 @@ before Stop.
 
 ### Steps, compensation and cleanup
 
-Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled or skipped), a title, SQL
+Each statement is a step, and the reply lists them in order with a status (done, failed, cancelled, skipped or rolledBack), a title, SQL
 Server's message for a failed one, and for some a detail (a name) or progress. The first failure stops the rest, which are
 skipped. An action may also plan compensation steps, each undoing one earlier step once that step completed and a later one
 failed or was stopped (restoring a database's user access after a failed rename, for example), and cleanup steps that run
@@ -295,7 +295,9 @@ after any failure or Stop (removing a partly restored database Varia created). T
 budget (`cleanupMs`), are listed only when they ran, marked as compensating, and the error message says how they ended. A
 Stop's reply waits for SQL Server to end the statement and then for them, so it never reports an unknown outcome while
 Varia's own cleanup runs. An action can instead run its steps in one transaction (the table designer's Save): a failure or
-Stop rolls it back, and only the commit, which Stop no longer reaches, completes it.
+Stop rolls it back, and only the commit, which Stop no longer reaches, completes it. The steps that had completed are then
+listed as rolledBack, never done, and the message names none as completed; a step that checks the server again before it
+changes anything (Unlock's recheck) can refuse with the action's own message, and then nothing is said to be rolled back.
 
 Before the first statement that needs a database to itself (setting single-user, renaming, dropping or detaching it), and
 before Database Properties applies its changes, the backend frees the database of its own sessions, on every connection
@@ -379,7 +381,9 @@ SSMS unlocks a SQL Server login only on Login Properties › Status, and only wi
 SQL Server login's menu (after Disable or Enable, access key U), a modal that keeps the current password, as Microsoft
 documents: it turns the password policy off, which unlocks the login, and back on, with password expiration when the login
 had it, in one transaction, so a failure or Stop rolls both back. This clears the login's password history, which the
-dialog says. Setting a new password instead, SSMS's way and then the dialog's default, arrives with Login Properties.
+dialog says, and nothing is chosen when it opens: OK (and Enter) waits until Keep the current password is, so clearing the
+history is never the default. Setting a new password instead, SSMS's way and then the dialog's default, arrives with
+Login Properties.
 
 Only `LOGINPROPERTY` knows whether a login is locked out, so the listing offers Unlock… on every SQL Server login and the
 dialog says. Its describe (`unlockLogin`) and its preflight read the login's facts and then its lock-out state with
@@ -390,7 +394,12 @@ after it would, until Stop. OK is greyed, with the reason on the page, for a log
 policy ("The login does not enforce the password policy, so it is never locked out."), one that must change its password at its next sign-in, whose policy SQL Server
 will not turn off (15128: "The login must change its password at its next sign-in, so its password policy cannot be turned off. Unlock it by setting a new password."), and one that is not locked out ("The login is not locked out."),
 which the preflight checks again before any statement. Script Action still writes the transaction for a login that is
-not locked out now. On success Object Explorer reloads the Logins folder and a notice says "Unlocked the login app_user.
+not locked out now. Catalog views and `LOGINPROPERTY` hold no lock on the login (a read in an open transaction, even
+SERIALIZABLE, does not block another session's `ALTER LOGIN`), so the first step reads the login's facts and lock-out
+state again inside the transaction, after any wait, and changes nothing when the login is gone, replaced, refused or no
+longer locked out, or when another session changed its policy or expiration since the plan was made
+("The login's password policy changed while Unlock ran, so nothing was changed. Try again."); only a change in the moment between that read and the first statement goes unseen.
+On success Object Explorer reloads the Logins folder and a notice says "Unlocked the login app_user.
 Its password history was cleared."
 
 | Step | As Script Action writes it |

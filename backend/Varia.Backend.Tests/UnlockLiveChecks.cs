@@ -193,10 +193,65 @@ internal static class UnlockLiveChecks
             // A login with the policy but without expiration keeps expiration off.
             if (await LockOut(policyOnly))
             {
+                // Another session turns expiration on after the preflight read it off, before the first statement (no read holds the
+                // login): Unlock reads the login again in its transaction and changes nothing, rather than turn expiration back off.
+                var actions = service.Actions;
+                var seen = new List<string>();
+                actions.Options.BeforeStep = async (title, _) =>
+                {
+                    seen.Add(title);
+                    if (title == "Turn off the password policy") await Sql("ALTER LOGIN " + Bracket(policyOnly) + " WITH CHECK_EXPIRATION = ON;");
+                };
+                ActionExecuteResult changed;
+                try { changed = await Execute(policyOnly); }
+                finally { actions.Options.BeforeStep = null; }
+                var policyAfterChange = await Policy(policyOnly);
+                check(changed is { Error.Code: "NOT_SUPPORTED" } && changed.Error.Message == words.Message("unlockChanged") && seen.SequenceEqual(["Turn off the password policy"])
+                    && Steps(changed) == "failed:Turn off the password policy, skipped:Turn the password policy back on, skipped:Commit"
+                    && (await Lock(policyOnly)).Locked && policyAfterChange == (true, true),
+                    "Unlock reads the login again in its transaction and changes nothing when another session changed its expiration after the preflight: "
+                    + changed.Error?.Message + " | " + Steps(changed) + " | " + policyAfterChange);
+                await Sql("ALTER LOGIN " + Bracket(policyOnly) + " WITH CHECK_EXPIRATION = OFF;");
+
+                // Stop after the first statement: the transaction rolls back, so the login stays locked out with its policy, and the
+                // first step is listed as rolled back, never done.
+                using (var stop = new CancellationTokenSource())
+                {
+                    actions.Options.BeforeStep = (title, _) => { if (title == "Turn the password policy back on") stop.Cancel(); return Task.CompletedTask; };
+                    ActionExecuteResult? stopped = null;
+                    try { stopped = await actions.ExecuteAsync(Unlock(policyOnly), stop.Token); }
+                    catch (OperationCanceledException) { }
+                    finally { actions.Options.BeforeStep = null; }
+                    check(stopped is { Error.Code: "CANCELLED" } && Steps(stopped) == "rolledBack:Turn off the password policy, cancelled:Turn the password policy back on, skipped:Commit"
+                        && stopped.Error.Message.EndsWith(ActionService.UnlockRolledBack, StringComparison.Ordinal) && !stopped.Error.Message.Contains("Completed before", StringComparison.Ordinal)
+                        && (await Lock(policyOnly)).Locked && await Policy(policyOnly) == (true, false),
+                        "Stop after Unlock's first statement rolls it back: the login stays locked out with its policy, and that step is listed as rolled back: "
+                        + (stopped is null ? "the reply answered an unknown outcome" : Steps(stopped) + " | " + stopped.Error?.Message));
+                }
+
                 var policyUnlocked = await Execute(policyOnly);
                 check(policyUnlocked.Error is null && Steps(policyUnlocked) == "done:Turn off the password policy, done:Turn the password policy back on, done:Commit"
                     && !(await Lock(policyOnly)).Locked && await Policy(policyOnly) == (true, false) && await SignIn(policyOnly, passwords[policyOnly]) == 0,
                     "Unlock of a login without password expiration turns only the policy back on: " + policyUnlocked.Error?.Message);
+
+                // Another admin unlocks the login with a new password after the preflight: the recheck finds it not locked out, so
+                // Unlock leaves its password history alone.
+                if (await LockOut(policyOnly))
+                {
+                    var replaced = NewPassword();
+                    actions.Options.BeforeStep = async (title, _) =>
+                    {
+                        if (title == "Turn off the password policy") await Sql("ALTER LOGIN " + Bracket(policyOnly) + " WITH PASSWORD = " + Literal(replaced) + " UNLOCK;");
+                    };
+                    ActionExecuteResult meanwhile;
+                    try { meanwhile = await Execute(policyOnly); }
+                    finally { actions.Options.BeforeStep = null; passwords[policyOnly] = replaced; }
+                    check(meanwhile is { Error.Code: "NOT_SUPPORTED" } && meanwhile.Error.Message == words.Message("notLocked")
+                        && Steps(meanwhile) == "failed:Turn off the password policy, skipped:Turn the password policy back on, skipped:Commit"
+                        && !(await Lock(policyOnly)).Locked && await Policy(policyOnly) == (true, false) && await SignIn(policyOnly, replaced) == 0,
+                        "Unlock changes nothing when another admin unlocked the login after its preflight: " + meanwhile.Error?.Message + " | " + Steps(meanwhile));
+                }
+                else check(false, "a login Unlock unlocked locks out again");
             }
             else check(false, "a second policy login locks out where the first did");
         }

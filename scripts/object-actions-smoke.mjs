@@ -648,14 +648,21 @@ try {
   await expect.poll(() => application.evaluate(() => globalThis.variaStub.cancels)).toContain(heldId)
   await expect(status).not.toContainText('Disabling')
   await expect(commandBanner()).toHaveCount(0)
-  // Unlock… (D4d): a modal over the login's lock-out state. Locked is locked out, and OK unlocks it keeping its password, bound
-  // to the login the dialog read; a notice says its password history was cleared. AppUser is not locked out: OK is greyed.
+  // Unlock… (D4d): a modal over the login's lock-out state. Locked is locked out; nothing is chosen, so OK is greyed until Keep the
+  // current password is, and then unlocks it keeping its password, bound to the login the dialog read; a notice says its
+  // password history was cleared. AppUser is not locked out: OK is greyed.
   const unlockDialog = name => page.getByRole('dialog', { name: `Unlock Login - ${name}`, exact: true })
   await menuOf(...logins, 'Locked')
   await explorerMenu().getByRole('menuitem', { name: 'Unlock…', exact: true }).click(fast)
   await expect(objectDialogProgress(unlockDialog('Locked'))).toHaveText('Ready')
   const how = unlockDialog('Locked').getByRole('radiogroup', { name: 'How to unlock', exact: true })
-  await expect(how.getByRole('radio', { name: 'Keep the current password', exact: true })).toBeChecked()
+  const keep = how.getByRole('radio', { name: 'Keep the current password', exact: true })
+  await expect(keep).not.toBeChecked()
+  await expect(unlockDialog('Locked').getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await expect(how).toContainText('Choose how to unlock the login.')
+  await keep.check()
+  await expect(keep).toBeChecked()
+  await expect(how).not.toContainText('Choose how to unlock the login.')
   await expect(unlockDialog('Locked')).toContainText('Locked out since 2026-11-02 21:07:12 (server time) after 10 failed sign-ins.')
   await expect(how).toContainText("This clears the login's password history.")
   await page.screenshot({ path: resolve('artifacts', 'object-actions-unlock-dark.png') })
