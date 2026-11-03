@@ -21,10 +21,11 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 
 const server: ObjectRef = { kind: 'server' }
 const model = (changes: Partial<NewLoginModel['server']> = {}): NewLoginModel => ({
-  server: { level: 17, linux: false, windowsOnly: false, canCreate: true, ...changes },
+  server: { level: 17, linux: false, windowsOnly: false, canCreate: true, engine: 'box', ...changes },
   databases: [{ name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false }], databasesTruncated: false,
   languages: [{ name: 'Deutsch', alias: 'German' }, { name: 'us_english', alias: 'English' }],
-  serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false
+  serverRoles: [{ name: 'bulkadmin', fixed: true }, { name: 'public', fixed: true }, { name: 'sysadmin', fixed: true }], serverRolesTruncated: false,
+  certificates: ['AppSigning'], certificatesTruncated: false, asymmetricKeys: ['AppKey'], asymmetricKeysTruncated: false, credentials: [{ name: 'AzureBlob' }, { name: 'Vault', provider: 'EkmProv' }], credentialsTruncated: false
 })
 const sqlDraft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
 const set: SecretState = { password: 'set', matches: true, wellFormed: true, tooLong: false }
@@ -34,14 +35,18 @@ const folder = (folderId: 'logins' | 'serverSecurity' | 'tables', engine: 'box' 
 
 describe('New Login draft and request', () => {
   it('starts from SSMS\'s defaults: Windows authentication, or SQL Server authentication on Linux; master; the three options; Grant; Enabled', () => {
-    expect(initialNewLoginDraft(model())).toEqual({ auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true, mappings: [] })
+    expect(initialNewLoginDraft(model())).toEqual({
+      auth: 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true, serverRoles: [], connect: 'grant', enabled: true, mappings: [],
+      certificate: 'AppSigning', asymmetricKey: 'AppKey', mapCredential: false, credential: 'AzureBlob', credentials: []
+    })
     expect(initialNewLoginDraft(model({ linux: true })).auth).toBe('sql')
   })
   it('greys the password fields for Windows logins and each option unless the one before it is checked', () => {
-    expect(newLoginEnabled(initialNewLoginDraft(model()))).toEqual({ password: false, checkPolicy: false, checkExpiration: false, mustChange: false, oldPassword: false })
-    expect(newLoginEnabled(sqlDraft())).toEqual({ password: true, checkPolicy: true, checkExpiration: true, mustChange: true, oldPassword: false })
-    expect(newLoginEnabled(sqlDraft({ checkPolicy: false }))).toMatchObject({ checkExpiration: false, mustChange: false })
-    expect(newLoginEnabled(sqlDraft({ checkExpiration: false }))).toMatchObject({ checkExpiration: true, mustChange: false })
+    const box = model().server
+    expect(newLoginEnabled(initialNewLoginDraft(model()), box)).toMatchObject({ password: false, checkPolicy: false, checkExpiration: false, mustChange: false, oldPassword: false })
+    expect(newLoginEnabled(sqlDraft(), box)).toMatchObject({ password: true, checkPolicy: true, checkExpiration: true, mustChange: true, oldPassword: false })
+    expect(newLoginEnabled(sqlDraft({ checkPolicy: false }), box)).toMatchObject({ checkExpiration: false, mustChange: false })
+    expect(newLoginEnabled(sqlDraft({ checkExpiration: false }), box)).toMatchObject({ checkExpiration: true, mustChange: false })
   })
   it('maps the draft to createLogin: options only for SQL Server logins and as enabled, a language only when chosen, roles in the describe\'s order', () => {
     expect(newLoginRequest(server, model(), sqlDraft({ serverRoles: ['sysadmin', 'bulkadmin', 'gone'], connect: 'deny', enabled: false, defaultLanguage: 'Deutsch' }), set)).toEqual({
@@ -75,17 +80,18 @@ describe('New Login draft and request', () => {
     expect(passwordFieldLength).toBe(loginLimits.password + 1)
   })
   it('notes the server\'s password policy only while it is checked', () => {
-    expect(newLoginHints(sqlDraft())).toEqual([newLoginMessages.policyServer, newLoginMessages.passwordScript])
-    expect(newLoginHints(sqlDraft({ checkPolicy: false }))).toEqual([newLoginMessages.passwordScript])
-    expect(newLoginHints(initialNewLoginDraft(model()))).toEqual([])
+    const box = model().server
+    expect(newLoginHints(sqlDraft(), box)).toEqual([newLoginMessages.policyServer, newLoginMessages.passwordScript])
+    expect(newLoginHints(sqlDraft({ checkPolicy: false }), box)).toEqual([newLoginMessages.passwordScript])
+    expect(newLoginHints(initialNewLoginDraft(model()), box)).toEqual([])
   })
-  it('opens on a SQL Server\'s Security or Logins folder or a login, with the server as its target', () => {
+  it('opens on the Security or Logins folder or a login of a SQL Server or a Managed Instance (D2e), with the server as its target', () => {
     expect(newLoginTarget(folder('logins'))).toEqual(server)
     expect(newLoginTarget(folder('serverSecurity'))).toEqual(server)
     expect(newLoginTarget({ id: 9, connectionId: 'server-a', ref: { type: 'object', object: { kind: 'login', name: 'sa' } }, kind: 'login', label: 'sa', lost: false, engine: 'box' })).toEqual(server)
     expect(newLoginTarget(folder('tables'))).toBeUndefined()
     expect(newLoginTarget(folder('logins', 'cloud'))).toBeUndefined()
-    expect(newLoginTarget(folder('logins', 'managedInstance'))).toBeUndefined()
+    expect(newLoginTarget(folder('logins', 'managedInstance'))).toEqual(server)
     expect(newLoginDefinition.secrets?.(sqlDraft())).toBe(true)
     expect(newLoginDefinition.secrets?.(initialNewLoginDraft(model()))).toBe(false)
     expect(newLoginDefinition.longRun).toBe('newLogin')

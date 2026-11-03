@@ -9,9 +9,9 @@ import {
   type ActionErrorCode, type DialogAction, type DialogId, type ObjectAction
 } from './catalog.ts'
 import {
-  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMappingChanges, loginMessages, loginPropertiesStatements, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes,
-  windowsLoginName, type LoginChanges, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMappings, type LoginPropertiesFacts, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral,
-  type NewLoginModel, type UnlockMode, type UserMappingChoice
+  credentialAuths, defaultsAuths, isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMappingChanges, loginMessages, loginPropertiesStatements, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes,
+  windowsLoginName, windowsPrincipalDescribe, type LoginChanges, type LoginDatabaseRoles, type LoginFacts, type LoginLockFacts, type LoginMappings, type LoginPropertiesFacts, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral,
+  type NewLoginModel, type UnlockMode, type UserMappingChoice, type WindowsPrincipal
 } from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
@@ -19,9 +19,10 @@ import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), one
- *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe), or an object's
- *  facts without a dialog (the login actions' loginFacts). */
-export const describeIds = [...dialogIds, ...designerDescribeIds, loginDatabaseRolesDescribe, ...actionDescribeIds] as const
+ *  database's roles and schemas for New Login's User Mapping page (logins.ts loginDatabaseRolesDescribe), an object's
+ *  facts without a dialog (the login actions' loginFacts), or a Windows account for New Login's Check Names (D2e,
+ *  logins.ts windowsPrincipalDescribe). */
+export const describeIds = [...dialogIds, ...designerDescribeIds, loginDatabaseRolesDescribe, ...actionDescribeIds, windowsPrincipalDescribe] as const
 export type DescribeId = typeof describeIds[number]
 
 /** `login`: the login whose user User Mapping's read of a database (loginDatabaseRoles) reads too (Login Properties, D2c); no other describe takes it. */
@@ -202,6 +203,8 @@ export interface ActionDescribeResult {
   readonly lock?: LoginLockFacts
   /** loginProperties (with newLogin's lists and login): the login's defaults, server roles and mapped users. */
   readonly loginProperties?: LoginPropertiesFacts
+  /** windowsPrincipal (Check Names, D2e): what xp_logininfo says of the account. */
+  readonly windowsPrincipal?: WindowsPrincipal
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -290,6 +293,10 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
       case 'newLogin':
         if (!isServer(request.target)) issue(context, 'target', 'New Login opens on a server.')
         break
+      // Check Names names the account as a login ref would: DOMAIN\name, which xp_logininfo resolves.
+      case windowsPrincipalDescribe:
+        if (request.target.kind !== 'login' || Object.keys(request.target).length !== 2 || !windowsLoginName.test(request.target.name ?? '')) issue(context, 'target', 'Check Names reads a Windows account named DOMAIN\\name.')
+        break
       // Any database, SQL Server's own included: a login may be mapped to master or msdb, as in SSMS.
       case loginDatabaseRolesDescribe:
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'User Mapping reads a database.')
@@ -333,9 +340,10 @@ const propertiesSchema = z.object({ action: z.literal('properties'), connectionI
 export const loginPassword = z.string().refine(value => value.length <= loginLimits.password, `At most ${loginLimits.password} UTF-16 code units.`)
   .refine(value => !value.includes('\0'), 'The password cannot contain a NUL character.').refine(wellFormed, 'The password holds a broken character (half of a surrogate pair).')
 const loginSecretsSchema = z.object({ password: loginPassword.optional(), oldPassword: loginPassword.optional() }).strict() satisfies z.ZodType<LoginSecrets>
+const credentialNames = z.array(ident).max(loginLimits.credentials)
 const newLoginGeneralSchema = z.object({
-  auth: z.enum(newLoginAuths), name: ident, defaultDatabase: ident, defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
-  mustChange: z.boolean().optional()
+  auth: z.enum(newLoginAuths), name: ident, defaultDatabase: ident.optional(), defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
+  mustChange: z.boolean().optional(), certificate: ident.optional(), asymmetricKey: ident.optional(), credentials: credentialNames.optional()
 }).strict() satisfies z.ZodType<NewLoginGeneral>
 const userMappingSchema = z.object({ database: ident, user: ident, defaultSchema: ident.optional(), rolesAdd: z.array(ident).max(loginLimits.roles) }).strict() satisfies z.ZodType<UserMappingChoice>
 const createLoginSchema = z.object({
@@ -350,7 +358,7 @@ const loginChangesSchema = z.object({
   defaultDatabase: ident.optional(), defaultLanguage: ident.optional(), checkPolicy: z.boolean().optional(), checkExpiration: z.boolean().optional(),
   password: z.object({ oldPassword: z.boolean(), unlock: z.boolean(), mustChange: z.boolean() }).strict().optional(),
   rolesAdd: roleNames(loginLimits.serverRoles).optional(), rolesDrop: roleNames(loginLimits.serverRoles).optional(), mappings: z.array(loginMappingChangeSchema).max(loginLimits.mappings).optional(),
-  connect: z.enum(['grant', 'deny']).optional(), enabled: z.boolean().optional()
+  connect: z.enum(['grant', 'deny']).optional(), enabled: z.boolean().optional(), credentialsAdd: credentialNames.optional(), credentialsDrop: credentialNames.optional()
 }).strict() satisfies z.ZodType<LoginChanges>
 const loginPropertiesSchema = z.object({
   action: z.literal('loginProperties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional(), loginChanges: loginChangesSchema,
@@ -369,6 +377,8 @@ function loginPropertiesIssues(request: z.infer<typeof loginPropertiesSchema>, c
   if (roles.some(list => list?.includes(publicRole))) issue(context, 'loginChanges', 'Every login and user is a member of public.')
   if (!roles.every(distinct)) issue(context, 'loginChanges', 'Duplicate role.')
   if (overlap(changes.rolesAdd, changes.rolesDrop) || (changes.mappings ?? []).some(mapping => overlap(mapping.rolesAdd, mapping.rolesDrop))) issue(context, 'loginChanges', 'A role is both added and dropped.')
+  if (!distinct(changes.credentialsAdd) || !distinct(changes.credentialsDrop)) issue(context, 'loginChanges', 'Duplicate credential.')
+  if (overlap(changes.credentialsAdd, changes.credentialsDrop)) issue(context, 'loginChanges', 'A credential is both added and removed.')
   if (!distinct((changes.mappings ?? []).map(mapping => mapping.database))) issue(context, 'loginChanges', 'A database changes twice.')
   for (const mapping of changes.mappings ?? []) {
     const valid = mapping.change === 'unmap' ? mapping.newName === undefined && mapping.defaultSchema === undefined && mapping.rolesAdd === undefined && mapping.rolesDrop === undefined
@@ -386,15 +396,23 @@ function loginPropertiesIssues(request: z.infer<typeof loginPropertiesSchema>, c
 function createLoginIssues(request: z.infer<typeof createLoginSchema>, context: z.RefinementCtx): void {
   const { login } = request
   if (!isServer(request.target)) issue(context, 'target', 'A login is created on a server.')
+  const options = [login.checkPolicy, login.checkExpiration, login.mustChange].filter(option => option !== undefined).length
   if (login.auth === 'sql') {
-    if (login.checkPolicy === undefined || login.checkExpiration === undefined || login.mustChange === undefined) issue(context, 'login', 'A SQL Server login states its password policy options.')
+    // All three on SQL Server, none on Managed Instance, whose CREATE LOGIN has no such options (C# checks the engine).
+    if (options !== 0 && options !== 3) issue(context, 'login', 'A SQL Server login states all its password policy options, or none on Managed Instance.')
     if (login.checkExpiration && !login.checkPolicy) issue(context, 'login', 'Enforce password expiration needs Enforce password policy.')
     if (login.mustChange && !login.checkExpiration) issue(context, 'login', 'User must change password at next login needs Enforce password expiration.')
     if (login.name.includes('\\')) issue(context, 'login', 'A SQL Server login name cannot contain a backslash.')
-  } else {
-    if (login.checkPolicy !== undefined || login.checkExpiration !== undefined || login.mustChange !== undefined) issue(context, 'login', 'Only a SQL Server login has password policy options.')
-    if (!windowsLoginName.test(login.name)) issue(context, 'login', 'A Windows login is named DOMAIN\\name.')
-  }
+  } else if (options !== 0) issue(context, 'login', 'Only a SQL Server login has password policy options.')
+  if (login.auth === 'windows' && !windowsLoginName.test(login.name)) issue(context, 'login', 'A Windows login is named DOMAIN\\name.')
+  if ((login.certificate !== undefined) !== (login.auth === 'certificate')) issue(context, 'login', 'A certificate login, and only one, names its certificate.')
+  if ((login.asymmetricKey !== undefined) !== (login.auth === 'asymmetricKey')) issue(context, 'login', 'An asymmetric key login, and only one, names its key.')
+  if (defaultsAuths.includes(login.auth) ? login.defaultDatabase === undefined : login.defaultDatabase !== undefined || login.defaultLanguage !== undefined)
+    issue(context, 'login', 'A certificate or asymmetric key login has no defaults; every other login names its default database.')
+  if (login.credentials?.length && !credentialAuths.includes(login.auth)) issue(context, 'login', 'A Microsoft Entra login cannot be mapped to a credential here.')
+  if (!distinct(login.credentials)) issue(context, 'login', 'Duplicate credential.')
+  // Learn (CREATE USER): a user mapped to a certificate or an asymmetric key cannot have a default schema.
+  if (!defaultsAuths.includes(login.auth) && request.mappings.some(mapping => mapping.defaultSchema !== undefined)) issue(context, 'mappings', 'A certificate or asymmetric key login\'s users have no default schema.')
   if (request.secrets?.oldPassword !== undefined) issue(context, 'secrets', 'A new login has no old password.')
   if (request.serverRoles.includes(publicRole)) issue(context, 'serverRoles', 'Every login is a member of public.')
   if (new Set(request.serverRoles).size !== request.serverRoles.length) issue(context, 'serverRoles', 'Duplicate server role.')

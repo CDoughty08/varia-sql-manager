@@ -22,12 +22,13 @@ afterEach(() => { cleanups.splice(0).forEach(cleanup => cleanup()) })
 const server: ObjectRef = { kind: 'server' }
 const ids = () => ({ connectionId: crypto.randomUUID(), requestId: crypto.randomUUID() })
 const model = (): NewLoginModel => ({
-  server: { level: 17, linux: false, windowsOnly: false, canCreate: true },
+  server: { level: 17, linux: false, windowsOnly: false, canCreate: true, engine: 'box' },
   databases: [
     { name: 'AppData', state: 0, accessible: true, readOnly: false }, { name: 'Closed', state: 0, accessible: false, readOnly: false }, { name: 'master', state: 0, accessible: true, readOnly: false },
     { name: 'Old', state: 6, accessible: false, readOnly: false }, { name: 'Sales', state: 0, accessible: true, readOnly: false }, { name: 'Shelf', state: 0, accessible: true, readOnly: true }
   ],
-  databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false
+  databasesTruncated: false, languages: [], serverRoles: [{ name: 'public', fixed: true }], serverRolesTruncated: false,
+  certificates: [], certificatesTruncated: false, asymmetricKeys: [], asymmetricKeysTruncated: false, credentials: [], credentialsTruncated: false
 })
 const draft = (changes: Partial<NewLoginDraft> = {}): NewLoginDraft => ({ ...initialNewLoginDraft(model()), auth: 'sql', name: 'app', ...changes })
 const set: SecretState = { password: 'set', matches: true, wellFormed: true, tooLong: false }

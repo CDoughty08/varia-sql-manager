@@ -4,11 +4,11 @@
 // secret slot, and this file sees whether the new one is typed, matches its confirmation and is well formed (`SecretState`).
 import { actionLimits } from '../../../shared/actions/catalog.ts'
 import {
-  loginLimits, loginMessages, loginPropertiesMessages, loginPropertiesRefusal, loginPropertiesStatements, newLoginMessages, publicRole, tooManyStatementsMessage, userMappingMessages, type LoginChanges, type LoginDatabaseRoles,
-  type LoginFacts, type LoginLockFacts, type LoginMappedUser, type LoginMappingChange, type LoginPropertiesFacts, type NewLoginModel
+  credentialAuths, loginLimits, loginMessages, loginPropertiesMessages, loginPropertiesRefusal, loginPropertiesStatements, newLoginMessages, publicRole, tooManyStatementsMessage, userMappingMessages, type LoginChanges, type LoginDatabaseRoles,
+  type LoginFacts, type LoginLockFacts, type LoginMappedUser, type LoginMappingChange, type LoginPropertiesFacts, type NewLoginAuth, type NewLoginModel
 } from '../../../shared/actions/logins.ts'
 import { displayText, type ObjectRef } from '../../../shared/explorer/refs.ts'
-import { emptySecrets, mappable, mappedUser, type MappingDraft, type NewLoginDraft, type SecretState } from './new-login'
+import { emptySecrets, mappable, mappedUser, signingAuth, type MappingDraft, type NewLoginDraft, type SecretState } from './new-login'
 
 /** What the loginProperties describe answers: New Login's lists, the login's facts (its identity among them), its lock-out state (a
  *  SQL Server login only) and the rest the describe read. `users` grows, and gains each user's roles, as User Mapping reads databases. */
@@ -30,6 +30,16 @@ export const loginPropertiesModelOf = (result: { readonly newLogin?: NewLoginMod
 
 /** Whether the login is one SQL Server authenticates itself: only it has a password and a password policy. */
 export const sqlLogin = (model: Pick<LoginPropertiesModel, 'login'>) => model.login.type === 'S'
+/** The General page's kind for a sys.server_principals type (D2e): its radio, shown checked and read-only. */
+export function loginAuthOf(type: string): NewLoginAuth {
+  switch (type) {
+    case 'S': return 'sql'
+    case 'E': case 'X': return 'entra'
+    case 'C': return 'certificate'
+    case 'K': return 'asymmetricKey'
+    default: return 'windows'
+  }
+}
 /** The user mapped in a database, as read so far. */
 export const mappedUserOf = (model: Pick<LoginPropertiesModel, 'properties'>, database: string): LoginMappedUser | undefined => model.properties.users.find(user => user.database === database)
 /** Whether User Mapping knows a database's user: the describe's scan read it, or its row's own read did. */
@@ -42,12 +52,13 @@ export const databaseRead = (model: Pick<LoginPropertiesModel, 'properties'>, da
 export function initialLoginPropertiesDraft(model: LoginPropertiesModel, target: ObjectRef): LoginPropertiesDraft {
   const { login, lock, properties } = model
   return {
-    auth: sqlLogin(model) ? 'sql' : 'windows', name: target.name ?? '', defaultDatabase: properties.defaultDatabase,
+    auth: loginAuthOf(login.type), name: target.name ?? '', defaultDatabase: properties.defaultDatabase,
     ...(properties.defaultLanguage !== undefined ? { defaultLanguage: properties.defaultLanguage } : {}),
     checkPolicy: login.policyChecked ?? false, checkExpiration: login.expirationChecked ?? false, mustChange: lock?.mustChange ?? false,
     serverRoles: properties.serverRoles.filter(role => role !== publicRole), connect: login.connectDenied ? 'deny' : 'grant', enabled: !login.disabled,
     mappings: properties.users.map(user => ({ database: user.database, map: true, user: user.user, defaultSchema: user.defaultSchema ?? '', roles: [], rolesKnown: false })),
-    specifyOld: login.own && !login.canAlter && !lock?.locked, locked: lock?.locked ?? false
+    specifyOld: login.own && !login.canAlter && !lock?.locked, locked: lock?.locked ?? false,
+    certificate: properties.certificate ?? '', asymmetricKey: properties.asymmetricKey ?? '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: [...properties.credentials]
   }
 }
 
@@ -59,7 +70,9 @@ export function loginPropertiesEnabled(model: LoginPropertiesModel, draft: Login
   const sql = sqlLogin(model), typed = sql && secrets.password === 'set'
   return {
     password: sql, oldPassword: sql && draft.specifyOld, checkPolicy: sql, checkExpiration: sql && draft.checkPolicy,
-    mustChange: typed && !draft.specifyOld && draft.checkPolicy && draft.checkExpiration && !model.login.own, locked: sql && !!model.lock?.locked
+    mustChange: typed && !draft.specifyOld && draft.checkPolicy && draft.checkExpiration && !model.login.own, locked: sql && !!model.lock?.locked,
+    // D2e: Map to Credential for every kind but Microsoft Entra (loginPropertiesRefusal's externalCredentials).
+    mapCredential: credentialAuths.includes(loginAuthOf(model.login.type)), credential: credentialAuths.includes(loginAuthOf(model.login.type)) && draft.mapCredential
   } as const
 }
 
@@ -108,7 +121,7 @@ export function loginMappingUnread(model: LoginPropertiesModel, draft: LoginProp
  *  a mapped row whose user, default schema or (once read) roles changed is updated. dbo (the login owns the database) never changes. A
  *  row's roles count only once they are known (seeded from the read, or a row the user mapped), against the user's roles as read. */
 export function loginMappingChanges(model: LoginPropertiesModel, draft: LoginPropertiesDraft): LoginMappingChange[] {
-  const changes: LoginMappingChange[] = []
+  const changes: LoginMappingChange[] = [], signing = signingAuth(loginAuthOf(model.login.type))
   for (const database of model.databases) {
     const before = mappedUserOf(model, database.name), row = draft.mappings.find(mapping => mapping.database === database.name)
     if (before?.owner) continue
@@ -117,14 +130,15 @@ export function loginMappingChanges(model: LoginPropertiesModel, draft: LoginPro
     const user = mappedUser(draft, row), roles = new Set(row.roles.filter(role => role !== publicRole))
     if (!before) {
       if (!databaseRead(model, database.name)) continue
-      changes.push({ database: database.name, change: 'map', user, ...(row.defaultSchema ? { defaultSchema: row.defaultSchema } : {}), rolesAdd: sorted(roles) })
+      changes.push({ database: database.name, change: 'map', user, ...(row.defaultSchema && !signing ? { defaultSchema: row.defaultSchema } : {}), rolesAdd: sorted(roles) })
       continue
     }
     const memberOf = row.rolesKnown === false ? undefined : model.memberOf?.[database.name]
     const rolesAdd = memberOf ? without([...roles], new Set(memberOf)) : [], rolesDrop = memberOf ? without(memberOf, roles) : []
     const newName = user !== before.user ? user : undefined
-    // Clearing the schema keeps it: ALTER USER has no "none" (D2c deviation); a different one is set.
-    const defaultSchema = row.defaultSchema && row.defaultSchema !== (before.defaultSchema ?? '') ? row.defaultSchema : undefined
+    // Clearing the schema keeps it: ALTER USER has no "none" (D2c deviation); a different one is set. A certificate or key login's
+    // users have none (15259), so it never changes there.
+    const defaultSchema = row.defaultSchema && !signing && row.defaultSchema !== (before.defaultSchema ?? '') ? row.defaultSchema : undefined
     if (newName === undefined && defaultSchema === undefined && !rolesAdd.length && !rolesDrop.length) continue
     changes.push({ database: database.name, change: 'update', user: before.user, ...(newName !== undefined ? { newName } : {}), ...(defaultSchema !== undefined ? { defaultSchema } : {}),
       ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}) })
@@ -135,7 +149,7 @@ export function loginMappingChanges(model: LoginPropertiesModel, draft: LoginPro
 /**
  * What differs from the describe, as OK and Script send it: General's defaults and password policy, the password (a typed one, with
  * the old one, or with UNLOCK when Login is locked out was cleared and MUST_CHANGE while User must change is checked), Status, the
- * server roles added and dropped, and User Mapping's changes.
+ * server roles added and dropped, Mapped Credentials' rows added (in the grid's order) and removed (D2e), and User Mapping's changes.
  */
 export function loginPropertiesChanges(model: LoginPropertiesModel, draft: LoginPropertiesDraft, secrets: SecretState = emptySecrets): LoginChanges {
   const { login, properties } = model, sql = sqlLogin(model), enabled = loginPropertiesEnabled(model, draft, secrets)
@@ -146,6 +160,8 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
   const mappings = loginMappingChanges(model, draft)
   const connect = draft.connect !== (login.connectDenied ? 'deny' : 'grant') ? draft.connect : undefined
   const typed = sql && secrets.password === 'set'
+  const mappedBefore = new Set(properties.credentials), mappedNow = new Set(draft.credentials)
+  const credentialsAdd = draft.credentials.filter(name => !mappedBefore.has(name)), credentialsDrop = sorted(properties.credentials.filter(name => !mappedNow.has(name)))
   return {
     ...(draft.defaultDatabase !== properties.defaultDatabase ? { defaultDatabase: draft.defaultDatabase } : {}),
     ...(draft.defaultLanguage !== undefined && draft.defaultLanguage !== properties.defaultLanguage ? { defaultLanguage: draft.defaultLanguage } : {}),
@@ -156,13 +172,15 @@ export function loginPropertiesChanges(model: LoginPropertiesModel, draft: Login
         oldPassword: draft.specifyOld, unlock: !draft.specifyOld && !!model.lock?.locked && !draft.locked, mustChange: enabled.mustChange && draft.mustChange
       }
     } : {}),
-    ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}), ...(mappings.length ? { mappings } : {}),
+    ...(rolesAdd.length ? { rolesAdd } : {}), ...(rolesDrop.length ? { rolesDrop } : {}), ...(credentialsAdd.length ? { credentialsAdd } : {}), ...(credentialsDrop.length ? { credentialsDrop } : {}),
+    ...(mappings.length ? { mappings } : {}),
     ...(connect ? { connect } : {}), ...(draft.enabled !== !login.disabled ? { enabled: draft.enabled } : {})
   }
 }
 
 /** Why OK and Script cannot send the changes, or undefined: a password that is too long, does not match or is broken; a lock-out
- *  cleared without a new password; a change the login's rules refuse (loginPropertiesRefusal); a default database or language the lists do not hold; too many databases or statements. */
+ *  cleared without a new password; a change the login's rules refuse (loginPropertiesRefusal); a default database or language the lists do not hold; more credentials
+ *  than one request maps or removes, or one the server does not list; too many databases or statements. */
 export function loginPropertiesProblem(model: LoginPropertiesModel, draft: LoginPropertiesDraft, secrets: SecretState = emptySecrets, changes = loginPropertiesChanges(model, draft, secrets)): string | undefined {
   if (sqlLogin(model)) {
     if (secrets.tooLong) return newLoginMessages.tooLong
@@ -178,6 +196,8 @@ export function loginPropertiesProblem(model: LoginPropertiesModel, draft: Login
   if (unread !== undefined) return loginPropertiesMessages.readAgain(displayText(unread))
   if (changes.defaultDatabase !== undefined && !model.databases.some(database => database.name === changes.defaultDatabase)) return newLoginMessages.defaultDatabase
   if (changes.defaultLanguage !== undefined && !model.languages.some(language => language.name === changes.defaultLanguage)) return newLoginMessages.defaultLanguage
+  if ((changes.credentialsAdd?.length ?? 0) > loginLimits.credentials || (changes.credentialsDrop?.length ?? 0) > loginLimits.credentials) return newLoginMessages.credentialsLimit
+  if (changes.credentialsAdd?.some(name => !model.credentials.some(credential => credential.name === name))) return newLoginMessages.credential
   if ((changes.mappings?.length ?? 0) > loginLimits.mappings) return userMappingMessages.mappingsLimit
   if (loginPropertiesStatements(changes) > actionLimits.statements) return tooManyStatementsMessage(actionLimits.statements)
   return undefined

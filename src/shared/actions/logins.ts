@@ -132,7 +132,11 @@ export const loginMessages = {
   // SQL Server then refuses the login's new sign-ins (18488) until its password changes, which Varia's pools cannot do.
   ownMustChange: "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it.",
   // Only SQL Server authenticates a SQL Server login's password; a request for another kind is refused before anything runs.
-  propertiesNotSql: 'Only a SQL Server login has a password and a password policy.'
+  propertiesNotSql: 'Only a SQL Server login has a password and a password policy.',
+  // D2e: Managed Instance's ALTER LOGIN for a Microsoft Entra login takes only ENABLE, DISABLE and the defaults (Learn).
+  externalCredentials: 'A Microsoft Entra login cannot be mapped to a credential here.',
+  // SQL Server refuses DEFAULT_SCHEMA for a user mapped to a certificate or an asymmetric key (15259, probed).
+  signingSchema: 'A user mapped to a certificate or an asymmetric key has no default schema.'
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -153,6 +157,8 @@ export const loginLimits = {
   roles: 256, schemas: 1_024, mappings: 256,
   /** Per request; 1,024 are listed. */
   credentials: 16, certificates: 1_024, asymmetricKeys: 1_024, permissions: 512,
+  /** Credentials New Login's list and a login's Mapped Credentials grid show (D2e). */
+  listedCredentials: 1_024,
   /** A SID as hexadecimal text (CONVERT(varchar(172), sid, 2)). */
   sidHex: 172,
   /** An action step's title and detail (ActionStep). */
@@ -311,6 +317,12 @@ export function loginsCatalog() {
     rules: loginSubtypes.map(subtype => ({ subtype, ...loginRules[subtype], greyed: Object.fromEntries(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => [verb, loginGreyedMessage(subtype, verb)])) })),
     saPrincipalId,
     rolesDescribe: loginDatabaseRolesDescribe,
+    // D2e: the kinds per engine, the policy options' engines, which kinds take credentials and defaults, and Check Names.
+    newLogin: {
+      authEngines: newLoginAuthEngines, entraBand: entraBoxBand, policyEngines: newLoginPolicyEngines, credentialAuths, defaultsAuths,
+      messages: Object.fromEntries((['authNotOffered', 'entraVersion', 'policyManagedInstance', 'policyRequired'] as const).map(id => [id, newLoginMessages[id]]))
+    },
+    checkNames: { describe: windowsPrincipalDescribe, permission: checkNamesText.permission, notFound: checkNamesText.notFound },
     scriptHeader: passwordScriptHeader,
     typeSubtypes: loginTypeSubtypes
   }
@@ -318,21 +330,65 @@ export function loginsCatalog() {
 
 // --- New Login (D2a) ---------------------------------------------------------------------------------------------------
 
-/** How a new login authenticates. D2a offers SSMS's first two; certificate, asymmetric key and Microsoft Entra come with D2e. */
-export const newLoginAuths = ['windows', 'sql'] as const
+/** How a new login authenticates, in SSMS's order on the General page (D2a: Windows and SQL Server; D2e: Microsoft Entra, certificate
+ *  and asymmetric key). */
+// One entry per line, so later kinds append cleanly.
+export const newLoginAuths = [
+  'windows',
+  'sql',
+  'entra',
+  'certificate',
+  'asymmetricKey'
+] as const
 export type NewLoginAuth = typeof newLoginAuths[number]
-/** New Login's General page as the request carries it. The SQL Server authentication options are present exactly for `sql`,
- *  and follow SQL Server's chain: MUST_CHANGE needs CHECK_EXPIRATION (15099), which needs CHECK_POLICY (15122). */
+/** The servers New Login runs on (createActionSpecs.createLogin.engines), as the describe reports them. */
+export type NewLoginEngine = 'box' | 'managedInstance'
+/**
+ * Which kinds a server offers (D2 §7): Managed Instance's CREATE LOGIN takes only a password or FROM EXTERNAL PROVIDER (Learn, MI
+ * moniker), so Windows, certificate and asymmetric key logins are SQL Server's; Microsoft Entra on SQL Server from 2022 (band 16),
+ * which answers 37525 until Azure Arc and Entra are set up there. C# reads these from actions-catalog.json (LoginRules.AuthRefusal).
+ */
+export const newLoginAuthEngines: { readonly [A in NewLoginAuth]: readonly NewLoginEngine[] } = {
+  windows: ['box'], sql: ['box', 'managedInstance'], entra: ['box', 'managedInstance'], certificate: ['box'], asymmetricKey: ['box']
+}
+/** The first SQL Server band whose CREATE LOGIN takes FROM EXTERNAL PROVIDER (2022); Managed Instance always does. */
+export const entraBoxBand = 16
+/** Where CREATE LOGIN takes CHECK_POLICY, CHECK_EXPIRATION and MUST_CHANGE: Managed Instance's grammar has none of them (SSMS's
+ *  ported SupportAdvancedPasswordOptions hides them there too), though its ALTER LOGIN takes them. */
+export const newLoginPolicyEngines: readonly NewLoginEngine[] = ['box']
+/** The kinds a credential can be mapped to: Managed Instance's ALTER LOGIN for a Microsoft Entra login takes only ENABLE, DISABLE and
+ *  the defaults (Learn), and SQL Server's for one is unverified, so Map to Credential is greyed for Entra logins. */
+export const credentialAuths: readonly NewLoginAuth[] = ['windows', 'sql', 'certificate', 'asymmetricKey']
+/** The kinds whose CREATE LOGIN takes DEFAULT_DATABASE and DEFAULT_LANGUAGE: not certificate or asymmetric key (SMO writes neither for
+ *  them, and FROM CERTIFICATE … WITH DEFAULT_DATABASE is a syntax error, 102, probed). */
+export const defaultsAuths: readonly NewLoginAuth[] = ['windows', 'sql', 'entra']
+/** Whether a server offers a kind of login. */
+export const newLoginAuthOffered = (server: { readonly engine: NewLoginEngine; readonly level: number }, auth: NewLoginAuth): boolean =>
+  newLoginAuthEngines[auth].includes(server.engine) && (auth !== 'entra' || server.engine !== 'box' || server.level >= entraBoxBand)
+/** The General page's radio per kind, by SSMS's labels (D2e adds the last three; the Microsoft Entra label is unverified for SSMS 22). */
+export const newLoginAuthLabels: { readonly [A in NewLoginAuth]: string } = {
+  windows: 'Windows authentication', sql: 'SQL Server authentication', entra: 'Microsoft Entra authentication', certificate: 'Mapped to certificate', asymmetricKey: 'Mapped to asymmetric key'
+}
+/** New Login's General page as the request carries it. The SQL Server authentication options are present for `sql` on SQL Server
+ *  and absent on Managed Instance, and follow SQL Server's chain: MUST_CHANGE needs CHECK_EXPIRATION (15099), which needs CHECK_POLICY
+ *  (15122). A certificate or asymmetric key login names its certificate or key and has no defaults. */
 export interface NewLoginGeneral {
   readonly auth: NewLoginAuth
   /** Used verbatim, at most 128 UTF-16 units; a Windows login is DOMAIN\name, a SQL login has no backslash (15006). */
   readonly name: string
-  readonly defaultDatabase: string
+  /** Present exactly for the defaultsAuths. */
+  readonly defaultDatabase?: string
   /** Absent: the server's default language (no DEFAULT_LANGUAGE clause). */
   readonly defaultLanguage?: string
   readonly checkPolicy?: boolean
   readonly checkExpiration?: boolean
   readonly mustChange?: boolean
+  /** A master certificate's name, exactly for `certificate`. */
+  readonly certificate?: string
+  /** A master asymmetric key's name, exactly for `asymmetricKey`. */
+  readonly asymmetricKey?: string
+  /** Map to Credential's Mapped Credentials, at most loginLimits.credentials (ALTER LOGIN … ADD CREDENTIAL each, after Disable). */
+  readonly credentials?: readonly string[]
 }
 /** The Status page: Permission to connect to database engine (Grant or Deny) and Login (Enabled or Disabled). */
 export interface LoginStatusChoice { readonly connect: 'grant' | 'deny'; readonly enabled: boolean }
@@ -347,6 +403,8 @@ export interface NewLoginDatabase { readonly name: string; readonly state: numbe
 export interface NewLoginLanguage { readonly name: string; readonly alias: string }
 /** A server role from sys.server_principals (type R): fixed roles, SQL Server 2022's ##MS_…## roles, and user-defined ones. */
 export interface NewLoginServerRole { readonly name: string; readonly fixed: boolean }
+/** A credential from sys.credentials, with its cryptographic provider's name for an EKM credential (Mapped Credentials' Provider). */
+export interface NewLoginCredential { readonly name: string; readonly provider?: string }
 /** What New Login's describe reads in master (the newLogin describe id, target the server). */
 export interface NewLoginModel {
   readonly server: {
@@ -357,12 +415,23 @@ export interface NewLoginModel {
     readonly windowsOnly: boolean
     /** HAS_PERMS_BY_NAME ALTER ANY LOGIN; advisory, the server decides on OK. */
     readonly canCreate: boolean
+    /** SQL Server or Azure SQL Managed Instance (D2e), which decides the kinds and options offered. */
+    readonly engine: NewLoginEngine
   }
   readonly databases: readonly NewLoginDatabase[]
   readonly databasesTruncated: boolean
   readonly languages: readonly NewLoginLanguage[]
   readonly serverRoles: readonly NewLoginServerRole[]
   readonly serverRolesTruncated: boolean
+  /** master's certificates and asymmetric keys, at most loginLimits.certificates and .asymmetricKeys by name (D2e); SQL Server's own
+   *  `##MS_…##` ones are listed too, as SSMS lists them. */
+  readonly certificates: readonly string[]
+  readonly certificatesTruncated: boolean
+  readonly asymmetricKeys: readonly string[]
+  readonly asymmetricKeysTruncated: boolean
+  /** sys.credentials, at most loginLimits.listedCredentials by name (D2e). */
+  readonly credentials: readonly NewLoginCredential[]
+  readonly credentialsTruncated: boolean
 }
 /** A Windows login's name: DOMAIN\name, one backslash with text on both sides (the server answers 15407 otherwise). */
 export const windowsLoginName = /^[^\\]+\\[^\\]+$/
@@ -384,19 +453,77 @@ export const newLoginMessages = {
   canCreate: 'You may not have permission to create logins (ALTER ANY LOGIN). The server checks when you press OK.',
   passwordsMatch: 'Passwords match.',
   policyServer: 'The server checks its password policy on OK.',
-  passwordScript: 'Sent only with OK; Script shows PASSWORD=<password>.'
+  passwordScript: 'Sent only with OK; Script shows PASSWORD=<password>.',
+  // D2e: the other kinds, Map to Credential and the engines.
+  certificate: 'Choose a certificate from the list.',
+  asymmetricKey: 'Choose an asymmetric key from the list.',
+  /** A certificate or key login signs code; it cannot connect (Learn, CREATE LOGIN). */
+  signingOnly: 'A login mapped to a certificate or an asymmetric key cannot connect to SQL Server: it is used for code signing.',
+  noCertificates: 'master has no certificate.',
+  noAsymmetricKeys: 'master has no asymmetric key.',
+  /** SQL Server 2022 and later need Azure Arc and Microsoft Entra set up (37525 otherwise, probed on 2025). */
+  entraBox: 'SQL Server creates Microsoft Entra logins once Azure Arc and Microsoft Entra authentication are set up on it; otherwise OK fails.',
+  entraName: 'Type the Microsoft Entra user, group or application as Microsoft Entra ID names it (user@domain for a user).',
+  credential: 'Choose a credential from the list.',
+  credentialTwice: 'This credential is mapped already.',
+  credentialsLimit: `At most ${loginLimits.credentials} credentials can be mapped at once.`,
+  noCredentials: 'The server has no credential.',
+  credentialsEntra: loginMessages.externalCredentials,
+  /** The request asked for a kind the server does not offer (C#: ActionService refuses it as NOT_SUPPORTED). */
+  authNotOffered: 'This server does not offer this kind of login.',
+  entraVersion: 'Microsoft Entra logins need SQL Server 2022 or later.',
+  policyManagedInstance: 'Azure SQL Managed Instance takes no password policy options when it creates a login. Set them in Login Properties afterwards.',
+  policyRequired: 'A SQL Server login on SQL Server states its password policy options.'
+} as const
+/** Check Names (D2 §6, the Search… button's SubDialog "Select User or Group"): the describe id that asks the server about a Windows
+ *  account through xp_logininfo (target `{ kind: 'login', name: DOMAIN\name }`), and what it answers. */
+export const windowsPrincipalDescribe = 'windowsPrincipal'
+/** xp_logininfo's answer: the account name as the server gives it, `user` or `group`, and the path its access comes through (a group,
+ *  or the account itself). No row means the server found the account but no login gives it access (probed: a missing account answers
+ *  15404, NOT_FOUND), so `access` is false and the type unknown. */
+export interface WindowsPrincipal {
+  readonly accountName: string
+  readonly access: boolean
+  readonly type?: 'user' | 'group'
+  readonly via?: string
+}
+/** Check Names' words, in Varia's: SSMS's Object Picker is Windows' own and has none of these. */
+export const checkNamesText = {
+  title: 'Select User or Group',
+  nameLabel: 'Enter the object name',
+  check: 'Check Names',
+  checking: 'Checking…',
+  hint: 'Varia asks the server (xp_logininfo), which resolves the name as CREATE LOGIN … FROM WINDOWS will. Type DOMAIN\\name.',
+  user: 'Windows user',
+  group: 'Windows group',
+  found: 'The server found this account.',
+  noAccess: 'The server found this account; no login gives it access yet.',
+  via: (path: string) => `It has access through ${path}.`,
+  /** xp_logininfo needs sysadmin, or EXECUTE granted on it in master (Learn); the server answers 229 otherwise. */
+  permission: 'Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\\name; the server checks it when you press OK.',
+  notFound: 'The server could not find this Windows account. Check the name, typed as DOMAIN\\name.',
+  changed: 'The name changed since it was checked. Check Names again.'
 } as const
 /** The Script Action header for a script with a password placeholder (D2 §5.6, A14): run unedited, the batch fails to parse. */
 export const passwordScriptHeader = '/* Varia leaves passwords out of scripts. Replace <password> with the login\'s password, as an N\'…\' literal, before you run this script. */'
 
 /** Why a New Login request cannot be sent, or undefined: the problems the page shows before anything is sent. `password` is
  *  only its length and whether it equals the confirmation, so no value leaves the secret slot. */
-export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean; readonly tooLong?: boolean } | undefined, model?: Pick<NewLoginModel, 'databases' | 'languages'>): string | undefined {
+export function newLoginProblem(login: NewLoginGeneral, password: { readonly empty: boolean; readonly matches: boolean; readonly wellFormed?: boolean; readonly tooLong?: boolean } | undefined,
+  model?: Pick<NewLoginModel, 'databases' | 'languages'> & Partial<Pick<NewLoginModel, 'server' | 'certificates' | 'asymmetricKeys' | 'credentials'>>): string | undefined {
   if (!login.name) return newLoginMessages.nameRequired
+  if (model?.server && !newLoginAuthOffered(model.server, login.auth)) return newLoginMessages.authNotOffered
   if (login.auth === 'sql' && login.name.includes('\\')) return newLoginMessages.sqlBackslash
   if (login.auth === 'windows' && !windowsLoginName.test(login.name)) return newLoginMessages.windowsName
-  if (model && !model.databases.some(database => database.name === login.defaultDatabase)) return newLoginMessages.defaultDatabase
+  if (login.auth === 'certificate' && (!login.certificate || (model?.certificates && !model.certificates.includes(login.certificate)))) return newLoginMessages.certificate
+  if (login.auth === 'asymmetricKey' && (!login.asymmetricKey || (model?.asymmetricKeys && !model.asymmetricKeys.includes(login.asymmetricKey)))) return newLoginMessages.asymmetricKey
+  if (defaultsAuths.includes(login.auth) && (login.defaultDatabase === undefined || (model && !model.databases.some(database => database.name === login.defaultDatabase)))) return newLoginMessages.defaultDatabase
   if (model && login.defaultLanguage !== undefined && !model.languages.some(language => language.name === login.defaultLanguage)) return newLoginMessages.defaultLanguage
+  const credentials = login.credentials ?? []
+  if (credentials.length > 0 && !credentialAuths.includes(login.auth)) return newLoginMessages.credentialsEntra
+  if (credentials.length > loginLimits.credentials) return newLoginMessages.credentialsLimit
+  if (new Set(credentials).size !== credentials.length) return newLoginMessages.credentialTwice
+  if (model?.credentials && credentials.some(name => !model.credentials!.some(credential => credential.name === name))) return newLoginMessages.credential
   if (login.auth === 'sql' && password) {
     if (password.tooLong) return newLoginMessages.tooLong
     if (!password.matches) return newLoginMessages.mismatch
@@ -438,10 +565,11 @@ export interface UserMappingChoice {
 }
 /** The most statements a mapping plans: CREATE USER, the default schema's ALTER USER and CREATE SCHEMA, and one per role. */
 export const mappingStatements = (mapping: Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>): number => 1 + (mapping.defaultSchema === undefined ? 0 : 2) + mapping.rolesAdd.length
-/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each server role, and each mapping's. Bounded by
- *  actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
-export function newLoginStatements(request: { readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
-  return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + request.serverRoles.length + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
+/** The most statements New Login plans: CREATE LOGIN, Deny, Disable, each credential (D2e), each server role, and each mapping's.
+ *  Bounded by actionLimits.statements (src/shared/actions/catalog.ts), which the request schema, the page and C# all check. */
+export function newLoginStatements(request: { readonly login?: Pick<NewLoginGeneral, 'credentials'>; readonly serverRoles: readonly string[]; readonly status: LoginStatusChoice; readonly mappings: readonly Pick<UserMappingChoice, 'defaultSchema' | 'rolesAdd'>[] }): number {
+  return 1 + (request.status.connect === 'deny' ? 1 : 0) + (request.status.enabled ? 0 : 1) + (request.login?.credentials?.length ?? 0) + request.serverRoles.length
+    + request.mappings.reduce((sum, mapping) => sum + mappingStatements(mapping), 0)
 }
 /** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
 export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
@@ -479,6 +607,9 @@ export interface LoginChanges {
   readonly mappings?: readonly LoginMappingChange[]
   readonly connect?: 'grant' | 'deny'
   readonly enabled?: boolean
+  /** Mapped Credentials' rows added and removed (D2e): ALTER LOGIN … ADD CREDENTIAL and DROP CREDENTIAL, at most loginLimits.credentials each. */
+  readonly credentialsAdd?: readonly string[]
+  readonly credentialsDrop?: readonly string[]
 }
 /** A user mapped to the login in one database, as the describe's scan read it: `owner` when it is dbo (the login owns the database). */
 export interface LoginMappedUser { readonly database: string; readonly user: string; readonly defaultSchema?: string; readonly owner: boolean }
@@ -493,12 +624,20 @@ export interface LoginPropertiesFacts {
   readonly serverRolesTruncated: boolean
   readonly users: readonly LoginMappedUser[]
   readonly read: readonly string[]
+  /** D2e: the credentials mapped to the login (sys.server_principal_credentials), at most loginLimits.listedCredentials by name, and
+   *  the certificate or asymmetric key a C or K login is mapped to (by its SID). */
+  readonly credentials: readonly string[]
+  readonly credentialsTruncated: boolean
+  readonly certificate?: string
+  readonly asymmetricKey?: string
 }
-/** The most statements Login Properties plans: the options, the password, Connect, Enabled, each server role, and per database its
- *  DROP USER, or its CREATE USER or rename, the default schema's two and one per role. C#: LoginSql.PropertiesStatements. */
+/** The most statements Login Properties plans: the options, the password, Connect, Enabled, each credential removed and added (D2e),
+ *  each server role, and per database its DROP USER, or its CREATE USER or rename, the default schema's two and one per role. C#:
+ *  LoginSql.PropertiesStatements. */
 export function loginPropertiesStatements(changes: LoginChanges): number {
   const options = changes.defaultDatabase !== undefined || changes.defaultLanguage !== undefined || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined
   return (options ? 1 : 0) + (changes.password ? 1 : 0) + (changes.connect ? 1 : 0) + (changes.enabled === undefined ? 0 : 1) + (changes.rolesAdd?.length ?? 0) + (changes.rolesDrop?.length ?? 0)
+    + (changes.credentialsAdd?.length ?? 0) + (changes.credentialsDrop?.length ?? 0)
     + (changes.mappings ?? []).reduce((sum, mapping) => sum + (mapping.change === 'unmap' ? 1
       : (mapping.change === 'map' || mapping.newName !== undefined ? 1 : 0) + (mapping.defaultSchema === undefined ? 0 : 2) + (mapping.rolesAdd?.length ?? 0) + (mapping.rolesDrop?.length ?? 0)), 0)
 }
@@ -512,6 +651,8 @@ export function loginPropertiesRefusal(facts: Pick<LoginFacts, 'subtype' | 'own'
   if (facts.own && changes.password?.mustChange) return 'ownMustChange'
   if (facts.subtype === 'windowsGroup' && changes.enabled === false) return 'windowsGroupDisable'
   if (facts.type !== 'S' && (changes.password || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined)) return 'propertiesNotSql'
+  if ((facts.type === 'E' || facts.type === 'X') && (changes.credentialsAdd?.length || changes.credentialsDrop?.length)) return 'externalCredentials'
+  if ((facts.type === 'C' || facts.type === 'K') && changes.mappings?.some(mapping => mapping.defaultSchema !== undefined)) return 'signingSchema'
   return undefined
 }
 /** Login Properties' own words, in Varia's where SSMS's are unverified. They name fields, never values. */

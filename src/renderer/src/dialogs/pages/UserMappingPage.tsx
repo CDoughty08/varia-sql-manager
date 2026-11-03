@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type UIEvent } from 'react'
 import { actionLimits } from '../../../../shared/actions/catalog.ts'
-import { loginLimits, loginPropertiesMessages, publicRole, userMappingMessages, type NewLoginDatabase, type NewLoginModel } from '../../../../shared/actions/logins.ts'
+import { loginLimits, loginMessages, loginPropertiesMessages, publicRole, userMappingMessages, type NewLoginDatabase, type NewLoginModel } from '../../../../shared/actions/logins.ts'
 import { displayText } from '../../../../shared/explorer/refs.ts'
 import { databaseChips } from '../../../../shared/explorer/status.ts'
 import { defaultDensity, densities } from '../../../../shared/theme/metrics.ts'
@@ -9,7 +9,7 @@ import { useWorkbench } from '../../core/WorkbenchContext'
 import StatusPill from '../../kit/StatusPill'
 import { databaseRead, mappingLock, mappedUserOf, type LoginPropertiesModel } from '../login-properties'
 import { loginBlocked, LoginBlockedNote } from './NewLoginPages'
-import { mappable, mappedUser, mappingOf, setMapped, setMappingRole, setMappingSchema, setMappingUser, type MappingDraft, type NewLoginDraft } from '../new-login'
+import { mappable, mappedUser, mappingOf, setMapped, setMappingRole, setMappingSchema, setMappingUser, signingAuth, type MappingDraft, type NewLoginDraft } from '../new-login'
 import type { PageProps } from '../ObjectDialog'
 import type { DatabaseRolesLookup } from '../ObjectDialogService'
 import SubDialog from '../SubDialog'
@@ -45,7 +45,8 @@ interface Editing { readonly database: string; readonly column: 'user' | 'schema
  * grid with an active cell (aria-activedescendant): arrows, Home, End and Page keys move it; Space toggles Map; F2, Enter or
  * typing edits User or Default Schema of a mapped row in one native field (Enter or Tab commits, Escape cancels without closing
  * the dialog); Alt+Down opens Select Schema. Selecting a row selects its database below, which reads its roles. Databases that
- * are not online or not open to this login are greyed with their state, as SSMS greys them.
+ * are not online or not open to this login are greyed with their state, as SSMS greys them. A certificate or asymmetric key login's
+ * users have no default schema (D2e: SQL Server answers 15259), so Default Schema stays blank and closed then.
  */
 function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: {
   model: NewLoginModel; draft: NewLoginDraft; editable: boolean; onSchema(database: string): void
@@ -86,9 +87,10 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
     if (!database || !editable || !mappable(database) || locked(database.name)) return
     dialogs.updateDraft(setMapped(draft, database.name, !mappingOf(draft, database.name).map))
   }
+  const noSchema = signingAuth(draft.auth)
   const begin = (index: number, to: UserMappingColumn, text?: string) => {
     const database = databases[index]
-    if (!database || !editable || (to !== 'user' && to !== 'schema') || !mappable(database) || locked(database.name) || !mappingOf(draft, database.name).map) return
+    if (!database || !editable || (to !== 'user' && to !== 'schema') || (to === 'schema' && noSchema) || !mappable(database) || locked(database.name) || !mappingOf(draft, database.name).map) return
     select(index, to)
     const mapping = mappingOf(draft, database.name)
     setEditing({ database: database.name, column: to, text: text ?? (to === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) })
@@ -119,7 +121,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
     let handled = true
     switch (event.key) {
       case 'ArrowDown':
-        if (event.altKey) { if (column === 'schema' && row >= 0 && editable && mappable(databases[row]) && !locked(databases[row].name) && mappingOf(draft, databases[row].name).map) onSchema(databases[row].name) }
+        if (event.altKey) { if (column === 'schema' && !noSchema && row >= 0 && editable && mappable(databases[row]) && !locked(databases[row].name) && mappingOf(draft, databases[row].name).map) onSchema(databases[row].name) }
         else select(row < 0 ? 0 : Math.min(count - 1, row + 1))
         break
       case 'ArrowUp': select(row < 0 ? 0 : Math.max(0, row - 1)); break
@@ -163,7 +165,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
           const field = (of: 'user' | 'schema') => editing?.database === database.name && editing.column === of
             ? <input className="user-mapping-editor" autoFocus aria-label={`${headers[of]} in ${database.name}`} maxLength={actionLimits.newName} spellCheck={false} value={editing.text}
               onChange={event => setEditing({ ...editing, text: event.target.value })} onBlur={() => commit()} onFocus={event => { const end = event.currentTarget.value.length; event.currentTarget.setSelectionRange(end, end) }} />
-            : <span className="user-mapping-text" data-unread={unread || undefined}><bdi>{unread ? (of === 'user' ? loginPropertiesMessages.notRead : '') : mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) : ''}</bdi></span>
+            : <span className="user-mapping-text" data-unread={unread || undefined}><bdi>{unread ? (of === 'user' ? loginPropertiesMessages.notRead : '') : mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : noSchema ? '' : mapping.defaultSchema) : ''}</bdi></span>
           return <div key={database.name} className="user-mapping-row" role="row" aria-rowindex={index + 2} aria-selected={selected} aria-disabled={!usable || undefined}
             data-selected={selected || undefined} data-unavailable={!usable || undefined} style={{ top: index * userMappingRowHeight, height: userMappingRowHeight }}>
             <span {...cell('map')} className="user-mapping-cell user-mapping-map">
@@ -177,7 +179,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
             <span {...cell('user')} className="user-mapping-cell" aria-describedby={unread ? 'user-mapping-unread' : undefined} onDoubleClick={() => begin(index, 'user')}>{field('user')}</span>
             <span {...cell('schema')} className="user-mapping-cell user-mapping-schema" onDoubleClick={() => begin(index, 'schema')}>
               {field('schema')}
-              {mapped && !lock && editing?.database !== database.name && <button type="button" className="user-mapping-browse" tabIndex={-1} aria-label={`Select Schema for ${database.name}`} title="Select Schema"
+              {mapped && !lock && !noSchema && editing?.database !== database.name && <button type="button" className="user-mapping-browse" tabIndex={-1} aria-label={`Select Schema for ${database.name}`} title="Select Schema"
                 disabled={!editable} onPointerDown={event => event.stopPropagation()} onMouseDown={event => event.preventDefault()}
                 onClick={() => { focusGrid(); select(index, 'schema'); onSchema(database.name) }}>…</button>}
             </span>
@@ -236,9 +238,10 @@ export default function UserMappingPage({ open, editable }: PageProps) {
     {/* What a "Not read" cell means, for the cells that name it (aria-describedby reads hidden text). */}
     {properties && <p id="user-mapping-unread" hidden>{loginPropertiesMessages.notReadHint}</p>}
     <UserMappingGrid model={model} draft={draft} editable={editable && !blocked} locked={locked} notRead={notRead} onSchema={database => { dialogs.loadDatabaseRoles(database); setSchemaFor(database) }} />
-    {(model.databasesTruncated || mappedCount > loginLimits.mappings) && <ul className="object-dialog-warnings" aria-label="Notes">
+    {(model.databasesTruncated || mappedCount > loginLimits.mappings || signingAuth(draft.auth)) && <ul className="object-dialog-warnings" aria-label="Notes">
       {model.databasesTruncated && <li><span>{`Only the first ${model.databases.length.toLocaleString('en-US')} databases are listed.`}</span></li>}
       {mappedCount > loginLimits.mappings && <li><span>{userMappingMessages.mappingsLimit}</span></li>}
+      {signingAuth(draft.auth) && <li><span>{loginMessages.signingSchema}</span></li>}
     </ul>}
     {/* One span, so the label's flex gap does not widen the space before the name. */}
     <label className="checkbox-label"><input type="checkbox" checked={!!ready?.guest} disabled /><span>Guest account enabled for: {name}</span></label>

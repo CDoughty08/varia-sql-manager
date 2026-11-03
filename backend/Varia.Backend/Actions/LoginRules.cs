@@ -4,7 +4,14 @@ namespace Varia.Backend.Actions;
 internal sealed record LoginRuleJson(string Subtype, string Disable, string Enable, string Unlock, string Rename, string Delete, Dictionary<string, string> Greyed);
 /// <summary>The logins block of actions-catalog.json (src/shared/actions/logins.ts loginsCatalog()).</summary>
 internal sealed record LoginRulesJson(Dictionary<string, long> Limits, List<string> LockProperties, Dictionary<string, string> Messages, List<string> OwnRefuses, string RolesDescribe,
-    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash);
+    List<LoginRuleJson> Rules, int SaPrincipalId, string ScriptHeader, Dictionary<string, string> TypeSubtypes, LoginDetailJson Detail, List<string> NoBackslash, NewLoginRulesJson NewLogin,
+    CheckNamesJson CheckNames);
+/// <summary>New Login's kinds per engine and the rules around them (logins.ts newLoginAuthEngines, entraBoxBand, newLoginPolicyEngines,
+/// credentialAuths, defaultsAuths), with the messages a refusal answers.</summary>
+internal sealed record NewLoginRulesJson(Dictionary<string, List<string>> AuthEngines, int EntraBand, List<string> PolicyEngines, List<string> CredentialAuths, List<string> DefaultsAuths,
+    Dictionary<string, string> Messages);
+/// <summary>Check Names (logins.ts windowsPrincipalDescribe and checkNamesText): its describe id and the messages of its two refusals.</summary>
+internal sealed record CheckNamesJson(string Describe, string Permission, string NotFound);
 /// <summary>The words of a Logins folder row's detail (logins.ts loginDetailWords): its kind by type letter, then its state and
 /// password policy.</summary>
 internal sealed record LoginDetailJson(Dictionary<string, string> Types, string Disabled, string ConnectDenied, string PolicyChecked, string ExpirationChecked);
@@ -29,7 +36,35 @@ internal sealed class LoginRules
         // ActionSql.LoginLock reads exactly the properties logins.ts allows (critic A15).
         if (json.LockProperties is null || !json.LockProperties.SequenceEqual(ActionSql.LoginLockProperties, StringComparer.Ordinal))
             throw new InvalidOperationException("The login lock-out properties differ from the catalogue's.");
+        if (json.NewLogin is null || json.CheckNames is null || json.NewLogin.AuthEngines.Count == 0) throw new InvalidOperationException("The login catalogue has no New Login rules.");
     }
+
+    /// <summary>New Login's kinds (logins.ts newLoginAuths).</summary>
+    public IReadOnlyCollection<string> Auths => json.NewLogin.AuthEngines.Keys;
+    /// <summary>Whether a kind takes a default database and language (logins.ts defaultsAuths).</summary>
+    public bool TakesDefaults(string auth) => json.NewLogin.DefaultsAuths.Contains(auth);
+    /// <summary>Whether a kind can be mapped to credentials (logins.ts credentialAuths).</summary>
+    public bool TakesCredentials(string auth) => json.NewLogin.CredentialAuths.Contains(auth);
+    /// <summary>Whether CREATE LOGIN takes the password policy options on this engine (logins.ts newLoginPolicyEngines).</summary>
+    public bool PolicyOn(string engine) => json.NewLogin.PolicyEngines.Contains(engine);
+
+    /// <summary>Why a server of this engine and band does not create this New Login, or null (logins.ts newLoginAuthOffered and the
+    /// policy options' engines): a kind it does not offer, Microsoft Entra on SQL Server before 2022, and a SQL Server login's policy
+    /// options missing on SQL Server or present on Managed Instance. The message is the catalogue's.</summary>
+    public string? NewLoginRefusal(NewLoginDto login, string engine, int band)
+    {
+        var messages = json.NewLogin.Messages;
+        if (!json.NewLogin.AuthEngines.TryGetValue(login.Auth, out var engines) || !engines.Contains(engine)) return messages["authNotOffered"];
+        if (login.Auth == "entra" && engine == "box" && band < json.NewLogin.EntraBand) return messages["entraVersion"];
+        if (login.Auth == "sql" && PolicyOn(engine) != login.CheckPolicy.HasValue) return messages[PolicyOn(engine) ? "policyRequired" : "policyManagedInstance"];
+        return null;
+    }
+
+    /// <summary>Check Names' describe id (logins.ts windowsPrincipalDescribe).</summary>
+    public string CheckNamesDescribe => json.CheckNames.Describe;
+    /// <summary>What Check Names answers when xp_logininfo is refused (229) or finds no account (15404).</summary>
+    public string CheckNamesPermission => json.CheckNames.Permission;
+    public string CheckNamesNotFound => json.CheckNames.NotFound;
 
     public IReadOnlyCollection<string> Subtypes => rules.Keys;
     /// <summary>The LOGINPROPERTY properties logins.ts allows ActionSql.LoginLock to read.</summary>
@@ -118,6 +153,9 @@ internal sealed class LoginRules
         if (facts.Own && changes.Password is { MustChange: true }) return "ownMustChange";
         if (facts.Subtype == "windowsGroup" && changes.Enabled == false) return "windowsGroupDisable";
         if (facts.Type.Trim() != "S" && (changes.Password is not null || changes.CheckPolicy is not null || changes.CheckExpiration is not null)) return "propertiesNotSql";
+        if (facts.Type.Trim() is "E" or "X" && ((changes.CredentialsAdd?.Count ?? 0) > 0 || (changes.CredentialsDrop?.Count ?? 0) > 0)) return "externalCredentials";
+        // SQL Server refuses DEFAULT_SCHEMA for a user mapped to a certificate or an asymmetric key (15259, probed).
+        if (facts.Type.Trim() is "C" or "K" && (changes.Mappings ?? []).Any(mapping => mapping.DefaultSchema is not null)) return "signingSchema";
         return null;
     }
 

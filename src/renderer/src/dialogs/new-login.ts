@@ -3,8 +3,8 @@
 // confirmation and is well formed (`SecretState`).
 import { actionLimits } from '../../../shared/actions/catalog.ts'
 import {
-  loginLimits, newLoginMessages, newLoginProblem, newLoginStatements, publicRole, tooManyStatementsMessage, userMappingMessages, type LoginStatusChoice, type NewLoginAuth, type NewLoginGeneral,
-  type NewLoginModel, type UserMappingChoice
+  credentialAuths, defaultsAuths, loginLimits, newLoginAuthOffered, newLoginAuths, newLoginMessages, newLoginPolicyEngines, newLoginProblem, newLoginStatements, publicRole, tooManyStatementsMessage,
+  userMappingMessages, type LoginStatusChoice, type NewLoginAuth, type NewLoginGeneral, type NewLoginModel, type UserMappingChoice
 } from '../../../shared/actions/logins.ts'
 import type { CreateLoginRequest } from '../../../shared/actions/schema.ts'
 import type { ObjectRef } from '../../../shared/explorer/refs.ts'
@@ -43,6 +43,14 @@ export interface NewLoginDraft {
   readonly mappings: readonly MappingDraft[]
   /** User Mapping's selected row, whose guest state and roles show below the grid. */
   readonly mappingDatabase?: string
+  /** D2e: Mapped to certificate's and Mapped to asymmetric key's choices ('' when master has none). */
+  readonly certificate: string
+  readonly asymmetricKey: string
+  /** Map to Credential: the box, the credential chosen beside it ('' when the server has none), and the Mapped Credentials grid,
+   *  which OK sends whether or not the box is still checked (as SSMS's grid keeps its rows). */
+  readonly mapCredential: boolean
+  readonly credential: string
+  readonly credentials: readonly string[]
 }
 /** One User Mapping row as edited: Map, the User and Default Schema as typed (blank schema: none), and the database roles checked
  *  other than public. */
@@ -59,14 +67,36 @@ export interface MappingDraft {
 
 /**
  * SSMS's New Login defaults (its LoginPrototypeData): Windows authentication, or SQL Server authentication when the server runs
- * on Linux; master; the three password options on; no server role but public; Grant; Enabled.
+ * on Linux or is a Managed Instance (which has no Windows logins); master; the three password options on; no server role but public;
+ * Grant; Enabled; the first certificate, key and credential listed chosen, none mapped.
  */
 export function initialNewLoginDraft(model: NewLoginModel): NewLoginDraft {
   return {
-    auth: model.server.linux ? 'sql' : 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true,
-    serverRoles: [], connect: 'grant', enabled: true, mappings: []
+    auth: model.server.linux || !newLoginAuthOffered(model.server, 'windows') ? 'sql' : 'windows', name: '', defaultDatabase: 'master', checkPolicy: true, checkExpiration: true, mustChange: true,
+    serverRoles: [], connect: 'grant', enabled: true, mappings: [],
+    certificate: model.certificates[0] ?? '', asymmetricKey: model.asymmetricKeys[0] ?? '', mapCredential: false, credential: model.credentials[0]?.name ?? '', credentials: []
   }
 }
+/** The kinds the General page offers on this server, in SSMS's order (newLoginAuthOffered). */
+export const offeredAuths = (server: NewLoginModel['server']): readonly NewLoginAuth[] => newLoginAuths.filter(auth => newLoginAuthOffered(server, auth))
+
+// --- Map to Credential (D2e) ---
+
+/** Why Add cannot map the chosen credential, or undefined: the server lists none, it is mapped already, or the grid is full. */
+export function credentialAddProblem(model: Pick<NewLoginModel, 'credentials'>, draft: Pick<NewLoginDraft, 'credential' | 'credentials'>): string | undefined {
+  if (!model.credentials.some(credential => credential.name === draft.credential)) return model.credentials.length ? newLoginMessages.credential : newLoginMessages.noCredentials
+  if (draft.credentials.includes(draft.credential)) return newLoginMessages.credentialTwice
+  if (draft.credentials.length >= loginLimits.credentials) return newLoginMessages.credentialsLimit
+  return undefined
+}
+/** Add: the chosen credential joins Mapped Credentials, last (ADD CREDENTIAL runs in the grid's order). */
+export function addCredential(model: Pick<NewLoginModel, 'credentials'>, draft: Pick<NewLoginDraft, 'credential' | 'credentials'>): Pick<NewLoginDraft, 'credentials'> {
+  return credentialAddProblem(model, draft) ? { credentials: draft.credentials } : { credentials: [...draft.credentials, draft.credential] }
+}
+/** Remove: a row of Mapped Credentials goes. */
+export const removeCredential = (draft: Pick<NewLoginDraft, 'credentials'>, name: string): Pick<NewLoginDraft, 'credentials'> => ({ credentials: draft.credentials.filter(item => item !== name) })
+/** Mapped Credentials' Provider column: the EKM provider's name, blank for a credential without one. */
+export const credentialProvider = (model: Pick<NewLoginModel, 'credentials'>, name: string) => model.credentials.find(credential => credential.name === name)?.provider ?? ''
 
 // --- User Mapping (D2b) ---
 
@@ -99,59 +129,86 @@ export function renameLogin(draft: NewLoginDraft, name: string): Pick<NewLoginDr
   const follow = (value: string) => value !== '' && value === draft.name ? name : value
   return { name, mappings: draft.name === name ? draft.mappings : draft.mappings.map(mapping => ({ ...mapping, user: follow(mapping.user), defaultSchema: follow(mapping.defaultSchema) })) }
 }
+/** A certificate or asymmetric key login (D2e): it signs code, has no defaults, and its users have no default schema (15259). */
+export const signingAuth = (auth: NewLoginAuth) => auth === 'certificate' || auth === 'asymmetricKey'
 /** The User a mapped row shows and OK sends: a blank one is the login name. */
 export const mappedUser = (draft: Pick<NewLoginDraft, 'name'>, mapping: MappingDraft) => mapping.user || draft.name
 /** The mappings OK sends: mapped rows of databases the describe lists and that can be mapped, in its order (by name); a blank User
- *  is the login name and a blank Default Schema none; roles by name. */
+ *  is the login name and a blank Default Schema none (always none for a certificate or key login); roles by name. */
 export function userMappings(model: NewLoginModel, draft: NewLoginDraft): UserMappingChoice[] {
   const byName = new Map(draft.mappings.filter(mapping => mapping.map).map(mapping => [mapping.database, mapping]))
   return model.databases.filter(database => mappable(database) && byName.has(database.name)).map(database => {
     const mapping = byName.get(database.name)!
     const roles = [...new Set(mapping.roles)].filter(role => role !== publicRole).sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
-    return { database: database.name, user: mappedUser(draft, mapping), ...(mapping.defaultSchema ? { defaultSchema: mapping.defaultSchema } : {}), rolesAdd: roles }
+    return { database: database.name, user: mappedUser(draft, mapping), ...(mapping.defaultSchema && !signingAuth(draft.auth) ? { defaultSchema: mapping.defaultSchema } : {}), rolesAdd: roles }
   })
 }
 
 /** Which General page controls are enabled: the password fields and options for SQL Server authentication only, each option
  *  only while the one before it is checked (SQL Server refuses CHECK_EXPIRATION without CHECK_POLICY, 15122, and MUST_CHANGE
- *  without CHECK_EXPIRATION, 15099). Specify old password is Login Properties'. */
-export function newLoginEnabled(draft: NewLoginDraft) {
-  const sql = draft.auth === 'sql'
-  return { password: sql, checkPolicy: sql, checkExpiration: sql && draft.checkPolicy, mustChange: sql && draft.checkPolicy && draft.checkExpiration, oldPassword: false } as const
+ *  without CHECK_EXPIRATION, 15099), and shown only where CREATE LOGIN takes them (not Managed Instance: `policy`). Specify old
+ *  password is Login Properties'. D2e: Search… for Windows authentication; each list for its kind; the defaults for the kinds that
+ *  take them; Map to Credential for the kinds credentials map to, and its list and Add while it is checked. */
+export function newLoginEnabled(draft: NewLoginDraft, server: Pick<NewLoginModel['server'], 'engine'>) {
+  const sql = draft.auth === 'sql', policy = newLoginPolicyEngines.includes(server.engine), options = sql && policy, credentials = credentialAuths.includes(draft.auth)
+  return {
+    password: sql, policy, checkPolicy: options, checkExpiration: options && draft.checkPolicy, mustChange: options && draft.checkPolicy && draft.checkExpiration, oldPassword: false,
+    search: draft.auth === 'windows', certificate: draft.auth === 'certificate', asymmetricKey: draft.auth === 'asymmetricKey', defaults: defaultsAuths.includes(draft.auth),
+    mapCredential: credentials, credential: credentials && draft.mapCredential, credentials
+  } as const
 }
 
-/** The General page as the request carries it: the password options only for SQL Server authentication, as enabled. */
-export function newLoginGeneral(draft: NewLoginDraft): NewLoginGeneral {
-  const enabled = newLoginEnabled(draft)
+/** The General page as the request carries it: the defaults for the kinds that take them; the password options for SQL Server
+ *  authentication where CREATE LOGIN takes them, as enabled; the certificate or key for its kind; Mapped Credentials for the kinds
+ *  credentials map to. */
+export function newLoginGeneral(draft: NewLoginDraft, server: Pick<NewLoginModel['server'], 'engine'>): NewLoginGeneral {
+  const enabled = newLoginEnabled(draft, server)
   return {
-    auth: draft.auth, name: draft.name, defaultDatabase: draft.defaultDatabase, ...(draft.defaultLanguage !== undefined ? { defaultLanguage: draft.defaultLanguage } : {}),
-    ...(draft.auth === 'sql' ? { checkPolicy: draft.checkPolicy, checkExpiration: enabled.checkExpiration && draft.checkExpiration, mustChange: enabled.mustChange && draft.mustChange } : {})
+    auth: draft.auth, name: draft.name,
+    ...(enabled.defaults ? { defaultDatabase: draft.defaultDatabase, ...(draft.defaultLanguage !== undefined ? { defaultLanguage: draft.defaultLanguage } : {}) } : {}),
+    ...(enabled.checkPolicy ? { checkPolicy: draft.checkPolicy, checkExpiration: enabled.checkExpiration && draft.checkExpiration, mustChange: enabled.mustChange && draft.mustChange } : {}),
+    ...(enabled.certificate ? { certificate: draft.certificate } : {}), ...(enabled.asymmetricKey ? { asymmetricKey: draft.asymmetricKey } : {}),
+    ...(enabled.credentials && draft.credentials.length ? { credentials: [...draft.credentials] } : {})
   }
 }
 
-/** The General page's password notes: the policy one only while the policy is checked (CHECK_POLICY=OFF skips it). */
-export function newLoginHints(draft: NewLoginDraft): readonly string[] {
+/** The General page's password notes: the policy one only while the policy is checked (CHECK_POLICY=OFF skips it), and on Managed
+ *  Instance that the options are Login Properties'. */
+export function newLoginHints(draft: NewLoginDraft, server: Pick<NewLoginModel['server'], 'engine'>): readonly string[] {
   if (draft.auth !== 'sql') return []
-  return newLoginEnabled(draft).checkPolicy && draft.checkPolicy ? [newLoginMessages.policyServer, newLoginMessages.passwordScript] : [newLoginMessages.passwordScript]
+  const enabled = newLoginEnabled(draft, server)
+  if (!enabled.policy) return [newLoginMessages.policyManagedInstance, newLoginMessages.passwordScript]
+  return enabled.checkPolicy && draft.checkPolicy ? [newLoginMessages.policyServer, newLoginMessages.passwordScript] : [newLoginMessages.passwordScript]
+}
+/** The notes under the other kinds (D2e): how to name a Microsoft Entra principal, and on SQL Server what it needs first; that a
+ *  certificate or key login cannot connect; an empty list. */
+export function newLoginKindNotes(model: NewLoginModel, draft: Pick<NewLoginDraft, 'auth'>): readonly string[] {
+  switch (draft.auth) {
+    case 'entra': return model.server.engine === 'box' ? [newLoginMessages.entraName, newLoginMessages.entraBox] : [newLoginMessages.entraName]
+    case 'certificate': return model.certificates.length ? [newLoginMessages.signingOnly] : [newLoginMessages.noCertificates, newLoginMessages.signingOnly]
+    case 'asymmetricKey': return model.asymmetricKeys.length ? [newLoginMessages.signingOnly] : [newLoginMessages.noAsymmetricKeys, newLoginMessages.signingOnly]
+    default: return []
+  }
 }
 
-/** New Login opens on a SQL Server's Security folder, its Logins folder or a login; its target is the server. */
+/** New Login opens on the Security folder, the Logins folder or a login of a SQL Server or a Managed Instance (D2e); its target is
+ *  the server. */
 export function newLoginTarget(node: ExplorerMenuNode): ObjectRef | undefined {
   const onServer = node.ref.type === 'folder' ? node.ref.owner.kind === 'server' && (node.folder === 'logins' || node.folder === 'serverSecurity') : node.kind === 'login'
-  return onServer && node.engine === 'box' ? { kind: 'server' } : undefined
+  return onServer && (node.engine === 'box' || node.engine === 'managedInstance') ? { kind: 'server' } : undefined
 }
 
 /** The request OK and Script send, without secrets (only OK attaches the password), or the problem the page shows. Server roles
  *  go in the describe's order, those it no longer lists left out; mappings as userMappings builds them, within loginLimits.mappings
  *  and actionLimits.statements. */
 export function newLoginRequest(target: ObjectRef, model: NewLoginModel, draft: NewLoginDraft, secrets: SecretState = emptySecrets): Omit<CreateLoginRequest, 'connectionId' | 'requestId'> | { readonly problem: string } {
-  const login = newLoginGeneral(draft)
+  const login = newLoginGeneral(draft, model.server)
   const problem = newLoginProblem(login, { empty: secrets.password === 'empty', matches: secrets.matches, wellFormed: secrets.wellFormed, tooLong: secrets.tooLong }, model)
   if (problem) return { problem }
   const chosen = new Set(draft.serverRoles)
   const serverRoles = model.serverRoles.filter(role => role.name !== publicRole && chosen.has(role.name)).map(role => role.name)
   const mappings = userMappings(model, draft), status = { connect: draft.connect, enabled: draft.enabled }
   if (mappings.length > loginLimits.mappings) return { problem: userMappingMessages.mappingsLimit }
-  if (newLoginStatements({ serverRoles, status, mappings }) > actionLimits.statements) return { problem: tooManyStatementsMessage(actionLimits.statements) }
+  if (newLoginStatements({ login, serverRoles, status, mappings }) > actionLimits.statements) return { problem: tooManyStatementsMessage(actionLimits.statements) }
   return { action: 'createLogin', target, login, serverRoles, mappings, status }
 }

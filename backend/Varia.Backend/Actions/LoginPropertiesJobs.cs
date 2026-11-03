@@ -43,6 +43,15 @@ internal sealed partial class ActionService
         }
         if (Roles(changes.RolesAdd, "serverRoles", "loginChanges.rolesAdd.").Intersect(Roles(changes.RolesDrop, "serverRoles", "loginChanges.rolesDrop."), StringComparer.Ordinal).Any())
             throw Invalid("loginChanges.roles.");
+        // Map to Credential's rows added and removed (D2e): distinct names, at most loginLimits.credentials each, never both.
+        List<string> Credentials(List<string>? names, string member)
+        {
+            if (names is null) return [];
+            if (names.Count > catalog.Logins.Limit("credentials") || names.Any(name => !ExplorerRefs.Ident(name)) || names.Distinct(StringComparer.Ordinal).Count() != names.Count) throw Invalid(member);
+            return names;
+        }
+        if (Credentials(changes.CredentialsAdd, "loginChanges.credentialsAdd.").Intersect(Credentials(changes.CredentialsDrop, "loginChanges.credentialsDrop."), StringComparer.Ordinal).Any())
+            throw Invalid("loginChanges.credentials.");
         var mappings = changes.Mappings ?? [];
         if (mappings.Count > catalog.Logins.Limit("mappings") || mappings.Select(mapping => mapping?.Database).Distinct(StringComparer.Ordinal).Count() != mappings.Count)
             throw Invalid("loginChanges.mappings.");
@@ -83,15 +92,19 @@ internal sealed partial class ActionService
         var (facts, row) = await LoginAsync(connection, target.Name!, null, null, token);
         if (facts is null) return new(null, 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
         var limit = (int)catalog.Logins.Limit("serverRoles");
+        var listed = (int)catalog.Logins.Limit("listedCredentials");
         var defaultDatabase = "master";
         string? language = null;
         var roles = new List<string>();
+        var credentials = new List<string>();
+        string? certificate = null, key = null;
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = LoginSql.PropertiesRead;
             command.CommandTimeout = 0;
             Add(command, "@principal", SqlDbType.Int, 0, facts.PrincipalId);
             Add(command, "@roles", SqlDbType.Int, 0, limit + 1);
+            Add(command, "@credentials", SqlDbType.Int, 0, listed + 1);
             await using var reader = await command.ExecuteReaderAsync(token);
             if (await reader.ReadAsync(token))
             {
@@ -100,6 +113,10 @@ internal sealed partial class ActionService
             }
             if (await reader.NextResultAsync(token))
                 while (await reader.ReadAsync(token)) roles.Add(reader.GetString(0));
+            if (await reader.NextResultAsync(token))
+                while (await reader.ReadAsync(token)) credentials.Add(reader.GetString(0));
+            if (await reader.NextResultAsync(token) && await reader.ReadAsync(token)) certificate = reader.GetString(0);
+            if (await reader.NextResultAsync(token) && await reader.ReadAsync(token)) key = reader.GetString(0);
         }
         var state = facts.Type.Trim() == "S" ? await LoginLockAsync(connection, row!.Text("name") ?? target.Name!, token) : null;
         var model = (await DescribeNewLoginJobAsync(connection, profile, band, token)).NewLogin;
@@ -107,7 +124,8 @@ internal sealed partial class ActionService
             (database, _, _, reader) => new LoginMappedUserDto(database, reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetBoolean(2)));
         var read = databases.Where(database => database.Checked).Select(database => database.Name).ToList();
         return new(null, 0, NewLogin: model, Login: facts, Lock: state,
-            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read));
+            LoginProperties: new(defaultDatabase, language, [.. roles.Take(limit)], roles.Count > limit, users, read, [.. credentials.Take(listed)], credentials.Count > listed,
+                facts.Type.Trim() == "C" ? certificate : null, facts.Type.Trim() == "K" ? key : null));
     }
 
     /// <summary>The user mapped to a login in one database and that user's roles (LoginSql.DatabaseUser, through ActionSql.MappedUserCall),

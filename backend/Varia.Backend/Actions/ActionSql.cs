@@ -20,7 +20,7 @@ internal enum ActionTemplate
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
     SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser,
     AddServerRoleMember, CreateUserForLogin, AlterUserSchema, CreateSchemaFor, AddRoleMember, RenameLogin, DropLogin, DropMappedUser,
-    CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember
+    CheckPolicyOff, CheckPolicyOn, CheckPolicyExpirationOn, DropServerRoleMember, RenameUser, DropRoleMember, AddLoginCredential, DropLoginCredential
 }
 
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
@@ -81,7 +81,8 @@ internal static partial class ActionSql
     {
         ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction or ActionTemplate.RenameDatabase or ActionTemplate.DetachDatabase
             or ActionTemplate.AddServerRoleMember or ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember
-            or ActionTemplate.RenameLogin or ActionTemplate.DropServerRoleMember or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember => 2,
+            or ActionTemplate.RenameLogin or ActionTemplate.DropServerRoleMember or ActionTemplate.RenameUser or ActionTemplate.DropRoleMember
+            or ActionTemplate.AddLoginCredential or ActionTemplate.DropLoginCredential => 2,
         ActionTemplate.RenameObject => 3,
         _ => 1
     };
@@ -132,7 +133,8 @@ internal static partial class ActionSql
     /// <see cref="LoginBinding"/> or <see cref="UserBindingCall"/> checks; without one (New Login, Disable, Script) it runs as it is.</summary>
     public static BindingShape? BindingOf(ActionTemplate template) => template switch
     {
-        ActionTemplate.DenyConnect or ActionTemplate.GrantConnect or ActionTemplate.EnableLogin or ActionTemplate.DisableLogin => new(true, 0, true, 0),
+        ActionTemplate.DenyConnect or ActionTemplate.GrantConnect or ActionTemplate.EnableLogin or ActionTemplate.DisableLogin or ActionTemplate.AddLoginCredential
+            or ActionTemplate.DropLoginCredential => new(true, 0, true, 0),
         ActionTemplate.AddServerRoleMember or ActionTemplate.DropServerRoleMember => new(true, 1, true, 1),
         ActionTemplate.CreateUserForLogin => new(true, 1, false, 0),
         ActionTemplate.RenameUser => new(false, 0, false, 1),
@@ -181,6 +183,9 @@ internal static partial class ActionSql
             ActionTemplate.DropServerRoleMember => "ALTER SERVER ROLE " + Quote(names[0]) + " DROP MEMBER " + Quote(names[1]),
             ActionTemplate.RenameUser => "ALTER USER " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
             ActionTemplate.DropRoleMember => "ALTER ROLE " + Quote(names[0]) + " DROP MEMBER " + Quote(names[1]),
+            // Map to Credential (D2e), as SMO writes it (D2 §5.2): the login, then the credential.
+            ActionTemplate.AddLoginCredential => "ALTER LOGIN " + Quote(names[0]) + " ADD CREDENTIAL " + Quote(names[1]),
+            ActionTemplate.DropLoginCredential => "ALTER LOGIN " + Quote(names[0]) + " DROP CREDENTIAL " + Quote(names[1]),
             _ => throw new InvalidOperationException("Unknown template " + plan.Template)
         };
     }
@@ -243,6 +248,8 @@ internal static partial class ActionSql
             ActionTemplate.DropServerRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER SERVER ROLE ' + QUOTENAME(@p1) + N' DROP MEMBER ' + QUOTENAME(@p2);\n"),
             ActionTemplate.RenameUser => Run("DECLARE @stmt nvarchar(max) = N'ALTER USER ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
             ActionTemplate.DropRoleMember => Run("DECLARE @stmt nvarchar(max) = N'ALTER ROLE ' + QUOTENAME(@p1) + N' DROP MEMBER ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.AddLoginCredential => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' ADD CREDENTIAL ' + QUOTENAME(@p2);\n"),
+            ActionTemplate.DropLoginCredential => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' DROP CREDENTIAL ' + QUOTENAME(@p2);\n"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
@@ -518,6 +525,8 @@ internal static partial class ActionSql
         "N' WITH CHECK_POLICY = OFF'", "N' WITH CHECK_POLICY = ON'", "N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON'",
         // Login Properties' server role and database role removals (D2c); its user rename is a login rename's N' WITH NAME='.
         "N' DROP MEMBER '",
+        // Map to Credential (D2e), and New Login's describe of the credentials' providers (LoginSql.Describe).
+        "N' ADD CREDENTIAL '", "N' DROP CREDENTIAL '", "N'CRYPTOGRAPHIC PROVIDER'",
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -732,6 +741,8 @@ internal static partial class ActionSql
         // New Login: its describe and preflight in master, and every CREATE LOGIN its builder can write, run and dry run.
         yield return ("new login describe", LintCatalog(LoginSql.Describe, ExplorerCatalog.MaxBand, database: false));
         yield return ("new login preflight", LintCatalog(LoginSql.Preflight, ExplorerCatalog.MaxBand, database: false));
+        // Check Names (D2e): xp_logininfo with the account as its own argument, never text.
+        yield return ("new login check names", LintCatalog(LoginSql.CheckNames, ExplorerCatalog.MaxBand, database: false));
         // User Mapping: its read of a database and its per-database preflight, each run inside the database through ModuleCall.
         yield return ("login database roles", LintCatalog(LoginSql.DatabaseRoles, ExplorerCatalog.MaxBand, database: true));
         yield return ("login mapping preflight", LintCatalog(LoginSql.MappingPreflight, ExplorerCatalog.MaxBand, database: true));

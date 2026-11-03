@@ -1,6 +1,6 @@
 import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
-import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
+import { checkNamesText, loginDatabaseRolesDescribe, loginLimits, newLoginMessages, windowsLoginName, windowsPrincipalDescribe, type LoginDatabaseRoles, type NewLoginModel, type WindowsPrincipal } from '../../../shared/actions/logins.ts'
 import { actionPrompts, promptTabFacts } from '../../../shared/actions/prompts.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
@@ -51,6 +51,8 @@ export interface OpenObjectDialog {
   readonly refusal?: string
   /** User Mapping's reads of the databases selected so far (`loadDatabaseRoles`), by database name. */
   readonly databaseRoles?: ReadonlyMap<string, DatabaseRolesLookup>
+  /** Check Names' last answer (D2e, `checkNames`), for the name it checked: Select User or Group shows it while that name is typed. */
+  readonly checkNames?: CheckNamesLookup
   /** Delete Object on a database: Varia's query tabs whose session holds an open transaction there (A7), named as `promptTabFacts` bounds them. */
   readonly tabsWithTransactions?: readonly string[]
   readonly moreTabsWithTransactions?: number
@@ -62,6 +64,8 @@ export interface OpenObjectDialog {
 }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
+/** Check Names' answer for one typed name: checking, what xp_logininfo said, or why it could not say. */
+export type CheckNamesLookup = { readonly name: string } & ({ readonly state: 'checking' } | { readonly state: 'ready'; readonly value: WindowsPrincipal } | { readonly state: 'failed'; readonly error: ActionError })
 /** A database an action removed (D3 §8): the server as connected to, so its Properties documents can say where it was. */
 export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
@@ -117,6 +121,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   private request?: { readonly id: string; readonly dialog: number }
   /** User Mapping's read in flight, apart from `request`: OK and Script run while it reads, and Stop never cancels it. */
   private lookup?: { readonly id: string; readonly dialog: number; readonly database: string }
+  /** Check Names' read in flight (D2e), apart from both: a new check cancels it. */
+  private check?: { readonly id: string; readonly dialog: number }
   private disposed = false
   /** The open dialog's password fields (New Login's Password and Confirm password): never published, cleared when the dialog
    *  closes, opens anew, succeeds or loses its server, and on dispose. Only ok() reads them. */
@@ -230,9 +236,37 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       ...(looked ? { model: looked.model, draft: looked.draft } : {})
     })
   }
+  /** Cancels the dialog's reads apart from its request: User Mapping's and Check Names'. */
   private cancelLookup(): void {
     if (this.lookup) this.cancel([this.lookup.id])
     this.lookup = undefined
+    if (this.check) this.cancel([this.check.id])
+    this.check = undefined
+  }
+
+  /**
+   * Check Names (D2e, Select User or Group): asks the server about a Windows account through xp_logininfo (the windowsPrincipal
+   * describe), as CREATE LOGIN … FROM WINDOWS resolves it. A name that is not DOMAIN\name is refused here without a request; a check
+   * still running is cancelled. Only New Login's open, ready dialog checks.
+   */
+  checkNames(name: string): void {
+    const open = this.current
+    if (!open?.model || open.dialog !== 'newLogin' || open.phase === 'loading' || open.phase === 'loadFailed' || open.phase === 'disconnected' || open.phase === 'executing') return
+    if (this.check) { this.cancel([this.check.id]); this.check = undefined }
+    if (!windowsLoginName.test(name) || name.length > actionLimits.newName) { this.update(open, { checkNames: { name, state: 'failed', error: error('NOT_SUPPORTED', newLoginMessages.windowsName) } }); return }
+    const requestId = this.newId()
+    this.check = { id: requestId, dialog: open.id }
+    this.update(open, { checkNames: { name, state: 'checking' } })
+    void (async () => {
+      const result = await this.call(() => this.options.api.describeObject({ connectionId: open.connectionId, requestId, dialog: windowsPrincipalDescribe, target: { kind: 'login', name } }))
+      if (this.check?.id !== requestId) return
+      this.check = undefined
+      const current = this.current
+      if (this.disposed || current?.id !== open.id || current.phase === 'disconnected') return
+      const value = result.ok ? result.value.windowsPrincipal : undefined
+      const failure = !result.ok ? error('SQL_ERROR', result.error) : result.value.error ?? (value ? undefined : error('NOT_FOUND', checkNamesText.notFound))
+      this.update(current, { checkNames: failure || !value ? { name, state: 'failed', error: failure! } : { name, state: 'ready', value } })
+    })().catch(onUnexpectedError)
   }
 
   /** For tests: whether the secret slot holds a value, which only an open dialog's password fields put there. */

@@ -66,8 +66,9 @@ internal static class LoginMappingChecks
                 + "AddRoleMember@Alpha:Readers/au,CreateUserForLogin@beta:bu/L,AlterUserSchema@beta:bu/dbo,CreateUserForLogin@zeta:zu/L",
             "User Mapping plans per database by name: CREATE USER, then the default schema, CREATE SCHEMA only where it is missing, then each role by name: " + plan);
         var status = new LoginStatusDto("deny", false);
-        check(LoginSql.Statements(status, ["sysadmin"], mappings) == 1 + 1 + 1 + 1 + 1 + (1 + 2 + 3) + (1 + 2) && LoginSql.Statements(new("grant", true), [], []) == 1,
-            "the statement bound counts CREATE LOGIN, Deny, Disable, server roles, and per mapping CREATE USER, two for a default schema and one per role (logins.ts newLoginStatements)");
+        check(LoginSql.Statements(login, status, ["sysadmin"], mappings) == 1 + 1 + 1 + 1 + 1 + (1 + 2 + 3) + (1 + 2) && LoginSql.Statements(login, new("grant", true), [], []) == 1
+            && LoginSql.Statements(login with { Credentials = ["c1", "c2"] }, new("grant", true), [], []) == 3,
+            "the statement bound counts CREATE LOGIN, Deny, Disable, credentials, server roles, and per mapping CREATE USER, two for a default schema and one per role (logins.ts newLoginStatements)");
         check(ActionService.StepDetail(new(ActionTemplate.AddRoleMember, "Ap]p", ["db_owner", "u"])) == "db_owner in Ap]p" && ActionService.StepDetail(new(ActionTemplate.CreateUserForLogin, "Ap]p", ["u", "L"])) == "Ap]p"
             && ActionService.StepDetail(new(ActionTemplate.CreateSchemaFor, "Ap]p", ["s", "u"])) == "Ap]p" && ActionService.StepDetail(new(ActionTemplate.AddServerRoleMember, "master", ["sysadmin", "L"])) == "sysadmin"
             && ActionService.StepDetail(new(ActionTemplate.DenyConnect, "master", ["L"])) is null,

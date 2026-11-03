@@ -591,17 +591,30 @@ with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The 
 request body.
 
 **New Login** (D2a, D2b) uses the same three methods. `actions.describe` with `dialog: 'newLogin'` and the server as target
-answers `{ newLogin }` (databases, each `{ name, state, accessible, readOnly }`, languages, server roles and the server's facts); with `dialog: 'loginDatabaseRoles'` and
+answers `{ newLogin }` (databases, each `{ name, state, accessible, readOnly }`, languages, server roles, master's certificates and
+asymmetric keys (≤ 1,024 each), credentials `{ name, provider? }` (≤ 1,024), and the server's facts, `engine` among them: `box` or
+`managedInstance`, D2e); with `dialog: 'loginDatabaseRoles'` and
 `target: { kind: 'database', name }` it answers User Mapping's read of that database, `{ loginDatabaseRoles: { roles (≤ 256),
 rolesTruncated, guest, schemas (≤ 1,024), schemasTruncated } }`, or `NOT_FOUND` and `DATABASE_UNAVAILABLE` (offline, closed or
 read-only) values.
-`actions.script` and `actions.execute` take `{ action: 'createLogin', login, serverRoles, status, mappings }`, where
-`mappings` is at most 256 `{ database, user, defaultSchema?, rolesAdd (≤ 256, never public) }`, one per database, and the
-whole plan at most 512 statements; only execute carries `secrets`. The backend re-validates all of it.
+With `dialog: 'windowsPrincipal'` and `target: { kind: 'login', name }` (a `DOMAIN\name`, nothing else; D2e Check Names) it answers
+`{ windowsPrincipal: { accountName, access, type? ('user' | 'group'), via? } }` from xp_logininfo, or `NOT_FOUND` (15404) and
+`PERMISSION_DENIED` (229) values; off SQL Server it is `NOT_SUPPORTED` before any connection.
+`actions.script` and `actions.execute` take `{ action: 'createLogin', login, serverRoles, status, mappings }`, where `login` is
+`{ auth, name, defaultDatabase?, defaultLanguage?, checkPolicy?, checkExpiration?, mustChange?, certificate?, asymmetricKey?,
+credentials? }`: `auth` is `windows`, `sql`, `entra`, `certificate` or `asymmetricKey` (D2e), the defaults exactly for the first
+three, the policy options all or none for `sql` (none on Managed Instance, all on SQL Server) and never for the others,
+`certificate` and `asymmetricKey` exactly for their kind, and `credentials` at most 16 distinct names, never for `entra`;
+`mappings` is at most 256 `{ database, user, defaultSchema?, rolesAdd (≤ 256, never public) }`, one per database (no
+`defaultSchema` for a certificate or key login), and the whole plan at most 512 statements; only execute carries `secrets`. The
+backend re-validates all of it, and refuses a kind or policy options the server's engine does not take (`NOT_SUPPORTED`) before it
+connects.
 
 **Login Properties** (D2c) too. `actions.describe { …, dialog: 'loginProperties', target: { kind: 'login', name } }` answers
 `{ login, lock? (a SQL Server login's, as unlockLogin's), newLogin (New Login's lists), loginProperties: { defaultDatabase,
-defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users: [{ database, user, defaultSchema?, owner }], read } }`, where
+defaultLanguage, serverRoles (≤ 256), serverRolesTruncated, users: [{ database, user, defaultSchema?, owner }], read, credentials
+(≤ 1,024), credentialsTruncated, certificate?, asymmetricKey? } }` (D2e: the credentials mapped to the login, and a certificate or
+key login's certificate or key), where
 `read` names the databases Delete's per-database scan read within its budget (the others are "Not read" on User Mapping).
 `loginDatabaseRoles` takes an optional `login` (a name, ≤ 128; no other describe takes it), and then also answers that login's
 `user? { name, defaultSchema?, owner }` there and the database roles it is a member of (`memberOf`). `actions.script` and
@@ -610,6 +623,7 @@ loginChanges, secrets? }` (strict), where `loginChanges` holds only what changed
 `checkPolicy?`, `checkExpiration?`, `password? { oldPassword, unlock, mustChange }` (the old password never with UNLOCK or
 MUST_CHANGE), `rolesAdd?`/`rolesDrop?` (≤ 256 server roles each, distinct, never public, never both), `mappings?` (≤ 256
 `{ database, change: 'map' | 'unmap' | 'update', user, newName?, defaultSchema?, rolesAdd?, rolesDrop? }`, one per database),
+`credentialsAdd?`/`credentialsDrop?` (D2e: ≤ 16 credentials each, distinct, never both; never for a Microsoft Entra login),
 `connect? ('grant' | 'deny')` and `enabled?`; between 1 and 512 statements. Execute needs `loginIdentity` and carries
 `secrets: { password, oldPassword? }` exactly when `password` is set (`oldPassword` exactly when `password.oldPassword`); script
 refuses `secrets`. Its steps run one by one without a transaction (critic A24); after a completed step a failure's message starts

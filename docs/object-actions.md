@@ -27,7 +27,7 @@ they have their own commands and no context key:
 
 | Action | Title | Dialog | Servers |
 | --- | --- | --- | --- |
-| `createLogin` | New Login | `newLogin` | SQL Server |
+| `createLogin` | New Login | `newLogin` | SQL Server, Managed Instance |
 
 Keys work while Object Explorer has focus and no text field does. Delete's access key is E: Disconnect has SSMS's D in
 Varia's one Object Explorer menu.
@@ -362,6 +362,7 @@ names by a live dry run:
 | Deny or Grant permission to connect | `DENY CONNECT SQL TO [login]`, `GRANT CONNECT SQL TO [login]` |
 | Drop the database user | `DROP USER [user]`, in its database |
 | Add to a server role (New Login) | `ALTER SERVER ROLE [role] ADD MEMBER [login]` |
+| Map a credential, Remove a credential (D2e) | `ALTER LOGIN [login] ADD CREDENTIAL [credential]`, `ALTER LOGIN [login] DROP CREDENTIAL [credential]` |
 | Create a user (User Mapping) | `CREATE USER [user] FOR LOGIN [login]`, in its database |
 | Set the default schema (User Mapping) | `ALTER USER [user] WITH DEFAULT_SCHEMA=[schema]`, in its database |
 | Create a schema (User Mapping) | `CREATE SCHEMA [schema] AUTHORIZATION [user]`, in its database, in a batch of its own |
@@ -520,7 +521,8 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 | `roles` | 256 | Database roles listed and chosen per database |
 | `schemas` | 1,024 | Schemas listed per database |
 | `mappings` | 256 | Database user mappings per request |
-| `credentials` | 16 | Credentials mapped per request |
+| `credentials` | 16 | Credentials mapped, or added and removed, per request |
+| `listedCredentials` | 1,024 | Credentials Map to Credential lists, and the Mapped Credentials Login Properties reads for a login |
 | `certificates` | 1,024 | Certificates listed |
 | `asymmetricKeys` | 1,024 | Asymmetric keys listed |
 | `permissions` | 512 | Server permissions per request |
@@ -538,7 +540,7 @@ Without ALTER ANY LOGIN: "You do not have permission to change logins (ALTER ANY
 
 Security › New › Login…, and New Login… on the Logins folder and on a login, open "Login - New", a modal dialog with the pages
 General, Server Roles, User Mapping, Status (Securables follows once its OK works). Its action is `createLogin`, on
-SQL Server (Managed Instance follows); its target is the server.
+SQL Server, Managed Instance; its target is the server.
 
 - **General**: Login name; Windows authentication (DOMAIN\name) or SQL Server authentication (the default when the server
   runs on Linux) with Password, Confirm password, Specify old password (greyed: Login Properties only), Enforce password
@@ -546,6 +548,7 @@ SQL Server (Managed Instance follows); its target is the server.
   is checked (SQL Server refuses MUST_CHANGE without CHECK_EXPIRATION, 15099, and CHECK_EXPIRATION without CHECK_POLICY,
   15122); Default database and Default language (`<default>`: no DEFAULT_LANGUAGE clause). A note says when the server
   takes Windows authentication only, and when this login may lack ALTER ANY LOGIN. A blank password needs the password policy on.
+  D2e adds the other kinds and Map to Credential, below.
 - **Server Roles**: every server role, public checked and greyed (every login is a member).
 - **User Mapping**: the grid "Users mapped to this login:" (Map, Database, User, Default Schema), one row per database New Login
   listed, virtualized; a database that is not online, not open to this login, or read-only (set READ_ONLY, a log-shipping
@@ -560,6 +563,45 @@ SQL Server (Managed Instance follows); its target is the server.
   on the action's read connection, inside the database through sp_executesql; a newer selection cancels a read still
   running); at most 256 roles and 1,024 schemas are listed, and 256 databases mapped.
 - **Status**: Permission to connect to database engine (Grant, Deny) and Login (Enabled, Disabled).
+
+#### Other kinds, Map to Credential and Check Names (D2e)
+
+General lists the kinds the server offers (`newLoginAuthEngines` in logins.ts, which the backend reads from actions-catalog.json):
+
+| Kind (radio) | CREATE LOGIN | Offered on |
+| --- | --- | --- |
+| Windows authentication | `FROM WINDOWS WITH DEFAULT_DATABASE=…` | SQL Server |
+| SQL Server authentication | `WITH PASSWORD=…, DEFAULT_DATABASE=…` (the policy options on SQL Server) | SQL Server, Managed Instance |
+| Microsoft Entra authentication | `FROM EXTERNAL PROVIDER WITH DEFAULT_DATABASE=…` | SQL Server (SQL Server 2022 and later, band 16), Managed Instance |
+| Mapped to certificate | `FROM CERTIFICATE [certificate]` | SQL Server |
+| Mapped to asymmetric key | `FROM ASYMMETRIC KEY [key]` | SQL Server |
+
+- **Microsoft Entra authentication** (`FROM EXTERNAL PROVIDER`, with Default database and Default language) names the user, group or
+  application as Microsoft Entra ID does. On SQL Server it needs Azure Arc and Microsoft Entra set up first ("SQL Server creates Microsoft Entra logins once Azure Arc and Microsoft Entra authentication are set up on it; otherwise OK fails."):
+  without them SQL Server answers 37525 (`NOT_SUPPORTED`, probed on SQL Server 2025), which a live check confirms creates nothing.
+  The SSMS 22 label of this radio is unverified.
+- **Mapped to certificate** and **Mapped to asymmetric key** choose one of master's certificates or asymmetric keys (Certificate
+  name, Asymmetric key name; at most 1,024 each, SQL Server's own `##MS_…##` ones included, as SSMS lists them).
+  Such a login has no Default database or Default language (SMO writes neither, and `FROM CERTIFICATE … WITH DEFAULT_DATABASE` is a
+  syntax error, 102), so both are greyed, and it cannot connect ("A login mapped to a certificate or an asymmetric key cannot connect to SQL Server: it is used for code signing."). Its users have no default schema
+  (SQL Server answers 15259, probed), so User Mapping keeps Default Schema blank and closed ("A user mapped to a certificate or an asymmetric key has no default schema.").
+- **Map to Credential**: the box enables the server's credentials (`sys.credentials`, at most 1,024) and **Add**, which appends the one chosen
+  to **Mapped Credentials** (Credential, Provider: the EKM provider of a credential that has one); **Remove** takes the selected row
+  out (the grid is one tab stop: arrows select, Delete removes). At most 16 credentials are mapped at once. OK maps each with
+  `ALTER LOGIN … ADD CREDENTIAL` after Deny and Disable and before the server roles, in the grid's order; a credential that fails
+  leaves the login created, and the message says "Not every credential was mapped.". Map to Credential is greyed for Microsoft Entra logins
+  ("A Microsoft Entra login cannot be mapped to a credential here."): Managed Instance's ALTER LOGIN for them takes no credential, and SQL Server's is unverified.
+- **Managed Instance**: New Login opens on SQL Server authentication, offers SQL Server and Microsoft Entra logins only, and hides
+  the password policy options, which its CREATE LOGIN does not take ("Azure SQL Managed Instance takes no password policy options when it creates a login. Set them in Login Properties afterwards."). The backend refuses
+  the other kinds, and the policy options, there before it connects (`NOT_SUPPORTED`), and on SQL Server it refuses a SQL Server login
+  without them.
+- **Search…** (Windows authentication) opens "Select User or Group": "Enter the object name" and **Check Names**, which asks the server
+  (`actions.describe` with dialog `windowsPrincipal` and the target `{ kind: 'login', name }`, on the describe's read connection:
+  `EXEC master.sys.xp_logininfo @acctname = @name;`). It answers the account as the server names it, user or group, and the group
+  its access comes through; a missing account is `NOT_FOUND` (15404: "The server could not find this Windows account. Check the name, typed as DOMAIN\name."), and a login that may not run
+  xp_logininfo gets "Check Names needs permission to run xp_logininfo. Type the name as DOMAIN\name; the server checks it when you press OK." (229, `PERMISSION_DENIED`). OK puts the account name into Login name. SSMS opens
+  Windows' own Object Picker, which a sandboxed renderer cannot reach and macOS and Linux lack: Check Names works the same on every
+  client and resolves the name as `CREATE LOGIN … FROM WINDOWS` will. It is not offered on Managed Instance.
 
 The password fields are masked, never reach the dialog's snapshot, React state that is saved, AutoRecover, a toast or a log, and
 are cleared when the dialog closes, the server disconnects or OK succeeds. The password travels only in `actions.execute`, which is
@@ -603,7 +645,7 @@ Windows login whose SID already has a user under another name in the database (a
 server in the domain), which fails it with 15063; resolving a Windows SID before the login exists would mean asking the domain
 from the preflight. The server's password policy answers `PASSWORD_POLICY` (15114 to 15118),
 which keeps the dialog open with its password; 15025 and 15023 are `NAME_IN_USE`, 15010, 15033 and 15401 `NOT_FOUND`, and 15099,
-15122, 15006, 15407 and 37525 `NOT_SUPPORTED`. After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
+15122, 15006, 15407, 15259 and 37525 `NOT_SUPPORTED`; a certificate, key or credential that does not exist is 15151 (`PERMISSION_DENIED`). After OK the server's Logins folder, once Object Explorer has listed it, reloads and selects the new login,
 and each mapped database's Users folder that Object Explorer has listed reloads (after a partial run too).
 
 Whether a server-side trace or Extended Events session can read the password from the RPC (critic A16) is checked by an opt-in live
@@ -639,8 +681,11 @@ every page why they never change, and every page's controls are greyed.
   refuses the old password: "The login is locked out, and SQL Server refuses its old password then. Clear Specify old password: a new password unlocks it."); the policy options; User must change password
   at next login only once a new password is typed, and never for the login this connection uses, whose new sessions SQL Server
   would then refuse ("This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."); Default database and Default language (no `<default>`: SMO's ALTER for it
-  is unverified). Login name reads as text in a frame; the kind of login shows under the authentication only when the two
-  choices do not say it (a group, a certificate, a key, Microsoft Entra).
+  is unverified). Login name reads as text in a frame; the five kinds show read-only with the login's checked (D2e), a certificate
+  or key login's certificate or key in its list, and a note names a Windows group or a Microsoft Entra group, which the radios do
+  not. Map to Credential and Mapped Credentials (D2e) list the credentials mapped to the login (`sys.server_principal_credentials`) and
+  change them: OK removes, then maps, after Connect and Enabled and before the server roles (`credentialsDrop`, `credentialsAdd`),
+  greyed for a Microsoft Entra login. A certificate or key login's users never get a default schema ("A user mapped to a certificate or an asymmetric key has no default schema.").
 - **Server Roles**: the login's memberships checked; public checked and greyed.
 - **User Mapping**: New Login's grid with the mapped users filled in. Unchecking Map unmaps (DROP USER; Script and the steps
   warn "Drops the user [user] in [database]."), a new user name renames, and the database owner's dbo cannot change

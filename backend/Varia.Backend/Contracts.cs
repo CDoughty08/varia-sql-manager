@@ -201,9 +201,12 @@ internal sealed record ActionArgs(string Action, string ConnectionId, string Req
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, NewLoginDto? Login = null,
     List<string>? ServerRoles = null, LoginStatusDto? Status = null, List<UserMappingDto>? Mappings = null, LoginIdentityDto? LoginIdentity = null, bool? DropMappedUsers = null,
     string? Mode = null, LoginChangesDto? LoginChanges = null);
-/// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
-/// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
-internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
+/// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows, sql, entra, certificate or
+/// asymmetricKey; the password policy options for sql on SQL Server (none on Managed Instance), in SQL Server's chain (MustChange
+/// needs CheckExpiration, which needs CheckPolicy); the defaults for every kind but certificate and asymmetricKey, which name their
+/// Certificate or AsymmetricKey instead; Credentials to map (D2e).</summary>
+internal sealed record NewLoginDto(string Auth, string Name, string? DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null,
+    string? Certificate = null, string? AsymmetricKey = null, List<string>? Credentials = null);
 /// <summary>One database New Login's User Mapping maps (src/shared/actions/logins.ts UserMappingChoice): the user to create for the login,
 /// its default schema (none when null), and the database roles to add it to, public never.</summary>
 internal sealed record UserMappingDto(string Database, string User, string? DefaultSchema, List<string> RolesAdd);
@@ -229,7 +232,7 @@ internal sealed record LoginSecretsDto(string? Password = null, string? OldPassw
 /// are User Mapping's changed databases; Connect is grant or deny.</summary>
 internal sealed record LoginChangesDto(string? DefaultDatabase = null, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null,
     LoginPasswordChangeDto? Password = null, List<string>? RolesAdd = null, List<string>? RolesDrop = null, List<LoginMappingChangeDto>? Mappings = null, string? Connect = null,
-    bool? Enabled = null);
+    bool? Enabled = null, List<string>? CredentialsAdd = null, List<string>? CredentialsDrop = null);
 /// <summary>A new password: OldPassword when the user gave the old one (then neither Unlock nor MustChange: T-SQL's grammar takes
 /// one or the others), Unlock to clear a lock-out, MustChange to require a change at the next sign-in.</summary>
 internal sealed record LoginPasswordChangeDto(bool OldPassword, bool Unlock, bool MustChange);
@@ -288,11 +291,15 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
     TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null,
-    LoginPropertiesDto? LoginProperties = null);
+    LoginPropertiesDto? LoginProperties = null, WindowsPrincipalDto? WindowsPrincipal = null);
+/// <summary>Check Names (the windowsPrincipal describe, D2e; logins.ts WindowsPrincipal): the account as xp_logininfo names it, whether a
+/// login gives it access (no row: the server found the account but none does), its type (user or group) and the path of its access.</summary>
+internal sealed record WindowsPrincipalDto(string AccountName, bool Access, string? Type = null, string? Via = null);
 /// <summary>What Login Properties reads of the login besides its facts and New Login's lists (src/shared/actions/logins.ts
 /// LoginPropertiesFacts): its default database and language, the server roles it is a member of (at most loginLimits.serverRoles),
 /// the database users mapped to it in the databases the scan read (Read, by name; a database it did not read shows "Not read").</summary>
-internal sealed record LoginPropertiesDto(string DefaultDatabase, string? DefaultLanguage, List<string> ServerRoles, bool ServerRolesTruncated, List<LoginMappedUserDto> Users, List<string> Read);
+internal sealed record LoginPropertiesDto(string DefaultDatabase, string? DefaultLanguage, List<string> ServerRoles, bool ServerRolesTruncated, List<LoginMappedUserDto> Users, List<string> Read,
+    List<string> Credentials, bool CredentialsTruncated, string? Certificate = null, string? AsymmetricKey = null);
 /// <summary>A user mapped to the login in one database: its name and default schema, and whether it is dbo (the login owns the database).</summary>
 internal sealed record LoginMappedUserDto(string Database, string User, string? DefaultSchema, bool Owner);
 /// <summary>The user mapped to a login in one database, as User Mapping's read with a login finds it.</summary>
@@ -305,8 +312,12 @@ internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTrunc
 /// <summary>New Login's describe (src/shared/actions/logins.ts NewLoginModel): the server's facts, then the databases, languages and
 /// server roles its lists offer, each bounded by loginLimits (a truncation flag says more exist).</summary>
 internal sealed record NewLoginModelDto(NewLoginServerDto Server, List<NewLoginDatabaseDto> Databases, bool DatabasesTruncated, List<NewLoginLanguageDto> Languages,
-    List<NewLoginServerRoleDto> ServerRoles, bool ServerRolesTruncated);
-internal sealed record NewLoginServerDto(int Level, bool Linux, bool WindowsOnly, bool CanCreate);
+    List<NewLoginServerRoleDto> ServerRoles, bool ServerRolesTruncated, List<string> Certificates, bool CertificatesTruncated, List<string> AsymmetricKeys, bool AsymmetricKeysTruncated,
+    List<NewLoginCredentialDto> Credentials, bool CredentialsTruncated);
+/// <summary>Engine: box or managedInstance (the actions' ServerEngine), which decides the kinds and options New Login offers (D2e).</summary>
+internal sealed record NewLoginServerDto(int Level, bool Linux, bool WindowsOnly, bool CanCreate, string Engine);
+/// <summary>A credential New Login's Map to Credential lists: its name and, for an EKM credential, its cryptographic provider's.</summary>
+internal sealed record NewLoginCredentialDto(string Name, string? Provider = null);
 /// <summary>A database User Mapping lists: its sys.databases state, whether this login can open it, and whether it is read-only (set
 /// READ_ONLY, a standby or a snapshot), where no user can be created.</summary>
 internal sealed record NewLoginDatabaseDto(string Name, int State, bool Accessible, bool ReadOnly);

@@ -75,7 +75,7 @@ internal static class ActionChecks
     {
         var results = ActionSql.Lint().ToList();
         var problems = results.SelectMany(result => result.Problems.Select(problem => result.Name + ": " + problem)).ToList();
-        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 14 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 2 + 2 + (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 + 4 + 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
+        check(problems.Count == 0 && results.Count == Enum.GetValues<ActionTemplate>().Length * 2 + 6 * 5 + 14 + 6 * 2 + 2 + DatabaseAlter.Corpus(Catalog).Count() * 2 + 3 + 2 + (LoginSql.Corpus().Count() + LoginSql.OptionsCorpus().Count() + LoginSql.PasswordCorpus().Count()) * 2 + 4 + 2, "every executable and catalog statement passes the lint at every band (" + results.Count + "): " + string.Join("; ", problems.Take(5)));
         // The transaction DMVs raise error 300 without VIEW SERVER STATE whatever guards them, so the statements every action runs never
         // read them; only the describe's counts and lists do, after Database's guarded count shows the permission.
         check(new[] { ActionSql.Database, ActionSql.DatabaseState, ActionSql.Login, ActionSql.OwnSessions }.All(statement => !statement.Contains("dm_tran_", StringComparison.Ordinal))

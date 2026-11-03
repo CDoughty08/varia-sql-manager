@@ -20,6 +20,8 @@ internal sealed partial class ActionService
     internal const string LoginCanConnectMessage = "It can connect: permission to connect was not denied.";
     /// <summary>Joined when Disabled was chosen and DISABLE did not complete.</summary>
     internal const string LoginEnabledMessage = "It is enabled.";
+    /// <summary>Joined when a credential was not mapped (D2e).</summary>
+    internal const string LoginCredentialsMessage = "Not every credential was mapped.";
     /// <summary>Joined when a server role was not added.</summary>
     internal const string LoginRolesMessage = "Not every server role was added.";
     /// <summary>Joined when a User Mapping statement (a user, its default schema or schema, a database role) did not complete.</summary>
@@ -41,6 +43,39 @@ internal sealed partial class ActionService
         return target;
     }
 
+    /// <summary>The account Check Names asks about (D2e): a login ref with only a DOMAIN\name, as zod's windowsPrincipal case.</summary>
+    private static ObjectRefDto WindowsAccount(ObjectRefDto? target)
+    {
+        if (target is not { Kind: "login", Database: null, Schema: null, Parent: null, SsisFolder: null, SsisProject: null, Name: { } name } || !ExplorerRefs.Ident(name)) throw Invalid("target.");
+        var slash = name.IndexOf('\\', StringComparison.Ordinal);
+        if (slash <= 0 || slash == name.Length - 1 || name.IndexOf('\\', slash + 1) >= 0) throw Invalid("target.");
+        return target;
+    }
+
+    /// <summary>Check Names (D2 §6): xp_logininfo on the describe's own connection. Its first row gives the account's name, type and
+    /// access path; no row means the server found the account but no login lets it in. 15404 (no such account) and 229 (no EXECUTE on
+    /// xp_logininfo) are values with Varia's own words, which name no account. DescribeAsync refuses it off SQL Server before connecting.</summary>
+    private async Task<ActionDescribeResult> DescribeWindowsPrincipalJobAsync(SqlConnection connection, ObjectRefDto target, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = LoginSql.CheckNames;
+        command.CommandTimeout = 0;
+        Add(command, "@name", SqlDbType.NVarChar, 128, target.Name!);
+        try
+        {
+            await using var reader = await command.ExecuteReaderAsync(token);
+            if (!await reader.ReadAsync(token)) return new(null, 0, WindowsPrincipal: new(target.Name!, false));
+            string? Text(int ordinal) => reader.FieldCount > ordinal && !reader.IsDBNull(ordinal) ? Convert.ToString(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture) : null;
+            var type = Text(1)?.Trim().ToLowerInvariant() is "user" or "group" ? Text(1)!.Trim().ToLowerInvariant() : null;
+            var limit = (int)catalog.Logins.Limit("stepDetail");
+            return new(null, 0, WindowsPrincipal: new(ScriptingErrors.Clip(Text(0) ?? target.Name!, 128), true, type, Text(4) is { } via ? ScriptingErrors.Clip(via, limit) : null));
+        }
+        catch (SqlException error) when (error.Number is 15404 or 229)
+        {
+            return new(null, 0, error.Number == 15404 ? Error("NOT_FOUND", catalog.Logins.CheckNamesNotFound) : Error("PERMISSION_DENIED", catalog.Logins.CheckNamesPermission));
+        }
+    }
+
     /// <summary>The server ref New Login names as its target, with no other member.</summary>
     private static ObjectRefDto ServerTarget(ObjectRefDto? target) =>
         target is { Kind: "server", Database: null, Schema: null, Name: null, Parent: null, SsisFolder: null, SsisProject: null } ? target : throw Invalid("target.");
@@ -55,23 +90,29 @@ internal sealed partial class ActionService
     {
         if (!SameMembers(args)) throw Invalid("createLogin takes a login, server roles and a status only.");
         var target = ServerTarget(args.Target);
-        if (args.Login is not { } login || !ExplorerRefs.Ident(login.Name) || !ExplorerRefs.Ident(login.DefaultDatabase) || (login.DefaultLanguage is not null && !ExplorerRefs.Ident(login.DefaultLanguage)))
+        static bool Name(string? value) => value is null || ExplorerRefs.Ident(value);
+        if (args.Login is not { } login || !ExplorerRefs.Ident(login.Name) || !Name(login.DefaultDatabase) || !Name(login.DefaultLanguage) || !Name(login.Certificate) || !Name(login.AsymmetricKey))
             throw Invalid("login.");
-        switch (login.Auth)
+        if (!catalog.Logins.Auths.Contains(login.Auth)) throw Invalid("login auth.");
+        var options = new[] { login.CheckPolicy, login.CheckExpiration, login.MustChange }.Count(option => option is not null);
+        if (login.Auth == "sql")
         {
-            case "sql":
-                if (login.CheckPolicy is not { } policy || login.CheckExpiration is not { } expiration || login.MustChange is not { } mustChange) throw Invalid("login options.");
-                if ((expiration && !policy) || (mustChange && !expiration)) throw Invalid("login options.");
-                if (login.Name.Contains('\\', StringComparison.Ordinal)) throw Invalid("login name.");
-                break;
-            case "windows":
-                if (login.CheckPolicy is not null || login.CheckExpiration is not null || login.MustChange is not null) throw Invalid("login options.");
-                var slash = login.Name.IndexOf('\\', StringComparison.Ordinal);
-                if (slash <= 0 || slash == login.Name.Length - 1 || login.Name.IndexOf('\\', slash + 1) >= 0) throw Invalid("login name.");
-                break;
-            default:
-                throw Invalid("login auth.");
+            // All three on SQL Server, none on Managed Instance (the run checks the engine: LoginRules.NewLoginRefusal).
+            if (options is not (0 or 3)) throw Invalid("login options.");
+            if ((login.CheckExpiration == true && login.CheckPolicy != true) || (login.MustChange == true && login.CheckExpiration != true)) throw Invalid("login options.");
+            if (login.Name.Contains('\\', StringComparison.Ordinal)) throw Invalid("login name.");
         }
+        else if (options != 0) throw Invalid("login options.");
+        if (login.Auth == "windows")
+        {
+            var slash = login.Name.IndexOf('\\', StringComparison.Ordinal);
+            if (slash <= 0 || slash == login.Name.Length - 1 || login.Name.IndexOf('\\', slash + 1) >= 0) throw Invalid("login name.");
+        }
+        if ((login.Certificate is not null) != (login.Auth == "certificate") || (login.AsymmetricKey is not null) != (login.Auth == "asymmetricKey")) throw Invalid("login source.");
+        if (catalog.Logins.TakesDefaults(login.Auth) ? login.DefaultDatabase is null : login.DefaultDatabase is not null || login.DefaultLanguage is not null) throw Invalid("login defaults.");
+        if (login.Credentials is { } credentials && (credentials.Count > catalog.Logins.Limit("credentials") || credentials.Any(credential => !ExplorerRefs.Ident(credential))
+            || credentials.Distinct(StringComparer.Ordinal).Count() != credentials.Count || (credentials.Count > 0 && !catalog.Logins.TakesCredentials(login.Auth))))
+            throw Invalid("login credentials.");
         if (args.ServerRoles is not { } roles || roles.Count > catalog.Logins.Limit("serverRoles") || roles.Any(role => !ExplorerRefs.Ident(role) || role == "public")
             || roles.Distinct(StringComparer.Ordinal).Count() != roles.Count)
             throw Invalid("serverRoles.");
@@ -83,11 +124,24 @@ internal sealed partial class ActionService
                 || mapping.RolesAdd is not { } added || added.Count > catalog.Logins.Limit("roles") || added.Any(role => !ExplorerRefs.Ident(role) || role == "public")
                 || added.Distinct(StringComparer.Ordinal).Count() != added.Count)
                 throw Invalid("mappings.");
-        if (LoginSql.Statements(status, roles, mappings) > catalog.Limit("statements")) throw Invalid("mappings: too many statements.");
+        // A user mapped to a certificate or an asymmetric key takes no default schema (15259, probed).
+        if (!catalog.Logins.TakesDefaults(login.Auth) && mappings.Any(mapping => mapping.DefaultSchema is not null)) throw Invalid("mappings: no default schema for this login.");
+        if (LoginSql.Statements(login, status, roles, mappings) > catalog.Limit("statements")) throw Invalid("mappings: too many statements.");
         if (script) return target;
         if (login.Auth == "sql" ? args.Secrets is not { Password: not null, OldPassword: null } : args.Secrets is not null) throw Invalid("secrets.");
         if (login.Auth == "sql" && args.Secrets!.Password!.Length == 0 && login.CheckPolicy != true) throw Invalid("secrets.password.");
         return target;
+    }
+
+    /// <summary>Why the connection's server does not create this login (LoginRules.NewLoginRefusal: a kind its engine or version does
+    /// not offer, or a SQL Server login's policy options where its CREATE LOGIN takes none or needs them), as NOT_SUPPORTED before any
+    /// connection opens; null for other actions. The engine and band are the connection's probed profile, as the engine gate's.</summary>
+    private ActionError? NewLoginEngineRefusal(ActionArgs args)
+    {
+        if (args.Action != "createLogin" || args.Login is not { } login) return null;
+        var served = host.Profile(args.ConnectionId).Explorer(explorer);
+        if (!Serves(args.Action, served.ServerEngine)) return null;
+        return catalog.Logins.NewLoginRefusal(login, served.ServerEngine, served.Band) is { } message ? Error("NOT_SUPPORTED", message) : null;
     }
 
     /// <summary>New Login's lists and the server's facts, read in master on the describe's own connection.</summary>
@@ -102,6 +156,12 @@ internal sealed partial class ActionService
         Add(command, "@databases", SqlDbType.Int, 0, databases + 1);
         Add(command, "@languages", SqlDbType.Int, 0, languages);
         Add(command, "@roles", SqlDbType.Int, 0, roles + 1);
+        var certificates = (int)catalog.Logins.Limit("certificates");
+        var keys = (int)catalog.Logins.Limit("asymmetricKeys");
+        var credentials = (int)catalog.Logins.Limit("listedCredentials");
+        Add(command, "@certificates", SqlDbType.Int, 0, certificates + 1);
+        Add(command, "@keys", SqlDbType.Int, 0, keys + 1);
+        Add(command, "@credentials", SqlDbType.Int, 0, credentials + 1);
         await using var reader = await command.ExecuteReaderAsync(token);
         var windowsOnly = false;
         var canCreate = true;
@@ -115,8 +175,21 @@ internal sealed partial class ActionService
         var serverRoles = new List<NewLoginServerRoleDto>();
         if (await reader.NextResultAsync(token))
             while (await reader.ReadAsync(token)) serverRoles.Add(new(reader.GetString(0), reader.GetBoolean(1)));
-        var model = new NewLoginModelDto(new(band, profile.Linux, windowsOnly, canCreate), [.. listed.Take(databases)], listed.Count > databases, names,
-            [.. serverRoles.Take(roles)], serverRoles.Count > roles);
+        async Task<List<string>> NamesAsync()
+        {
+            var read = new List<string>();
+            if (await reader.NextResultAsync(token)) while (await reader.ReadAsync(token)) read.Add(reader.GetString(0));
+            return read;
+        }
+        var certificateNames = await NamesAsync();
+        var keyNames = await NamesAsync();
+        var credentialRows = new List<NewLoginCredentialDto>();
+        if (await reader.NextResultAsync(token))
+            while (await reader.ReadAsync(token)) credentialRows.Add(new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)));
+        var engine = profile.Explorer(explorer).ServerEngine;
+        var model = new NewLoginModelDto(new(band, profile.Linux, windowsOnly, canCreate, engine), [.. listed.Take(databases)], listed.Count > databases, names,
+            [.. serverRoles.Take(roles)], serverRoles.Count > roles, [.. certificateNames.Take(certificates)], certificateNames.Count > certificates, [.. keyNames.Take(keys)], keyNames.Count > keys,
+            [.. credentialRows.Take(credentials)], credentialRows.Count > credentials);
         return new(null, 0, NewLogin: model);
     }
 
@@ -216,6 +289,7 @@ internal sealed partial class ActionService
     {
         var served = host.Profile(args.ConnectionId).Explorer(explorer);
         if (!Serves(args.Action, served.ServerEngine)) return Task.FromResult(new ActionScriptResult(null, "master", [], ActionErrors.Create(catalog, "NOT_SUPPORTED", EngineMessage(served.ServerEngine))));
+        if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionScriptResult(null, "master", [], refused));
         ActionScriptResult Script(IReadOnlySet<string> missing)
         {
             var text = LoginSql.ScriptText(args.Login!, args.ServerRoles!, args.Status!, args.Mappings!, missing, catalog.Logins.ScriptHeader);
@@ -289,6 +363,7 @@ internal sealed partial class ActionService
         var state = LoginCreatedMessage;
         if (status.Connect == "deny" && !Done(StepTitle(ActionTemplate.DenyConnect))) state += " " + LoginCanConnectMessage;
         if (!status.Enabled && !Done(StepTitle(ActionTemplate.DisableLogin))) state += " " + LoginEnabledMessage;
+        if (steps.Any(step => step.Title == StepTitle(ActionTemplate.AddLoginCredential) && step.Status != "done")) state += " " + LoginCredentialsMessage;
         if (steps.Any(step => step.Title == StepTitle(ActionTemplate.AddServerRoleMember) && step.Status != "done")) state += " " + LoginRolesMessage;
         var mapping = new[] { ActionTemplate.CreateUserForLogin, ActionTemplate.AlterUserSchema, ActionTemplate.CreateSchemaFor, ActionTemplate.AddRoleMember }.Select(StepTitle).ToHashSet(StringComparer.Ordinal);
         if (steps.Any(step => mapping.Contains(step.Title) && step.Status != "done")) state += " " + LoginMappingsMessage;
@@ -304,7 +379,7 @@ internal sealed partial class ActionService
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, "master");
         Add(command, "@p1", SqlDbType.NVarChar, 128, login.Name);
-        Add(command, "@p2", SqlDbType.NVarChar, 128, login.DefaultDatabase);
+        Add(command, "@p2", SqlDbType.NVarChar, 128, LoginSql.SecondName(login));
         if (login.DefaultLanguage is { } language) Add(command, "@p3", SqlDbType.NVarChar, 128, language);
         var secret = login.Auth == "sql" ? new SqlParameter("@password", SqlDbType.NVarChar, 128) { Value = (object?)password ?? DBNull.Value } : null;
         if (secret is not null) command.Parameters.Add(secret);

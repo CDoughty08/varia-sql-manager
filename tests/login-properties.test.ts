@@ -118,7 +118,7 @@ describe('Login Properties drafts', () => {
     const of = model()
     expect(draftOf(of)).toEqual({
       auth: 'sql', name: 'app_login', defaultDatabase: 'master', defaultLanguage: 'us_english', checkPolicy: true, checkExpiration: true, mustChange: false, serverRoles: ['bulkadmin'],
-      connect: 'grant', enabled: true, specifyOld: false, locked: true,
+      connect: 'grant', enabled: true, specifyOld: false, locked: true, certificate: '', asymmetricKey: '', mapCredential: false, credential: '', credentials: [],
       mappings: [{ database: 'AppData', map: true, user: 'app', defaultSchema: 'dbo', roles: [], rolesKnown: false }, { database: 'Owned', map: true, user: 'dbo', defaultSchema: 'dbo', roles: [], rolesKnown: false }]
     })
     expect(loginPropertiesRequest(appLogin, of, draftOf(of))).toBeUndefined()
@@ -167,7 +167,7 @@ describe('Login Properties drafts', () => {
     expect(loginPropertiesProblem(group, draftOf(group, { connect: 'deny' }))).toBeUndefined()
     // A Windows login has no password: a typed one (the field is greyed) never joins the changes, and its policy never changes.
     expect(loginPropertiesChanges(group, draftOf(group, { checkPolicy: true }), typed)).toEqual({})
-    expect(loginPropertiesEnabled(group, draftOf(group), typed)).toEqual({ password: false, oldPassword: false, checkPolicy: false, checkExpiration: false, mustChange: false, locked: false })
+    expect(loginPropertiesEnabled(group, draftOf(group), typed)).toEqual({ password: false, oldPassword: false, checkPolicy: false, checkExpiration: false, mustChange: false, locked: false, mapCredential: true, credential: false })
     expect(loginPropertiesHints(group, draftOf(group))).toEqual([])
     expect(loginPropertiesRefusal({ type: 'U', subtype: 'windowsUser', own: false }, { checkPolicy: true })).toBe('propertiesNotSql')
     expect(loginPropertiesRefusal({ type: 'S', subtype: 'system', own: false }, { enabled: true })).toBe('system')
@@ -511,7 +511,7 @@ describe('Login Properties pages', () => {
     expect(cleared).toMatch(new RegExp(`<li id="login-properties-keep">.*?<span>${loginPropertiesMessages.unlockNeedsPassword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</span>`))
     expect(cleared).not.toContain('login-properties-kind')
     const group = render(NewLoginGeneralPage, opened(model({ login: { type: 'G', subtype: 'windowsGroup' }, lock: null })))
-    expect(group).toContain('<p class="field-note" id="login-properties-kind">Windows group</p>')
+    expect(group).toContain('<p class="field-note new-login-kind" id="login-properties-kind">Windows group</p>')
     expect(group).toContain('<input id="new-login-name" type="text" readOnly="" aria-describedby="login-properties-kind" value="app_login"/>')
     expect(cleared).toContain('<input id="new-login-name" type="text" readOnly="" value="app_login"/>')
   })

@@ -21,10 +21,16 @@ internal static partial class LoginSql
     // --- Reads ------------------------------------------------------------------------------------------------------------
 
     /// <summary>Login Properties' read of the login in master, by the principal_id the login preflight found: its default database
-    /// and language, then at most @roles server roles it is a member of, by name (the caller reads one more, so a truncation shows).</summary>
+    /// and language, then at most @roles server roles it is a member of, by name (the caller reads one more, so a truncation shows); then
+    /// (D2e) at most @credentials credentials mapped to it (sys.server_principal_credentials), by name, and the certificate and asymmetric
+    /// key in master whose SID is the login's (a C or K login's).</summary>
     public const string PropertiesRead = "SELECT p.default_database_name AS default_database, p.default_language_name AS default_language FROM sys.server_principals AS p WHERE p.principal_id = @principal;\n"
         + "SELECT TOP (@roles) r.name AS name FROM sys.server_role_members AS m JOIN sys.server_principals AS r ON r.principal_id = m.role_principal_id "
-        + "WHERE m.member_principal_id = @principal ORDER BY r.name;";
+        + "WHERE m.member_principal_id = @principal ORDER BY r.name;\n"
+        + "SELECT TOP (@credentials) c.name AS name FROM sys.server_principal_credentials AS pc JOIN sys.credentials AS c ON c.credential_id = pc.credential_id "
+        + "WHERE pc.principal_id = @principal ORDER BY c.name;\n"
+        + "SELECT TOP (1) c.name AS name FROM master.sys.certificates AS c JOIN sys.server_principals AS p ON p.sid = c.sid WHERE p.principal_id = @principal ORDER BY c.name;\n"
+        + "SELECT TOP (1) k.name AS name FROM master.sys.asymmetric_keys AS k JOIN sys.server_principals AS p ON p.sid = k.sid WHERE p.principal_id = @principal ORDER BY k.name;";
 
     /// <summary>A login's SID by its name, for User Mapping's read of its user in one database (the loginDatabaseRoles describe with a login).</summary>
     public const string LoginSid = "SELECT p.sid AS sid FROM sys.server_principals AS p WHERE p.name = @name AND p.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X');";
@@ -135,13 +141,16 @@ internal static partial class LoginSql
     // --- The plan ---------------------------------------------------------------------------------------------------------
 
     /// <summary>The server statements after the options and the password, in SSMS's order (the ported SendChangeToServer): GRANT or
-    /// DENY CONNECT SQL, ENABLE or DISABLE, then ALTER SERVER ROLE … ADD or DROP MEMBER per changed role, by name. OK binds each to the
-    /// login its preflight read (<paramref name="bound"/>, ActionSql.BindingOf); Script passes none.</summary>
+    /// DENY CONNECT SQL, ENABLE or DISABLE, ALTER LOGIN … DROP CREDENTIAL and then ADD CREDENTIAL per credential removed or added (D2e, in
+    /// the request's order), then ALTER SERVER ROLE … ADD or DROP MEMBER per changed role, by name. OK binds each to the login its
+    /// preflight read (<paramref name="bound"/>, ActionSql.BindingOf); Script passes none.</summary>
     public static List<PlannedStatement> PropertiesServerPlan(string login, LoginChangesDto changes, PrincipalBinding? bound = null)
     {
         var plan = new List<PlannedStatement>();
         if (changes.Connect is { } connect) plan.Add(new(connect == "deny" ? ActionTemplate.DenyConnect : ActionTemplate.GrantConnect, "master", [login], Principal: bound));
         if (changes.Enabled is { } enabled) plan.Add(new(enabled ? ActionTemplate.EnableLogin : ActionTemplate.DisableLogin, "master", [login], Principal: bound));
+        foreach (var credential in changes.CredentialsDrop ?? []) plan.Add(new(ActionTemplate.DropLoginCredential, "master", [login, credential], Principal: bound));
+        foreach (var credential in changes.CredentialsAdd ?? []) plan.Add(new(ActionTemplate.AddLoginCredential, "master", [login, credential], Principal: bound));
         var added = changes.RolesAdd ?? [];
         foreach (var role in Ordered(added.Concat(changes.RolesDrop ?? [])))
             plan.Add(new(added.Contains(role) ? ActionTemplate.AddServerRoleMember : ActionTemplate.DropServerRoleMember, "master", [role, login], Principal: bound));
@@ -183,10 +192,11 @@ internal static partial class LoginSql
     }
 
     /// <summary>The most statements Login Properties plans (logins.ts loginPropertiesStatements): the options, the password, Connect,
-    /// Enabled, each server role, and per database its DROP USER, or its CREATE USER or rename, the default schema's two and one per role.</summary>
+    /// Enabled, each credential, each server role, and per database its DROP USER, or its CREATE USER or rename, the default schema's two
+    /// and one per role.</summary>
     public static int PropertiesStatements(LoginChangesDto changes) =>
         (HasOptions(changes) ? 1 : 0) + (changes.Password is null ? 0 : 1) + (changes.Connect is null ? 0 : 1) + (changes.Enabled is null ? 0 : 1)
-        + (changes.RolesAdd?.Count ?? 0) + (changes.RolesDrop?.Count ?? 0)
+        + (changes.RolesAdd?.Count ?? 0) + (changes.RolesDrop?.Count ?? 0) + (changes.CredentialsAdd?.Count ?? 0) + (changes.CredentialsDrop?.Count ?? 0)
         + (changes.Mappings ?? []).Sum(mapping => mapping.Change == "unmap" ? 1
             : (mapping.Change == "map" || mapping.NewName is not null ? 1 : 0) + (mapping.DefaultSchema is null ? 0 : 2) + (mapping.RolesAdd?.Count ?? 0) + (mapping.RolesDrop?.Count ?? 0));
 

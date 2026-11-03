@@ -515,13 +515,13 @@ export const actionLimits = {
   blockers: 8, blockerChars: 128
 } as const
 
-/** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
- *  SSMS hides the password policy options). */
+/** The create actions. New Login runs on SQL Server and Managed Instance (D2e), whose kinds and options differ
+ *  (logins.ts newLoginAuthEngines and newLoginPolicyEngines). */
 export const createActionSpecs: { readonly [A in CreateAction]: CreateActionSpec } = {
-  createLogin: { title: 'New Login', dialog: 'newLogin', engines: ['box'] }
+  createLogin: { title: 'New Login', dialog: 'newLogin', engines: onServers }
 }
 export const isCreateAction = (action: string): action is CreateAction => (createActions as readonly string[]).includes(action)
-/** The kind dialog actions. Login Properties runs where Properties does; its ALTER LOGIN on Managed Instance is unverified (D2e). */
+/** The kind dialog actions. Login Properties runs where Properties does (Managed Instance's ALTER LOGIN grammar is SQL Server's, Learn). */
 export const kindDialogActionSpecs: { readonly [A in KindDialogAction]: KindDialogActionSpec } = {
   loginProperties: { title: 'Login Properties', dialog: 'loginProperties', kind: 'login', verb: 'properties', engines: onServers }
 }

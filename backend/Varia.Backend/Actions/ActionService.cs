@@ -179,6 +179,8 @@ internal sealed partial class ActionService : IDisposable
         if (args.Login is not null && (args.Dialog != catalog.Logins.RolesDescribe || !ExplorerRefs.Ident(args.Login))) throw Invalid("login.");
         // User Mapping reads any database, SQL Server's own included: a login may be mapped to master or msdb.
         if (args.Dialog is not null && args.Dialog == catalog.Logins.RolesDescribe) return MappedDatabase(args.Target);
+        // New Login's Check Names (D2e) asks about a Windows account named DOMAIN\name, which need not have a login.
+        if (args.Dialog is not null && args.Dialog == catalog.Logins.CheckNamesDescribe) return WindowsAccount(args.Target);
         if (args.Dialog is not null && designer.Describes.Contains(args.Dialog)) return DatabaseTarget(args.Target);
         if (args.Dialog is not null && catalog.Describes.TryGetValue(args.Dialog, out var describe))
         {
@@ -283,7 +285,11 @@ internal sealed partial class ActionService : IDisposable
     {
         var target = Validate(args);
         var watch = Stopwatch.StartNew();
+        // Check Names asks about Windows accounts, which only SQL Server's own logins use (Managed Instance has no FROM WINDOWS).
+        if (args.Dialog == catalog.Logins.CheckNamesDescribe && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine != "box")
+            return Task.FromResult(new ActionDescribeResult(null, 0, Error("NOT_SUPPORTED", catalog.Logins.Message("notOffered"))));
         var action = designer.Describes.Contains(args.Dialog) ? designer.Requests.Single() : args.Dialog == catalog.Logins.RolesDescribe ? (args.Login is null ? "createLogin" : "loginProperties")
+            : args.Dialog == catalog.Logins.CheckNamesDescribe ? "createLogin"
             : catalog.Describes.TryGetValue(args.Dialog, out var describe) ? describe.Action : catalog.ActionOf(args.Dialog);
         return RunAsync(args.ConnectionId, args.RequestId, action, read: true, Options.DescribeBudget, token,
             async (connection, profile, band, job) => await (args.Dialog switch
@@ -292,6 +298,7 @@ internal sealed partial class ActionService : IDisposable
                 "databaseProperties" => DescribePropertiesJobAsync(connection, target, band, job),
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job, args.Login),
+                _ when args.Dialog == catalog.Logins.CheckNamesDescribe => DescribeWindowsPrincipalJobAsync(connection, target, job),
                 "loginProperties" => DescribeLoginPropertiesJobAsync(connection, profile, target, band, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
                 "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
@@ -326,6 +333,7 @@ internal sealed partial class ActionService : IDisposable
         // asks for it anyway is refused before any connection opens.
         if (args.Action == "delete" && args.CloseConnections == true && host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine == "managedInstance")
             return Task.FromResult(new ActionExecuteResult([], [], 0, Error("NOT_SUPPORTED", ManagedInstanceCloseNote)));
+        if (NewLoginEngineRefusal(args) is { } refused) return Task.FromResult(new ActionExecuteResult([], [], 0, refused));
         return RunAsync(args.ConnectionId, args.RequestId, args.Action, read: false, null, token,
             async (connection, profile, band, job) => await (args.Action switch
             {
@@ -739,6 +747,8 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DropServerRoleMember => "Remove from a server role",
         ActionTemplate.RenameUser => "Rename a user",
         ActionTemplate.DropRoleMember => "Remove from a database role",
+        ActionTemplate.AddLoginCredential => "Map a credential",
+        ActionTemplate.DropLoginCredential => "Remove a credential",
         _ => "Drop the object"
     };
 
@@ -750,6 +760,7 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.DropUser or ActionTemplate.DropMappedUser => ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database),
         ActionTemplate.AddServerRoleMember or ActionTemplate.DropServerRoleMember => statement.Names[0],
         ActionTemplate.AddRoleMember or ActionTemplate.DropRoleMember => statement.Names[0] + " in " + statement.Database,
+        ActionTemplate.AddLoginCredential or ActionTemplate.DropLoginCredential => statement.Names[1],
         _ when MappingStep(statement.Template) => statement.Database,
         _ => null
     };

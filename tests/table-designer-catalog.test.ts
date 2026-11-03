@@ -57,7 +57,7 @@ describe('table designer catalogue', () => {
   it('keeps its describe and request ids out of the object-action catalogue but in the describe schema', () => {
     expect(designerDescribeIds).toEqual(['tableDesigner'])
     expect(designerRequestActions).toEqual(['createTable'])
-    expect(describeIds).toEqual([...dialogIds, 'tableDesigner', 'loginDatabaseRoles', 'loginFacts'])
+    expect(describeIds).toEqual([...dialogIds, 'tableDesigner', 'loginDatabaseRoles', 'loginFacts', 'windowsPrincipal'])
     expect(designerLimits.scriptChars).toBe(maxScriptCharacters)
   })
   it('generates commands with valid preconditions, menus and keys, F4 only inside a designer', () => {
@@ -85,7 +85,7 @@ describe('table designer catalogue', () => {
       expect(buildMenuModel('explorer.new', platform).map(entry => entry.kind === 'command' ? [entry.id, entry.title, entry.mnemonic] : [])).toEqual([
         ['explorer.newLoginOnSecurity', 'Login…', 'l'], [], ['explorer.newTable', 'Table…', 't']])
       expect((['explorer.newLoginOnSecurity', 'explorer.newTable'] as const).map(id => commandDescriptor(id).menus?.find(placement => placement.menu === 'explorer.new')?.when))
-        .toEqual(["explorerFolder == 'serverSecurity' && explorerServerEngine == 'box'", "explorerFolder == 'tables'"])
+        .toEqual(["explorerFolder == 'serverSecurity' && (explorerServerEngine == 'box' || explorerServerEngine == 'managedInstance')", "explorerFolder == 'tables'"])
     }
   })
   it('loads in plain Node 24, as the fake backend loads the other catalogues', () => {
