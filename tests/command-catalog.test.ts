@@ -50,8 +50,8 @@ function showTogether(menu: MenuId, ...clauses: (string | undefined)[]): boolean
 describe('command catalogue', () => {
   it('is the renderer\'s command id type', () => {
     expectTypeOf<CommandId>().toEqualTypeOf<RendererCommandId>()
-    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id) and a login's Disable and Enable, New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, and New Login's two (its Logins menu item and palette entry, and Security › New › Login…).
-    expect(commandIds).toHaveLength(188)
+    // 110 commands (Create Catalog among them), Object Explorer's four object actions (Select Top keeps PR4's id) and a login's Disable, Enable and Unlock…, New Table and the table designer's seven, then Script As's 30 generated ones (three keep the table menu's CREATE ids) and its palette pick, Modify, and Cancel, the two notification commands, the Database Properties document's four verbs, Filter Loaded Objects, the SSIS Catalog's four Properties verbs and their documents' Refresh, the Activity Monitor's nine, Integration Services Operations' nine, and New Login's two (its Logins menu item and palette entry, and Security › New › Login…).
+    expect(commandIds).toHaveLength(189)
     expect(commandIds.filter(id => id.startsWith('explorer.script') && id.includes('To'))).toEqual([...scriptCommandIds])
   })
   it('has a handler for every command once all contributions have run', () => {

@@ -42,7 +42,7 @@ export const codiconIcons = [
   'refresh', 'remote', 'remove', 'replace', 'save', 'save-all', 'save-as', 'screen-full', 'search', 'settings-gear', 'split-horizontal', 'star-empty',
   'star-full', 'symbol-color', 'symbol-constant', 'symbol-field', 'symbol-file', 'symbol-function', 'symbol-key', 'symbol-namespace', 'symbol-numeric',
   'symbol-operator', 'symbol-parameter', 'symbol-ruler', 'symbol-snippet', 'symbol-structure', 'symbol-variable', 'tag', 'tools', 'trash',
-  'triangle-right', 'type-hierarchy', 'verified',
+  'triangle-right', 'type-hierarchy', 'unlock', 'verified',
   'warning', 'watch', 'whitespace', 'window', 'word-wrap', 'workspace-trusted', 'zap', 'zoom-in', 'zoom-out'
 ] as const
 export type CodiconId = typeof codiconIcons[number]

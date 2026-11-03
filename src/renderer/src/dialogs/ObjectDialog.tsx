@@ -13,6 +13,7 @@ import type { DialogPhase, OpenObjectDialog } from './ObjectDialogService'
 import DeleteObjectPage from './pages/DeleteObjectPage'
 import { NewLoginGeneralPage, NewLoginServerRolesPage, NewLoginStatusPage } from './pages/NewLoginPages'
 import UserMappingPage from './pages/UserMappingPage'
+import UnlockLoginPage from './pages/UnlockLoginPage'
 
 /** A page of an object dialog: the open dialog's snapshot, and whether its controls may change now. */
 export interface PageProps { readonly open: OpenObjectDialog; readonly editable: boolean }
@@ -20,7 +21,8 @@ export interface PageProps { readonly open: OpenObjectDialog; readonly editable:
  *  document instead (src/renderer/src/properties). */
 export const dialogPages: { readonly [D in ModalDialogId]: Readonly<Partial<Record<PageId, ComponentType<PageProps>>>> } = {
   deleteObject: { general: DeleteObjectPage },
-  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage }
+  newLogin: { general: NewLoginGeneralPage, serverRoles: NewLoginServerRolesPage, userMapping: UserMappingPage, status: NewLoginStatusPage },
+  unlockLogin: { general: UnlockLoginPage }
 }
 
 const progressText: Readonly<Record<DialogPhase, string>> = {
@@ -155,6 +157,8 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   const usable = !!open.model && open.phase !== 'loadFailed' && open.phase !== 'disconnected'
   // The page says why (a login's Delete refused by the protected-principal rules); Script still works.
   const blocked = !!open.model && !!definitionOf(open.dialog).blocked?.(open.model)
+  // The definition's reason OK cannot run (the page shows it): OK greys, Script stays.
+  const unavailable = usable && !!dialogs.unavailable(open)
   const nav = useRef<HTMLElement>(null), form = useRef<HTMLFormElement>(null)
   const tabs = useMediaQuery(narrowFrameQuery)
   const [visited, setVisited] = useState<ReadonlySet<PageId>>(() => new Set([open.page]))
@@ -226,7 +230,7 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
     </div>
     <div className="connection-footer">
       <span />
-      <button className="primary" type="submit" disabled={busy || blocked || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
+      <button className="primary" type="submit" disabled={busy || blocked || unavailable || open.phase === 'loadFailed' || open.phase === 'disconnected'}>OK</button>
       {executing ? <button type="button" onClick={() => dialogs.stop()}>Stop</button> : <button type="button" onClick={close}>{open.phase === 'disconnected' ? 'Close' : 'Cancel'}</button>}
     </div>
   </form></div>

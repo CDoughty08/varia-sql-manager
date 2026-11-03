@@ -44,8 +44,8 @@ internal static class ActionErrors
         // 5058: the option cannot be set in this database (SQL Server's own). New Login (probed by D2): 15099 MUST_CHANGE without
         // CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a SQL login, 15407 not DOMAIN\name,
         // 37525 Microsoft Entra not set up on the server. 15405, 15021 (a SQL login's name with a backslash, D4 P3): changes to
-        // logins SQL Server refuses outright.
-        ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525, 15405, 15021],
+        // logins SQL Server refuses outright. 15128: CHECK_POLICY = OFF while MUST_CHANGE is set (Unlock, D4d).
+        ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525, 15405, 15021, 15128],
         // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough.
         ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118],
         ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],

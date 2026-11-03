@@ -6,8 +6,8 @@ import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
 import { actionDescribeIds, actionDescribeSpecs, actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isCreateAction, objectActionSpecs, type ActionErrorCode, type ObjectAction } from './catalog.ts'
 import {
-  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMessages, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, windowsLoginName, type LoginDatabaseRoles, type LoginFacts, type LoginMappings, type LoginSecrets, type LoginStatusChoice,
-  type NewLoginGeneral, type NewLoginModel, type UserMappingChoice
+  isSystemLoginName, loginDatabaseRolesDescribe, loginLimits, loginMessages, newLoginAuths, newLoginStatements, publicRole, tooManyStatementsMessage, unlockModes, windowsLoginName, type LoginDatabaseRoles, type LoginFacts,
+  type LoginLockFacts, type LoginMappings, type LoginSecrets, type LoginStatusChoice, type NewLoginGeneral, type NewLoginModel, type UnlockMode, type UserMappingChoice
 } from './logins.ts'
 import { wellFormed } from '../ssis/schema.ts'
 import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
@@ -67,8 +67,13 @@ export interface CreateLoginRequest {
 export interface LoginIdentity { readonly sid: string; readonly created: string }
 /** A login's Disable or Enable (D4b): ALTER LOGIN … DISABLE or ENABLE in master, of the login its facts were read from. */
 export interface LoginStateRequest { readonly action: 'disable' | 'enable'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly loginIdentity?: LoginIdentity }
+/**
+ * Unlock Login (D4d): turns the password policy off and on again in one transaction, which unlocks the login and keeps its
+ * password. No password crosses for it; the identity is the login Unlock…'s describe read.
+ */
+export interface UnlockRequest { readonly action: 'unlock'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly mode: UnlockMode; readonly loginIdentity?: LoginIdentity }
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateLoginRequest | LoginStateRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateLoginRequest | LoginStateRequest | UnlockRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -177,8 +182,10 @@ export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
   readonly newLogin?: NewLoginModel
   readonly loginDatabaseRoles?: LoginDatabaseRoles
-  /** loginFacts: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
+  /** loginFacts and unlockLogin: what the login preflight read, which the renderer checks against logins.ts' rules before it asks or runs. */
   readonly login?: LoginFacts
+  /** unlockLogin: the login's lock-out state (ActionSql.LoginLock). */
+  readonly lock?: LoginLockFacts
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -188,7 +195,8 @@ export interface ActionScriptResult {
   readonly warnings: readonly string[]
   readonly error?: ActionError
 }
-export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled'] as const
+/** A step's status. 'rolledBack': it completed in a transaction that a later failure or Stop rolled back (runner v2's transaction mode). */
+export const actionStepStatuses = ['done', 'failed', 'skipped', 'cancelled', 'rolledBack'] as const
 export type ActionStepStatus = typeof actionStepStatuses[number]
 /**
  * One step of an action's reply. `title` says what it does (constant text); `message` is SQL Server's text for a failed
@@ -227,7 +235,7 @@ const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA']
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
 /** A server ref: what a create action on a server object (a login) names as its target. */
 const isServer = (ref: ObjectRef) => ref.kind === 'server' && Object.keys(ref).length === 1
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', disable: 'disabled', enable: 'enabled', unlock: 'unlocked' }
 const systemLogin = (ref: ObjectRef) => ref.kind === 'login' && isSystemLoginName(ref.name ?? '')
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
@@ -289,6 +297,7 @@ const deleteSchema = z.object({
   dropMappedUsers: z.boolean().optional(), loginIdentity: loginIdentitySchema.optional()
 }).strict()
 const loginStateSchema = z.object({ action: z.enum(['disable', 'enable']), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, loginIdentity: loginIdentitySchema.optional() }).strict()
+const unlockSchema = z.object({ action: z.literal('unlock'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, mode: z.enum(unlockModes), loginIdentity: loginIdentitySchema.optional() }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
 /** A password: at most loginLimits.password UTF-16 code units (as C# counts them), no NUL, well formed. A quote is fine
  *  (SQL Server's builder doubles it); blank is allowed where the server's policy decides (newLoginProblem). */
@@ -335,7 +344,8 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
   propertiesSchema,
   createTableSchema,
   createLoginSchema,
-  loginStateSchema
+  loginStateSchema,
+  unlockSchema
 ]).superRefine((request, context) => {
   // A new table or login is not an object row's action: its target is the database (SQL Server's own included) or the server.
   if (request.action !== 'createTable' && !isCreateAction(request.action)) targetIssues(context, request.target, request.action as ObjectAction)

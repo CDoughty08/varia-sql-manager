@@ -1,4 +1,4 @@
-// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties and a login's Disable and Enable, which kinds and subtypes offer each, the object
+// Object Explorer actions: Select Top 1000 Rows, Rename, Delete, Properties and a login's Disable, Enable and Unlock, which kinds and subtypes offer each, the object
 // dialogs and their pages, error codes and limits. It is the only declaration of what an action may touch: menus,
 // context keys, the palette and docs/object-actions.md read it, and the backend embeds actionsCatalogJson() as
 // Actions/actions-catalog.json (a vitest file snapshot keeps that copy in sync), so a stale tree cannot ask the backend
@@ -17,7 +17,8 @@ export const objectActions = [
   'delete',
   'properties',
   'disable',
-  'enable'
+  'enable',
+  'unlock'
 ] as const
 export type ObjectAction = typeof objectActions[number]
 /** `query` opens and runs a query, `inline` runs on the tree row as a status-bar job (Rename's box, a login's Disable and
@@ -45,7 +46,8 @@ export interface CreateActionSpec {
 export const dialogIds = [
   'deleteObject',
   'databaseProperties',
-  'newLogin'
+  'newLogin',
+  'unlockLogin'
 ] as const
 export type DialogId = typeof dialogIds[number]
 /** Describes that read an object's facts without a dialog: the login actions' preflight (D4b). */
@@ -91,7 +93,9 @@ const actionSpecData = {
   // A login's state (D4b): SSMS 22's menu words and access key are recalled, not verified. B is free in a login's menu, and
   // the two never show together (a status overlay swaps them).
   disable: { title: 'Disable Login', menuTitle: 'Disable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.disable', engines: onServers },
-  enable: { title: 'Enable Login', menuTitle: 'Enable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.enable', engines: onServers }
+  enable: { title: 'Enable Login', menuTitle: 'Enable', mnemonic: 'b', group: '6_state', order: 1, class: 'inline', command: 'explorer.enable', engines: onServers },
+  // Varia's own verb (D4d): SSMS unlocks only on Login Properties › Status, with a new password. U is free in a login's menu.
+  unlock: { title: 'Unlock Login…', menuTitle: 'Unlock…', mnemonic: 'u', group: '6_state', order: 2, class: 'dialog', dialog: 'unlockLogin', command: 'explorer.unlock', engines: onServers }
 } as const satisfies { readonly [A in ObjectAction]: ObjectActionSpec }
 /** The kind a describe id reads, and the action whose target rules it follows (the backend's Target, and zod's). */
 export const actionDescribeSpecs: { readonly [D in ActionDescribeId]: { readonly action: ObjectAction; readonly kind: NodeKind } } = {
@@ -119,9 +123,10 @@ const all: ActionRow = { selectTop: 'enabled', rename: 'enabled', delete: 'enabl
 const selectOnly: ActionRow = { selectTop: 'enabled', rename: 'disabled', delete: 'disabled' }
 const editable: ActionRow = { rename: 'enabled', delete: 'enabled' }
 const locked: ActionRow = { rename: 'disabled', delete: 'disabled' }
-/** The login verbs whose rows this catalogue declares from logins.ts' rules; Unlock (D4d) and Properties (D2c) join as they
- *  arrive. Enable is not here: only a disabled login's overlay offers it. */
-export const loginRowVerbs = ['disable', 'rename', 'delete'] as const satisfies readonly ObjectAction[]
+/** The login verbs whose rows this catalogue declares from logins.ts' rules; Properties (D2c) joins as it arrives. Enable is not
+ *  here: only a disabled login's overlay offers it. Unlock is offered whatever the login's state: only LOGINPROPERTY knows whether
+ *  it is locked out, so its dialog says. */
+export const loginRowVerbs = ['disable', 'unlock', 'rename', 'delete'] as const satisfies readonly ObjectAction[]
 const ruleState = (rule: LoginRule): 'enabled' | 'disabled' | undefined => rule === 'allowed' ? 'enabled' : rule === 'greyed' ? 'disabled' : undefined
 const loginRow = (subtype: LoginSubtype): ActionRow => Object.fromEntries(loginRowVerbs.flatMap(verb => { const state = ruleState(loginRules[subtype][verb]); return state ? [[verb, state]] : [] }))
 /** A disabled login offers Enable, as its subtype's rule says, in place of Disable. A login whose CONNECT SQL is denied keeps
@@ -305,7 +310,8 @@ const commandData: { readonly [A in ObjectAction]: Omit<ActionCommandEntry, 'tit
   },
   // SSMS has no keys for either.
   disable: { icon: 'circle-slash', keywords: ['login', 'account', 'block', 'deactivate'], documentTask: false, unavailableHint: 'Select an enabled login in Object Explorer.' },
-  enable: { icon: 'pass', keywords: ['login', 'account', 'allow', 'activate'], documentTask: false, unavailableHint: 'Select a disabled login in Object Explorer.' }
+  enable: { icon: 'pass', keywords: ['login', 'account', 'allow', 'activate'], documentTask: false, unavailableHint: 'Select a disabled login in Object Explorer.' },
+  unlock: { icon: 'unlock', keywords: ['login', 'account', 'locked', 'lockout', 'password', 'policy'], documentTask: false, unavailableHint: 'Select a SQL Server login in Object Explorer.' }
 }
 /**
  * The action commands, keyed by their command ids (explorer.selectTopRows keeps PR4's id). A long-running action (a
@@ -423,7 +429,9 @@ const dialogSpecData = {
   newLogin: {
     title: 'Login - New', surface: 'modal', titleFormat: 'plain', size: 'large', action: 'createLogin', steps: true,
     pages: [page('general', 'General', { keepMounted: true }), page('serverRoles', 'Server Roles'), page('userMapping', 'User Mapping', { keepMounted: true }), page('status', 'Status')]
-  }
+  },
+  // Varia's own dialog (D4d); its run lists the transaction's steps when it fails or is stopped.
+  unlockLogin: { title: 'Unlock Login', surface: 'modal', titleFormat: 'withName', size: 'compact', action: 'unlock', pages: [page('general', 'General')], steps: true }
 } as const satisfies { readonly [D in DialogId]: DialogSpec }
 export const dialogSpecs: { readonly [D in DialogId]: DialogSpec } = dialogSpecData
 /** The dialogs that open over the workbench (ObjectDialogService), derived from their surface; the others are documents. */

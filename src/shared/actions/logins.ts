@@ -116,7 +116,16 @@ export const loginMessages = {
   // SQL Server accepts such a name, and Varia would then take the login for one of SQL Server's own and refuse to change it.
   systemName: "Names that start and end with ## are reserved for SQL Server's own logins.",
   // A login's Delete drops its users before the login; a session it cannot see would then fail the login's DROP (15434) after them.
-  sessionsUncounted: "This connection cannot count the login's sessions (that needs VIEW SERVER STATE), and one would make its DROP fail after its users were deleted. Delete the login without its users."
+  sessionsUncounted: "This connection cannot count the login's sessions (that needs VIEW SERVER STATE), and one would make its DROP fail after its users were deleted. Delete the login without its users.",
+  // Unlock… (D4d). Only a SQL Server login that enforces the password policy is ever locked out; turning the policy on for one
+  // that does not would change it rather than unlock it.
+  unlockNoPolicy: 'The login does not enforce the password policy, so it is never locked out.',
+  // SQL Server refuses CHECK_POLICY = OFF while MUST_CHANGE is set (15128), so only a new password unlocks such a login.
+  unlockMustChange: 'The login must change its password at its next sign-in, so its password policy cannot be turned off. Unlock it by setting a new password.',
+  notLocked: 'The login is not locked out.',
+  // Unlock's plan turns back on the policy and expiration its preflight read; it reads them again in its transaction and stops
+  // there when another session changed them meanwhile, rather than undo that change.
+  unlockChanged: "The login's password policy changed while Unlock ran, so nothing was changed. Try again."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -246,6 +255,33 @@ export const loginDeleteText = {
    *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
   connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
 } as const
+/**
+ * A login's lock-out state, which only LOGINPROPERTY knows (ActionSql.LoginLock, the one statement allowed to call it, D4 §7):
+ * read by Unlock…'s describe and again by its preflight. `lockoutTime` (the server's clock, yyyy-MM-ddTHH:mm:ss.fff) only
+ * while locked; `daysUntilExpiration` only while the password expires.
+ */
+export interface LoginLockFacts {
+  readonly locked: boolean
+  readonly badPasswords?: number
+  readonly lockoutTime?: string
+  readonly mustChange: boolean
+  readonly expired: boolean
+  readonly daysUntilExpiration?: number
+}
+/** How Unlock… unlocks (D4d, owner decision 9): keeping the current password, by turning the password policy off and on
+ *  again in one transaction (which clears the password history). D2c's Login Properties adds setting a new password, SSMS's way,
+ *  as the dialog's first choice; that hand-off sends no request of its own. */
+export const unlockModes = ['keepPassword'] as const
+/** The only LOGINPROPERTY properties Varia reads (ActionSql.LoginLock, critic A15): never PasswordHash or
+ *  PasswordHashAlgorithm. The backend checks its statement against this list (LoginRules.LockProperties). */
+export const loginLockProperties = ['IsLocked', 'BadPasswordCount', 'LockoutTime', 'IsMustChange', 'IsExpired', 'DaysUntilExpiration'] as const
+export type UnlockMode = typeof unlockModes[number]
+/** Why Unlock… cannot keep the password now, or undefined: the login's rules (loginRefusal), then a login that is not a SQL
+ *  Server login enforcing the password policy, one that must change its password, and one that is not locked out. C#:
+ *  LoginRules.UnlockRefusal. */
+export function unlockRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadmin' | 'canAlter' | 'canControlServer' | 'type' | 'policyChecked'>, lock: Pick<LoginLockFacts, 'locked' | 'mustChange'>): LoginMessageId | undefined {
+  return loginRefusal(facts, 'unlock') ?? (facts.type !== 'S' || facts.policyChecked !== true ? 'unlockNoPolicy' : lock.mustChange ? 'unlockMustChange' : !lock.locked ? 'notLocked' : undefined)
+}
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */
 export const noBackslashSubtypes: readonly LoginSubtype[] = ['sa', 'sql']
@@ -261,6 +297,7 @@ export function loginsCatalog() {
   return {
     detail: loginDetailWords,
     limits: loginLimits,
+    lockProperties: loginLockProperties,
     messages: loginMessages,
     noBackslash: noBackslashSubtypes,
     ownRefuses: ownLoginRefuses,

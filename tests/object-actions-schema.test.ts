@@ -87,6 +87,24 @@ describe('object action request schemas', () => {
     expect([0, 1_000_000].map(sessions => actionExecuteResultSchema.safeParse({ ...reply, sessions }).success)).toEqual([true, true])
     expect([-1, 1_000_001, 1.5].map(sessions => actionExecuteResultSchema.safeParse({ ...reply, sessions }).success)).toEqual([false, false, false])
   })
+  it('takes Unlock with keepPassword and the login\'s identity, never a password, and reads its lock-out state for a login only', () => {
+    const login = { kind: 'login', name: 'Locked' } as const
+    const unlock = (changes: Record<string, unknown> = {}) => ({ action: 'unlock', ...ids(), target: login, mode: 'keepPassword', ...changes })
+    const identity = { sid: '01', created: '2026-01-02T03:04:05.000' }
+    const request = unlock({ loginIdentity: identity })
+    expect(actionRequestSchema.parse(request)).toEqual(request)
+    expect([valid(unlock()), valid(unlock({ target: { kind: 'login', name: 'sa' } }))]).toEqual([true, true])
+    const system = { kind: 'login', name: '##MS_PolicyTsqlExecutionLogin##' } as const
+    for (const [name, value] of [
+      ['no mode', unlock({ mode: undefined })], ['a new password mode', unlock({ mode: 'newPassword' })], ['a password', unlock({ secrets: { password: 'x' } })],
+      ['a password member', unlock({ password: 'x' })], ['a new name', unlock({ newName: 'x' })], ['delete flags', unlock({ closeConnections: false, deleteHistory: false })],
+      ['a table', unlock({ target: table })], ['SQL Server\'s own login', unlock({ target: system })], ['a bad identity', unlock({ loginIdentity: { sid: '0a', created: identity.created } })],
+      ['a mode on a disable', { action: 'disable', ...ids(), target: login, mode: 'keepPassword' }], ['the backend\'s spelling', { ...unlock({ mode: undefined }), unlockMode: 'keepPassword' }]
+    ] as const) expect(valid(value), name).toBe(false)
+    const describe = { ...ids(), dialog: 'unlockLogin', target: login }
+    expect(actionDescribeSchema.parse(describe)).toEqual(describe)
+    for (const target of [table, database, system]) expect(actionDescribeSchema.safeParse({ ...describe, target }).success, target.kind).toBe(false)
+  })
   it('cancels 1 to 16 distinct request ids', () => {
     const id = randomUUID()
     expect(actionCancelSchema.parse({ requestIds: [id] })).toEqual({ requestIds: [id] })

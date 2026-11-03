@@ -193,11 +193,13 @@ internal sealed record ScriptResult(string? Text, string Database, List<string> 
 internal sealed record ActionDescribeArgs(string ConnectionId, string RequestId, string Dialog, ObjectRefDto Target);
 /// <summary>actions.script and actions.execute: rename takes NewName, delete the two database options, properties
 /// CloseConnections and Changes, createTable (Target the database) Design, createLogin (Target the server) Login, ServerRoles,
-/// Mappings, Status and, on execute only, Secrets; a login's disable and enable take only LoginIdentity, and a login's delete
-/// LoginIdentity and DropMappedUsers (D4c: also drop the database users mapped to it). Validate refuses the rest.</summary>
+/// Mappings, Status and, on execute only, Secrets; a login's disable and enable take only LoginIdentity, its unlock Mode
+/// (keepPassword; the request's `mode`) and LoginIdentity, and its delete LoginIdentity and DropMappedUsers (D4c: also drop the
+/// database users mapped to it). Validate refuses the rest.</summary>
 internal sealed record ActionArgs(string Action, string ConnectionId, string RequestId, ObjectRefDto Target, string? NewName = null, bool? CloseConnections = null, bool? DeleteHistory = null,
     DatabaseChangesDto? Changes = null, TableDesignDto? Design = null, DatabaseIdentityDto? Identity = null, LoginSecretsDto? Secrets = null, NewLoginDto? Login = null,
-    List<string>? ServerRoles = null, LoginStatusDto? Status = null, List<UserMappingDto>? Mappings = null, LoginIdentityDto? LoginIdentity = null, bool? DropMappedUsers = null);
+    List<string>? ServerRoles = null, LoginStatusDto? Status = null, List<UserMappingDto>? Mappings = null, LoginIdentityDto? LoginIdentity = null, bool? DropMappedUsers = null,
+    string? Mode = null);
 /// <summary>New Login's General page (src/shared/actions/logins.ts NewLoginGeneral): Auth windows or sql; the password policy
 /// options exactly for sql, in SQL Server's chain (MustChange needs CheckExpiration, which needs CheckPolicy).</summary>
 internal sealed record NewLoginDto(string Auth, string Name, string DefaultDatabase, string? DefaultLanguage = null, bool? CheckPolicy = null, bool? CheckExpiration = null, bool? MustChange = null);
@@ -207,7 +209,7 @@ internal sealed record UserMappingDto(string Database, string User, string? Defa
 /// <summary>New Login's Status page: Connect grant or deny; Enabled.</summary>
 internal sealed record LoginStatusDto(string Connect, bool Enabled);
 /// <summary>Which login the loginFacts describe read (its SID as hexadecimal, at most loginLimits.sidHex characters, and
-/// create_date as the describe writes it): Disable, Enable and Delete refuse a principal that has taken the name since.</summary>
+/// create_date as the describe writes it): Disable, Enable, Unlock and Delete refuse a principal that has taken the name since.</summary>
 internal sealed record LoginIdentityDto(string Sid, string Created);
 /// <summary>Passwords an action needs (New Login and Login Properties, later): only actions.execute carries them, which is
 /// sensitive as a whole (its frame is zeroed once read); Validate refuses them on actions.script and on every other action.
@@ -241,6 +243,9 @@ internal sealed record MappedUserDto(string Database, string User, int OwnedSche
 /// <summary>The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all (Mapped), and how many databases it
 /// read (Checked) and did not (NotChecked: offline, restoring, not accessible, failed, or past the scan's bound or budget).</summary>
 internal sealed record LoginMappingsDto(List<MappedUserDto> Users, int Mapped, int Checked, int NotChecked);
+/// <summary>A login's lock-out state (src/shared/actions/logins.ts LoginLockFacts), from ActionSql.LoginLock: LockoutTime (the
+/// server's clock) only while locked, DaysUntilExpiration only while the password expires.</summary>
+internal sealed record LoginLockFactsDto(bool Locked, int? BadPasswords, string? LockoutTime, bool MustChange, bool Expired, int? DaysUntilExpiration);
 internal sealed record ActionWarningDto(string Text, bool Blocking);
 /// <summary>A session in a database that its DROP waits for and Close existing connections ends (D3 §8): never the backend's own
 /// pooled sessions. Program and host are clipped to the catalogue's blockerChars.</summary>
@@ -266,7 +271,7 @@ internal sealed record DatabasePropertiesDto(DatabaseGeneralDto General, Diction
     List<string> Collations, List<string> Logins, List<DatabaseFileDto> Files, bool FilesTruncated, List<DatabaseFilegroupDto> Filegroups, bool FilegroupsTruncated,
     DatabaseServerFactsDto Server, int? Sessions = null, string? ReadOnlyReason = null);
 internal sealed record ActionDescribeResult(DeleteTargetDto? DeleteTarget, long ElapsedMs, ActionError? Error = null, DatabasePropertiesDto? DatabaseProperties = null,
-    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null);
+    TableDesignerModelDto? TableDesigner = null, NewLoginModelDto? NewLogin = null, LoginDatabaseRolesDto? LoginDatabaseRoles = null, LoginFactsDto? Login = null, LoginLockFactsDto? Lock = null);
 /// <summary>User Mapping's read of one database (src/shared/actions/logins.ts LoginDatabaseRoles): its roles and schemas by name, each
 /// bounded by loginLimits, and whether guest has CONNECT there.</summary>
 internal sealed record LoginDatabaseRolesDto(List<string> Roles, bool RolesTruncated, bool Guest, List<string> Schemas, bool SchemasTruncated);

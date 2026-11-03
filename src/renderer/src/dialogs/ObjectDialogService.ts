@@ -84,6 +84,8 @@ export interface ObjectDialogServiceOptions {
   /** The names of the open query tabs among these ids (query session ids), in tab order: Delete Object names those its describe found
    *  holding an open transaction in the database (A7), whatever database each tab is in. */
   readonly tabNames?: (ids: readonly string[]) => readonly string[]
+  /** A success notice (Unlock Login's), as the object actions' toast; none without it. */
+  readonly notify?: (message: string) => void
 }
 
 /** A password field of an object dialog. Their values live only in the service's secret slot, never in its snapshot. */
@@ -125,6 +127,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
   }
 
   get current(): OpenObjectDialog | undefined { return this.getSnapshot().open }
+  /** Why OK cannot run for the open dialog's model (its definition's `unavailable`), or undefined. */
+  unavailable(open: OpenObjectDialog | undefined = this.current): string | undefined {
+    return open?.model ? definitionOf(open.dialog).unavailable?.(open.model, open.draft) : undefined
+  }
 
   /** Opens `dialog` for an Object Explorer node and describes it; refused while another dialog is open. */
   open(dialog: ModalDialogId, node: ExplorerMenuNode): void {
@@ -239,6 +245,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (!open || open.phase === 'executing' || open.phase === 'scripting' || open.phase === 'loading' || open.phase === 'confirming') return
     if (open.phase === 'disconnected' || open.phase === 'loadFailed' || !open.model || !open.draft) { this.close(); return }
     const definition = definitionOf(open.dialog)
+    // The frame greys OK and the page says why; Enter must not run it either.
+    if (definition.unavailable?.(open.model, open.draft)) return
     let built = definition.request(open.target, open.model, open.draft, open.secretState ?? emptySecrets)
     if (!built) { this.close(); return }
     if ('problem' in built) { this.showProblem(open, built.problem); return }
@@ -276,7 +284,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       this.secrets.clear()
       this.cancelLookup()
       this.publish({})
-      try { definition.afterSuccess(this.effects(open), sent) } catch (failure) { onUnexpectedError(failure) }
+      try { definition.afterSuccess(this.effects(open), sent, { target: open.target, label: open.label }) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
     }
@@ -416,7 +424,10 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     if (folder !== undefined) this.options.explorer.reconcile(folder)
   }
   private effects(open: OpenObjectDialog): DialogEffects {
-    return { refreshListing: () => this.refreshListing(open), reveal: (folder, object) => this.reveal(open, folder, object), reload: (owner, folder) => this.reloadFolder(open, owner, folder) }
+    return {
+      refreshListing: () => this.refreshListing(open), reveal: (folder, object) => this.reveal(open, folder, object), reload: (owner, folder) => this.reloadFolder(open, owner, folder),
+      notify: message => this.options.notify?.(message)
+    }
   }
   /** Reloads the server's folder a new object is listed in and selects it there; a folder never listed loads fresh when opened. */
   private reveal(open: OpenObjectDialog, folder: FolderId, object: ObjectRef): void {

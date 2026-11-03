@@ -117,7 +117,8 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // _lt is the login actions' taken name, _lr]' -- the hostile name they rename the scratch login to and back, and ##…_ls## the
     // login in SQL Server's own name form that they prove is refused under other spellings, and _lsx the name a refused rename
     // of it would have given it (D4b); _ld]' -- the login a Delete drops with its users, _ld2 the one whose Delete leaves its user
-    // orphaned, and _ld3 the login that deletes without VIEW SERVER STATE (D4c).
+    // orphaned, and _ld3 the login that deletes without VIEW SERVER STATE (D4c); _lk, _lp and _lm are Unlock's logins with the
+    // password policy (D4d).
     [GeneratedRegex(@"^(VariaScratch_\d{14}_[0-9a-f]{8}(_l[a-z0-9]{1,8}|_lr\]' --|_ld\]' --)?|##VariaScratch_\d{14}_[0-9a-f]{8}_ls##)$")]
     private static partial Regex LoginPattern();
     // New Login's Extended Events session; its name's UTC timestamp dates it, as sys.server_event_sessions has no creation date.

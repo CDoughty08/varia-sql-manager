@@ -76,6 +76,7 @@ describe('action steps and secrets', () => {
   it('checks actions.execute\'s answer in main with the bounds C# clips to (ActionSteps.Bound)', () => {
     const ok = { status: 'failed', title: 'Rename', message: 'm', detail: 'd', compensates: true, progress: 100 }
     expect(actionStepSchema.safeParse(ok).success).toBe(true)
+    expect(actionStepSchema.safeParse({ status: 'rolledBack', title: 'Turn off the password policy' }).success).toBe(true)
     for (const bad of [{ status: 'done' }, { ...ok, title: 't'.repeat(loginLimits.stepTitle + 1) }, { ...ok, detail: 'd'.repeat(loginLimits.stepDetail + 1) },
       { ...ok, message: 'm'.repeat(actionLimits.messageChars + 1) }, { ...ok, progress: 101 }, { ...ok, progress: 1.5 }, { ...ok, status: 'undone' }, { ...ok, extra: 1 }]) {
       expect(actionStepSchema.safeParse(bad).success, JSON.stringify(bad).slice(0, 80)).toBe(false)
@@ -108,7 +109,8 @@ describe('password hashes', () => {
   it('appear in no Varia source but the lint lists that refuse them and comments (critic A15)', () => {
     const root = join(__dirname, '..')
     const sources = [...files(join(root, 'backend', 'Varia.Backend'), /\.cs$/), ...files(join(root, 'src'), /\.tsx?$/)]
-    const offending: string[] = []
+    const offending: string[] = [], lockLines: number[] = []
+    const lockCall = /LOGINPROPERTY\(@name, N'(IsLocked|BadPasswordCount|LockoutTime|IsMustChange|IsExpired|DaysUntilExpiration)'\)/g
     for (const file of sources) {
       const name = relative(root, file).replaceAll('\\', '/')
       readFileSync(file, 'utf8').split('\n').forEach((line, index) => {
@@ -116,16 +118,25 @@ describe('password hashes', () => {
         // CatalogSql.SecretUses, the lint every other lint calls.
         const lint = name === 'backend/Varia.Backend/Explorer/CatalogSql.cs'
           && /^\s*(if \(LoginFunction\(\)\.IsMatch|foreach \(var token in new\[\] \{ "password_hash", "PasswordHash" \}|\[GeneratedRegex\(@"\\bLOGINPROPERTY|if \(text\.Contains\("sql_logins")/.test(line)
+        // ActionSql.LoginLock (D4d), the one statement that may call LOGINPROPERTY: only of @name, only for the lock-out
+        // properties, and its own lint's pattern for such a call.
+        const loginLock = name === 'backend/Varia.Backend/Actions/ActionSql.cs' && !comment && (line.trim() === String.raw`[GeneratedRegex(@"\bLOGINPROPERTY\(@name, N'(\w+)'\)")]`
+          || /LOGINPROPERTY/.test(line) && line.replace(lockCall, '').search(/LOGINPROPERTY|password_?hash/i) < 0)
         // A star over sys.sql_logins reads password_hash without naming it (COUNT(*) aside).
         if (/sql_logins/i.test(line) && /(?<!\(\s*)\*/.test(line) && !comment && !lint) offending.push(`${name}:${index + 1} (*)`)
         if (!/password_?hash|LOGINPROPERTY/i.test(line)) return
         const list = line.includes('"LOGINPROPERTY(", "password_hash", "PasswordHash"')
         // Generated docs may name LOGINPROPERTY to say why it is not used; never a password hash.
         const docs = (name === 'src/shared/actions/docs.ts' || name === 'src/shared/explorer/docs.ts') && !/password_?hash/i.test(line)
+        if (loginLock) { lockLines.push(index + 1); return }
         if (!comment && !list && !docs && !lint) offending.push(`${name}:${index + 1}`)
       })
     }
     expect(offending).toEqual([])
+    // LoginLock's three lines and its lint's pattern, nothing more.
+    expect(lockLines).toHaveLength(4)
+    const actionSql = readFileSync(join(root, 'backend', 'Varia.Backend', 'Actions', 'ActionSql.cs'), 'utf8')
+    expect(actionSql).toContain('LoginLockProperties = ["IsLocked", "BadPasswordCount", "LockoutTime", "IsMustChange", "IsExpired", "DaysUntilExpiration"];')
     const catalogSql = readFileSync(join(root, 'backend', 'Varia.Backend', 'Explorer', 'CatalogSql.cs'), 'utf8')
     expect(catalogSql).toContain('"LOGINPROPERTY(", "password_hash", "PasswordHash"]')
     expect(catalogSql).toContain('[GeneratedRegex(@"\\bLOGINPROPERTY\\s*\\(", RegexOptions.IgnoreCase)]')

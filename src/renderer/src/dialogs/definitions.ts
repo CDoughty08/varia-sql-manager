@@ -6,7 +6,7 @@
 // src/shared/actions/catalog.ts, a describe in the backend, a definition here, and its pages or sections. No React here,
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
-import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept, type NewLoginModel } from '../../../shared/actions/logins.ts'
+import { loginDeleteText, loginMessages, loginRefusal, mappedUserKept, unlockRefusal, type LoginFacts, type LoginLockFacts, type NewLoginModel, type UnlockMode } from '../../../shared/actions/logins.ts'
 import {
   dropDatabaseStepTitle, dropUserStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type CreateLoginRequest, type DatabasePropertiesModel, type DeleteTarget
 } from '../../../shared/actions/schema.ts'
@@ -29,7 +29,11 @@ export interface DialogEffects {
   reveal(folder: FolderId, object: ObjectRef): void
   /** Reloads `owner`'s `folder` (a database's Users), when that folder is in the tree; one never listed loads fresh when opened. */
   reload(owner: ObjectRef, folder: FolderId): void
+  /** A toast with the object actions' notice key, which the next one replaces. */
+  notify(message: string): void
 }
+/** The dialog OK succeeded in. */
+export interface DialogSubject { readonly target: ObjectRef; readonly label: string }
 /** A question main asks before OK runs: SSMS's Open Connections prompt. */
 export type DialogConfirmation = 'openConnections'
 export interface ObjectDialogDefinition<Model, Draft> {
@@ -59,7 +63,10 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly withConfirmation?: (request: BuiltRequest, confirmation: DialogConfirmation) => BuiltRequest
   /** The model after OK failed, when the failure shows part of it is stale (the same model otherwise). */
   readonly afterFailure?: (model: Model, failure: ActionError) => Model
-  readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest) => void
+  /** Why OK cannot run for this model and draft, shown on the page; OK is greyed while it is set, and Script stays available. */
+  readonly unavailable?: (model: Model, draft?: Draft) => string | undefined
+  /** After a success: `request` is what OK sent (never with a secret), `subject` the dialog's target and its label. */
+  readonly afterSuccess: (effects: DialogEffects, request: BuiltRequest, subject: DialogSubject) => void
   /** After a failure or Stop that left some steps done; reloading the object's listing when absent. */
   readonly afterPartial?: (effects: DialogEffects, request: BuiltRequest) => void
   /** Why OK is greyed (the protected-principal rules' refusal of a login), shown on the page; Script still works. */
@@ -180,15 +187,35 @@ export const newLoginDefinition: ObjectDialogDefinition<NewLoginModel, NewLoginD
   afterSuccess: revealLogin,
   afterPartial: revealLogin
 }
-
-export interface DialogModels { readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly newLogin: NewLoginModel }
-export interface DialogDrafts { readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly newLogin: NewLoginDraft }
+/** Unlock Login (D4d): the login preflight's facts and its lock-out state, as the unlockLogin describe read them. */
+export interface UnlockModel { readonly login: LoginFacts; readonly lock: LoginLockFacts }
+/** How to unlock: none until the user chooses (owner decision 9: keeping the password, which clears its history, is never the
+ *  default). Keeping it is the only way until Login Properties (D2c) adds Set a new password, which is then the default. */
+export interface UnlockDraft { readonly mode?: UnlockMode }
+export const unlockChooseMode = 'Choose how to unlock the login.'
+export const unlockSuccessNotice = (label: string) => `Unlocked the login ${label}. Its password history was cleared.`
+export const unlockLoginDefinition: ObjectDialogDefinition<UnlockModel, UnlockDraft> = {
+  dialog: 'unlockLogin',
+  modelOf: result => result.login && result.lock ? { login: result.login, lock: result.lock } : undefined,
+  initialDraft: () => ({}),
+  // The identity binds OK to the login this dialog read: one renamed, dropped or replaced since is refused, not unlocked.
+  // OK waits for a choice (unavailable); Script, which runs nothing, shows the only way there is before one.
+  request: (target, model, draft) => ({ action: 'unlock', target, mode: draft.mode ?? 'keepPassword', ...(model.login.sid && model.login.created ? { loginIdentity: { sid: model.login.sid, created: model.login.created } } : {}) }),
+  unavailable: (model, draft) => { const id = unlockRefusal(model.login, model.lock); return id ? loginMessages[id] : draft?.mode ? undefined : unlockChooseMode },
+  // Unlocked meanwhile (by its owner's new password, or another admin): the page says so and OK greys, as on a fresh open.
+  afterFailure: (model, failure) => failure.code === 'NOT_SUPPORTED' && failure.message === loginMessages.notLocked ? { ...model, lock: { ...model.lock, locked: false } } : model,
+  // The Logins folder's row and its status come from the reconciled listing.
+  afterSuccess: (effects, _request, subject) => { effects.refreshListing(); effects.notify(unlockSuccessNotice(subject.label)) }
+}
+export interface DialogModels { readonly deleteObject: DeleteTarget; readonly databaseProperties: DatabasePropertiesModel; readonly newLogin: NewLoginModel; readonly unlockLogin: UnlockModel }
+export interface DialogDrafts { readonly deleteObject: DeleteDraft; readonly databaseProperties: DatabaseDraft; readonly newLogin: NewLoginDraft; readonly unlockLogin: UnlockDraft }
 export type DialogModel = DialogModels[DialogId]
 export type DialogDraft = DialogDrafts[DialogId]
 export const dialogDefinitions: { readonly [D in DialogId]: ObjectDialogDefinition<DialogModels[D], DialogDrafts[D]> } = {
   deleteObject: deleteObjectDefinition,
   databaseProperties: databasePropertiesDefinition,
-  newLogin: newLoginDefinition
+  newLogin: newLoginDefinition,
+  unlockLogin: unlockLoginDefinition
 }
 /** A dialog's definition over the open dialog's model and draft, which the service keeps paired with its dialog. */
 export const definitionOf = (dialog: DialogId) => dialogDefinitions[dialog] as unknown as ObjectDialogDefinition<DialogModel, DialogDraft>

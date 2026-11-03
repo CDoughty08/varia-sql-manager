@@ -212,10 +212,11 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const scriptingOptions = { getSnapshot: () => ({ options: scriptingOptionsFrom(settings.getSnapshot().values) }), subscribe: settings.subscribe }
   // A throttled frame (a hidden or background window) can come after a dialog opened; the dialog keeps focus then.
   const scripting = new ScriptingService({ api, documents, files, connections, options: scriptingOptions, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }) })
+
   const longRuns = new LongRunService({ api })
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, longRuns, focusEditor: () => nextFrame(() => { if (!modalOpen()) documents.focusActive() }),
-    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids), notify: message => notifications.notify({ severity: 'info', message, key: objectActionNoticeKey })
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({

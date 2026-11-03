@@ -10,9 +10,9 @@ export type StepState = 'pending' | 'running' | ActionStepStatus
  */
 export interface StepItem { readonly state: StepState; readonly text: string; readonly meta?: string; readonly progress?: number; readonly progressText?: string }
 
-export const stepIcons: Readonly<Record<StepState, IconId>> = { pending: 'circle-outline', running: 'loading', done: 'check', failed: 'error', cancelled: 'debug-stop', skipped: 'circle-slash' }
+export const stepIcons: Readonly<Record<StepState, IconId>> = { pending: 'circle-outline', running: 'loading', done: 'check', failed: 'error', cancelled: 'debug-stop', skipped: 'circle-slash', rolledBack: 'discard' }
 /** What a screen reader hears before a step that has a state of its own; a pending step is read as its text alone. */
-export const stepWords: Readonly<Record<StepState, string>> = { pending: '', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Stopped', skipped: 'Skipped' }
+export const stepWords: Readonly<Record<StepState, string>> = { pending: '', running: 'Running', done: 'Done', failed: 'Failed', cancelled: 'Stopped', skipped: 'Skipped', rolledBack: 'Rolled back' }
 export const clampPercent = (value: number) => Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0))
 
 /**

@@ -63,6 +63,9 @@ internal sealed class ActionServiceOptions
     public TimeSpan FreeWait { get; set; } = TimeSpan.FromSeconds(1);
     /// <summary>How long a login's mapped-user scan reads databases (null: loginLimits.scanMs); the live checks shorten it.</summary>
     internal TimeSpan? ScanBudget { get; set; }
+    /// <summary>Test seam: how long a describe or script waits behind another session's lock before it answers BLOCKED
+    /// (actionLimits.readLockTimeoutMs), so a live check of that answer stays short.</summary>
+    internal int ReadLockTimeoutMs { get; set; } = 10_000;
     /// <summary>Test seam: awaited before each main step with its title and the job's token.</summary>
     internal Func<string, CancellationToken, Task>? BeforeStep { get; set; }
     /// <summary>Test seam: awaited before each compensation or cleanup step that runs, with its title and the cleanup budget's token.</summary>
@@ -189,19 +192,20 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
-    /// with nothing but a target and the login's identity, the delete flags only for databases and the login's identity and
-    /// dropMappedUsers only for a login's Delete (whose execute needs the identity), Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an
-    /// execute of an action that takes them (critic A3).</summary>
+    /// with nothing but a target and the login's identity, its Unlock with those and the keepPassword mode, the delete flags only for
+    /// databases and the login's identity and dropMappedUsers only for a login's Delete (whose execute needs the identity), Database
+    /// Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an execute of an action that takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
         Ids(args.ConnectionId, args.RequestId);
         if (args.Secrets is not null && (script || !SecretActions.Contains(args.Action))) throw Invalid("this request takes no secrets.");
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles, mappings or status.");
-        // The login a confirmation or Delete Object was about: Disable, Enable and Delete read it first.
-        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "delete") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
+        // The login a confirmation or dialog was about: Disable, Enable, Unlock and Delete read it first.
+        if (args.LoginIdentity is { } read && (args.Action is not ("disable" or "enable" or "unlock" or "delete") || read.Sid is null || !LoginSid().IsMatch(read.Sid)
             || read.Created is null || !DatabaseAlter.IdentityCreated().IsMatch(read.Created))) throw Invalid("loginIdentity.");
         if (args.DropMappedUsers is not null && args.Action != "delete") throw Invalid("only a login's delete drops mapped users.");
+        if (args.Mode is not null && args.Action != "unlock") throw Invalid("only unlock takes a mode.");
         switch (args.Action)
         {
             case "rename":
@@ -232,6 +236,14 @@ internal sealed partial class ActionService : IDisposable
                 var login = Target(args.Target, args.Action);
                 if (login.Kind != "login") throw Invalid("target.");
                 return login;
+            case "unlock":
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null)
+                    throw Invalid("unlock takes only a target, its mode and the login's identity.");
+                // No password crosses for Unlock: keeping the current one is its only mode (setting a new one is Login Properties').
+                if (args.Mode != "keepPassword") throw Invalid("mode.");
+                var locked = Target(args.Target, "unlock");
+                if (locked.Kind != "login") throw Invalid("target.");
+                return locked;
             case "createTable":
                 if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null) throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
@@ -267,6 +279,7 @@ internal sealed partial class ActionService : IDisposable
                 "newLogin" => DescribeNewLoginJobAsync(connection, profile, band, job),
                 _ when args.Dialog == catalog.Logins.RolesDescribe => DescribeDatabaseRolesJobAsync(connection, target, job),
                 "loginFacts" => DescribeLoginJobAsync(connection, target, job),
+                "unlockLogin" => DescribeUnlockJobAsync(connection, target, job),
                 _ => DescribeJobAsync(connection, args.ConnectionId, profile.Explorer(explorer).ServerEngine, target, action, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionDescribeResult(null, watch.ElapsedMilliseconds, error));
@@ -283,6 +296,7 @@ internal sealed partial class ActionService : IDisposable
             {
                 "createTable" => ScriptDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ScriptPropertiesJobAsync(connection, args, target, band, job),
+                "unlock" => ScriptUnlockJobAsync(connection, args, target, band, job),
                 _ => ScriptJobAsync(connection, args, target, band, job)
             },
             error => new ActionScriptResult(null, database, [], error));
@@ -302,6 +316,7 @@ internal sealed partial class ActionService : IDisposable
                 "createTable" => ExecuteDesignerJobAsync(connection, args, target, band, job),
                 "properties" => ExecutePropertiesJobAsync(connection, args, target, band, job),
                 "createLogin" => ExecuteNewLoginJobAsync(connection, args, job),
+                "unlock" => ExecuteUnlockJobAsync(connection, args, target, band, job),
                 _ => ExecuteJobAsync(connection, args, target, band, job)
             }) with { ElapsedMs = watch.ElapsedMilliseconds },
             error => new ActionExecuteResult([], [], watch.ElapsedMilliseconds, error));
@@ -369,7 +384,7 @@ internal sealed partial class ActionService : IDisposable
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.Create(catalog, "CONNECTION_LOST", "Could not connect to the server: " + error.Message)); }
                     try
                     {
-                        await RunAsync(connection, read ? ActionSql.ReadPrologue : ActionSql.ExecutePrologue, token);
+                        await RunAsync(connection, read ? ActionSql.ReadPrologueOf(Options.ReadLockTimeoutMs) : ActionSql.ExecutePrologue, token);
                         return await work(connection, profile, band, token);
                     }
                     catch (SqlException error) when (!token.IsCancellationRequested) { return failed(ActionErrors.FromSql(catalog, error, connection, ddl: !read, inUseAdvice: null)); }
@@ -514,10 +529,11 @@ internal sealed partial class ActionService : IDisposable
 
     /// <summary>The login preflight in master: the login's facts, at most <paramref name="take"/> names of the databases it owns
     /// (ActionSql.Login), or with a null take nothing it owns (ActionSql.LoginAlter), and its row; null facts when no login of
-    /// a listed type has the name.</summary>
-    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token)
+    /// a listed type has the name. <paramref name="transaction"/>: the open transaction it reads in (Unlock's recheck).</summary>
+    private async Task<(LoginFactsDto? Facts, ScriptPreflight.Row? Row)> LoginAsync(SqlConnection connection, string name, string? newName, int? take, CancellationToken token, SqlTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = take is null ? ActionSql.LoginAlter : ActionSql.Login;
         command.CommandTimeout = 0;
         Add(command, "@name", SqlDbType.NVarChar, 128, name);
@@ -695,6 +711,9 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.AlterUserSchema => "Set the default schema",
         ActionTemplate.CreateSchemaFor => "Create a schema",
         ActionTemplate.AddRoleMember => "Add to a database role",
+        ActionTemplate.CheckPolicyOff => "Turn off the password policy",
+        ActionTemplate.CheckPolicyOn => "Turn the password policy back on",
+        ActionTemplate.CheckPolicyExpirationOn => "Turn the password policy and expiration back on",
         _ => "Drop the object"
     };
 
