@@ -54,7 +54,7 @@ export function themeMenuItems(theme: Pick<ThemeState, 'preference' | 'themes'>)
 
 export interface MenuServiceOptions {
   readonly platform: Platform
-  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled' | 'execute' | 'onWillExecute'>
+  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled' | 'execute' | 'onWillExecute' | 'reportError'>
   /** Static and state keys, for menu conditions and enablement. */
   readonly context: { getState(): ContextKeys }
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
@@ -84,6 +84,8 @@ export interface MenuServiceOptions {
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
 const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
+/** The banner's words for a menu item chosen after it stopped being available. */
+const unavailableMessage = (title: string) => `“${title.replace(/…$/, '')}” is no longer available: something changed after the menu opened.`
 /** How far `element` and each element around it are scrolled, by element. */
 function scrollPositions(element: Element): ReadonlyMap<EventTarget, readonly [number, number]> {
   const positions = new Map<EventTarget, readonly [number, number]>()
@@ -398,10 +400,15 @@ export class MenuService implements Disposable {
     }
     this.owned = owns
   }
-  /** Order matters: the menus have closed, focus goes back synchronously, and only then does the command run. */
+  /**
+   * Order matters: the menus have closed, focus goes back synchronously, and only then does the command run. The item was
+   * enabled when the menu showed; when something changed since (a reload moved the selection, the server went), the
+   * banner says so rather than the choice doing nothing.
+   */
   private activate(item: ResolvedCommandItem): void {
     this.options.focus.restore(this.restoreTarget)
-    void this.options.commands.execute(item.id, item.args, 'menu')
+    if (this.options.commands.isEnabled(item.id, item.args)) void this.options.commands.execute(item.id, item.args, 'menu')
+    else this.options.commands.reportError(unavailableMessage(item.title))
   }
   private closed(reason: CloseReason): void {
     this.tabbedIn = false

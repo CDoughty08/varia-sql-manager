@@ -60,6 +60,17 @@ describe('menu service', () => {
     menus.controller.click(0, indexOf(items, 'file.new'))
     expect(order).toEqual(['closed', 'restore editor', 'execute file.new from menu'])
   })
+  it('says so in the banner, and runs nothing, when a chosen item stopped being available after the menu opened', async () => {
+    const { menus, fixture, order } = setup()
+    const document = fixture.documents.create('SQLQuery1.sql', '', 'master')
+    menus.controller.openMenubar('file', { keyboard: true, focus: 'first' })
+    const items = menus.controller.view.levels[0].items
+    expect(items[indexOf(items, 'file.save')]).toMatchObject({ enabled: true })
+    await fixture.documents.close(document.id)
+    menus.controller.click(0, indexOf(items, 'file.save'))
+    expect(order).toEqual(['closed', 'restore editor'])
+    expect(fixture.commands.getSnapshot().error).toBe('“Save” is no longer available: something changed after the menu opened.')
+  })
   it('returns focus when the menus close without a choice, but not when one menu replaces another', () => {
     const { menus, state, order } = setup()
     menus.controller.focusMenubar('edit')
