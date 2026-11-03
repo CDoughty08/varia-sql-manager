@@ -4,9 +4,12 @@ import { z } from 'zod'
 import { kindSpecs } from '../explorer/catalog.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { ident, objectRefSchema } from '../explorer/schema.ts'
-import { actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type ObjectAction } from './catalog.ts'
+import {
+  actionErrorCodes, actionLimits, actionOffered, dialogIds, dialogSpecs, isServerAction, objectActionSpecs, serverFilePurposes, serverFilesDescribeId, type ActionErrorCode, type ObjectAction
+} from './catalog.ts'
 import { loginLimits } from './logins.ts'
-import { optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
+import { collationPattern, optionDef, settableOptionKeys, settableScopedKeys, tokenProblem, type FileType, type Growth } from './database.ts'
+import { containmentTypes, newDatabaseOptionKeys, newDatabaseProblems, newDatabaseScopedKeys, type NewDatabaseDesign, type NewDatabaseModel } from './new-database.ts'
 import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } from './files.ts'
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
@@ -40,8 +43,12 @@ export interface PropertiesRequest {
   readonly action: 'properties'; readonly connectionId: string; readonly requestId: string; readonly target: ObjectRef; readonly closeConnections: boolean; readonly changes: DatabaseChanges
   readonly identity?: DatabaseIdentity
 }
+/** New Database's OK and Script: the new database's name as the target, and the design (src/shared/actions/new-database.ts). */
+export interface CreateDatabaseRequest {
+  readonly action: 'createDatabase'; readonly connectionId: string; readonly requestId: string; readonly target: { readonly kind: 'database'; readonly name: string }; readonly design: NewDatabaseDesign
+}
 /** One action: actions.script returns its script, actions.execute runs it. */
-export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
+export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest | CreateDatabaseRequest
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -129,6 +136,7 @@ export interface DatabasePropertiesModel {
 export interface ActionDescribeResult {
   readonly deleteTarget?: DeleteTarget; readonly elapsedMs: number; readonly error?: ActionError; readonly databaseProperties?: DatabasePropertiesModel; readonly tableDesigner?: TableDesignerModel
   readonly serverFiles?: ServerFilesListing
+  readonly newDatabase?: NewDatabaseModel
 }
 export interface ActionScriptResult {
   /** Absent with `error`; at most `actionLimits.scriptChars` characters. */
@@ -196,8 +204,12 @@ export const actionDescribeSchema = z.object({ connectionId: z.uuid(), requestId
       case 'tableDesigner':
         if (request.target.kind !== 'database' || request.target.parent) issue(context, 'target', 'The table designer opens on a database.')
         break
-      default:
-        targetIssues(context, request.target, dialogSpecs[request.dialog].action)
+      default: {
+        // A server action's document describes the server it makes something on.
+        const action = dialogSpecs[request.dialog].action
+        if (isServerAction(action)) { if (request.target.kind !== 'server') issue(context, 'target', 'New Database describes the server.') }
+        else targetIssues(context, request.target, action)
+      }
     }
   }) satisfies z.ZodType<ActionDescribeRequest>
 
@@ -220,15 +232,39 @@ const deleteSchema = z.object({ action: z.literal('delete'), connectionId: z.uui
 // create_date as the backend writes it (yyyy-MM-ddTHH:mm:ss.fff); without the m flag, $ refuses a final line break too.
 const identitySchema = z.object({ id: z.number().int().min(1).max(2_147_483_647), created: z.string().max(23).regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}$/) }).strict()
 const propertiesSchema = z.object({ action: z.literal('properties'), connectionId: z.uuid(), requestId: z.uuid(), target: objectRefSchema, closeConnections: z.boolean(), changes: changesSchema, identity: identitySchema.optional() }).strict()
+// New Database's design; the rules that need the server (Linux, FILESTREAM, the version) wait for the backend's preflight.
+const growthSchema = z.discriminatedUnion('enabled', [
+  z.object({ enabled: z.literal(false) }).strict(),
+  z.object({ enabled: z.literal(true), unit: z.enum(['mb', 'percent']), by: z.number().int().min(1).max(actionLimits.growthMb), maxMb: z.number().int().min(1).max(actionLimits.dataFileMb).optional() }).strict()
+])
+const newFileSchema = z.object({
+  name: ident, type: z.enum(['rows', 'log', 'filestream']), filegroup: ident.optional(), sizeMb: z.number().int().min(1).max(actionLimits.dataFileMb).optional(), growth: growthSchema,
+  path: serverPathSchema, fileName: z.string().min(1).max(actionLimits.serverPath)
+}).strict()
+const newFilegroupSchema = z.object({
+  name: ident, type: z.enum(['rows', 'filestream', 'memoryOptimized']), readOnly: z.boolean().optional(), isDefault: z.boolean().optional(), autogrowAllFiles: z.boolean().optional()
+}).strict()
+export const newDatabaseDesignSchema = z.object({
+  owner: ident.optional(), files: z.array(newFileSchema).min(2).max(actionLimits.newDatabaseFiles), filegroups: z.array(newFilegroupSchema).min(1).max(actionLimits.newDatabaseFilegroups),
+  collation: z.string().max(128).regex(collationPattern).optional(), containment: z.enum(containmentTypes), ledger: z.boolean().optional(),
+  options: tokens(newDatabaseOptionKeys), scoped: tokens(newDatabaseScopedKeys)
+}).strict() satisfies z.ZodType<NewDatabaseDesign>
+const createDatabaseSchema = z.object({
+  action: z.literal('createDatabase'), connectionId: z.uuid(), requestId: z.uuid(), target: z.object({ kind: z.literal('database'), name: ident }).strict(), design: newDatabaseDesignSchema
+}).strict()
 export const actionRequestSchema = z.discriminatedUnion('action', [
   renameSchema,
   deleteSchema,
   propertiesSchema,
-  createTableSchema
+  createTableSchema,
+  createDatabaseSchema
 ]).superRefine((request, context) => {
-  // A new table is not an object row's action: its target is the database, SQL Server's own included.
-  if (request.action !== 'createTable') targetIssues(context, request.target, request.action)
+  // A new table and a new database are not an object row's action: their target is the database they go in, or make.
+  if (request.action !== 'createTable' && request.action !== 'createDatabase') targetIssues(context, request.target, request.action)
   switch (request.action) {
+    case 'createDatabase':
+      for (const problem of newDatabaseProblems(request.target.name, request.design)) issue(context, problem.field === 'name' ? 'target' : 'design', problem.message)
+      break
     case 'rename':
       if (request.newName === request.target.name) issue(context, 'newName', 'The new name is the current name.')
       break

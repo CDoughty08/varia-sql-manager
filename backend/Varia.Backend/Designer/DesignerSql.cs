@@ -167,11 +167,12 @@ internal static class DesignerSql
         + "ON n.ordinal = CONVERT(int, k.value);\n"
         + "IF NOT EXISTS (SELECT 1 FROM @k) OR EXISTS (SELECT 1 FROM @k AS q WHERE q.quoted IS NULL) THROW 50000, N'A column could not be built.', 1;\n";
 
-    /// <summary>Concatenates a table variable's text column in order, comma separated, without FOR XML (which refuses the
-    /// control characters a name may hold) or STRING_AGG (SQL Server 2017).</summary>
-    private static string Join(string table, string order, string column, string into) =>
+    /// <summary>Concatenates a table variable's text column in order (its order column runs 0, 1, 2, …), comma separated or, with
+    /// <paramref name="comma"/> false, as each row's text already joins it, without FOR XML (which refuses the control characters a
+    /// name may hold) or STRING_AGG (SQL Server 2017). New Database's builder (Actions/CreateDatabaseSql) joins its files with it.</summary>
+    internal static string Join(string table, string order, string column, string into, bool comma = true) =>
         "DECLARE @i int = 0, @n int = (SELECT COUNT(*) FROM " + table + "), " + into + " nvarchar(max) = N'';\n"
-        + "WHILE @i < @n BEGIN SELECT " + into + " = " + into + " + CASE WHEN @i = 0 THEN N'' ELSE N', ' END + x." + column + " FROM " + table + " AS x WHERE x." + order + " = @i; SET @i = @i + 1; END;\n";
+        + "WHILE @i < @n BEGIN SELECT " + into + " = " + into + (comma ? " + CASE WHEN @i = 0 THEN N'' ELSE N', ' END" : "") + " + x." + column + " FROM " + table + " AS x WHERE x." + order + " = @i; SET @i = @i + 1; END;\n";
 
     /// <summary>The batch that runs a step: SQL Server builds the statement from @design and runs it in @db.
     /// <paramref name="dryRun"/> (the live checks only, never the wire) selects it instead.</summary>

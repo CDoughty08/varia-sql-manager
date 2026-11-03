@@ -522,6 +522,31 @@ with no steps). The design reaches SQL Server only as one `nvarchar(max)` JSON p
 with OPENJSON (master needs compatibility level 130, else `NOT_SUPPORTED`). The largest design is far below the 4 MiB
 request body.
 
+**New Database** (D1b) uses the same three methods, again with no new method. `actions.describe { connectionId, requestId,
+dialog: 'newDatabase', target: { kind: 'server' } }` (only a server target; SQL Server only, `NOT_SUPPORTED` on Azure SQL
+Database and Managed Instance) answers `{ newDatabase: { model (model as `databaseProperties` describes it), dataPath, logPath,
+serverCollation, canCreate, masterLevel, linux }, elapsedMs }`, read in master. `actions.script` and `actions.execute` take
+`{ action: 'createDatabase', connectionId, requestId, target: { kind: 'database', name }, design: { owner?, files: [{ name,
+type: 'rows' | 'log' | 'filestream', filegroup?, sizeMb?, growth, path, fileName }] (2 to 256), filegroups: [{ name, type:
+'rows' | 'filestream' | 'memoryOptimized', readOnly?, isDefault?, autogrowAllFiles? }] (PRIMARY first, 1 to 256), collation?,
+containment: 'NONE' | 'PARTIAL', ledger?, options, scoped } }`, strict at every level (the design is read as the action's own
+type, so a table design's members are refused) and checked by `newDatabaseProblems` in main and `NewDatabaseValidator` in
+the backend: sizes are whole MB (data 1 – 16,777,215, 2,147,483,647 pages; log 1 – 2,097,152), growth 1 – 2,097,152 MB or
+1 – 100 %, a maximum no smaller than the size and, in MB, no smaller than the growth (SQL Server's 5169), file names the
+server's platform allows (no `\` on Linux either, which SQL Server there reads as a separator), distinct names and paths, every filegroup with a file, and
+options only those Database Properties sets but collation and containment, which CREATE DATABASE writes. Script answers
+CREATE DATABASE as SSMS lays it out, then Database Properties' ALTER statements, with `database: 'master'` and, as warnings,
+what OK would refuse; it runs nothing. Execute refuses those first (`NAME_IN_USE` for a database or file that exists,
+`PATH_NOT_FOUND` for a missing folder from SQL Server 2017, `NOT_FOUND` for an owner or collation, `PERMISSION_DENIED`
+without CREATE DATABASE), then runs "Create the database", each option's step, the filegroup steps and "Set the owner"; it
+never compensates, so a later failure leaves the database created and says so. The design reaches SQL Server only as one
+JSON parameter; a constant builder (`CreateDatabaseSql`, checked by its own `Lint` with the table designer's OPENJSON rules in
+`JsonBuilderLint`) shreds it with OPENJSON, quotes names with `QUOTENAME` and file names and paths on the server (`REPLACE`
+under a binary collation), writes sizes as typed numbers with a unit (KB up to 2,097,151 MB, since SQL Server reads a size as
+an int, and MB above), takes the collation only as
+`sys.fn_helpcollations()` names it, and runs the statement through `QUOTENAME(@db) + N'.sys.sp_executesql'` in master. It
+is a long run (`LongRunService`, kind `newDatabase`).
+
 The **server file picker** (Locate Backup File, Locate Database Files, Locate Folder) is `actions.describe` too, again with
 no new method: `{ connectionId, requestId, dialog: 'serverFiles', target: { kind: 'server' }, files: { purpose: 'backup' |
 'database' | 'log' | 'folder', path?, allFiles?, exists? } }` (`files` only with that dialog, `allFiles` never with `folder`,

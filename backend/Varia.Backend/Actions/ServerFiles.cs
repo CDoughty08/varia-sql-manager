@@ -166,7 +166,8 @@ internal static partial class ServerFiles
         return new(Text(0), Text(1), Text(2), !reader.IsDBNull(3) && reader.GetBoolean(3), !reader.IsDBNull(4) && reader.GetInt32(4) == 3);
     }
 
-    private static async Task<(bool Exists, bool Directory)> ExistsAsync(SqlConnection connection, string sql, string folder, CancellationToken token)
+    /// <summary>Whether a path exists and is a folder (Exists, or LegacyExists before SQL Server 2017); New Database's preflight checks its folders and files with it.</summary>
+    internal static async Task<(bool Exists, bool Directory)> ExistsAsync(SqlConnection connection, string sql, string folder, CancellationToken token)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
