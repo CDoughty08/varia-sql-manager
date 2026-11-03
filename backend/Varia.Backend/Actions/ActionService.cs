@@ -242,17 +242,18 @@ internal sealed partial class ActionService : IDisposable
         if (args.Secrets is { } secrets) { Secret(secrets.Password, "password"); Secret(secrets.OldPassword, "oldPassword"); }
         if (args.Action != "createLogin" && LoginMembers(args)) throw Invalid(args.Action + " takes no login, server roles or status.");
         if (args.Restore is not null && args.Action != "restore") throw Invalid("only a restore takes restore options.");
+        if (args.DropConnections is not null && args.Action != "takeOffline") throw Invalid("only takeOffline takes dropConnections.");
         switch (args.Action)
         {
             case "rename":
-                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null || args.DropConnections is not null)
+                if (args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null)
                     throw Invalid("rename takes no delete options or changes.");
                 if (!ExplorerRefs.Ident(args.NewName)) throw Invalid("newName.");
                 var renamed = Target(args.Target, "rename");
                 if (string.Equals(args.NewName, renamed.Name, StringComparison.Ordinal)) throw Invalid("the new name is the current name.");
                 return renamed;
             case "delete":
-                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null || args.DropConnections is not null) throw Invalid("delete takes no new name or changes.");
+                if (args.NewName is not null || args.Changes is not null || args.Design is not null || args.Identity is not null || args.Databases is not null) throw Invalid("delete takes no new name or changes.");
                 if (args.CloseConnections is not { } close || args.DeleteHistory is not { } history) throw Invalid("closeConnections and deleteHistory are required.");
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
@@ -271,7 +272,7 @@ internal sealed partial class ActionService : IDisposable
                 ValidateAttach(args.Databases);
                 return server;
             case "createTable":
-                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null || args.Databases is not null || args.DropConnections is not null)
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Identity is not null || args.Databases is not null)
                     throw Invalid("createTable takes only a design.");
                 var database = DatabaseTarget(args.Target);
                 TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
@@ -287,11 +288,10 @@ internal sealed partial class ActionService : IDisposable
                 return created;
             case "takeOffline":
             case "bringOnline":
-                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null)
-                    throw Invalid(args.Action + " takes no new name, delete options or changes.");
-                // Take Offline asks whether to roll back other connections; Bring Online has nothing to ask.
-                if (args.Action == "takeOffline" ? args.DropConnections is null : args.DropConnections is not null)
-                    throw Invalid(args.Action == "takeOffline" ? "dropConnections is required." : "bringOnline takes no dropConnections.");
+                if (args.NewName is not null || args.CloseConnections is not null || args.DeleteHistory is not null || args.Changes is not null || args.Design is not null || args.Databases is not null)
+                    throw Invalid(args.Action + " takes no new name, delete options, changes or databases.");
+                // Take Offline asks whether to roll back other connections; Bring Online has nothing to ask (no other action takes it).
+                if (args.Action == "takeOffline" && args.DropConnections is null) throw Invalid("dropConnections is required.");
                 if (args.Identity is { } identity && !DatabaseAlter.IdentityValid(identity)) throw Invalid("identity.");
                 return Target(args.Target, args.Action);
             default:

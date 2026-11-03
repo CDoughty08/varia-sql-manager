@@ -125,7 +125,10 @@ internal static class AttachChecks
             ("a database target", Attach([One()], new ObjectRefDto("database", Name: "Sales"))), ("a named server", Attach([One()], new ObjectRefDto("server", Name: "x"))),
             ("a new name", Attach([One()]) with { NewName = "x" }), ("delete options", Attach([One()]) with { CloseConnections = false, DeleteHistory = false }),
             ("databases on a delete", new("delete", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "Sales"), CloseConnections: false, DeleteHistory: false, Databases: [One()])),
-            ("databases on a rename", new("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "Sales"), NewName: "Hr", Databases: [One()]))
+            ("databases on a rename", new("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "Sales"), NewName: "Hr", Databases: [One()])),
+            // Take Offline's Drop All Active Connections belongs to it alone, and it takes no databases (both merged in after D3a).
+            ("dropConnections on an attach", Attach([One()]) with { DropConnections = true }),
+            ("databases on a take offline", new("takeOffline", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new ObjectRefDto("database", Name: "Sales"), DropConnections: false, Databases: [One()]))
         };
         var accepted = invalid.Where(item => Refused(() => service.Validate(item.Args)) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         ActionDescribeArgs Describe(string dialog, string? mdf, ObjectRefDto? target = null) => new(Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), dialog, target ?? Server, Attach: mdf is null ? null : new(mdf));
