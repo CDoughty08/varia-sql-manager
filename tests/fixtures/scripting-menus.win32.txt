@@ -503,6 +503,14 @@ explorer.context, for a database
       &File…
       C&lipboard
   ---
+  &Tasks >
+    &Take Offline
+    Bring &Online
+    ---
+    &Restore >
+      &Database…
+      &Files and Filegroups…
+  ---
   Copy N&ame
   ---
   Rena&me

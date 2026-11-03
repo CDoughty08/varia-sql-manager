@@ -69,6 +69,7 @@ import { copyText, exportText } from './backend/text-writer.mjs'
 import { parseDirective, shapes } from './backend/shapes.mjs'
 import { backendMethods } from '../../src/shared/ipc/methods.ts'
 import { folderSpecs, kindSpecs, staticChildren } from '../../src/shared/explorer/catalog.ts'
+import { loginDetail, loginStatusOf, loginSubtypeOf } from '../../src/shared/actions/logins.ts'
 import { liveProbes } from '../../src/shared/live/catalog.ts'
 import { pendingProbes } from '../../src/shared/activity/catalog.ts'
 import { openStatuses, operationKindSpecs, operationStatuses, operationTiles, operationTypes } from '../../src/shared/ssis/catalog.ts'
@@ -171,6 +172,16 @@ function request(id, deadline, { method, params, credit }) {
       write(FrameKind.EVENT, id, 0, { type: 'messages', messages: [{ text: 'first', kind: 'info' }] })
       process.stdout.write(encodeFrame(FrameKind.EVENT, id, 0, Uint8Array.of(0xc1)))
       return
+    // A long action's STATS progress: two valid EVENTs around an out-of-range one and one of another type, then the reply.
+    case 'action-progress':
+      if (method === 'actions.execute') {
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 0, percent: 5 })
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 0, percent: 101 })
+        write(FrameKind.EVENT, id, 0, { type: 'messages', messages: [] })
+        write(FrameKind.EVENT, id, 0, { type: 'action.progress', step: 1, percent: 50 })
+        return respond(id, { steps: [{ status: 'done', title: 'Back up', progress: 50 }] })
+      }
+      break
   }
   if (method === 'live.subscribe') return liveEcho(id, credit, params)
   if (credit !== undefined) return stream(id, credit, params)
@@ -306,7 +317,7 @@ const explorerRows = {
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'Id' }, 'Id', { sublabel: '(PK, int, not null)', icon: 'key' }),
     explorerObject({ kind: 'column', database: owner.database, parent: { kind: owner.kind, schema: owner.schema, name: owner.name }, name: 'CustomerName' }, 'CustomerName', { sublabel: '(nvarchar(100), null)' })
   ],
-  logins: () => [explorerObject({ kind: 'login', name: 'sa' }, 'sa')],
+  logins: () => fixtureLogins.map(fixtureLogin),
   serverRoles: () => serverRoles.map(name => explorerObject({ kind: 'serverRole', name }, name)),
   cryptographicProviders: () => [explorerObject({ kind: 'cryptographicProvider', name: 'Test EKM Provider' }, 'Test EKM Provider')],
   audits: () => [explorerObject({ kind: 'audit', name: 'LoginAudit' }, 'LoginAudit')],
@@ -333,6 +344,24 @@ function catalogFingerprints() {
   const views = ['folders', 'projects', 'packages', 'environments', 'variables', 'references', 'parameters', 'properties']
   const more = { folders: extra('ssisFolders') ? 1 : 0, projects: extra('ssisProjects') ? 1 : 0 }
   return views.flatMap(view => [{ id: view + 'Count', value: 1 + (more[view] ?? 0) }, { id: view + 'Checksum', value: 100 + 7 * (more[view] ?? 0) }])
+}
+// The Logins folder (D4): a login of each kind the login menus tell apart, in SQL Server's name order: [name, principal_id,
+// type, what sys.server_principals, sys.server_permissions and sys.sql_logins say of it].
+const fixtureLogins = [
+  ['##MS_PolicyTsqlExecutionLogin##', 257, 'S', { disabled: true, policyChecked: true }],
+  ['AppUser', 300, 'S', { policyChecked: true, expirationChecked: true }],
+  ['CONTOSO\\Ops', 301, 'G', {}],
+  ['Denied', 302, 'S', { connectDenied: true, policyChecked: true }],
+  ['Locked', 303, 'S', { policyChecked: true, expirationChecked: true }],
+  ['NT SERVICE\\SQLSERVERAGENT', 304, 'U', {}],
+  ['Retired', 305, 'S', { disabled: true, connectDenied: true, policyChecked: true }],
+  ['sa', 1, 'S', { disabled: true, policyChecked: true }]
+]
+/** A login row as the backend lists it (ExplorerQueries' logins listing). */
+function fixtureLogin([name, principalId, type, state]) {
+  const facts = { disabled: false, connectDenied: false, policyChecked: false, expirationChecked: false, ...state }
+  const status = loginStatusOf(facts.disabled, facts.connectDenied)
+  return explorerObject({ kind: 'login', name }, name, { subtype: loginSubtypeOf(principalId, type, name), detail: loginDetail(type, facts), ...status ? { status } : {}, ...facts.connectDenied ? { connectDenied: true } : {} })
 }
 function explorerObject(object, label, fields = {}) { return { ref: { type: 'object', object }, label, icon: kindSpecs[object.kind].icon, hasChildren: false, ...fields } }
 async function explorerChildren({ node, subtype }) {
@@ -951,7 +980,11 @@ async function workbench(id, method, params, credit) {
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
-    case 'actions.execute': return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
+    // Progress EVENTs as a long step's STATS sends them, at once: main pushes step 0's first at once, holds its second (inside its
+    // 250 ms) until step 1 replaces it, and drops the out-of-range one.
+    case 'actions.execute':
+      for (const [step, percent] of [[0, 25], [0, 100], [0, 101], [1, 40]]) write(FrameKind.EVENT, id, 0, { type: 'action.progress', step, percent })
+      return respond(id, { steps: [{ status: 'done', title: 'Drop the object' }], messages: [], elapsedMs: 1 })
     case 'tables.columns': return respond(id, { columns: [{ name: 'Id', dataType: 'int' }, { name: 'CustomerName', dataType: 'nvarchar' }], truncated: false })
     case 'explorer.children': return respond(id, await explorerChildren(params))
     case 'ssis.describe': return ssisDescribe(id, params)

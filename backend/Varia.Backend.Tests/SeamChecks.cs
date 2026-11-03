@@ -75,8 +75,8 @@ internal static class SeamChecks
             && !catalog.Serves("delete", "onPrem")
             && DesignerCatalog.Current.Engines.SequenceEqual(["box", "managedInstance"]),
             "each action declares its engines: Select Top everywhere, Rename, Delete, Properties and the designer's createTable on SQL Server and Managed Instance");
-        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
-            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own");
+        check(catalog.Actions.All(action => catalog.CleanupBudget(action) == TimeSpan.FromMilliseconds(action == "restore" ? 30_000 : catalog.Limit("cleanupMs"))) && catalog.Limit("cleanupMs") == 10_000,
+            "every action's compensation and cleanup run under the catalogue's 10-second budget unless it sets its own (Restore Database's 30 s, to drop a partly restored database)");
 
         // A later action that Managed Instance cannot run (Detach, Restore) is refused before any connection opens; the message names the engine.
         var mi = new Host(8);
@@ -341,6 +341,14 @@ internal static class SeamChecks
             && outcome.Done == 1 && ran.SequenceEqual(["Close existing connections", "Rename"]),
             "runner v2 skips the rest after a failure and runs only the compensations of completed steps and the cleanups their condition allows, listed as compensating: "
             + string.Join(", ", outcome.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + outcome.Failure?.Code + " " + outcome.Failure?.Message);
+        ran.Clear();
+        // A main step that finds it must not go on (StepRefusedException) fails with its own error, as a SqlException does.
+        var refusal = ActionErrors.Create(ActionsCatalog.Current, "RESTORE_SEQUENCE", "The log was backed up during the run.");
+        var refused = await service.RunStepsAsync(connection, [Step("Restore"), Step("Back up", new StepRefusedException(refusal)), Step("Restore it")], null, CancellationToken.None, TimeSpan.FromSeconds(1));
+        check(refused.Steps.Select(step => step.Status + ":" + step.Title + ":" + step.Message).SequenceEqual(["done:Restore:", "failed:Back up:The log was backed up during the run.", "skipped:Restore it:"])
+            && refused.Failure is { Code: "RESTORE_SEQUENCE" } && refused.Failure.Message == "The log was backed up during the run. Completed before the failure: Restore." && refused.Done == 1
+            && ran.SequenceEqual(["Restore", "Back up"]),
+            "a step that refuses to go on fails with its own error, the rest skipped and the steps completed named: " + string.Join(", ", refused.Steps.Select(step => step.Status + ":" + step.Title)) + " | " + refused.Failure?.Message);
         ran.Clear();
         using var stopped = new CancellationTokenSource();
         stopped.Cancel();

@@ -35,6 +35,9 @@ export interface ServerStatus {
   readonly complete: boolean
 }
 export interface ExplorerStatusSnapshot { readonly servers: ReadonlyMap<string, ServerStatus> }
+/** A database's runtime state as the database probe last sampled it: its row (none: plainly online, when `complete`), and
+ *  when that sample was taken (epoch ms, the tick's sampledAt), for `currentDatabaseRuntime`. */
+export interface DatabaseRuntimeSample { readonly at: number; readonly row: DatabaseStatusRow | undefined; readonly complete: boolean }
 /** Whether Object Explorer's tree can be seen. Today the explorer pane; once the rail puts other containers in that pane,
  *  the Object Explorer container's own visibility. */
 export interface StatusVisibility { get(): boolean; subscribe(listener: () => void): () => void }
@@ -86,6 +89,10 @@ class ServerView {
   private subscriptionId: string | undefined
   private databases: Map<string, DatabaseStatusRow> | undefined
   private complete = false
+  /** When the rows in `databases` were last sampled: the tick of their read, moved on by every tick whose revision was the same. */
+  private databasesAt: number | undefined
+  /** A read of the database rows is in flight: a tick meanwhile must not date the rows it will replace. */
+  private databasesReading = false
   private progress: Map<string, ProgressRow> | undefined
   private groups: GroupRow[] | undefined
   private jobs: number | null | undefined
@@ -106,9 +113,12 @@ class ServerView {
         const entry = sample.tables?.find(table => table.table === 0)
         if (!entry) continue
         const probe = sample.probe as TableProbe
-        // An unchanged revision needs no read: its rows are the ones already read.
-        if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && this.has(probe)) continue
-        this.read(probe, subscriptionId)
+        // An unchanged revision needs no read: its rows are the ones already read, as of this tick.
+        if (entry.diff && entry.diff.added + entry.diff.removed + entry.diff.changed === 0 && this.has(probe)) {
+          if (probe === 'explorer.databases' && !this.databasesReading) this.databasesAt = tick.sampledAt
+          continue
+        }
+        this.read(probe, subscriptionId, tick.sampledAt)
       }
       this.update()
     })
@@ -130,7 +140,7 @@ class ServerView {
   }
 
   private forget(probe: TableProbe): void {
-    if (probe === 'explorer.databases') { this.databases = undefined; this.complete = false } else if (probe === 'explorer.progress') this.progress = undefined
+    if (probe === 'explorer.databases') { this.databases = undefined; this.complete = false; this.databasesAt = undefined; this.databasesReading = false } else if (probe === 'explorer.progress') this.progress = undefined
     else this.groups = undefined
   }
 
@@ -143,17 +153,20 @@ class ServerView {
     this.reads.clear()
   }
 
-  private read(probe: TableProbe, subscriptionId: string): void {
+  private read(probe: TableProbe, subscriptionId: string, sampledAt: number): void {
     const table = this.handle.table(probe)
     if (!table) return
     const seq = ++this.readSeq
     this.reads.set(probe, seq)
     const current = () => this.reads.get(probe) === seq && this.subscriptionId === subscriptionId
+    if (probe === 'explorer.databases') this.databasesReading = true
     readRows(table).then(({ rows, complete }) => {
       if (!current()) return
       if (probe === 'explorer.databases') {
+        this.databasesReading = false
         this.databases = new Map(rows.filter(row => row[0] !== null).map(row => [row[0]!, { name: row[0]!, state: integer(row[1] ?? '0'), userAccess: integer(row[2] ?? '0'), readOnly: bit(row[3] ?? ''), standby: bit(row[4] ?? '') }]))
         this.complete = complete
+        this.databasesAt = sampledAt
       } else if (probe === 'explorer.progress') this.progress = new Map(rows.filter(row => row[0] !== null).map(row => [row[0]!, { name: row[0]!, command: row[1] ?? '', percent: integer(row[2] ?? '0') }]))
       else this.groups = rows.filter(row => row[0] !== null).map(row => ({ name: row[0]!, health: integer(row[1] ?? '0'), role: integer(row[2] ?? '0') }))
       this.update()
@@ -161,15 +174,27 @@ class ServerView {
       // A revision released before it was read (the view moved on two samples, or ended): the rows read before it are out
       // of date, so they go, and the next revision is read whatever its diff says.
       if (!current()) return
+      if (probe === 'explorer.databases') this.databasesReading = false
       this.forget(probe)
       this.update()
     })
   }
 
+  private fresh(probe: LiveProbeId): boolean {
+    const snapshot = this.handle.getSnapshot()
+    return snapshotUsable(snapshot, this.subscriptionId) && usable.has(snapshot.probes[probe]?.state ?? '')
+  }
+
+  /** A database's runtime state as the database probe sampled it last, while it samples; undefined otherwise. Read, never
+   *  published by itself: a tick that only moves the sample's time on changes no menu. */
+  runtime(name: string): DatabaseRuntimeSample | undefined {
+    if (!this.databases || this.databasesAt === undefined || !this.fresh('explorer.databases')) return undefined
+    return { at: this.databasesAt, row: this.databases.get(name), complete: this.complete }
+  }
+
   /** Republishes what the probes that still sample say; a probe that fails, is unavailable or paused says nothing. */
   update(): void {
-    const snapshot = this.handle.getSnapshot()
-    const fresh = (probe: LiveProbeId) => snapshotUsable(snapshot, this.subscriptionId) && usable.has(snapshot.probes[probe]?.state ?? '')
+    const fresh = (probe: LiveProbeId) => this.fresh(probe)
     const previous = this.published
     const databases = fresh('explorer.databases') && this.databases ? this.databaseMap(previous.databases, fresh('explorer.progress') ? this.progress : undefined) : undefined
     const complete = !!databases && this.complete
@@ -245,6 +270,14 @@ export class ExplorerStatusService extends SnapshotStore<ExplorerStatusSnapshot>
 
   /** A connection's status, or undefined while it has none. */
   server(connectionId: string): ServerStatus | undefined { return this.getSnapshot().servers.get(connectionId) }
+  /**
+   * A database's runtime state as its connection's view sampled it last (a peek: badges and menus never subscribe for it).
+   * Object Explorer narrows a database's actions by it when it is newer than the listing (`currentDatabaseRuntime`).
+   */
+  databaseRuntime(connectionId: string, database: string): DatabaseRuntimeSample | undefined {
+    const key = this.wanted().get(connectionId)
+    return key === undefined ? undefined : this.views.get(key)?.runtime(database)
+  }
 
   /** Object Explorer's Refresh: the connection's view (every view, with none named) samples at once, and one that ended
    *  (a sign-in that failed, every probe refused) is opened again. */

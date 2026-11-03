@@ -12,7 +12,7 @@ import type { DatabaseRuntime } from './explorer/status.ts'
 import type { ActionPromptAnswer, ActionPromptRequest } from './actions/prompts.ts'
 import type { LongRunState } from './long-runs.ts'
 import type { ScriptRequest, ScriptResult } from './scripting/schema.ts'
-import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteResult, ActionRequest, ActionScriptResult } from './actions/schema.ts'
+import type { ActionDescribeRequest, ActionDescribeResult, ActionExecuteRequest, ActionExecuteResult, ActionProgress, ActionScriptRequest, ActionScriptResult } from './actions/schema.ts'
 import type { SsisCatalogSetupRequest, SsisCatalogSetupResult, SsisDescribeRequest, SsisDescribeResult, SsisExecuteRequest, SsisExecuteResult } from './ssis/schema.ts'
 import type { SettingsLoad, SettingsPatch, SettingsState } from './settings/schema'
 import type { SessionAnswer, SessionEnd, SessionPromptRequest } from './sessions.ts'
@@ -216,7 +216,8 @@ export interface ResultsCopyParams { resultId: number; parts: readonly CopyPart[
  *  if the backend dies before it does. */
 export interface ResultsExportParams { resultId: number; path: string; format: ResultsFormat; headers: boolean; nullText: 'empty' | 'NULL'; temporaryId: string }
 /** One Object Explorer node. Labels are SSMS's text (≤ 300), sublabels the "(…)" part (≤ 200), detail tooltip-only facts
- *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed. */
+ *  (≤ 512); `created` is server local time, `yyyy-MM-ddTHH:mm:ss`; `database`, a database node's runtime state as listed;
+ *  `connectDenied`, a login denied CONNECT SQL (its status says `disabled` when it is disabled too). */
 export interface ExplorerNode {
   readonly ref: ExplorerNodeRef
   readonly label: string
@@ -228,6 +229,7 @@ export interface ExplorerNode {
   readonly status?: NodeStatus
   readonly created?: string
   readonly database?: DatabaseRuntime
+  readonly connectDenied?: boolean
 }
 // AUTH_KERBEROS and AUTH_UNSUPPORTED: a pool connection off Windows could not sign in with Kerberos (an expired ticket: run kinit, then Retry).
 // AUTH_ENTRA: a pool connection's Microsoft Entra sign-in expired or was revoked (connect again to sign in).
@@ -273,9 +275,9 @@ export interface RpcMethods {
   /** What an object dialog shows (Delete Object's row and warnings), read in the action's own connection. */
   'actions.describe': { params: ActionDescribeRequest; result: ActionDescribeResult }
   /** An action's script, for the dialog's Script button; it runs nothing. */
-  'actions.script': { params: ActionRequest; result: ActionScriptResult }
+  'actions.script': { params: ActionScriptRequest; result: ActionScriptResult }
   /** Runs an action's DDL after a preflight; never re-sent, and only Stop (varia:actions-cancel) ends a lock wait. */
-  'actions.execute': { params: ActionRequest; result: ActionExecuteResult }
+  'actions.execute': { params: ActionExecuteRequest; result: ActionExecuteResult }
   /** What an SSIS Catalog object is (a properties document's read), on the SSIS read pool; Stop is varia:ssis-cancel. */
   'ssis.describe': { params: SsisDescribeRequest; result: SsisDescribeResult }
   /** Changes the SSIS Catalog (Stop Operation, Create Catalog) on its own unpooled connection after a preflight; never re-sent,
@@ -415,12 +417,15 @@ export interface VariaApi {
   /** Reads what an object dialog shows. Failures the user can act on come back as `result.error`. */
   describeObject(params: ActionDescribeRequest): Promise<ApiResult<ActionDescribeResult>>
   /** Scripts an object action (the dialog's Script button) without running it. */
-  scriptObjectAction(params: ActionRequest): Promise<ApiResult<ActionScriptResult>>
+  scriptObjectAction(params: ActionScriptRequest): Promise<ApiResult<ActionScriptResult>>
   /** Runs an object action: Rename, or Delete Object's OK. Its steps report what ran; it is never re-sent. */
-  executeObjectAction(params: ActionRequest): Promise<ApiResult<ActionExecuteResult>>
+  executeObjectAction(params: ActionExecuteRequest): Promise<ApiResult<ActionExecuteResult>>
   /** Cancels object action requests by their `requestId`s (1–16); `cancelled` counts those still running. A request
    *  cancelled this way answers `CANCELLED`. */
   cancelObjectActions(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
+  /** A long object action's progress (a restore or backup step's STATS percent), at most 4 a second per request and only
+   *  for requests this window sent; droppable, so the latest value is all that counts. Returns the unsubscribe. */
+  onActionProgress(listener: (progress: ActionProgress) => void): () => void
   /** Reads an SSIS Catalog object (catalog, folder, project, package or environment). Failures come back as `result.error`. */
   describeSsis(params: SsisDescribeRequest): Promise<ApiResult<SsisDescribeResult>>
   /** Runs an SSIS Catalog action (Stop Operation, Create Catalog). Refusals and failures come back as `result.error` with the

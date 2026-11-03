@@ -57,7 +57,7 @@ describe('table designer catalogue', () => {
   it('keeps its describe and request ids out of the object-action catalogue but in the describe schema', () => {
     expect(designerDescribeIds).toEqual(['tableDesigner'])
     expect(designerRequestActions).toEqual(['createTable'])
-    expect(describeIds).toEqual([...dialogIds, 'tableDesigner', 'loginDatabaseRoles'])
+    expect(describeIds).toEqual([...dialogIds, 'tableDesigner', 'serverFiles', 'restoreDatabase', 'loginDatabaseRoles'])
     expect(designerLimits.scriptChars).toBe(maxScriptCharacters)
   })
   it('generates commands with valid preconditions, menus and keys, F4 only inside a designer', () => {

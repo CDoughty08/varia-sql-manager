@@ -16,9 +16,12 @@ import FilterDialog from './explorer/FilterDialog'
 import OptionsDialog from './settings/OptionsDialog'
 import ObjectDialog from './dialogs/ObjectDialog'
 import CreateCatalogDialog from './ssis/CreateCatalogDialog'
+import ServerFilePicker from './server-files/ServerFilePicker'
 import TableDesigner from './designer/TableDesigner'
 import SsisProperties from './ssis/SsisProperties'
 import DatabaseProperties from './properties/DatabaseProperties'
+import NewDatabase from './new-database/NewDatabase'
+import RestoreDatabase from './restore/RestoreDatabase'
 import ActivityMonitor from './activity/ActivityMonitor'
 import SsisOperations from './ssis/SsisOperations'
 import GoToLineDialog from './editor/GoToLineDialog'
@@ -98,7 +101,7 @@ export default function App() {
   // An XML, JSON or plan value opened from the results: no server, database, or results of its own. A table designer,
   // Database Properties, SSIS properties, an Activity Monitor and Integration Services Operations have a server, but it is their own: none has a query bar,
   // and the classic toolbar's lists do not change it.
-  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties', isMonitor = activeKind === 'activityMonitor', isOperations = activeKind === 'ssisOperations'
+  const activeKind = documentKind(active), isQuery = activeKind === 'sql', isDesigner = activeKind === 'tableDesigner', isProperties = activeKind === 'databaseProperties', isNewDatabase = activeKind === 'newDatabase', isMonitor = activeKind === 'activityMonitor', isOperations = activeKind === 'ssisOperations', isRestore = activeKind === 'restoreDatabase'
   const isCustom = isCustomKind(activeKind)
   const windowTitle = active.id ? `${active.dirty ? '* ' : ''}${active.name} — Varia SQL Manager` : 'Varia SQL Manager'
   const connection = connections.find(value => value.id === active.connectionId)
@@ -296,9 +299,11 @@ export default function App() {
           <div className="editor-container" hidden={isCustom}><QueryEditor /></div>
           {isDesigner && <TableDesigner key={active.id} documentId={active.id} />}
           {isProperties && <DatabaseProperties key={active.id} documentId={active.id} />}
+          {isNewDatabase && <NewDatabase key={active.id} documentId={active.id} />}
           {isSsisDocumentKind(activeKind) && <SsisProperties key={active.id} documentId={active.id} />}
           {isMonitor && <ActivityMonitor key={active.id} documentId={active.id} />}
           {isOperations && <SsisOperations key={active.id} documentId={active.id} />}
+          {isRestore && <RestoreDatabase key={active.id} documentId={active.id} />}
           {!statusTop && statusBar}
         </> : <EmptyState className="workspace-empty" icon="file-code" title="No open queries" actions={[{ label: 'New query', run: () => run('file.new'), primary: true }, { label: 'Open SQL file', run: () => run('file.open') }]} />}
       </main>} output={<OutputPane tabId={active.id} query={isQuery} connected={!!liveConnection} hint={connection?.lost ? lostHint : undefined} />} />
@@ -314,6 +319,7 @@ export default function App() {
     {optionsDialog.open && <OptionsDialog page={optionsDialog.page} />}
     <ObjectDialog />
     <CreateCatalogDialog />
+    <ServerFilePicker />
     {editorDialogs.goToLine && <GoToLineDialog request={editorDialogs.goToLine} />}
     {recoveryOpen && <RecoveryDialog />}
     <Toasts snapshot={toasts} notifications={workbench.notifications} focusFallback={() => documents.focusActive()} />

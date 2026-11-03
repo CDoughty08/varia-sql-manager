@@ -9,9 +9,26 @@ namespace Varia.Backend.Actions;
 internal sealed record StepContext(SqlTransaction? Transaction, CancellationToken Token);
 
 /// <summary>One step of runner v2 (critic A4). Undoes: for a compensation, the index among the main steps of the step whose change
-/// it undoes. When: whether a compensation or cleanup is due, from the main steps' statuses. Detail: a name it acts on, never a secret.</summary>
+/// it undoes. When: whether a compensation or cleanup is due, from the main steps' statuses. Detail: a name it acts on, never a secret.
+/// Confirm: for a compensation whose main step was cancelled, whether that step's change happened all the same (Stop can reach a
+/// statement SQL Server has finished before its answer is read), asked on the server under the cleanup budget; without it, a
+/// compensation runs only after its main step completed.</summary>
 internal sealed record RunStep(string Title, Func<StepContext, Task> Run, StepKind Kind = StepKind.Main, int? Undoes = null, Func<IReadOnlyList<string>, bool>? When = null,
-    string? Detail = null);
+    string? Detail = null, Func<StepContext, Task<bool>>? Confirm = null);
+
+/// <summary>Thrown by a compensation or cleanup step that finds, when it runs, that it has nothing to do (a restore's cleanup whose
+/// database is not the one it created): the runner neither lists it nor reports it.</summary>
+internal sealed class StepNotDueException : Exception
+{
+    public StepNotDueException() : base("The step is not due.") { }
+}
+
+/// <summary>Thrown by a main step that finds, when it runs, that it must not go on (a file restore whose database's log was backed up
+/// during the run): the runner reports its error as the step's failure, as it does a SqlException.</summary>
+internal sealed class StepRefusedException(ActionError error) : Exception(error.Message)
+{
+    public ActionError Error { get; } = error;
+}
 
 /// <summary>A runner's answer: the steps as the reply lists them, the failure (null when every main step completed), and how many
 /// main steps completed (none once a transaction rolled back).</summary>
@@ -40,9 +57,11 @@ internal sealed partial class ActionService
     /// <paramref name="rolledBack"/> then joins the failure's message. <paramref name="serverText"/> rewrites the text of SQL Server's errors
     /// (New Login removes its password from it), never the runner's or ActionErrors' own sentences. After a failure or Stop, the compensation and cleanup
     /// steps that are due run in order under a fresh token bounded by <paramref name="cleanupBudget"/>, so a Stop's reply (which
-    /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates.</summary>
+    /// waits StopGrace plus that budget) still lists them. They are listed only when they run, marked compensates. With
+    /// <paramref name="progress"/>, each step's 3211 messages count for its index in the reply, and the step carries its last percent. A
+    /// compensation or cleanup that finds it has nothing to do (StepNotDueException) is not listed.</summary>
     internal async Task<RunOutcome> RunStepsAsync(SqlConnection connection, IReadOnlyList<RunStep> plan, string? inUseAdvice, CancellationToken token, TimeSpan cleanupBudget,
-        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, Func<string, string>? serverText = null)
+        bool transaction = false, string commitTitle = "Commit", string? rolledBack = null, ActionProgress? progress = null, Func<string, string>? serverText = null)
     {
         var mains = plan.Where(step => step.Kind == StepKind.Main).ToList();
         var after = plan.Where(step => step.Kind != StepKind.Main).ToList();
@@ -63,7 +82,7 @@ internal sealed partial class ActionService
         }
         void Add(string status, RunStep step, string? message = null)
         {
-            steps.Add(ActionSteps.Bound(new(status, step.Title, message, step.Detail, step.Kind == StepKind.Main ? null : true)));
+            steps.Add(ActionSteps.Bound(new(status, step.Title, message, step.Detail, step.Kind == StepKind.Main ? null : true, progress?.PercentOf(steps.Count))));
             if (step.Kind == StepKind.Main) statuses.Add(status);
         }
         List<string> Done() => [.. mains.Take(statuses.Count).Where((_, index) => statuses[index] == "done").Select(step => step.Title)];
@@ -76,7 +95,9 @@ internal sealed partial class ActionService
                 {
                     if (Options.BeforeStep is { } before) await before(step.Title, token);
                     token.ThrowIfCancellationRequested();
+                    progress?.Begin(steps.Count);
                     await step.Run(new(open, token));
+                    if (Options.AfterStep is { } afterStep) await afterStep(step.Title, token);
                     Add("done", step);
                     completed++;
                 }
@@ -86,6 +107,12 @@ internal sealed partial class ActionService
                     var done = Done();
                     failure = Error("CANCELLED", "The action was stopped at \"" + step.Title + "\"; SQL Server cancelled that statement."
                         + (done.Count == 0 ? "" : " Completed before Stop: " + string.Join(", ", done) + "."));
+                }
+                catch (StepRefusedException refused)
+                {
+                    Add("failed", step, refused.Error.Message);
+                    var done = Done();
+                    failure = done.Count == 0 ? refused.Error : refused.Error with { Message = ScriptingErrors.Clip(refused.Error.Message + " Completed before the failure: " + string.Join(", ", done) + ".", ActionErrors.MaxMessage) };
                 }
                 catch (SqlException sql)
                 {
@@ -117,17 +144,22 @@ internal sealed partial class ActionService
         using var budget = new CancellationTokenSource(cleanupBudget);
         foreach (var step in after)
         {
-            var due = (step.Kind != StepKind.Compensation || statuses[step.Undoes!.Value] == "done") && (step.When?.Invoke(statuses) ?? true);
+            var undone = step.Kind == StepKind.Compensation ? statuses[step.Undoes!.Value] : null;
+            var confirm = undone == "cancelled" && step.Confirm is not null;
+            var due = (step.Kind != StepKind.Compensation || undone == "done" || confirm) && (step.When?.Invoke(statuses) ?? true);
             if (!due) continue;
             try
             {
                 budget.Token.ThrowIfCancellationRequested();
                 if (connection.State != ConnectionState.Open) throw new InvalidOperationException("The connection is closed.");
+                if (confirm && !await step.Confirm!(new(null, budget.Token))) continue;
                 if (Options.BeforeCleanup is { } before) await before(step.Title, budget.Token);
+                progress?.Begin(steps.Count);
                 await step.Run(new(null, budget.Token));
                 Add("done", step);
                 outcomes.Add("\"" + step.Title + "\" completed");
             }
+            catch (StepNotDueException) { }
             catch (Exception exception) when (budget.IsCancellationRequested && exception is SqlException or OperationCanceledException)
             {
                 Add("cancelled", step);

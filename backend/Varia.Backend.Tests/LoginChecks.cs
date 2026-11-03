@@ -206,6 +206,9 @@ internal static class LoginChecks
             ("a Windows password", Create(Windows("D\\a"), null) with { Secrets = new(secret) }, false),
             ("a blank password without the policy", Create(Sql("app", false, false, false), ""), false),
             ("a password on Script", good, true),
+            // Members other actions take (Attach's databases, Restore's options) are refused here too.
+            ("Attach's databases", good with { Databases = [] }, false),
+            ("Restore's options", good with { Restore = new RestoreOptionsDto([], [], false, false, false, "recovery", false) }, false),
             ("login members on a rename", new ActionArgs("rename", Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), new("table", "AppData", "dbo", "T"), "U", Login: Sql("app")), false)
         };
         var accepted = invalid.Where(item => Refused(item.Args, item.Script) != "INVALID_PARAMS").Select(item => item.Name + " (" + Refused(item.Args, item.Script) + ")").ToList();

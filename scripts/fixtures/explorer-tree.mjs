@@ -2,7 +2,7 @@
 // the tree for suites that answer explorer.children in main instead of through a backend.
 import { expect } from './smoke.mjs'
 import { folderIds, folderSpecs, nodeKinds, staticChildren } from '../../src/shared/explorer/catalog.ts'
-import { explorerTree, part } from './ui.mjs'
+import { explorerTree, menuItemNames, part } from './ui.mjs'
 
 export { explorerTree }
 
@@ -83,6 +83,113 @@ export async function expandExplorerPath(page, ...path) {
     }).toPass({ timeout, intervals: [100, 250, 500] })
     if (clicks > 1) console.log(`Object Explorer row ${path.slice(0, length).join(' › ')} took ${clicks} clicks to expand: an earlier one was lost while the row moved.`)
   }
+}
+
+/** The open Object Explorer context menu. */
+export const explorerMenu = page => page.getByRole('menu', { name: 'Object Explorer', exact: true })
+
+/**
+ * Opens the context menu of the row at a path and returns the menu, once it shows marked for that row (the menus mark
+ * the element a menu is for with `data-menu-target`). A row can move between the press, which selects it, and the
+ * release, which opens the menu on Windows, so a menu for another row (or none) is closed and the press repeats. The press
+ * is forced, as Playwright's wait for a stable row needs frames a hidden or locked window draws seconds apart.
+ */
+export async function openExplorerMenu(page, ...path) {
+  const menu = explorerMenu(page)
+  let presses = 0
+  await expect(async () => {
+    if (await menu.count()) {
+      await page.keyboard.press('Escape')
+      await expect(menu).toHaveCount(0, { timeout: 1000 })
+    }
+    const row = await revealExplorerRow(page, ...path)
+    presses++
+    await row.click({ button: 'right', force: true })
+    await expect(menu).toBeVisible({ timeout: 1000 })
+    await expect(row).toHaveAttribute('data-menu-target', '', { timeout: 1000 })
+  }).toPass({ timeout: process.platform === 'win32' ? 30000 : 15000, intervals: [100, 250, 500] })
+  if (presses > 1) console.log(`Object Explorer row ${path.join(' › ')} took ${presses} right-clicks to open its menu.`)
+  return menu
+}
+
+/**
+ * The item names of the row's context menu (openExplorerMenu), and those greyed, read while it is open; the menu stays
+ * open. A menu shows only with items and never changes them while open, so an empty read is a menu that closed between
+ * opening and the read (a PR #78 run read none so): it opens again.
+ */
+export async function explorerMenuItems(page, ...path) {
+  return itemsWhileOpen(() => openExplorerMenu(page, ...path), path.join(' › '))
+}
+
+/** The items of a menu `open` opens (and returns), read while it is open, as explorerMenuItems reads them. */
+async function itemsWhileOpen(open, title) {
+  let items
+  await expect(async () => {
+    const menu = await open()
+    const [names, disabled] = await Promise.all([menuItemNames(menu), menuItemNames(menu, { disabled: true })])
+    expect(names.length, `items of the menu of ${title}`).toBeGreaterThan(0)
+    await expect(menu).toBeVisible({ timeout: 1000 })
+    items = { names, disabled }
+  }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
+  return items
+}
+
+/**
+ * Opens the submenus `submenus` (menuitem names, outermost first) of the context menu of the row at a path
+ * (openExplorerMenu) and returns the innermost, once it shows. A press on a submenu only opens it, so a press that missed
+ * (its menu closed meanwhile and it landed on the tree) is safe to repeat: the row's menu then opens again.
+ */
+export async function openExplorerSubmenu(page, path, submenus) {
+  let menu
+  await expect(async () => {
+    menu = await openExplorerMenu(page, ...path)
+    for (const name of submenus) {
+      const parent = menu.getByRole('menuitem', { name, exact: true })
+      await parent.click({ force: true, timeout: 2000 })
+      await expect(parent).toHaveAttribute('aria-expanded', 'true', { timeout: 1000 })
+      menu = page.getByRole('menu', { name, exact: true })
+      await expect(menu).toBeVisible({ timeout: 1000 })
+    }
+  }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
+  return menu
+}
+
+/**
+ * The item names, and those greyed, of a submenu of the row's context menu (openExplorerSubmenu), read while it is open as
+ * explorerMenuItems reads the row's menu: an empty read opens them again. The menus stay open.
+ */
+export async function explorerSubmenuItems(page, path, submenus) {
+  return itemsWhileOpen(() => openExplorerSubmenu(page, path, submenus), [...path, ...submenus].join(' › '))
+}
+
+/**
+ * Chooses item `name` (a menuitem's accessible name) from the context menu of the row at a path (openExplorerMenu), or,
+ * when `name` is a list, from the submenus it names first (['New', 'Login…'] is New › Login…, openExplorerSubmenu). The
+ * click is forced, so it goes where the item was even if the menu closed meanwhile: it then lands on the tree below,
+ * selects another row and runs nothing (a Windows run lost Delete so). The press is therefore checked where it landed:
+ * only a press that missed the item opens the menu again; once one reaches it, what it runs is the caller's to check.
+ */
+export async function chooseExplorerMenuItem(page, path, name) {
+  const names = [name].flat(), submenus = names.slice(0, -1)
+  name = names.join(' › ')
+  let presses = 0
+  await expect(async () => {
+    const menu = submenus.length ? await openExplorerSubmenu(page, path, submenus) : await openExplorerMenu(page, ...path)
+    const item = menu.getByRole('menuitem', { name: names.at(-1), exact: true })
+    // The item by its command, not its element: a menu that renders again keeps the item's id.
+    await item.evaluate(element => {
+      const id = element.getAttribute('data-item-id')
+      window.__variaMenuPress = 'none'
+      addEventListener('pointerdown', event => { window.__variaMenuPress = event.target.closest?.('[role="menuitem"]')?.getAttribute('data-item-id') === id ? 'item' : 'elsewhere' }, { capture: true, once: true })
+    }, undefined, { timeout: 2000 })
+    presses++
+    // A press that reached the item chose it, even if the click then reports a failure: it is never pressed again.
+    const failure = await item.click({ force: true, timeout: 2000 }).then(() => undefined, error => error)
+    const landed = await page.evaluate(() => window.__variaMenuPress)
+    if (landed !== 'item' && failure) throw failure
+    expect(landed, `where the press on ${name} landed`).toBe('item')
+  }).toPass({ timeout: process.platform === 'win32' ? 60000 : 30000, intervals: [100, 250, 500] })
+  if (presses > 1) console.log(`Object Explorer row ${path.join(' › ')} took ${presses} presses on ${name}: an earlier one missed its closed menu.`)
 }
 
 /** The visible rows as `level label [expanded]` lines, for failure messages and screenshots of the structure. */

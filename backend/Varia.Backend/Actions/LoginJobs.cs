@@ -27,7 +27,7 @@ internal sealed partial class ActionService
     /// <summary>User Mapping's steps, whose detail names their database.</summary>
     private static bool MappingStep(ActionTemplate template) => template is ActionTemplate.CreateUserForLogin or ActionTemplate.AlterUserSchema or ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember;
     private static bool SameMembers(ActionArgs args) => args.NewName is null && args.CloseConnections is null && args.DeleteHistory is null && args.Changes is null && args.Design is null
-        && args.Identity is null;
+        && args.Identity is null && args.Databases is null;
     /// <summary>Whether a request carries New Login's members, which only createLogin takes.</summary>
     private static bool LoginMembers(ActionArgs args) => args.Login is not null || args.ServerRoles is not null || args.Status is not null || args.Mappings is not null;
 
@@ -260,7 +260,9 @@ internal sealed partial class ActionService
                 await using var command = connection.CreateCommand();
                 command.CommandText = LoginSql.Preflight;
                 Add(command, "@name", SqlDbType.NVarChar, 128, login.Name);
-                if (await command.ExecuteScalarAsync(budget.Token) is true) (done, failure) = StoppedAsCreated(done, failure);
+                // A reader, as every action statement is (tests/action-reader-lint.test.ts); its first column says the name is taken.
+                await using var reader = await command.ExecuteReaderAsync(budget.Token);
+                if (await reader.ReadAsync(budget.Token) && reader.GetBoolean(0)) (done, failure) = StoppedAsCreated(done, failure);
             }
             catch (Exception exception) when (exception is SqlException or InvalidOperationException or OperationCanceledException) { }
         }

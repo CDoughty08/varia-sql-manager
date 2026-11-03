@@ -138,7 +138,7 @@ internal sealed partial class ActionService
 
     private async Task<ActionScriptResult> ScriptDesignerJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
-        var plan = TableDesignValidator.Validate(designer, args.Design);
+        var plan = TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
         var (filegroup, error, warnings) = await PlanDesignerAsync(connection, plan, target.Name!, band, execute: false, token);
         if (filegroup is null) return new(null, target.Name!, [], error);
         var text = DesignerSql.Script(designer, plan, filegroup);
@@ -149,17 +149,17 @@ internal sealed partial class ActionService
     /// <summary>Save: the preflight, then each step's builder in one transaction, then the commit. Any failure, Stop or lost
     /// connection rolls back (a rollback that cannot finish within StopGrace closes the unpooled connection, which ends the
     /// session and rolls it back); only a commit the connection broke during leaves the outcome unknown.</summary>
-    private async Task<ActionExecuteResult> ExecuteDesignerJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
+    private async Task<ActionExecuteResult> ExecuteDesignerJobAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, ActionProgress progress, CancellationToken token)
     {
-        var plan = TableDesignValidator.Validate(designer, args.Design);
-        var messages = CollectMessages(connection);
+        var plan = TableDesignValidator.Validate(designer, args.Design?.As<TableDesignDto>());
+        var messages = CollectMessages(connection, progress);
         var (filegroup, refused, _) = await PlanDesignerAsync(connection, plan, target.Name!, band, execute: true, token);
         if (filegroup is null) return new([], [], 0, refused);
         var design = DesignerSql.DesignJson(designer, plan, filegroup);
         // Runner v2's transaction mode: the builders, then the commit; a failure or Stop rolls back.
         var work = DesignerSql.Statements(plan, filegroup).Select(statement => new RunStep(StepTitle(statement.Part),
             context => RunBuilderAsync(connection, context.Transaction, statement.Part, target.Name!, design, dryRun: false, context.Token))).ToList();
-        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token, CleanupBudget(args.Action), transaction: true, rolledBack: RolledBack);
+        var (steps, failure, _) = await RunStepsAsync(connection, work, null, token, CleanupBudget(args.Action), transaction: true, rolledBack: RolledBack, progress: progress);
         return new(steps, messages.Collected(), 0, failure);
     }
 
@@ -171,14 +171,7 @@ internal sealed partial class ActionService
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, database);
         Add(command, "@design", SqlDbType.NVarChar, -1, design);
-        var values = new List<string?>();
-        await using var reader = await command.ExecuteReaderAsync(token);
-        do
-        {
-            while (await reader.ReadAsync(token))
-                for (var i = 0; i < reader.FieldCount; i++) values.Add(reader.IsDBNull(i) ? null : reader.GetString(i));
-        } while (await reader.NextResultAsync(token));
-        return values;
+        return await ReadAllAsync(command, token);
     }
 
     /// <summary>The live checks' only way to see what the builders compose for a plan, in order (see the other DryRunAsync).</summary>
