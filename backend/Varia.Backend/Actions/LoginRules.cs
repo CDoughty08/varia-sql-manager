@@ -108,13 +108,14 @@ internal sealed class LoginRules
 
     /// <summary>The message id that refuses Login Properties' changes for a login the preflight read, or null (logins.ts
     /// loginPropertiesRefusal): SQL Server's own logins, which it shows but never changes; Deny or Disable of the login this connection
-    /// uses, which would lock Varia out (owner decision 7); Disable of a Windows group (15151 by design); and a password or password
-    /// policy for a login SQL Server does not authenticate itself. Permissions are SQL Server's to answer: a login may change its own
-    /// password (with the old one), default database and language.</summary>
+    /// uses, which would lock Varia out (owner decision 7), and MUST_CHANGE on it, which would refuse its new sessions (18488); Disable
+    /// of a Windows group (15151 by design); and a password or password policy for a login SQL Server does not authenticate itself.
+    /// Permissions are SQL Server's to answer: a login may change its own password (with the old one), default database and language.</summary>
     public static string? PropertiesRefusal(LoginFactsDto facts, LoginChangesDto changes)
     {
         if (facts.Subtype == "system") return "system";
         if (facts.Own && (changes.Enabled == false || changes.Connect == "deny")) return "ownStatus";
+        if (facts.Own && changes.Password is { MustChange: true }) return "ownMustChange";
         if (facts.Subtype == "windowsGroup" && changes.Enabled == false) return "windowsGroupDisable";
         if (facts.Type.Trim() != "S" && (changes.Password is not null || changes.CheckPolicy is not null || changes.CheckExpiration is not null)) return "propertiesNotSql";
         return null;

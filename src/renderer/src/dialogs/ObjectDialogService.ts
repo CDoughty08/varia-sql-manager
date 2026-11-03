@@ -1,7 +1,7 @@
 import { actionLimits, dialogSpecs, dialogTitle, isModalDialog, unknownOutcomeMessage, type ModalDialogId, type PageId } from '../../../shared/actions/catalog.ts'
 import { noScriptNotice } from '../../../shared/actions/database.ts'
 import { loginDatabaseRolesDescribe, loginLimits, type LoginDatabaseRoles, type NewLoginModel } from '../../../shared/actions/logins.ts'
-import { promptTabFacts } from '../../../shared/actions/prompts.ts'
+import { actionPrompts, promptTabFacts } from '../../../shared/actions/prompts.ts'
 import type { ActionError, ActionExecuteResult, ActionRequest, ActionStep, DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { ApiResult, VariaApi } from '../../../shared/contracts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
@@ -17,7 +17,7 @@ import type { ExplorerMenuNode } from '../menus/targets'
 import { deliverScript, type DeliverScriptDeps } from '../scripting/deliver'
 import { scriptFileName, scriptObjectLabel } from '../scripting/ScriptingService'
 import type { LiveConnection } from '../services/connections'
-import { definitionOf, type BuiltRequest, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
+import { definitionOf, type BuiltRequest, type DialogConfirmation, type DialogContext, type DialogDraft, type DialogEffects, type DialogModel } from './definitions'
 import { emptySecrets, mappable, type SecretState } from './new-login'
 
 /** loading → ready, or loadFailed; OK → (confirming →) executing → closed, or failed (or stopped); a lost server → disconnected. */
@@ -56,6 +56,9 @@ export interface OpenObjectDialog {
   readonly moreTabsWithTransactions?: number
   /** Delete Object on a login: Varia's other connections that sign in as it (critic D4-3), by their labels. */
   readonly loginConnections?: readonly string[]
+  /** Counts the times the secret slot was emptied while the dialog stayed open (`spentSecrets`): the password fields, which keep their
+   *  text themselves, remount on it and come back empty. */
+  readonly secretEpoch?: number
 }
 /** One database's roles, guest state and schemas, as User Mapping reads them when its row is selected. */
 export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly state: 'ready'; readonly value: LoginDatabaseRoles } | { readonly state: 'failed'; readonly error: ActionError }
@@ -63,7 +66,7 @@ export type DatabaseRolesLookup = { readonly state: 'loading' } | { readonly sta
 export interface DatabaseGone { readonly connectionId: string; readonly server: string; readonly database: string }
 export interface ObjectDialogSnapshot { readonly open?: OpenObjectDialog }
 export interface ObjectDialogServiceOptions {
-  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections'>
+  readonly api: Pick<VariaApi, 'describeObject' | 'scriptObjectAction' | 'executeObjectAction' | 'cancelObjectActions' | 'writeClipboardText' | 'confirmOpenConnections' | 'confirmAction'>
   readonly connections: ExternalStore<readonly LiveConnection[]>
   readonly explorer: {
     listingFolderOf(nodeId: number): number | undefined
@@ -272,15 +275,16 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     // OK is greyed then; Enter still reaches here, and nothing is sent.
     const blocked = definition.blocked?.(open.model)
     if (blocked) { this.update(open, { error: error('NOT_SUPPORTED', blocked) }); return }
-    const confirmation = definition.confirm?.(open.model, built)
+    const context = this.context(open)
+    const confirmation = definition.confirm?.(open.model, built, context)
     if (confirmation) {
       // Main's message box; a failure or a dialog that closed meanwhile counts as No, and No sends nothing.
       this.update(open, { phase: 'confirming', error: undefined, notice: undefined })
-      const answer = await this.call(() => this.options.api.confirmOpenConnections())
+      const answer = await this.confirmed(confirmation)
       // Cancel, a lost server or a disposed service while the box was up: nothing runs.
       if (this.disposed || this.current?.id !== open.id || this.current.phase !== 'confirming') return
-      if (!answer.ok || !answer.value) { this.update(open, { phase: 'ready' }); return }
-      built = definition.withConfirmation?.(built, confirmation) ?? built
+      if (!answer) { this.update(open, { phase: 'ready' }); return }
+      if (confirmation === 'openConnections') built = definition.withConfirmation?.(built, confirmation) ?? built
     }
     const requestId = this.begin(open)
     this.update(open, { phase: 'executing', error: undefined, notice: undefined, steps: undefined })
@@ -305,7 +309,7 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       this.secrets.clear()
       this.cancelLookup()
       this.publish({})
-      try { definition.afterSuccess(this.effects(open), sent, { target: open.target, label: open.label }) } catch (failure) { onUnexpectedError(failure) }
+      try { definition.afterSuccess(this.effects(open), sent, { target: open.target, label: open.label }, open.model, context) } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value.steps)
       return
     }
@@ -317,16 +321,43 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       try { if (definition.afterPartial) definition.afterPartial(effects, sent); else effects.refreshListing() } catch (failure) { onUnexpectedError(failure) }
       this.reconcileChanged(open, open.model, value!.steps)
     }
+    // Completed steps that used the secret slot (Login Properties' password change): a retry must not send it again.
+    const spent = partial ? this.spend(open, value!.steps) : undefined
+    const withNote = (failure: ActionError): ActionError => spent ? { ...failure, message: failure.message + ' ' + spent.note } : failure
     // Stop: the backend answers once SQL Server has ended the statement, saying what completed before it.
-    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: value.error, steps: value.steps }); if (partial) this.reload(open); return }
+    if (value?.error?.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: withNote(value.error), steps: value.steps, ...spent?.patch }); if (partial) this.reload(open); return }
     if (!result.ok && result.code === 'CANCELLED') { this.update(open, { phase: 'stopped', error: error('CANCELLED', dialogMessages.stopped) }); return }
     const failure = value?.error ?? (!result.ok && (result.code === 'BACKEND_LOST' || result.code === 'CONNECTION_LOST') ? error('CONNECTION_LOST', unknownOutcomeMessage) : error('SQL_ERROR', result.ok ? 'The action failed.' : result.error))
-    const model = definition.afterFailure?.(open.model, failure) ?? open.model
-    this.update(open, { phase: 'failed', error: failure, model, ...(value ? { steps: value.steps } : {}) })
+    const model = spent?.patch.model ?? definition.afterFailure?.(open.model, failure) ?? open.model
+    this.update(open, { phase: 'failed', error: withNote(failure), ...(value ? { steps: value.steps } : {}), ...spent?.patch, model })
     if (partial) { this.reload(open); return }
     // SSMS counts other connections when OK is pressed: when nothing ran and the fresh model needs the question this OK
     // did not ask, it is asked at once rather than on the next OK.
-    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built)) await this.ok()
+    if (!confirmation && model !== open.model && !value?.steps.some(step => step.status === 'done') && definition.confirm?.(model, built, this.context(open))) await this.ok()
+  }
+
+  /** Main's box for a confirmation: Open Connections' Yes, or any action prompt answer but its cancel one. A failure counts as No. */
+  private async confirmed(confirmation: DialogConfirmation): Promise<boolean> {
+    if (confirmation === 'openConnections') {
+      const answer = await this.call(() => this.options.api.confirmOpenConnections())
+      return answer.ok && answer.value
+    }
+    const answer = await this.call(() => this.options.api.confirmAction(confirmation))
+    return answer.ok && answer.value !== actionPrompts[confirmation.prompt].cancelAnswer
+  }
+  /** What a definition knows besides its model: Varia's other connections that sign in as a login target, as they are now. */
+  private context(open: OpenObjectDialog): DialogContext {
+    if (open.target.kind !== 'login') return {}
+    const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
+    return labels.length ? { loginConnections: labels } : {}
+  }
+  /** After a partial run whose done steps used the secret slot: empties the slot and the password fields (`secretEpoch` remounts
+   *  them), and takes the definition's model and draft; the note joins the failure. */
+  private spend(open: OpenObjectDialog, steps: readonly ActionStep[]): { readonly patch: Partial<OpenObjectDialog> & { readonly model: DialogModel }; readonly note: string } | undefined {
+    const spent = open.model && open.draft ? definitionOf(open.dialog).spentSecrets?.(open.model, open.draft, steps) : undefined
+    if (!spent) return undefined
+    this.secrets.clear()
+    return { note: spent.note, patch: { model: spent.model, draft: spent.draft, secretState: emptySecrets, secretEpoch: (open.secretEpoch ?? 0) + 1 } }
   }
 
   /** Stop: cancels the running action in SQL Server; the dialog reports Stopped, with what completed, when its answer comes. */
@@ -379,8 +410,8 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
     this.update(open, { phase: 'ready', model, draft: { ...definition.initialDraft(model, open.target), ...patch } as DialogDraft })
     if (open.dialog === 'deleteObject' && open.target.kind === 'database') this.nameTabTransactions(open, (model as DeleteTarget).transactionTabs ?? [])
     if (open.dialog === 'deleteObject' && open.target.kind === 'login') {
-      const labels = otherLoginConnections(this.options.connections.getSnapshot(), open.connectionId, open.target.name)
-      if (labels.length) this.update(open, { loginConnections: labels })
+      const labels = this.context(open).loginConnections
+      if (labels) this.update(open, { loginConnections: labels })
     }
   }
   /**
@@ -397,7 +428,22 @@ export class ObjectDialogService extends SnapshotStore<ObjectDialogSnapshot> imp
       if (!this.end(open, requestId)) return
       const current = this.current
       const model = result.ok && !result.value.error ? definition.modelOf(result.value) : undefined
-      if (model && current && (current.phase === 'failed' || current.phase === 'stopped')) this.update(current, { model })
+      if (!model || !current || (current.phase !== 'failed' && current.phase !== 'stopped')) return
+      // The fresh describe holds nothing User Mapping read (roles, users past its scan): those databases are read again, one at a time,
+      // and until each answers, its changed rows count as not read, so OK refuses rather than dropping their changes.
+      const again = current.model && current.draft ? definition.readAgain?.(current.model, current.draft) ?? [] : []
+      const roles = new Map(current.databaseRoles ?? [])
+      for (const database of again) roles.delete(database)
+      this.update(current, { model, ...(again.length ? { databaseRoles: roles } : {}) })
+      for (const database of again) {
+        const now = this.current
+        // A database the user selected meanwhile is read by that selection; one left out while it reads stays unread until selected.
+        if (this.disposed || now?.id !== open.id || (now.phase !== 'failed' && now.phase !== 'stopped') || now.databaseRoles?.has(database) || this.lookup) continue
+        const lookupId = this.newId()
+        this.lookup = { id: lookupId, dialog: open.id, database }
+        this.update(now, { databaseRoles: new Map(now.databaseRoles ?? []).set(database, { state: 'loading' }) })
+        await this.readDatabaseRoles(now, database, lookupId)
+      }
     })().catch(onUnexpectedError)
   }
   /** Reloads the loaded folders a reply's done steps changed besides the listing (definition.changedFolders). */

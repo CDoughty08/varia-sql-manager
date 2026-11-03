@@ -169,6 +169,14 @@ function ObjectDialogFrame({ open, close }: { open: OpenObjectDialog; close(): v
   useEffect(() => setVisited(seen => seen.has(open.page) ? seen : new Set([...seen, open.page])), [open.page])
   // The dialog takes focus as it opens, so Enter is OK and Escape is Cancel, as in SSMS.
   useEffect(() => { form.current?.focus() }, [])
+  // Once the object is read, a definition may send focus to one field: Login Properties opened by Unlock's hand-off, to the password.
+  const focused = useRef(false)
+  useEffect(() => {
+    if (focused.current || open.phase !== 'ready' || !open.model || !open.draft) return
+    focused.current = true
+    const id = definitionOf(open.dialog).initialFocus?.(open.model, open.draft)
+    if (id) document.getElementById(id)?.focus()
+  }, [open.phase, open.model, open.draft, open.dialog])
   // A run disables the page and the field that had focus, which drops focus to the body. When it ends, focus comes back: to the
   // password after the server's policy refused it (it must be retyped), else to the dialog, so Enter and Escape work again.
   const wasBusy = useRef(false)

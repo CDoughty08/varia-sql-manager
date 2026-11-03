@@ -882,11 +882,20 @@ try {
   await unlockDialog('Locked').getByRole('button', { name: 'Continue in Login Properties…', exact: true }).click()
   await expect(unlockDialog('Locked')).toHaveCount(0)
   await expect(objectDialogProgress(propertiesDialog('Locked'))).toHaveText('Ready')
+  // The hand-off is for a new password: focus is in Password, whose note says so.
+  await expect(passwordField(propertiesDialog('Locked'), 'Password')).toBeFocused()
+  await expect(passwordField(propertiesDialog('Locked'), 'Password')).toHaveAccessibleDescription('Type a new password to unlock the login.')
   await expect(propertiesDialog('Locked').getByRole('textbox', { name: 'Login name', exact: true })).toHaveValue('Locked')
   await expect(propertiesDialog('Locked').getByRole('textbox', { name: 'Login name', exact: true })).not.toBeEditable()
   await propertiesDialog('Locked').getByRole('button', { name: 'Status', exact: true }).click()
-  await expect(propertiesDialog('Locked').getByRole('checkbox', { name: 'Login is locked out', exact: true })).not.toBeChecked()
+  const lockedOut = propertiesDialog('Locked').getByRole('checkbox', { name: 'Login is locked out', exact: true })
+  await expect(lockedOut).not.toBeChecked()
   await expect(propertiesDialog('Locked')).toContainText('Type a new password to unlock the login.')
+  // Cleared, it can be checked again, and cleared once more.
+  await lockedOut.check()
+  await expect(lockedOut).toBeChecked()
+  await lockedOut.uncheck()
+  await expect(lockedOut).not.toBeChecked()
   // Without a new password OK says what it needs and sends nothing.
   await propertiesDialog('Locked').getByRole('button', { name: 'OK', exact: true }).click()
   await expect(propertiesDialog('Locked').getByRole('alert')).toContainText('Type a new password to unlock the login.')
@@ -940,6 +949,17 @@ try {
   await expect(propertiesDialog('Retired').getByRole('radiogroup', { name: 'Permission to connect to database engine', exact: true }).getByRole('radio', { name: 'Deny', exact: true })).toBeChecked()
   await expect(propertiesDialog('Retired').getByRole('radiogroup', { name: 'Login', exact: true }).getByRole('radio', { name: 'Enabled', exact: true })).toBeChecked()
   await expect(propertiesDialog('Retired').getByRole('checkbox', { name: 'Login is locked out', exact: true })).toBeDisabled()
+  // Disabled asks first, as Disable does, since a service runs as Retired; Cancel (the default then) sends nothing.
+  const retiredLogin = propertiesDialog('Retired').getByRole('radiogroup', { name: 'Login', exact: true })
+  await retiredLogin.getByRole('radio', { name: 'Disabled', exact: true }).check()
+  const promptsBefore = (await prompts()).length, executesBefore = (await stubCalls('actions.execute')).length
+  await answer(1)
+  await propertiesDialog('Retired').getByRole('button', { name: 'OK', exact: true }).click()
+  await expect.poll(async () => (await prompts()).length).toBe(promptsBefore + 1)
+  expect((await prompts()).at(-1)).toMatchObject({ title: 'Disable Login', message: 'Disable the login Retired?', buttons: ['Disable', 'Cancel'], defaultId: 1, cancelId: 1 })
+  await expect(objectDialogProgress(propertiesDialog('Retired'))).toHaveText('Ready')
+  expect((await stubCalls('actions.execute')).length).toBe(executesBefore)
+  await retiredLogin.getByRole('radio', { name: 'Enabled', exact: true }).check()
   await propertiesDialog('Retired').getByRole('button', { name: 'User Mapping', exact: true }).click()
   const propertiesGrid = propertiesDialog('Retired').getByRole('grid', { name: 'Users mapped to this login:', exact: true })
   const propertiesRow = database => propertiesGrid.getByRole('row').filter({ has: page.getByRole('checkbox', { name: `Map ${database}`, exact: true }) })
@@ -967,6 +987,33 @@ try {
   await expect(propertiesDialog('Retired')).toHaveCount(0)
   expect((await stubCalls('actions.execute')).at(-1)).toEqual({ action: 'loginProperties', connectionId: expect.any(String), requestId: expect.any(String), target: { kind: 'login', name: 'Retired' },
     loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' }, loginChanges: { defaultLanguage: 'Deutsch' } })
+  // A Windows group: General names its kind, which the authentication choices do not; Status greys Disabled with the reason.
+  await menuOf(...logins, 'CONTOSO\\Ops')
+  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  await expect(objectDialogProgress(propertiesDialog('CONTOSO\\Ops'))).toHaveText('Ready')
+  await expect(propertiesDialog('CONTOSO\\Ops').getByRole('textbox', { name: 'Login name', exact: true })).toHaveAccessibleDescription('Windows group')
+  await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Status', exact: true }).click()
+  const groupDisabled = propertiesDialog('CONTOSO\\Ops').getByRole('radiogroup', { name: 'Login', exact: true }).getByRole('radio', { name: 'Disabled', exact: true })
+  await expect(groupDisabled).toBeDisabled()
+  await expect(groupDisabled).toHaveAccessibleDescription('A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead.')
+  await expect(propertiesDialog('CONTOSO\\Ops').getByRole('radiogroup', { name: 'Permission to connect to database engine', exact: true }).getByRole('radio', { name: 'Deny', exact: true })).toBeEnabled()
+  await propertiesDialog('CONTOSO\\Ops').getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(propertiesDialog('CONTOSO\\Ops')).toHaveCount(0)
+  // SQL Server's own login: every page says why it cannot change, its controls are greyed, and so is OK.
+  await menuOf(...logins, '##MS_PolicyTsqlExecutionLogin##')
+  await explorerMenu().getByRole('menuitem', { name: 'Properties', exact: true }).click(fast)
+  const systemDialog = propertiesDialog('##MS_PolicyTsqlExecutionLogin##')
+  await expect(objectDialogProgress(systemDialog)).toHaveText('Ready')
+  for (const pageName of ['General', 'Server Roles', 'User Mapping', 'Status']) {
+    await systemDialog.getByRole('button', { name: pageName, exact: true }).click()
+    await expect(systemDialog.getByRole('list', { name: 'Notes', exact: true })).toContainText('This login belongs to SQL Server and cannot be changed.')
+  }
+  await expect(systemDialog.getByRole('radiogroup', { name: 'Login', exact: true }).getByRole('radio', { name: 'Enabled', exact: true })).toBeDisabled()
+  await systemDialog.getByRole('button', { name: 'General', exact: true }).click()
+  await expect(systemDialog.getByRole('combobox', { name: 'Default language', exact: true })).toBeDisabled()
+  await expect(systemDialog.getByRole('button', { name: 'OK', exact: true })).toBeDisabled()
+  await systemDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(systemDialog).toHaveCount(0)
   // Rename: F2 on a login; a name in SQL Server's own form keeps the box with the reason, which Escape takes away with the box.
   await select(...logins, 'AppUser')
   await page.keyboard.press('F2')

@@ -28,6 +28,11 @@ internal interface IActionHost
     /// <summary>A database was renamed (to <paramref name="newName"/>) or dropped (null): a connection whose initial catalog
     /// it was moves to the new name, or to master, so its later connections can still open.</summary>
     void DatabaseChanged(string connectionId, string database, string? newName);
+    /// <summary>Login Properties changed the password of <paramref name="login"/> (its catalog name): every connection of the backend to
+    /// the same server that signs in as that SQL Server login (its SUSER_SNAME at connect, not a contained user) uses the new password
+    /// for its later sessions, so its pools, object actions and live probes never sign in with the old one (which can lock a login out
+    /// under its password policy). Hosts without connections (the offline checks') do nothing.</summary>
+    void PasswordChanged(string connectionId, string login, string password) { }
     /// <summary>Before a statement that needs the database to itself (critic A5), for every connection of the backend to the same
     /// server: when its own database (named, or the login's default) is that one, its server-scope pools (Object Explorer, scripting,
     /// SSIS, live, databases.list) open in master from now on, unless the login is a contained database user; then its idle pools
@@ -1114,6 +1119,9 @@ internal sealed partial class ActionService : IDisposable
     private static async Task<List<string?>> RunStatementAsync(SqlConnection connection, PlannedStatement statement, bool dryRun, CancellationToken token, SqlTransaction? transaction = null)
     {
         ActionSql.Checked(statement);
+        // A bound statement never runs by its names alone: RunBoundAsync checks its principal around it, in its transaction.
+        if (statement.Principal is not null && ActionSql.BindingOf(statement.Template) is not null && !dryRun && transaction is null)
+            throw new InvalidOperationException("A bound statement runs through RunBoundAsync.");
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = ActionSql.Executable(statement.Template, dryRun);

@@ -44,10 +44,14 @@ internal static class LoginPropertiesLiveChecks
 
         // The login this connection uses: its describe reads its facts, defaults and the users mapped to it, and changes nothing.
         var own = (await Sql("SELECT SUSER_SNAME();")).Scalar ?? "";
-        var ownDescribed = await Describe(own);
-        check(ownDescribed is { Error: null, Login.Own: true, NewLogin: not null, LoginProperties: { DefaultDatabase.Length: > 0 } }
-            && (ownDescribed.Login.Type.Trim() == "S") == (ownDescribed.Lock is not null),
-            "Login Properties' describe reads the login this connection uses: its facts, defaults, server roles, mapped users and, for a SQL Server login, its lock-out state: " + ownDescribed.Error?.Message);
+        if (await actions.LoginFactsAsync(info.Id, own, CancellationToken.None) is not null)
+        {
+            var ownDescribed = await Describe(own);
+            check(ownDescribed is { Error: null, Login.Own: true, NewLogin: not null, LoginProperties: { DefaultDatabase.Length: > 0 } }
+                && (ownDescribed.Login.Type.Trim() == "S") == (ownDescribed.Lock is not null),
+                "Login Properties' describe reads the login this connection uses: its facts, defaults, server roles, mapped users and, for a SQL Server login, its lock-out state: " + ownDescribed.Error?.Message);
+        }
+        else Console.WriteLine("Login Properties' own-login describe skipped: this connection gets in through a Windows group.");
 
         // Dry runs: SQL Server builds exactly Script's statements for hostile names and passwords, which never leave the batch's
         // parameters (no login is needed: the batch returns its statement and runs nothing).
@@ -180,6 +184,14 @@ internal static class LoginPropertiesLiveChecks
                 && withOld.Error is null && await SignIn(login, fourth) == 0
                 && denied is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && denied.Error.Message == actions.Catalog.Logins.Message("ownStatus") && await State(login) == database + "|Deutsch|0|G|dbcreator",
                 "the login itself changes its own password only with the old one, and may not disable itself: " + withoutOld.Error?.Code + " " + withOld.Error?.Message + " " + denied.Error?.Code);
+            // The connection keeps working: its new sessions (each object action opens one) sign in with the new password (finding 7).
+            var afterOwn = await actions.ExecuteAsync(Properties(login, new(DefaultLanguage: "us_english"), IdentityOf(selfDescribed), null, self.Id), CancellationToken.None);
+            var afterOwnState = await State(login);
+            var mustOwn = await actions.ExecuteAsync(Properties(login, new(CheckExpiration: true, Password: new(false, false, true)), IdentityOf(selfDescribed), new(Remember(NewPassword())), self.Id), CancellationToken.None);
+            check(afterOwn.Error is null && afterOwnState.StartsWith(database + "|us_english|", StringComparison.Ordinal) && Clean(afterOwn),
+                "after the login changes its own password, the connection signed in as it runs its next action with the new one: " + afterOwn.Error?.Code + " " + afterOwn.Error?.Message);
+            check(mustOwn is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 } && mustOwn.Error.Message == actions.Catalog.Logins.Message("ownMustChange") && await SignIn(login, fourth) == 0,
+                "the login this connection uses may not require itself to change its password at the next sign-in: " + mustOwn.Error?.Code);
             third = fourth;
         }
         finally { await Call<object>("connections.disconnect", new ConnectionArgs(self.Id)); }
@@ -204,7 +216,7 @@ internal static class LoginPropertiesLiveChecks
         check(unmapScript.Warnings.SequenceEqual(["Drops the user " + Bracket(renamed) + " in " + Bracket(database) + "."])
             && owning.Error is { } owningError && owningError.Message.StartsWith(ActionService.LoginChangedMessage + " ", StringComparison.Ordinal)
             && Steps(owning) == "done:Remove from a server role/dbcreator, failed:Drop the database user/" + renamed + " in " + database
-            && await State(login) == database + "|Deutsch|0|G|" && await Mapped(login) == renamed + "|" + schema + "|" + renamed + "|" + role,
+            && await State(login) == database + "|us_english|0|G|" && await Mapped(login) == renamed + "|" + schema + "|" + renamed + "|" + role,
             "Login Properties drops a server role membership, then fails to unmap a user that owns a schema and says the login changed in part: " + Steps(owning) + " | " + owning.Error?.Message);
         var transferred = await Sql("ALTER AUTHORIZATION ON SCHEMA::" + Bracket(schema) + " TO [dbo];", database);
         var unmapped = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "unmap", renamed)]), identity), CancellationToken.None);
@@ -214,6 +226,14 @@ internal static class LoginPropertiesLiveChecks
         // Mapping again, then a role that vanishes after the preflight: the reply says first that the login changed in part.
         var remap = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "map", user, DefaultSchema: "dbo", RolesAdd: ["VariaGone"])]), identity), CancellationToken.None);
         check(remap.Error is null && await Mapped(login) == user + "|dbo|dbo|VariaGone", "Login Properties maps the login to a new user with a role: " + Steps(remap));
+        // The mapping preflight refuses, before anything runs: a map where the login has a user, a new name another user or role has,
+        // and a role the database lacks (finding 16).
+        var mapTwice = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "map", "VariaOther")]), identity), CancellationToken.None);
+        var renameTaken = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "update", user, role)]), identity), CancellationToken.None);
+        var roleMissing = await actions.ExecuteAsync(Properties(login, new(DefaultLanguage: "us_english", Mappings: [new(database, "update", user, RolesAdd: ["VariaMissing"])]), identity), CancellationToken.None);
+        check(mapTwice is { Error.Code: "NAME_IN_USE", Steps.Count: 0 } && renameTaken is { Error.Code: "NAME_IN_USE", Steps.Count: 0 } && roleMissing is { Error.Code: "NOT_FOUND", Steps.Count: 0 }
+            && await Mapped(login) == user + "|dbo|dbo|VariaGone" && (await State(login)).StartsWith(database + "|us_english|", StringComparison.Ordinal),
+            "User Mapping's preflight refuses a second user, a name in use and a missing role, and runs nothing: " + mapTwice.Error?.Code + " " + renameTaken.Error?.Code + " " + roleMissing.Error?.Code);
         var partialChanges = new LoginChangesDto(DefaultLanguage: "us_english", Mappings: [new(database, "update", user, RolesAdd: [role], RolesDrop: ["VariaGone"])]);
         actions.Options.BeforeStep = async (title, _) => { if (title == "Remove from a database role") await Sql("ALTER ROLE [VariaGone] DROP MEMBER " + Bracket(user) + ";\nDROP ROLE [VariaGone];", database); };
         ActionExecuteResult partial;
@@ -238,6 +258,43 @@ internal static class LoginPropertiesLiveChecks
                 && await SignIn(login, current) == 0 && Clean(stopped),
                 "Stop before the password leaves the options changed and the password as it was, and says so first: " + (stopped is null ? "an unknown outcome" : Steps(stopped)));
         }
+
+        // A user replaced by another of the same name (another SID) between the preflight and its step: the step is refused and grants
+        // nothing to the newcomer (finding 2). Then the preflight refuses an update and an unmap of the user that is gone (finding 16).
+        actions.Options.BeforeStep = async (title, _) => { if (title == "Add to a database role") await Sql("DROP USER " + Bracket(user) + ";\nCREATE USER " + Bracket(user) + " WITHOUT LOGIN;", database); };
+        ActionExecuteResult userSwapped;
+        try { userSwapped = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "update", user, RolesAdd: ["db_datawriter"])]), identity), CancellationToken.None); }
+        finally { actions.Options.BeforeStep = null; }
+        var impostorRoles = (await Sql("SELECT COUNT(*) FROM sys.database_role_members AS m JOIN sys.database_principals AS u ON u.principal_id = m.member_principal_id WHERE u.name = " + Literal(user) + ";", database)).Scalar;
+        check(userSwapped is { Error.Code: "NOT_FOUND" } && Steps(userSwapped) == "failed:Add to a database role/db_datawriter in " + database && impostorRoles == "0" && await Mapped(login) == "",
+            "a user replaced under the same name after the preflight is refused at its step, and the newcomer gains no role: " + Steps(userSwapped) + " | " + userSwapped.Error?.Message);
+        var updateGone = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "update", user, DefaultSchema: "dbo", RolesAdd: ["db_datawriter"])]), identity), CancellationToken.None);
+        var unmapGone = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "unmap", user)]), identity), CancellationToken.None);
+        check(updateGone is { Error.Code: "NOT_FOUND", Steps.Count: 0 } && unmapGone is { Error.Code: "NOT_FOUND", Steps.Count: 0 }
+            && (await Sql("SELECT COUNT(*) FROM sys.database_principals WHERE name = " + Literal(user) + ";", database)).Scalar == "1",
+            "the preflight refuses to update or unmap a user that is no longer the login's: " + updateGone.Error?.Code + " " + unmapGone.Error?.Code);
+        // The login owning the database is dbo there, which Login Properties never changes.
+        var owner = (await Sql("SELECT SUSER_SNAME(owner_sid) FROM sys.databases WHERE name = " + Literal(database) + ";")).Scalar ?? "";
+        ActionExecuteResult dboChange;
+        string? owned;
+        try
+        {
+            owned = (await Sql("DROP USER " + Bracket(user) + ";\nALTER AUTHORIZATION ON DATABASE::" + Bracket(database) + " TO " + Bracket(login) + ";", database)).Error;
+            dboChange = await actions.ExecuteAsync(Properties(login, new(Mappings: [new(database, "update", "dbo", DefaultSchema: schema)]), identity), CancellationToken.None);
+        }
+        finally { await Sql("ALTER AUTHORIZATION ON DATABASE::" + Bracket(database) + " TO " + Bracket(owner) + ";"); }
+        check(owned is null && dboChange is { Error.Code: "NOT_SUPPORTED", Steps.Count: 0 },
+            "the preflight refuses to change dbo, the user of the login that owns the database: " + owned + " " + dboChange.Error?.Code);
+        // The login dropped and created again between the preflight and its step: that step is refused and the new login gains no role.
+        actions.Options.BeforeStep = async (title, _) =>
+        {
+            if (title == "Add to a server role") await Sql("DROP LOGIN " + Bracket(login) + ";\nCREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Literal(Remember(NewPassword())) + ", CHECK_POLICY = OFF;");
+        };
+        ActionExecuteResult loginSwapped;
+        try { loginSwapped = await actions.ExecuteAsync(Properties(login, new(RolesAdd: ["dbcreator"]), identity), CancellationToken.None); }
+        finally { actions.Options.BeforeStep = null; }
+        check(loginSwapped is { Error.Code: "NOT_FOUND" } && Steps(loginSwapped) == "failed:Add to a server role/dbcreator" && await State(login) == "master|us_english|0|G|",
+            "a login replaced under the same name after the preflight is refused at its step, and the newcomer gains no server role: " + Steps(loginSwapped) + " | " + loginSwapped.Error?.Message);
 
         // A login dropped and created again under the same name is not the one the dialog read: refused before anything runs.
         var recreated = await Sql("DROP LOGIN " + Bracket(login) + ";\nCREATE LOGIN " + Bracket(login) + " WITH PASSWORD = " + Literal(Remember(NewPassword())) + ", CHECK_POLICY = OFF;");

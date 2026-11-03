@@ -129,6 +129,8 @@ export const loginMessages = {
   // Login Properties (D2c): the login this connection uses may change its own password and defaults, but Deny or Disable would
   // lock Varia out (owner decision 7).
   ownStatus: 'This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status.',
+  // SQL Server then refuses the login's new sign-ins (18488) until its password changes, which Varia's pools cannot do.
+  ownMustChange: "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it.",
   // Only SQL Server authenticates a SQL Server login's password; a request for another kind is refused before anything runs.
   propertiesNotSql: 'Only a SQL Server login has a password and a password policy.'
 } as const
@@ -443,7 +445,7 @@ export function newLoginStatements(request: { readonly serverRoles: readonly str
 }
 /** Why a plan is too long (the limit is actionLimits.statements; catalog.ts imports this file, so the number is passed in). */
 export const tooManyStatementsMessage = (limit: number) => `This login would need more than ${limit.toLocaleString('en-US')} statements. Map fewer databases, or apply the rest afterwards.`
-/** User Mapping's own notes, in Varia's words. They name databases only as the page shows them. */
+
 // --- Login Properties (D2c) ---------------------------------------------------------------------------------------------
 
 /** A new password (the value travels in LoginSecrets): with the old one (`oldPassword`; then neither UNLOCK nor MUST_CHANGE, as
@@ -500,13 +502,14 @@ export function loginPropertiesStatements(changes: LoginChanges): number {
     + (changes.mappings ?? []).reduce((sum, mapping) => sum + (mapping.change === 'unmap' ? 1
       : (mapping.change === 'map' || mapping.newName !== undefined ? 1 : 0) + (mapping.defaultSchema === undefined ? 0 : 2) + (mapping.rolesAdd?.length ?? 0) + (mapping.rolesDrop?.length ?? 0)), 0)
 }
-/** Why Login Properties cannot apply these changes to the login its describe read, or undefined: SQL Server's own logins, Deny or
- *  Disable of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is not a SQL Server
- *  login. Permissions are the server's to answer: a login may change its own password (with the old one) and defaults. C#:
+/** Why Login Properties cannot apply these changes to the login its describe read, or undefined: SQL Server's own logins, Deny,
+ *  Disable or MUST_CHANGE of the login this connection uses, Disable of a Windows group, and a password or policy for a login that is
+ *  not a SQL Server login. Permissions are the server's to answer: a login may change its own password (with the old one) and defaults. C#:
  *  LoginRules.PropertiesRefusal. */
 export function loginPropertiesRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'type'>, changes: LoginChanges): LoginMessageId | undefined {
   if (facts.subtype === 'system') return 'system'
   if (facts.own && (changes.enabled === false || changes.connect === 'deny')) return 'ownStatus'
+  if (facts.own && changes.password?.mustChange) return 'ownMustChange'
   if (facts.subtype === 'windowsGroup' && changes.enabled === false) return 'windowsGroupDisable'
   if (facts.type !== 'S' && (changes.password || changes.checkPolicy !== undefined || changes.checkExpiration !== undefined)) return 'propertiesNotSql'
   return undefined
@@ -528,7 +531,15 @@ export const loginPropertiesMessages = {
   owner: 'The login owns this database, so its user is dbo, which cannot be unmapped or renamed here.',
   /** The steps preview's and Script's warning per unmapped database (ActionService.LoginPropertiesWarnings). */
   dropsUser: (user: string, database: string) => `Drops the user [${user.replaceAll(']', ']]')}] in [${database.replaceAll(']', ']]')}].`,
-  locked: 'Login is locked out'
+  locked: 'Login is locked out',
+  /** SQL Server refuses OLD_PASSWORD on a locked-out login (15113); only a new password with UNLOCK clears the lock-out. */
+  lockedOldPassword: 'The login is locked out, and SQL Server refuses its old password then. Clear Specify old password: a new password unlocks it.',
+  /** After a partial run reloaded the login, until the dialog has read the database again (`shown` as the page shows names). */
+  readAgain: (shown: string) => `User Mapping has not read ${shown} again since the last run. Select it on User Mapping (Retry if its read failed), then press OK.`,
+  /** A partial run that completed the password step: the fields are cleared, so a retry does not send it again. */
+  passwordApplied: 'The new password was set before the failure, so the password fields were cleared.',
+  /** After a password change for a login Varia's connections sign in as: the backend gives them the new password; main's remembered one is stale. */
+  connectionsPassword: (label: string) => `Changed the password of ${label}. Varia's connections that sign in as this login use the new password from now on; if Varia remembers the old one, type the new one the next time you connect.`
 } as const
 /** Unlock…'s choices (D4 §5.5, owner decision 9): a new password, SSMS's way, which hands over to Login Properties with "Login is locked
  *  out" cleared and sends nothing itself (the default); or keeping the current one (the `unlock` action's keepPassword mode). */
@@ -538,6 +549,7 @@ export const unlockChoiceText: { readonly [C in UnlockChoice]: string } = { setP
 /** Unlock…'s OK while "Set a new password…" is chosen. */
 export const unlockHandOffLabel = 'Continue in Login Properties…'
 
+/** User Mapping's own notes, in Varia's words. They name databases only as the page shows them. */
 export const userMappingMessages = {
   rolesLoading: 'Reading the database roles…',
   notMapped: 'Check Map to choose roles for this database.',

@@ -681,6 +681,21 @@ internal sealed class SqlService : IRequestDispatcher, IExplorerHost, IScripting
         }
     }
 
+    /// <summary>After Login Properties changed a SQL Server login's password: each connection to the same server that signed in as
+    /// that login with SQL Server authentication (its profile's SUSER_SNAME, so never a contained database user or another login of a
+    /// similar name) keeps the new password for its later sessions. Sessions already open stay signed in.</summary>
+    public void PasswordChanged(string connectionId, string login, string password)
+    {
+        foreach (var id in SameServer(connectionId))
+        {
+            if (!connections.TryGetValue(id, out var current) || !profiles.TryGetValue(id, out var profile) || profile.Contained || !string.Equals(profile.Login, login, StringComparison.Ordinal)) continue;
+            var builder = new SqlConnectionStringBuilder(current);
+            if (builder.IntegratedSecurity || builder.Authentication is not (SqlAuthenticationMethod.NotSpecified or SqlAuthenticationMethod.SqlPassword)) continue;
+            builder.Password = password;
+            connections.TryUpdate(id, builder.ConnectionString, current);
+        }
+    }
+
     private ServerProfile Profile(string connectionId) =>
         connections.ContainsKey(connectionId) && profiles.TryGetValue(connectionId, out var profile) ? profile : throw new RequestException("NOT_CONNECTED", "Connect to a SQL Server first.");
 

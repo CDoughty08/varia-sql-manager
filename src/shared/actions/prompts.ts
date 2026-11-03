@@ -49,7 +49,9 @@ export const disableLoginFactsSchema = z.object({
   sysadmin: z.boolean(),
   /** Varia's other connections to the server that sign in as this login (critic D4-3), by their Object Explorer label:
    *  they cannot reconnect while it is disabled. */
-  connections: z.array(z.string().min(1).max(promptLimits.connectionName)).min(1).max(promptLimits.connections).optional()
+  connections: z.array(z.string().min(1).max(promptLimits.connectionName)).min(1).max(promptLimits.connections).optional(),
+  /** Login Properties (D2c): its Status denies the login permission to connect rather than disabling it. */
+  deny: z.literal(true).optional()
 }).strict()
 export const actionPromptRequestSchema = z.discriminatedUnion('prompt', [
   z.object({ prompt: z.literal('renameDatabase'), facts: renameDatabaseFactsSchema }).strict(),
@@ -97,20 +99,21 @@ export const actionPrompts = {
     defaultAnswer: facts => facts.canClose ? 'closeAndRename' : 'renameWhenFree',
     cancelAnswer: 'cancel'
   } satisfies ActionPromptSpec<'renameDatabase', 'closeAndRename' | 'renameWhenFree' | 'cancel'>,
-  // SSMS disables at once; Varia asks, with Cancel the default for a login a service runs as.
+  // SSMS disables at once; Varia asks, with Cancel the default for a login a service runs as. Login Properties asks it too, for Deny as
+  // well, when a session, a service or another Varia connection would be locked out (D2c).
   disableLogin: {
     title: 'Disable Login',
-    message: facts => `Disable the login ${show(facts.login)}?`,
+    message: facts => facts.deny ? `Deny the login ${show(facts.login)} permission to connect?` : `Disable the login ${show(facts.login)}?`,
     detail: facts => [
       'New connections will be refused.' + (facts.sessions ? ` ${facts.sessions === 1 ? '1 session connected as this login stays connected until it ends' : `${plural(facts.sessions, 'session', 'sessions')} connected as this login stay connected until they end`}; Activity Monitor can end ${facts.sessions === 1 ? 'it' : 'them'}.` : ''),
-      ...facts.service ? [`${show(facts.service)} runs as this account, and cannot connect while it is disabled.`] : [],
+      ...facts.service ? [`${show(facts.service)} runs as this account, and cannot connect while it is ${facts.deny ? 'denied' : 'disabled'}.`] : [],
       ...facts.sysadmin ? ['This login is a member of sysadmin.'] : [],
-      ...facts.connections?.length ? [loginConnectionsText(facts.connections, 'cannot reconnect while it is disabled')] : []
+      ...facts.connections?.length ? [loginConnectionsText(facts.connections, facts.deny ? 'cannot reconnect while it is denied' : 'cannot reconnect while it is disabled')] : []
     ],
-    buttons: () => [{ answer: 'disable', label: 'Disable' }, { answer: 'cancel', label: 'Cancel' }],
-    defaultAnswer: facts => facts.service ? 'cancel' : 'disable',
+    buttons: facts => [facts.deny ? { answer: 'deny' as const, label: 'Deny' } : { answer: 'disable' as const, label: 'Disable' }, { answer: 'cancel', label: 'Cancel' }],
+    defaultAnswer: facts => facts.service ? 'cancel' : facts.deny ? 'deny' : 'disable',
     cancelAnswer: 'cancel'
-  } satisfies ActionPromptSpec<'disableLogin', 'disable' | 'cancel'>
+  } satisfies ActionPromptSpec<'disableLogin', 'disable' | 'deny' | 'cancel'>
 } as const
 export type ActionPromptAnswer<P extends ActionPromptId = ActionPromptId> = ReturnType<typeof actionPrompts[P]['buttons']>[number]['answer']
 

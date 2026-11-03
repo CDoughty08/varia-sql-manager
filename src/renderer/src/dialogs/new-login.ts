@@ -52,6 +52,9 @@ export interface MappingDraft {
   readonly user: string
   readonly defaultSchema: string
   readonly roles: readonly string[]
+  /** Login Properties (D2c): false on a mapped user's row until User Mapping's read of its database seeds `roles` with the user's
+   *  roles (then true); absent on a row the user made by checking Map, whose roles are never seeded. */
+  readonly rolesKnown?: boolean
 }
 
 /**

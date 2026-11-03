@@ -29,6 +29,9 @@ internal static class LoginPropertiesChecks
         Validation(check);
         Refusals(check);
         Messages(check);
+        // The A16 Extended Events check (CI only) waits for this text to know it recorded the batch that carries both passwords.
+        check(LoginSql.PasswordExecutable(new(true, false, false)).Contains(LoginLiveChecks.XeOldMarker, StringComparison.Ordinal) && !LoginSql.PasswordExecutable(NewPassword).Contains(LoginLiveChecks.XeOldMarker, StringComparison.Ordinal),
+            "the Extended Events check finds Login Properties' password batch with Specify old password by its old password's guard");
     }
 
     private static void Templates(Action<bool, string> check)
@@ -115,13 +118,16 @@ internal static class LoginPropertiesChecks
             new("AppData", "update", "app", "app2", "dbo", ["db_owner"], ["db_datareader"]),
             new("Archive", "unmap", "old")
         ]);
-        var server = LoginSql.PropertiesServerPlan("app_login", changes);
+        var sid = new byte[] { 1, 2 };
+        var bound = new PrincipalBinding(sid, 300, new DateTime(2026, 1, 1));
+        var server = LoginSql.PropertiesServerPlan("app_login", changes, bound);
         check(server.Select(plan => plan.Template).SequenceEqual([ActionTemplate.DenyConnect, ActionTemplate.DisableLogin, ActionTemplate.DropServerRoleMember, ActionTemplate.AddServerRoleMember,
                 ActionTemplate.AddServerRoleMember])
             && server.Skip(2).Select(plan => plan.Names[0]).SequenceEqual(["bulkadmin", "dbcreator", "sysadmin"]) && server.All(plan => plan.Database == "master"),
             "the server statements follow SSMS: Connect, then Enabled, then each changed server role by name");
-        var sid = new byte[] { 1, 2 };
-        var mapping = LoginSql.PropertiesMappingPlan("app_login", changes, new HashSet<string> { "Sales" }, sid);
+        check(server.All(plan => plan.Principal == bound && ReferenceEquals(ActionSql.Checked(plan), plan)) && LoginSql.PropertiesServerPlan("app_login", changes).All(plan => plan.Principal is null),
+            "each server statement is bound to the login the preflight read (its SID, principal_id and create_date); Script's plan to none");
+        var mapping = LoginSql.PropertiesMappingPlan("app_login", changes, new HashSet<string> { "Sales" }, bound);
         check(mapping.Select(plan => (plan.Database, plan.Template)).SequenceEqual([
                 ("AppData", ActionTemplate.RenameUser), ("AppData", ActionTemplate.AlterUserSchema), ("AppData", ActionTemplate.DropRoleMember), ("AppData", ActionTemplate.AddRoleMember),
                 ("Archive", ActionTemplate.DropMappedUser),
@@ -129,6 +135,23 @@ internal static class LoginPropertiesChecks
             && mapping[1].Names.SequenceEqual(["app2", "dbo"]) && mapping[2].Names.SequenceEqual(["db_datareader", "app2"]) && mapping[0].Names.SequenceEqual(["app", "app2"])
             && mapping[4].Principal is { } principal && principal.Sid.SequenceEqual(sid) && mapping[5].Names.SequenceEqual(["app", "app_login"]),
             "User Mapping's statements run per database by name: a rename before the schema and roles, which name the new user; a guarded DROP USER bound to the login's SID");
+        check(mapping.All(plan => plan.Principal is { } binding && binding.Sid.SequenceEqual(sid) && (plan.Template == ActionTemplate.CreateUserForLogin) == (binding.PrincipalId == 300 && binding.Created is not null))
+                && mapping.All(plan => ReferenceEquals(ActionSql.Checked(plan), plan)),
+            "every User Mapping statement is bound: CREATE USER … FOR LOGIN to the login, the others to the user with the login's SID (finding 2)");
+        string Binding(PlannedStatement plan) { try { ActionSql.Checked(plan); return "accepted"; } catch (InvalidOperationException) { return "refused"; } }
+        var misfits = new (string Name, PlannedStatement Plan)[]
+        {
+            ("a user statement bound to the login", new(ActionTemplate.AddRoleMember, "AppData", ["db_owner", "app"], Principal: bound)),
+            ("a login statement bound to a SID alone", new(ActionTemplate.DisableLogin, "master", ["app_login"], Principal: new(sid))),
+            ("an unbindable statement", new(ActionTemplate.DropUser, "AppData", ["app"], Principal: new(sid))),
+            ("a SID too long", new(ActionTemplate.AlterUserSchema, "AppData", ["app", "dbo"], Principal: new(new byte[86]))),
+            ("an empty SID", new(ActionTemplate.EnableLogin, "master", ["app_login"], Principal: new([], 300, new DateTime(2026, 1, 1))))
+        };
+        var fitted = misfits.Where(misfit => Binding(misfit.Plan) != "refused").Select(misfit => misfit.Name).ToList();
+        check(fitted.Count == 0, "a binding must fit its template: the login's for a login statement, a SID alone for a user's, none elsewhere: " + string.Join(", ", fitted));
+        check(new[] { "login binding", "user binding call" }.All(name => ActionSql.Lint().Single(result => result.Name == name).Problems.Count == 0) && ActionSql.LoginBinding.Contains("p.create_date = @created", StringComparison.Ordinal) && ActionSql.LoginBinding.Contains("p.sid = @sid", StringComparison.Ordinal)
+                && ActionSql.UserBindingCall.Contains("QUOTENAME(@db)", StringComparison.Ordinal) && ActionSql.UserBindingCall.Contains("@sid = @sid", StringComparison.Ordinal),
+            "the binding checks are constant, linted text: the login by name, SID, principal_id and create_date, the user by name and SID in its database through QUOTENAME");
         check(LoginSql.PropertiesMappingPlan("app_login", changes, new HashSet<string>()).Single(plan => plan.Template == ActionTemplate.DropMappedUser).Principal is null,
             "Script's plan has no SID to bind");
         var full = changes with { DefaultDatabase = "AppData", Password = NewPassword };
@@ -221,6 +244,16 @@ internal static class LoginPropertiesChecks
         };
         var accepted = invalid.Where(item => Refused(item.Args, item.Script) != "INVALID_PARAMS").Select(item => item.Name).ToList();
         check(accepted.Count == 0, "Validate refuses what zod refuses for Login Properties: " + string.Join(", ", accepted));
+        var stray = new LoginChangesDto(Enabled: true);
+        var others = new (string Name, ActionArgs Args)[]
+        {
+            ("rename", new ActionArgs("rename", Id(), Id(), App, NewName: "app2", LoginChanges: stray)),
+            ("disable", new ActionArgs("disable", Id(), Id(), App, LoginChanges: stray)),
+            ("properties", new ActionArgs("properties", Id(), Id(), new ObjectRefDto("database", Name: "AppData"), CloseConnections: false, Changes: new(), LoginChanges: stray)),
+            ("createLogin", new ActionArgs("createLogin", Id(), Id(), new ObjectRefDto("server"), Login: new("sql", "x", "master"), Status: new("grant", true), LoginChanges: stray))
+        };
+        var strayAccepted = others.Where(item => Refused(item.Args, script: true) != "INVALID_PARAMS").Select(item => item.Name).ToList();
+        check(strayAccepted.Count == 0, "every other action refuses loginChanges (finding 20): " + string.Join(", ", strayAccepted));
         check(DescribeRefused(new(Id(), Id(), "loginProperties", App)) == "accepted" && DescribeRefused(new(Id(), Id(), "loginProperties", new ObjectRefDto("database", Name: "AppData"))) == "INVALID_PARAMS"
             && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), "a]'b")) == "accepted"
             && DescribeRefused(new(Id(), Id(), Catalog.Logins.RolesDescribe, new ObjectRefDto("database", Name: "Sales"), new string('l', 129))) == "INVALID_PARAMS"

@@ -610,9 +610,10 @@ Whether a server-side trace or Extended Events session can read the password fro
 check (`VARIA_TEST_SQL_XE=1`, set only for CI's disposable SQL Server container; it first checks, read-only, that every event,
 field, action and predicate it uses exists on the server): it records `rpc_starting`, `rpc_completed`,
 `sql_batch_starting`, `sql_batch_completed` and the statement-level events (statements, batch text, data streams and output
-parameters) in a scratch session while New Login creates a login and Create Catalog's master key batch runs, and fails if either
-password appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each half counts only once the session has
-recorded that half's own RPC (its constant batch text, or SQL Server's notice that it hid the statement), polled for on the
+parameters) in a scratch session while New Login creates a login, Create Catalog's master key batch runs and Login Properties
+changes a scratch login's password with Specify old password (`@password` and `@old_password`), and fails if any of their
+passwords appears in any field, as text, doubled quotes, XML-escaped or UTF-16 bytes. Each run counts only once the session has
+recorded that run's own RPC (its constant batch text, or SQL Server's notice that it hid the statement), polled for on the
 ring buffer rather than awaited for a fixed time. Developers' servers never run it (owner decision 14). It has not run yet:
 D2a does not merge until it has run once on a disposable server and its result is recorded here (critic A16).
 
@@ -629,21 +630,36 @@ lock-out state through `ActionSql.LoginLock` (as Unlock reads it), New Login's l
 Delete's per-database scan (at most 4,096 databases within 20 s). A database the scan did not read shows "Not read" in
 User and cannot be mapped until it is selected ("This database was not read yet. Select it to read its user and roles."): selecting a database reads it with the
 login (`loginDatabaseRoles` with `login`), answering the user mapped to it there and that user's database roles.
+A database not read yet is muted in the grid, and its cell says why through `aria-describedby`. SQL Server's own logins say on
+every page why they never change, and every page's controls are greyed.
 
 - **General**: Login name and its authentication read-only; Password and Confirm password blank ("Leave blank to keep the current password."
   SSMS fills them with a fake value); Specify old password and Old password (checked already when the login is this connection's
-  and the connection cannot alter any login, since SQL Server then asks for it); the policy options; User must change password
-  at next login only once a new password is typed; Default database and Default language (no `<default>`: SMO's ALTER for it is
-  unverified).
+  and the connection cannot alter any login, since SQL Server then asks for it, unless the login is locked out, where SQL Server
+  refuses the old password: "The login is locked out, and SQL Server refuses its old password then. Clear Specify old password: a new password unlocks it."); the policy options; User must change password
+  at next login only once a new password is typed, and never for the login this connection uses, whose new sessions SQL Server
+  would then refuse ("This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."); Default database and Default language (no `<default>`: SMO's ALTER for it
+  is unverified). Login name reads as text in a frame; the kind of login shows under the authentication only when the two
+  choices do not say it (a group, a certificate, a key, Microsoft Entra).
 - **Server Roles**: the login's memberships checked; public checked and greyed.
 - **User Mapping**: New Login's grid with the mapped users filled in. Unchecking Map unmaps (DROP USER; Script and the steps
   warn "Drops the user [user] in [database]."), a new user name renames, and the database owner's dbo cannot change
   ("The login owns this database, so its user is dbo, which cannot be unmapped or renamed here.").
 - **Status**: Permission to connect to database engine, Login (Enabled, Disabled) and "Login is locked out", checked while the
-  login is locked out and enabled then only to clear it, which needs a new password ("Type a new password to unlock the login.").
+  login is locked out and enabled then to clear it, which needs a new password ("Type a new password to unlock the login."), or to
+  check it again. Deny and Disabled are greyed for the login this connection uses, and Disabled for a Windows group, with the
+  reason beside them. Opened from Unlock's hand-off (Login is locked out cleared), the dialog puts focus in Password, whose
+  first note then says a new password unlocks the login.
+
+Disabled or Deny asks first, with the Disable verb's message box (owner decisions 4 and 7; its button reads Deny for Deny), when
+someone would be locked out: sessions connected as the login, a service that runs as it, or Varia's other connections that sign
+in as it. With none of those it asks nothing, as SSMS. Cancel sends nothing.
 
 OK and Script send only what differs from the describe, bound to the login it read (its SID and creation time; a login
-recreated since is `NOT_FOUND`). The passwords join only OK's request, as in New Login (masked, never in the snapshot, cleared
+recreated since is `NOT_FOUND`). Each statement OK runs is bound too: in a transaction of its own, a check that the login (by
+name, SID, principal_id and create_date) or the user (by name and the login's SID, in its database) is still the one the
+preflight read, the statement, then the check again (`ActionSql.LoginBinding`, `UserBindingCall`); a principal replaced meanwhile
+fails that step with `NOT_FOUND` and changes nothing. The passwords join only OK's request, as in New Login (masked, never in the snapshot, cleared
 with the dialog): the new one as `@password`, the old one as `@old_password` when Specify old password is checked, each one
 nvarchar parameter read once and quoted by a binary-collation REPLACE, which the lint pins. T-SQL takes either `OLD_PASSWORD`
 or `UNLOCK` and `MUST_CHANGE`, never both. Script never carries a password: with a password change it is one `SET XACT_ABORT ON`
@@ -657,12 +673,20 @@ the login's SID), or `CREATE USER … FOR LOGIN` or `ALTER USER … WITH NAME`, 
 database lacks it) and each database role. Before any of them the preflight refuses a changed database that is gone, offline,
 closed or read-only, a user that is no longer the one mapped, a name in use and a missing role. A failure or Stop after a step
 leaves what completed; the message starts "The login was changed only in part: its steps run one by one, as in SSMS, and list
-what completed.", and the dialog reads the login again. SQL Server answers a wrong old password, and a missing permission,
+what completed.", and the dialog reads the login again, then User Mapping's databases one at a time; until each is read again,
+OK refuses its changed row ("User Mapping has not read <database> again since the last run. Select it on User Mapping (Retry if its read failed), then press OK."). When the password step completed before the
+failure, the password fields are emptied, so a retry never sends it again ("The new password was set before the failure, so the password fields were cleared.").
+SQL Server answers a wrong old password, and a missing permission,
 with 15151 (`PERMISSION_DENIED`): the message adds "Check the old password." when the password step failed with an old
 password, else what changing a login needs. Permissions are left to SQL Server, since a login may change its own password
 (with the old one) and defaults. SQL Server refuses DROP USER for a user that owns a schema (15138), as in SSMS.
 
-Refused before anything runs: the login this connection uses denied or disabled ("This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status."), a
+A password change of a login that Varia's connections sign in as (this one or others, by SQL Server authentication) gives them
+the new password in the backend's memory, so their next sessions sign in; a password Varia remembers for them is not changed,
+and a notice says so: "Changed the password of <login>. Varia's connections that sign in as this login use the new password from now on; if Varia remembers the old one, type the new one the next time you connect."
+
+Refused before anything runs: the login this connection uses denied, disabled or made to change its password at its next sign-in
+("This is the login this connection uses. Denying it permission to connect or disabling it would lock this connection out. Connect with another login to change its status."; "This is the login this connection uses. Requiring a new password at its next sign-in would refuse this connection's new sessions. Connect with another login to require it."), a
 Windows group disabled ("A Windows group cannot be disabled. Deny it permission to connect on Login Properties › Status instead."), and a password or policy change on a login that is not a SQL
 Server login ("Only a SQL Server login has a password and a password policy."). After OK the Logins folder and each changed database's Users folder reload.
 

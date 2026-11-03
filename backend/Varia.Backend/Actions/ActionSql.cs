@@ -26,8 +26,14 @@ internal enum ActionTemplate
 /// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
 /// checks them in the statement's own batch, waiting behind any change to the row, and rolls the DROP back when the name it quoted
 /// belonged to another principal by then: a user renamed or remapped in an open transaction while the scan read past it, or a login
-/// dropped and created again while an earlier step waited for a lock.</summary>
+/// dropped and created again while an earlier step waited for a lock. Login Properties (D2c) binds its other statements to the
+/// principals its preflight read too (<see cref="ActionSql.BindingOf"/>): a login's by all three, a user's by the login's SID.</summary>
 internal sealed record PrincipalBinding(byte[] Sid, int? PrincipalId = null, DateTime? Created = null);
+
+/// <summary>Which principal a bound statement acts on (<see cref="ActionSql.BindingOf"/>): the login (<c>Login</c>, by name, SID,
+/// principal_id and create_date) or, in the statement's database, the user with the login's SID, each by the index of its name among
+/// the statement's names, before the statement runs and after it (a rename's new name; CREATE USER's new user).</summary>
+internal sealed record BindingShape(bool Login, int Name, bool AfterLogin, int AfterName);
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
 /// names (its index among the main steps) once that step completed and a later one failed or was stopped; a cleanup runs after
@@ -110,13 +116,30 @@ internal static partial class ActionSql
     {
         if (plan.Names.Count != ParameterCount(plan.Template)) throw new InvalidOperationException("The plan has the wrong number of names for " + plan.Template + ".");
         if (plan.Template == ActionTemplate.DetachDatabase && plan.Names[1] is not ("true" or "false")) throw new InvalidOperationException("@skipchecks is true or false.");
-        if (plan.Principal is { } bound && (!Guarded(plan.Template) || bound.Sid.Length is < 1 or > 85 || (plan.Template == ActionTemplate.DropLogin) != (bound.PrincipalId is not null && bound.Created is not null)))
+        if (plan.Principal is { } bound && (!(Guarded(plan.Template) || BindingOf(plan.Template) is not null) || bound.Sid.Length is < 1 or > 85
+            || (plan.Template == ActionTemplate.DropLogin || BindingOf(plan.Template)?.Login == true) != (bound.PrincipalId is not null && bound.Created is not null)))
             throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
         return plan;
     }
 
     /// <summary>The templates whose batch checks the principal it drops (<see cref="PrincipalBinding"/>): they never run without one.</summary>
     public static bool Guarded(ActionTemplate template) => template is ActionTemplate.DropMappedUser or ActionTemplate.DropLogin;
+
+    /// <summary>The templates Login Properties (D2c) may bind to the principals its preflight read, and which principal each acts on (by
+    /// its name's index): a login's Connect, Enabled and server roles act on the login; CREATE USER … FOR LOGIN on the login, after which
+    /// the new user has its SID; a user's rename, default schema, schema and roles act on the user with the login's SID, under its new
+    /// name after a rename. With a binding, ActionService.RunBoundAsync runs the statement in a transaction of its own between
+    /// <see cref="LoginBinding"/> or <see cref="UserBindingCall"/> checks; without one (New Login, Disable, Script) it runs as it is.</summary>
+    public static BindingShape? BindingOf(ActionTemplate template) => template switch
+    {
+        ActionTemplate.DenyConnect or ActionTemplate.GrantConnect or ActionTemplate.EnableLogin or ActionTemplate.DisableLogin => new(true, 0, true, 0),
+        ActionTemplate.AddServerRoleMember or ActionTemplate.DropServerRoleMember => new(true, 1, true, 1),
+        ActionTemplate.CreateUserForLogin => new(true, 1, false, 0),
+        ActionTemplate.RenameUser => new(false, 0, false, 1),
+        ActionTemplate.AlterUserSchema => new(false, 0, false, 0),
+        ActionTemplate.CreateSchemaFor or ActionTemplate.AddRoleMember or ActionTemplate.DropRoleMember => new(false, 1, false, 1),
+        _ => null
+    };
 
     /// <summary>The statement itself as SSMS writes it, names quoted by C#'s QUOTENAME.</summary>
     public static string Statement(PlannedStatement plan)
@@ -236,6 +259,22 @@ internal static partial class ActionSql
         + "THROW 50010, N''The login is no longer the one that was read: it was renamed, dropped or replaced since. It was not dropped.'', 1; BEGIN TRANSACTION; '";
     internal const string LoginRecheck = "N'; IF EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.principal_id = @principal) THROW 50010, N''The login changed while it was dropped. It was not dropped.'', 1; COMMIT TRANSACTION;'";
     internal const string LoginParameters = "N'@name sysname, @sid varbinary(85), @principal int, @created datetime'";
+
+    /// <summary>A bound statement's check of its login (<see cref="BindingOf"/>), in the statement's transaction before and after it,
+    /// waiting behind any open change to the row: the login with the name and the SID, principal_id and create_date its preflight read,
+    /// else 50010 (NOT_FOUND), which rolls the transaction back (XACT_ABORT), so the statement never acts on a login that took the name
+    /// meanwhile. The message is constant: no name reaches it.</summary>
+    public const string LoginBinding = "IF NOT EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @name AND p.sid = @sid AND p.principal_id = @principal AND p.create_date = @created) "
+        + "THROW 50010, " + LoginBindingMessage + ", 1;";
+    internal const string LoginBindingMessage = "N'The login is no longer the one Login Properties read: it was renamed, dropped or replaced since. This step was not applied.'";
+    /// <summary>A bound statement's check of its user in the statement's database (inside sp_executesql there, as MappedUserCall runs its
+    /// read): the user with the name and the login's SID, else 50010. SQL Server maps a SID to at most one user in a database, so name
+    /// and SID name one principal.</summary>
+    public const string UserBindingCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
+        + "EXEC @module " + UserBindingCheck + ", " + UserBindingParameters + ", @name = @name, @sid = @sid;";
+    internal const string UserBindingCheck = "N'IF NOT EXISTS (SELECT 1 FROM sys.database_principals AS u WHERE u.name = @name AND u.sid = @sid) "
+        + "THROW 50010, N''The database user is no longer the one mapped to the login: it was renamed, remapped or dropped since it was read. This step was not applied.'', 1;'";
+    internal const string UserBindingParameters = "N'@name sysname, @sid varbinary(85)'";
     private static readonly string[] GuardedTexts = [UserCheck, UserRecheck, UserParameters, LoginCheck, LoginRecheck, LoginParameters];
     /// <summary>The variables a guarded batch binds besides its names (RunStatementAsync, from the plan's PrincipalBinding).</summary>
     public static IReadOnlyList<string> Bindings(ActionTemplate template) => template switch
@@ -473,6 +512,8 @@ internal static partial class ActionSql
         "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
         // Its guarded DROPs (PrincipalBinding).
         UserCheck, UserRecheck, UserParameters, LoginCheck, LoginRecheck, LoginParameters,
+        // Login Properties' bound statements (BindingOf).
+        LoginBindingMessage, UserBindingCheck, UserBindingParameters,
         // Unlock's password policy statements (D4d).
         "N' WITH CHECK_POLICY = OFF'", "N' WITH CHECK_POLICY = ON'", "N' WITH CHECK_POLICY = ON, CHECK_EXPIRATION = ON'",
         // Login Properties' server role and database role removals (D2c); its user rename is a login rename's N' WITH NAME='.
@@ -670,6 +711,8 @@ internal static partial class ActionSql
         yield return ("login databases", LintCatalog(LoginDatabases, ExplorerCatalog.MaxBand, database: false));
         yield return ("mapped user", LintCatalog(MappedUser, ExplorerCatalog.MaxBand, database: true));
         yield return ("mapped user call", LintCatalog(MappedUserCall, ExplorerCatalog.MaxBand, database: false));
+        yield return ("login binding", LintCatalog(LoginBinding, ExplorerCatalog.MaxBand, database: false));
+        yield return ("user binding call", LintCatalog(UserBindingCall, ExplorerCatalog.MaxBand, database: false));
         yield return ("login jobs", LintCatalog(LoginJobs, ExplorerCatalog.MaxBand, database: false));
         yield return ("own sessions", LintCatalog(OwnSessions, ExplorerCatalog.MaxBand, database: false));
         yield return ("database use", LintCatalog(DatabaseUse, ExplorerCatalog.MaxBand, database: false));

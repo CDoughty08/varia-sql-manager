@@ -233,6 +233,9 @@ export const dropDatabaseStepTitle = 'Drop the database'
 /** The title of a login Delete's step per mapped user (ActionService.StepTitle; tests/delete-login.test.ts keeps them equal): its
  *  `detail` is "database: user", and a done one changed that database's Users folder. */
 export const dropUserStepTitle = 'Drop the database user'
+/** The title of Login Properties' password step (LoginPropertiesJobs.LoginPasswordStep; tests/login-properties.test.ts keeps them equal):
+ *  a reply in which it is 'done' changed the password, even when a later step failed. */
+export const loginPasswordStepTitle = 'Change the password'
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
   readonly steps: readonly ActionStep[]

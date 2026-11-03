@@ -229,24 +229,93 @@ internal sealed partial class ActionService
     {
         var messages = CollectMessages(connection);
         var changes = args.LoginChanges!;
-        var (facts, _) = await LoginAsync(connection, target.Name!, null, null, token);
+        var (facts, row) = await LoginAsync(connection, target.Name!, null, null, token);
         if (facts is null) return new([], [], 0, Error("NOT_FOUND", "The login " + Display(target) + " no longer exists. Refresh Object Explorer."));
         if (LoginPropertiesRefusal(facts, args) is { } refused) return new([], [], 0, refused);
+        if (row!.Raw("create_date") is not DateTime created) return new([], [], 0, Error("NOT_FOUND", "The login " + Display(target) + " changed while it was read. Refresh Object Explorer and try again."));
         var sid = SidBytes(facts);
         var (missing, mappingRefused) = await PropertiesMappingPreflightAsync(connection, changes, sid, refuse: true, token);
         if (mappingRefused is not null) return new([], [], 0, mappingRefused);
         var secrets = args.Secrets;
         string Scrubbed(string text) => LoginSql.Scrub(text, secrets);
         var login = target.Name!;
+        // Every statement is bound to the login the preflight read: one renamed, dropped or replaced while an earlier step waited is
+        // never changed in its place.
+        var bound = new PrincipalBinding(sid, facts.PrincipalId, created);
+        var self = new Bind(true, login, "master");
         var steps = new List<RunStep>();
-        if (LoginSql.HasOptions(changes)) steps.Add(new(LoginOptionsStep, context => AlterLoginOptionsAsync(connection, login, changes, dryRun: false, context.Token)));
+        if (LoginSql.HasOptions(changes))
+            steps.Add(new(LoginOptionsStep, context => RunBoundAsync(connection, bound, self, self, open => AlterLoginOptionsAsync(connection, login, changes, dryRun: false, context.Token, open), context.Token)));
         if (changes.Password is { } password)
-            steps.Add(new(LoginPasswordStep, context => AlterLoginPasswordAsync(connection, login, password, secrets?.Password, secrets?.OldPassword, dryRun: false, context.Token)));
-        steps.AddRange(LoginSql.PropertiesServerPlan(login, changes).Concat(LoginSql.PropertiesMappingPlan(login, changes, missing, sid)).Select(ActionSql.Checked).Select(statement =>
-            new RunStep(StepTitle(statement.Template), context => RunStatementAsync(connection, statement, dryRun: false, context.Token), Detail: StepDetail(statement))));
+            steps.Add(new(LoginPasswordStep, context => RunBoundAsync(connection, bound, self, self,
+                open => AlterLoginPasswordAsync(connection, login, password, secrets?.Password, secrets?.OldPassword, dryRun: false, context.Token, open), context.Token)));
+        steps.AddRange(LoginSql.PropertiesServerPlan(login, changes, bound).Concat(LoginSql.PropertiesMappingPlan(login, changes, missing, bound)).Select(ActionSql.Checked).Select(statement =>
+            new RunStep(StepTitle(statement.Template), context => RunPlannedBoundAsync(connection, statement, context.Token), Detail: StepDetail(statement))));
         var (done, failure, _) = await RunStepsAsync(connection, steps, null, token, CleanupBudget(args.Action), serverText: Scrubbed);
+        // The connections that sign in as this login keep working: their later sessions use the new password, never the old one.
+        if (secrets?.Password is { } changed && done.Any(step => step.Title == LoginPasswordStep && step.Status == "done"))
+            host.PasswordChanged(args.ConnectionId, row.Text("name") ?? login, changed);
         if (failure is not null) failure = PartlyChanged(failure, done, changes.Password?.OldPassword == true);
         return new(done, [.. messages.Collected().Select(Scrubbed)], 0, failure);
+    }
+
+    /// <summary>Which principal a bound step checks (ActionSql.BindingOf): the login, or in <c>Database</c> the user with the login's SID,
+    /// by name.</summary>
+    internal readonly record struct Bind(bool Login, string Name, string Database);
+
+    /// <summary>A planned statement of Login Properties' run: a bound one through <see cref="RunBoundAsync"/>, DROP USER (guarded in its own
+    /// batch) as it is.</summary>
+    private Task RunPlannedBoundAsync(SqlConnection connection, PlannedStatement statement, CancellationToken token)
+    {
+        if (statement.Principal is not { } bound || ActionSql.BindingOf(statement.Template) is not { } shape) return RunStatementAsync(connection, statement, dryRun: false, token);
+        var names = statement.Names;
+        return RunBoundAsync(connection, bound, new(shape.Login, names[shape.Name], statement.Database), new(shape.AfterLogin, names[shape.AfterName], statement.Database),
+            open => RunStatementAsync(connection, statement, dryRun: false, token, open), token);
+    }
+
+    /// <summary>Runs one step bound to the principals the preflight read (review of D2c): in a transaction of its own, the
+    /// <paramref name="before"/> check (ActionSql.LoginBinding or UserBindingCall, waiting behind any open change to the principal), the
+    /// statement, then the <paramref name="after"/> check, so the step is undone when the name it acted on belonged to another principal
+    /// by then. A failure or Stop rolls it back (within StopGrace, else closing the unpooled connection ends the session).</summary>
+    private async Task RunBoundAsync(SqlConnection connection, PrincipalBinding bound, Bind before, Bind after, Func<SqlTransaction, Task> run, CancellationToken token)
+    {
+        var open = (SqlTransaction)await connection.BeginTransactionAsync(token);
+        var committed = false;
+        try
+        {
+            await CheckBindingAsync(connection, open, bound, before, token);
+            await run(open);
+            await CheckBindingAsync(connection, open, bound, after, token);
+            await open.CommitAsync(CancellationToken.None);
+            committed = true;
+        }
+        finally
+        {
+            // XACT_ABORT has rolled back a failed statement's transaction already (its Connection is then null).
+            if (!committed && open.Connection is not null)
+            {
+                try { await open.RollbackAsync(CancellationToken.None).WaitAsync(Options.StopGrace, CancellationToken.None); }
+                catch (Exception) { try { await connection.CloseAsync(); } catch (Exception) { } }
+            }
+            await open.DisposeAsync();
+        }
+    }
+
+    private static async Task CheckBindingAsync(SqlConnection connection, SqlTransaction transaction, PrincipalBinding bound, Bind bind, CancellationToken token)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandTimeout = 0;
+        command.CommandText = bind.Login ? ActionSql.LoginBinding : ActionSql.UserBindingCall;
+        if (!bind.Login) Add(command, "@db", SqlDbType.NVarChar, 128, bind.Database);
+        Add(command, "@name", SqlDbType.NVarChar, 128, bind.Name);
+        Add(command, "@sid", SqlDbType.VarBinary, 85, bound.Sid);
+        if (bind.Login)
+        {
+            Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId ?? throw new InvalidOperationException("A login's binding needs its principal_id."));
+            Add(command, "@created", SqlDbType.DateTime, 0, bound.Created ?? throw new InvalidOperationException("A login's binding needs its create_date."));
+        }
+        await command.ExecuteNonQueryAsync(token);
     }
 
     /// <summary>A failure or Stop of Login Properties: 15151 (PERMISSION_DENIED) gets what to check, the old password when its step
@@ -265,9 +334,10 @@ internal sealed partial class ActionService
     internal const string LoginOldPasswordAdvice = "Check the old password.";
 
     /// <summary>Runs (or dry-runs) the options' ALTER LOGIN (LoginSql.OptionsExecutable).</summary>
-    private static async Task<List<string?>> AlterLoginOptionsAsync(SqlConnection connection, string login, LoginChangesDto changes, bool dryRun, CancellationToken token)
+    private static async Task<List<string?>> AlterLoginOptionsAsync(SqlConnection connection, string login, LoginChangesDto changes, bool dryRun, CancellationToken token, SqlTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = LoginSql.OptionsExecutable(changes, dryRun);
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, "master");
@@ -280,9 +350,10 @@ internal sealed partial class ActionService
     /// <summary>Runs (or dry-runs) the password's ALTER LOGIN (LoginSql.PasswordExecutable). Each password is one nvarchar(128)
     /// parameter, cleared once the batch ends.</summary>
     private static async Task<List<string?>> AlterLoginPasswordAsync(SqlConnection connection, string login, LoginPasswordChangeDto password, string? value, string? oldValue, bool dryRun,
-        CancellationToken token)
+        CancellationToken token, SqlTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = LoginSql.PasswordExecutable(password, dryRun);
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, "master");

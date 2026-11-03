@@ -135,46 +135,49 @@ internal static partial class LoginSql
     // --- The plan ---------------------------------------------------------------------------------------------------------
 
     /// <summary>The server statements after the options and the password, in SSMS's order (the ported SendChangeToServer): GRANT or
-    /// DENY CONNECT SQL, ENABLE or DISABLE, then ALTER SERVER ROLE … ADD or DROP MEMBER per changed role, by name.</summary>
-    public static List<PlannedStatement> PropertiesServerPlan(string login, LoginChangesDto changes)
+    /// DENY CONNECT SQL, ENABLE or DISABLE, then ALTER SERVER ROLE … ADD or DROP MEMBER per changed role, by name. OK binds each to the
+    /// login its preflight read (<paramref name="bound"/>, ActionSql.BindingOf); Script passes none.</summary>
+    public static List<PlannedStatement> PropertiesServerPlan(string login, LoginChangesDto changes, PrincipalBinding? bound = null)
     {
         var plan = new List<PlannedStatement>();
-        if (changes.Connect is { } connect) plan.Add(new(connect == "deny" ? ActionTemplate.DenyConnect : ActionTemplate.GrantConnect, "master", [login]));
-        if (changes.Enabled is { } enabled) plan.Add(new(enabled ? ActionTemplate.EnableLogin : ActionTemplate.DisableLogin, "master", [login]));
+        if (changes.Connect is { } connect) plan.Add(new(connect == "deny" ? ActionTemplate.DenyConnect : ActionTemplate.GrantConnect, "master", [login], Principal: bound));
+        if (changes.Enabled is { } enabled) plan.Add(new(enabled ? ActionTemplate.EnableLogin : ActionTemplate.DisableLogin, "master", [login], Principal: bound));
         var added = changes.RolesAdd ?? [];
         foreach (var role in Ordered(added.Concat(changes.RolesDrop ?? [])))
-            plan.Add(new(added.Contains(role) ? ActionTemplate.AddServerRoleMember : ActionTemplate.DropServerRoleMember, "master", [role, login]));
+            plan.Add(new(added.Contains(role) ? ActionTemplate.AddServerRoleMember : ActionTemplate.DropServerRoleMember, "master", [role, login], Principal: bound));
         return plan;
     }
 
     /// <summary>User Mapping's statements (the ported ApplyDatabaseRoleChanges), per database in name order: an unmapped database's
-    /// DROP USER (guarded by the login's <paramref name="sid"/> when it runs: the user must still be the one mapped to it); a newly
-    /// mapped one's CREATE USER … FOR LOGIN; a mapped one's ALTER USER … WITH NAME when renamed. Then, for both, ALTER USER … WITH
-    /// DEFAULT_SCHEMA (and CREATE SCHEMA when the database has no such schema, <paramref name="missingSchemas"/>) and ALTER ROLE …
-    /// ADD or DROP MEMBER per changed role, by name. Each runs in its database.</summary>
-    public static List<PlannedStatement> PropertiesMappingPlan(string login, LoginChangesDto changes, IReadOnlySet<string> missingSchemas, byte[]? sid = null)
+    /// DROP USER (guarded by the login's SID when it runs: the user must still be the one mapped to it); a newly mapped one's CREATE
+    /// USER … FOR LOGIN; a mapped one's ALTER USER … WITH NAME when renamed. Then, for both, ALTER USER … WITH DEFAULT_SCHEMA (and
+    /// CREATE SCHEMA when the database has no such schema, <paramref name="missingSchemas"/>) and ALTER ROLE … ADD or DROP MEMBER per
+    /// changed role, by name. Each runs in its database. OK binds each to the login its preflight read (<paramref name="bound"/>): CREATE
+    /// USER to the login, the others to the user with its SID (ActionSql.BindingOf); Script passes none.</summary>
+    public static List<PlannedStatement> PropertiesMappingPlan(string login, LoginChangesDto changes, IReadOnlySet<string> missingSchemas, PrincipalBinding? bound = null)
     {
         var plan = new List<PlannedStatement>();
         var byName = (changes.Mappings ?? []).ToDictionary(mapping => mapping.Database, StringComparer.Ordinal);
+        var user = bound is null ? null : new PrincipalBinding(bound.Sid);
         foreach (var database in Ordered(byName.Keys))
         {
             var mapping = byName[database];
             if (mapping.Change == "unmap")
             {
-                plan.Add(new(ActionTemplate.DropMappedUser, database, [mapping.User], Principal: sid is null ? null : new(sid)));
+                plan.Add(new(ActionTemplate.DropMappedUser, database, [mapping.User], Principal: user));
                 continue;
             }
-            if (mapping.Change == "map") plan.Add(new(ActionTemplate.CreateUserForLogin, database, [mapping.User, login]));
-            else if (mapping.NewName is { } renamed) plan.Add(new(ActionTemplate.RenameUser, database, [mapping.User, renamed]));
-            var user = mapping.Change == "map" ? mapping.User : mapping.NewName ?? mapping.User;
+            if (mapping.Change == "map") plan.Add(new(ActionTemplate.CreateUserForLogin, database, [mapping.User, login], Principal: bound));
+            else if (mapping.NewName is { } renamed) plan.Add(new(ActionTemplate.RenameUser, database, [mapping.User, renamed], Principal: user));
+            var name = mapping.Change == "map" ? mapping.User : mapping.NewName ?? mapping.User;
             if (mapping.DefaultSchema is { } schema)
             {
-                plan.Add(new(ActionTemplate.AlterUserSchema, database, [user, schema]));
-                if (missingSchemas.Contains(database)) plan.Add(new(ActionTemplate.CreateSchemaFor, database, [schema, user]));
+                plan.Add(new(ActionTemplate.AlterUserSchema, database, [name, schema], Principal: user));
+                if (missingSchemas.Contains(database)) plan.Add(new(ActionTemplate.CreateSchemaFor, database, [schema, name], Principal: user));
             }
             var added = mapping.RolesAdd ?? [];
             foreach (var role in Ordered(added.Concat(mapping.RolesDrop ?? [])))
-                plan.Add(new(added.Contains(role) ? ActionTemplate.AddRoleMember : ActionTemplate.DropRoleMember, database, [role, user]));
+                plan.Add(new(added.Contains(role) ? ActionTemplate.AddRoleMember : ActionTemplate.DropRoleMember, database, [role, name], Principal: user));
         }
         return plan;
     }

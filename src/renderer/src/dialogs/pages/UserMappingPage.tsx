@@ -8,6 +8,7 @@ import type { StatusTone } from '../../../../shared/theme/tones.ts'
 import { useWorkbench } from '../../core/WorkbenchContext'
 import StatusPill from '../../kit/StatusPill'
 import { databaseRead, mappingLock, mappedUserOf, type LoginPropertiesModel } from '../login-properties'
+import { loginBlocked, LoginBlockedNote } from './NewLoginPages'
 import { mappable, mappedUser, mappingOf, setMapped, setMappingRole, setMappingSchema, setMappingUser, type MappingDraft, type NewLoginDraft } from '../new-login'
 import type { PageProps } from '../ObjectDialog'
 import type { DatabaseRolesLookup } from '../ObjectDialogService'
@@ -162,7 +163,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
           const field = (of: 'user' | 'schema') => editing?.database === database.name && editing.column === of
             ? <input className="user-mapping-editor" autoFocus aria-label={`${headers[of]} in ${database.name}`} maxLength={actionLimits.newName} spellCheck={false} value={editing.text}
               onChange={event => setEditing({ ...editing, text: event.target.value })} onBlur={() => commit()} onFocus={event => { const end = event.currentTarget.value.length; event.currentTarget.setSelectionRange(end, end) }} />
-            : <span className="user-mapping-text"><bdi>{unread ? (of === 'user' ? loginPropertiesMessages.notRead : '') : mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) : ''}</bdi></span>
+            : <span className="user-mapping-text" data-unread={unread || undefined}><bdi>{unread ? (of === 'user' ? loginPropertiesMessages.notRead : '') : mapped ? displayText(of === 'user' ? mappedUser(draft, mapping) : mapping.defaultSchema) : ''}</bdi></span>
           return <div key={database.name} className="user-mapping-row" role="row" aria-rowindex={index + 2} aria-selected={selected} aria-disabled={!usable || undefined}
             data-selected={selected || undefined} data-unavailable={!usable || undefined} style={{ top: index * userMappingRowHeight, height: userMappingRowHeight }}>
             <span {...cell('map')} className="user-mapping-cell user-mapping-map">
@@ -173,7 +174,7 @@ function UserMappingGrid({ model, draft, editable, onSchema, locked, notRead }: 
               <span className="user-mapping-text" title={displayText(database.name)}><bdi>{displayText(database.name)}</bdi></span>
               {chip && <StatusPill tone={chip.tone} label={chip.label} title={chip.title} size="small" icon={null} />}
             </span>
-            <span {...cell('user')} className="user-mapping-cell" onDoubleClick={() => begin(index, 'user')}>{field('user')}</span>
+            <span {...cell('user')} className="user-mapping-cell" aria-describedby={unread ? 'user-mapping-unread' : undefined} onDoubleClick={() => begin(index, 'user')}>{field('user')}</span>
             <span {...cell('schema')} className="user-mapping-cell user-mapping-schema" onDoubleClick={() => begin(index, 'schema')}>
               {field('schema')}
               {mapped && !lock && editing?.database !== database.name && <button type="button" className="user-mapping-browse" tabIndex={-1} aria-label={`Select Schema for ${database.name}`} title="Select Schema"
@@ -228,10 +229,13 @@ export default function UserMappingPage({ open, editable }: PageProps) {
   const ready = lookup?.state === 'ready' ? lookup.value : undefined
   const chosen = new Set(mapping?.roles ?? [])
   const name = selected === undefined ? null : <bdi>{displayText(selected)}</bdi>
-  const mappedCount = draft.mappings.filter(item => item.map).length
+  const mappedCount = draft.mappings.filter(item => item.map).length, blocked = !!loginBlocked(open)
   return <div className="new-login-page user-mapping-page">
+    <LoginBlockedNote open={open} />
     <p className="user-mapping-label" id="user-mapping-label">Users mapped to this login:</p>
-    <UserMappingGrid model={model} draft={draft} editable={editable} locked={locked} notRead={notRead} onSchema={database => { dialogs.loadDatabaseRoles(database); setSchemaFor(database) }} />
+    {/* What a "Not read" cell means, for the cells that name it (aria-describedby reads hidden text). */}
+    {properties && <p id="user-mapping-unread" hidden>{loginPropertiesMessages.notReadHint}</p>}
+    <UserMappingGrid model={model} draft={draft} editable={editable && !blocked} locked={locked} notRead={notRead} onSchema={database => { dialogs.loadDatabaseRoles(database); setSchemaFor(database) }} />
     {(model.databasesTruncated || mappedCount > loginLimits.mappings) && <ul className="object-dialog-warnings" aria-label="Notes">
       {model.databasesTruncated && <li><span>{`Only the first ${model.databases.length.toLocaleString('en-US')} databases are listed.`}</span></li>}
       {mappedCount > loginLimits.mappings && <li><span>{userMappingMessages.mappingsLimit}</span></li>}
@@ -245,7 +249,7 @@ export default function UserMappingPage({ open, editable }: PageProps) {
           : !lookup || lookup.state === 'loading' ? <p className="field-note" role="status">{userMappingMessages.rolesLoading}</p>
             : lookup.state === 'failed' ? <div className="user-mapping-failed" role="alert"><span>{lookup.error.message}</span>
               <button type="button" onClick={() => dialogs.loadDatabaseRoles(selected)}>Retry</button></div>
-              : <fieldset className="user-mapping-roles" role="group" aria-labelledby="user-mapping-roles-label" aria-describedby={mapped ? undefined : 'user-mapping-roles-note'} disabled={!editable}>
+              : <fieldset className="user-mapping-roles" role="group" aria-labelledby="user-mapping-roles-label" aria-describedby={mapped ? undefined : 'user-mapping-roles-note'} disabled={!editable || blocked}>
                 {lookup.value.roles.map(role => role === publicRole
                   ? <label key={role} className="checkbox-label"><input type="checkbox" checked disabled /><bdi className="user-mapping-role">{role}</bdi></label>
                   : <label key={role} className="checkbox-label"><input type="checkbox" checked={mapped && chosen.has(role)} disabled={!mapped}

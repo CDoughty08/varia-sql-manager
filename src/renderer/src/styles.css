@@ -857,6 +857,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* A greyed field's label greys with it, as the option checkboxes do. */
 .new-login-page .property-row:has(input:disabled) > label:not(.checkbox-label) { color: var(--varia-disabledForeground); }
 @media (forced-colors: active) { .new-login-page .property-row:has(input:disabled) > label:not(.checkbox-label) { color: GrayText; } }
+/* Login Properties' Login name cannot change: it reads as text in a frame, not as a field to type in. */
+.new-login-page input[readonly] { background: transparent; border-color: var(--varia-dialog-separatorBackground); color: var(--varia-dialog-labelForeground); cursor: default; }
+@media (forced-colors: active) { .new-login-page input[readonly] { border-color: GrayText; } }
 .password-field { width: 100%; min-width: 0; height: 28px; }
 .new-login-match { display: flex; align-items: center; gap: 4px; color: var(--varia-successForeground); }
 .new-login-hints { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; margin-bottom: 0; padding: 6px 8px; list-style: none; border: 1px solid var(--varia-dialog-separatorBackground); border-radius: var(--varia-radius-sm); font-size: var(--varia-size-xs); color: var(--varia-descriptionForeground); }
@@ -886,6 +889,8 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .user-mapping-row[data-selected] > .user-mapping-map { box-shadow: inset 2px 0 0 var(--varia-focusBorder); }
 .user-mapping-grid:focus .user-mapping-cell[data-active] { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .user-mapping-row[data-unavailable] .user-mapping-text { color: var(--varia-disabledForeground); }
+/* Login Properties: a database User Mapping has not read yet (its cell names it, and says why through aria-describedby). */
+.user-mapping-text[data-unread] { color: var(--varia-descriptionForeground); font-style: italic; }
 .user-mapping-editor { flex: 1; min-width: 0; height: calc(var(--varia-row) - 2px); padding: 0 4px; border-radius: 0; }
 .user-mapping-browse { flex: none; height: calc(var(--varia-row) - 4px); padding: 0 6px; border-color: var(--varia-button-border); line-height: 1; }
 .user-mapping-roles-box { display: flex; flex-direction: column; gap: 4px; min-height: 92px; padding: 6px 10px; border: 1px solid var(--varia-panel-border); border-radius: var(--varia-radius-sm); }
@@ -898,11 +903,12 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 @media (forced-colors: active) {
   .user-mapping-row[data-selected] > .user-mapping-cell { forced-color-adjust: none; background: Highlight; color: HighlightText; }
   .user-mapping-row[data-unavailable] .user-mapping-text { color: GrayText; }
+  .user-mapping-text[data-unread] { color: GrayText; }
   /* Inside the selected row, which adjusts no colours itself, everything takes HighlightText: the active cell's outline, the …
      button and a greyed database's name. */
   .user-mapping-grid:focus .user-mapping-row[data-selected] > .user-mapping-cell[data-active] { outline-color: HighlightText; }
   .user-mapping-row[data-selected] .user-mapping-browse { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: HighlightText; }
-  .user-mapping-row[data-selected][data-unavailable] .user-mapping-text { color: HighlightText; }
+  .user-mapping-row[data-selected][data-unavailable] .user-mapping-text, .user-mapping-row[data-selected] .user-mapping-text[data-unread] { color: HighlightText; }
 }
 /* D3d: the sessions a database's DROP meets, a disclosure whose grid scrolls within its own height so the options below stay
    in view; the notes under Close existing connections line up with its label, and a greyed option's label greys with it. */
