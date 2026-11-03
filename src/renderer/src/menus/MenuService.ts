@@ -54,7 +54,7 @@ export function themeMenuItems(theme: Pick<ThemeState, 'preference' | 'themes'>)
 
 export interface MenuServiceOptions {
   readonly platform: Platform
-  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled' | 'execute' | 'onWillExecute'>
+  readonly commands: Pick<CommandService, 'isEnabled' | 'isToggled' | 'execute' | 'onWillExecute' | 'reportError'>
   /** Static and state keys, for menu conditions and enablement. */
   readonly context: { getState(): ContextKeys }
   readonly keybindings: { lookup(id: CommandId): KeybindingLabel | undefined }
@@ -84,6 +84,14 @@ export interface MenuServiceOptions {
 const guard = (action: () => void) => { try { action() } catch (error) { onUnexpectedError(error) } }
 const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item.kind !== 'separator')
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
+/** The banner's words for a menu item chosen after it stopped being available. */
+const unavailableMessage = (title: string) => `“${title.replace(/…$/, '')}” is no longer available: something changed after the menu opened.`
+/** How far `element` and each element around it are scrolled, by element. */
+function scrollPositions(element: Element): ReadonlyMap<EventTarget, readonly [number, number]> {
+  const positions = new Map<EventTarget, readonly [number, number]>()
+  for (let node: Element | null = element; node; node = node.parentElement) positions.set(node, [node.scrollTop, node.scrollLeft])
+  return positions
+}
 /** The item a focused composite widget names as active (`aria-activedescendant`), when it is inside the widget. */
 function activeDescendant(element: Element | null): Element | undefined {
   if (typeof element?.getAttribute !== 'function') return undefined
@@ -125,8 +133,13 @@ export class MenuService implements Disposable {
   private nativeMarked?: Element
   /** The element an open context menu is for, so a menu button can say whether its menu is open (aria-expanded). */
   readonly menuFor = new (class extends SnapshotStore<Element | undefined> { set(value: Element | undefined) { if (value !== this.getSnapshot()) this.publish(value) } clear() { this.clearListeners() } })(undefined)
-  /** A widget scrolled to show its active item for a keyboard menu: that scroll does not close the menu. */
-  private revealed?: { readonly widget: Element; readonly top: number }
+  /**
+   * How far the open context menu's element and the elements around it were scrolled when it opened. Chromium dispatches
+   * a scroll event with the next frame, so a scroll made before the menu opened (a keyboard menu revealing its tree row, a
+   * script, or the wheel just before a right-click, on a window that draws few frames) can arrive while the menu shows:
+   * only a scroll that moved one of them since closes it.
+   */
+  private scrolled?: ReadonlyMap<EventTarget, readonly [number, number]>
   private readonly native?: NativeMenuPresenter
   private readonly subscriptions: Disposable[]
   private detach?: () => void
@@ -249,16 +262,10 @@ export class MenuService implements Disposable {
       // Items report their own release: a menubar press dragged onto an item activates it there.
       if (!inside(pointer.target, '.menu-layer .menu-item')) this.controller.pointerUp(-1, -1, { x: pointer.clientX, y: pointer.clientY }, pointer.button)
     })
-    const scroll = (event: Event) => guard(() => {
-      const revealed = this.revealed
-      if (revealed && event.target === revealed.widget) {
-        this.revealed = undefined
-        if (revealed.widget.scrollTop === revealed.top) return
-      }
-      if (this.controller.view.levels.length && !inside(event.target, '.menu')) this.close('scroll')
-    })
-    // Alt with the wheel scrolls faster in the editor; it is not an Alt tap.
-    const wheel = (event: Event) => { guard(() => this.access.disarm()); scroll(event) }
+    const scrolled = (event: Event) => { if (this.controller.view.levels.length && !inside(event.target, '.menu')) this.close('scroll') }
+    const scroll = (event: Event) => guard(() => { if (!this.unmoved(event.target)) scrolled(event) })
+    // Alt with the wheel scrolls faster in the editor; it is not an Alt tap. The wheel is the user scrolling now.
+    const wheel = (event: Event) => guard(() => { this.access.disarm(); scrolled(event) })
     const resize = () => guard(() => this.close('resize'))
     const blur = () => guard(() => { this.access.disarm(); this.close('blur') })
     const visibility = () => guard(() => { if (target.document.visibilityState === 'hidden') this.close('blur') })
@@ -325,7 +332,12 @@ export class MenuService implements Disposable {
     const items = this.resolve(menu, target)
     if (!hasItems(items)) return false
     const at = anchor ?? this.keyboardAnchor(hit, widget), open = () => this.openContext(menu, items, at, keyboard, hit.mark)
-    if (!this.native) return open()
+    if (!this.native) {
+      const positions = scrollPositions(hit.element)
+      if (!open()) return false
+      this.scrolled = positions
+      return true
+    }
     this.showNative(this.native, menu, items, at, hit.mark, open)
     return true
   }
@@ -368,10 +380,12 @@ export class MenuService implements Disposable {
     const box = widget.getBoundingClientRect(), rect = item.getBoundingClientRect()
     const top = box.top + widget.clientTop, bottom = top + widget.clientHeight
     const delta = rect.top < top ? rect.top - top : rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : 0
-    if (!delta) return
-    const before = widget.scrollTop
-    widget.scrollTop = before + delta
-    if (widget.scrollTop !== before) this.revealed = { widget, top: widget.scrollTop }
+    if (delta) widget.scrollTop += delta
+  }
+  /** Whether a scroll event's element is one the open context menu recorded, still where it was when the menu opened. */
+  private unmoved(target: EventTarget | null): boolean {
+    const at = target ? this.scrolled?.get(target) : undefined
+    return !!at && (target as Element).scrollTop === at[0] && (target as Element).scrollLeft === at[1]
   }
   /** The menus took the keyboard: remember where focus was, unless a menu replaced another one. */
   private ownershipChanged(): void {
@@ -386,13 +400,19 @@ export class MenuService implements Disposable {
     }
     this.owned = owns
   }
-  /** Order matters: the menus have closed, focus goes back synchronously, and only then does the command run. */
+  /**
+   * Order matters: the menus have closed, focus goes back synchronously, and only then does the command run. The item was
+   * enabled when the menu showed; when something changed since (a reload moved the selection, the server went), the
+   * banner says so rather than the choice doing nothing.
+   */
   private activate(item: ResolvedCommandItem): void {
     this.options.focus.restore(this.restoreTarget)
-    void this.options.commands.execute(item.id, item.args, 'menu')
+    if (this.options.commands.isEnabled(item.id, item.args)) void this.options.commands.execute(item.id, item.args, 'menu')
+    else this.options.commands.reportError(unavailableMessage(item.title))
   }
   private closed(reason: CloseReason): void {
     this.tabbedIn = false
+    this.scrolled = undefined
     this.marked?.removeAttribute('data-menu-target')
     if (this.marked && this.menuFor.getSnapshot() === this.marked) this.menuFor.set(undefined)
     this.marked = undefined
