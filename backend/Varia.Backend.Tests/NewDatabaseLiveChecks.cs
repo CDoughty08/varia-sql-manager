@@ -90,17 +90,34 @@ internal static class NewDatabaseLiveChecks
             + string.Join(", ", mismatches));
 
         // At the catalogue's ceilings (sizes from 2 TB on are written in MB, as SQL Server reads a size's number as an int) the builder
-        // composes the statement exactly, and SQL Server accepts its sizes: it checks them (1842) before it looks for the folder, which
-        // does not exist, so the statement fails there (5133) and creates nothing.
-        var nowhere = dataFolder + separator + "VariaMissing_" + Guid.NewGuid().ToString("N");
+        // composes the statement exactly, and SQL Server accepts its sizes: it checks their range as it compiles the statement (a MB past
+        // a data file's ceiling is refused there, 1842, before anything runs) and the rest as it runs, before it creates a file. The files
+        // must never be made: SQL Server on Linux creates a missing folder and would then grow the file to its size (16 TB), so they go
+        // under model's own data file, where no platform can make a folder or a file. The statement then fails as it opens the first file
+        // (5133 on Windows, 5123 on Linux, both operating system error 3) and nothing is created, grown or left behind.
+        var anchor = (await Sql("SELECT physical_name FROM sys.master_files WHERE database_id = 3 AND file_id = 1;")).Scalar ?? "";
+        async Task<string?> Exists(string path) => major < 14 ? null
+            : (await Sql("SELECT CONVERT(nvarchar(1), x.file_exists) + CONVERT(nvarchar(1), x.file_is_a_directory) FROM sys.dm_os_file_exists(" + Literal(path) + ") AS x;")).Scalar;
+        // sys.master_files names model's open data file, so it is a file; from SQL Server 2017 the server says so too.
+        var anchorKind = anchor.Length > 0 ? await Exists(anchor) : "";
+        var anchored = anchor.Length > 0 && anchorKind is null or "10";
+        var nowhere = anchor + separator + "VariaMissing_" + Guid.NewGuid().ToString("N");
         var ceilings = NewDatabaseChecks.Ceilings(unused, nowhere);
         var ceilingBuilt = await service.Actions.DryRunCreateAsync(info.Id, ceilings, model.Linux, CancellationToken.None);
         var ceilingStatement = CreateDatabaseSql.Statement(ceilings, model.Linux);
-        var attempted = await Sql(ceilingStatement + ";");
+        var pastStatement = ceilingStatement.Replace(", SIZE = 16777215MB,", ", SIZE = 16777216MB,", StringComparison.Ordinal);
+        var past = anchored && pastStatement != ceilingStatement ? await Sql(pastStatement + ";") : null;
+        var attempted = anchored ? await Sql(ceilingStatement + ";") : null;
         var nothing = (await Sql("SELECT COUNT(*) FROM sys.databases WHERE name = " + Literal(unused) + ";")).Scalar;
+        var left = await Exists(nowhere);
         check(ceilingBuilt.Count == 1 && ceilingBuilt[0] == ceilingStatement && ceilingStatement.Contains("SIZE = 16777215MB, MAXSIZE = 16777215MB, FILEGROWTH = 2097152MB", StringComparison.Ordinal)
-            && attempted.Error is { } refusal && refusal.Contains("Directory lookup", StringComparison.Ordinal) && nothing == "0",
-            "SQL Server's New Database builder composes sizes at the catalogue's ceilings exactly, and SQL Server parses them and accepts their sizes: " + attempted.Error);
+            && past?.Error is { } tooBig && tooBig.Contains("Msg 1842,", StringComparison.Ordinal)
+            && attempted?.Error is { } refusal && (refusal.Contains("Msg 5133,", StringComparison.Ordinal) || refusal.Contains("Msg 5123,", StringComparison.Ordinal))
+            && refusal.Contains("operating system error 3(", StringComparison.Ordinal) && refusal.Contains(nowhere + separator + "c.mdf", StringComparison.Ordinal)
+            && !refusal.Contains("Msg 1842,", StringComparison.Ordinal) && nothing == "0" && left is null or "00",
+            "SQL Server's New Database builder composes sizes at the catalogue's ceilings exactly, and SQL Server accepts their sizes (a MB more is refused as it compiles, 1842) and runs "
+            + "CREATE DATABASE until it opens the first file, which it cannot under model's data file (5133 or 5123, operating system error 3), so nothing is created or grown: "
+            + (anchored ? past?.Error + " / " + attempted?.Error : "model's data file is not a file the server sees (" + anchorKind + ")") + " / databases " + nothing + ", folder " + left);
 
         if (Environment.GetEnvironmentVariable("VARIA_TEST_SQL_SCRATCH") != "1")
         {
