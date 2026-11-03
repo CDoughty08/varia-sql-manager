@@ -506,6 +506,7 @@ explorer.context, for a database
   &Tasks >
     &Restore >
       &Database…
+      &Files and Filegroups…
   ---
   Copy N&ame
   ---

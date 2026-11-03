@@ -1,12 +1,14 @@
-// Restore Database's strict zod schemas: the describe's `restore` source and actions.script's restore request. Main
-// validates both before the backend re-checks them (RestoreRequest.Validate in C#), and the document checks its draft
-// with restoreOptionsProblems, so it refuses exactly what main and the backend refuse.
+// Restore Database's strict zod schemas: the describe's `restore` source, and actions.script's restore and restoreFiles
+// requests. Main validates them before the backend re-checks them (ValidateRestore and ValidateRestoreFiles in C#), and the
+// document checks its draft with restoreOptionsProblems and restoreFilesOptionsProblems, so it refuses exactly what main and
+// the backend refuse.
 import { z } from 'zod'
 import { ident } from '../explorer/schema.ts'
 import type { ObjectRef } from '../explorer/refs.ts'
 import { serverPathProblem } from './files.ts'
 import {
-  restoreLimits, restoreRecoveryStates, restoreSetIdPattern, restoreTargetProblem, restoreTimePattern, plannedSetTypes, type RestoreOptions, type RestoreSource
+  restoreFilesSetTypes, restoreLimits, restoreRecoveryStates, restoreSetIdPattern, restoreTargetProblem, restoreTimePattern, plannedSetTypes, type RestoreFilesOptions, type RestoreOptions,
+  type RestoreSource
 } from './restore.ts'
 
 const path = z.string().superRefine((value, context) => { const problem = serverPathProblem(value); if (problem) context.addIssue({ code: 'custom', message: problem }) })
@@ -78,3 +80,54 @@ export interface RestoreRequest {
 export const restoreRequestSchema = z.object({
   action: z.literal('restore'), connectionId: z.uuid(), requestId: z.uuid(), target: targetSchema, identity: identitySchema.optional(), restore: restoreOptionsSchema
 }).strict() satisfies z.ZodType<RestoreRequest>
+
+// --- Restore Files and Filegroups (D1g) ---------------------------------------------------------------------------------
+
+const filesSetSchema = setSchema.extend({ type: z.enum(restoreFilesSetTypes) }).strict()
+const names = z.array(ident).max(restoreLimits.restoreFiles)
+
+/** The parameters a file restore's RESTORE DATABASE sends (C#: ActionService.RestoreFilesParameters): @db, @file and @standby, its files,
+ *  filegroups and devices, and two per move. */
+export const restoreFilesParameters = (options: Pick<RestoreFilesOptions, 'sets' | 'files' | 'filegroups' | 'relocate'>): number =>
+  3 + options.files.length + options.filegroups.length + (options.sets[0]?.devices.length ?? 0) + 2 * options.relocate.length
+/** Why file restore options cannot be scripted (or run): the sets' shape, what is restored, the moves and the recovery state's rules. */
+export function restoreFilesOptionsProblems(options: RestoreFilesOptions): { readonly path: string; readonly message: string }[] {
+  const problems: { path: string; message: string }[] = []
+  const { sets } = options
+  if (sets.length > 0 && sets[0].type === 'log') problems.push({ path: 'sets', message: 'A file restore starts with a full or file backup.' })
+  if (sets.some((set, index) => index > 0 && set.type !== 'log')) problems.push({ path: 'sets', message: 'Only log backups follow the backup the files restore from.' })
+  if (new Set(sets.map(set => set.id)).size !== sets.length) problems.push({ path: 'sets', message: 'A backup set is listed twice.' })
+  if (options.files.length + options.filegroups.length === 0) problems.push({ path: 'files', message: 'Name the files or filegroups to restore.' })
+  if (new Set(options.files).size !== options.files.length) problems.push({ path: 'files', message: 'A file is named twice.' })
+  if (new Set(options.filegroups).size !== options.filegroups.length) problems.push({ path: 'filegroups', message: 'A filegroup is named twice.' })
+  if (restoreFilesParameters(options) > restoreLimits.parameters) problems.push({ path: 'relocate', message: `One RESTORE takes at most ${restoreLimits.parameters.toLocaleString('en-US')} parameters: restore fewer files, or move fewer.` })
+  const logical = new Set(options.relocate.map(move => move.logical)), physical = new Set(options.relocate.map(move => move.physical.toLowerCase()))
+  if (logical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'A file is moved twice.' })
+  if (physical.size !== options.relocate.length) problems.push({ path: 'relocate', message: 'Two files would restore to one path.' })
+  if ((options.recovery === 'standby') !== (options.standbyFile !== undefined)) problems.push({ path: 'standbyFile', message: 'RESTORE WITH STANDBY needs a standby file, and only it takes one.' })
+  // The log backup is restored last, with RECOVERY: it is what brings the restored files online.
+  if (options.logBackup && options.recovery !== 'recovery') problems.push({ path: 'logBackup', message: 'The log backup brings the files online, so it restores only WITH RECOVERY.' })
+  return problems
+}
+
+export const restoreFilesOptionsSchema = z.object({
+  sets: z.array(filesSetSchema).min(1).max(restoreLimits.planSets),
+  files: names, filegroups: names,
+  relocate: z.array(moveSchema).max(restoreLimits.restoreMoves),
+  replace: z.boolean(), restrictedUser: z.boolean(),
+  recovery: z.enum(restoreRecoveryStates), standbyFile: path.optional(),
+  logBackup: z.object({ file: path }).strict().optional()
+}).strict().superRefine((options, context) => {
+  for (const problem of restoreFilesOptionsProblems(options)) context.addIssue({ code: 'custom', path: [problem.path], message: problem.message })
+}) satisfies z.ZodType<RestoreFilesOptions>
+
+/** A file restore names an existing database, so its identity is required: the run refuses one that has taken the name since. */
+export interface RestoreFilesRequest {
+  readonly action: 'restoreFiles'; readonly connectionId: string; readonly requestId: string
+  readonly target: ObjectRef & { readonly kind: 'database'; readonly name: string }
+  readonly identity: { readonly id: number; readonly created: string }
+  readonly restoreFiles: RestoreFilesOptions
+}
+export const restoreFilesRequestSchema = z.object({
+  action: z.literal('restoreFiles'), connectionId: z.uuid(), requestId: z.uuid(), target: targetSchema, identity: identitySchema, restoreFiles: restoreFilesOptionsSchema
+}).strict() satisfies z.ZodType<RestoreFilesRequest>

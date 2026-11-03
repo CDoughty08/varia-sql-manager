@@ -21,7 +21,8 @@ import { explorerStatics } from './explorer-tree.mjs'
  * Restore Database ('restoreDatabase') reads AppData's three backups (see restore()); its Script returns `restoreScript`. Its run
  * (restoreRun()) takes the backend's steps: with Close existing connections it reports the full backup's RESTORE at 40 % and
  * waits until its Stop arrives, then answers as the backend does over a database that existed (left RESTORING); otherwise
- * every step is done and the database online.
+ * every step is done and the database online. Restore Files and Filegroups (the same reads, action 'restoreFiles') scripts
+ * `restoreFilesScript` and runs RestoreFilesRun.cs's steps at once, each done, leaving the database online.
  */
 export function actionsStubData() {
   return { statics: explorerStatics(), serverFiles: stubServerFiles }
@@ -50,6 +51,7 @@ export const dependentsMessage = "Could not drop object 'dbo.Lines' because it i
 export const scriptText = name => `USE [AppData]\r\nGO\r\nDROP TABLE [dbo].[${name}]\r\nGO\r\n`
 export const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
 export const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+export const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
@@ -62,6 +64,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
   const propertiesScript = 'USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET AUTO_CLOSE ON WITH NO_WAIT\r\nGO\r\nALTER DATABASE [AppData] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n'
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
+  const restoreFilesScript = "USE [master]\r\nRESTORE DATABASE [AppData] FILE = N'AppData' FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NORECOVERY,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
   const ok = value => ({ ok: true, value })
   const folders = (owner, ids) => ids.map(folder => ({ ref: { type: 'folder', owner, folder }, label: statics.labels[folder], icon: 'folder', hasChildren: true }))
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
@@ -181,8 +184,16 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
       steps: steps.map((title, index) => ({ status: index < first ? 'done' : index === first ? 'cancelled' : 'skipped', title, ...index === first ? { progress: 40 } : {} })),
       error: { code: 'CANCELLED', message: `The action was stopped at "${steps[first]}"; SQL Server cancelled that statement. Completed before Stop: ${steps.slice(0, first).join(', ')}.`, retryable: true } }))))
   }
+  /** Restore Files and Filegroups' run: RestoreFilesRun.cs's step titles for the request, each done, the database online. */
+  function restoreFilesRun({ restoreFiles: options }) {
+    const logs = options.sets.length - 1
+    const steps = [...options.sets.map((set, index) => index === 0 ? 'Restore the files' : 'Restore log backup' + (logs > 1 ? ` ${index} of ${logs}` : '')),
+      ...options.logBackup ? ['Back up the log', 'Restore the log backup'] : []]
+    return ok({ steps: steps.map(title => ({ status: 'done', title })), messages: [], elapsedMs: 1, restored: { state: 0, userAccess: 0 } })
+  }
   function execute(params, sender) {
     const { target } = params
+    if (params.action === 'restoreFiles') return restoreFilesRun(params)
     if (params.action === 'createTable') return createTable(params)
     if (params.action === 'restore') return restoreRun(params, sender)
     if (params.action === 'properties') return ok({ steps: Object.keys(params.changes.options ?? {}).map(key => ({ status: 'done', title: 'Set ' + key })), messages: [], elapsedMs: 1 })
@@ -250,6 +261,7 @@ export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
           case 'properties': return ok({ text: propertiesScript, database: 'master', warnings: [] })
           case 'createTable': return ok({ text: designerScript(params.design.name), database: params.target.name, warnings: [] })
           case 'restore': return ok({ text: restoreScript, database: 'master', warnings: [] })
+          case 'restoreFiles': return ok({ text: restoreFilesScript, database: 'master', warnings: [] })
           default: return ok({ text: scriptText(params.target.name), database: params.target.database ?? 'master', warnings: [] })
         }
       case 'actions.execute': return execute(params, _event.sender)

@@ -7,13 +7,14 @@ namespace Varia.Backend.Actions;
 /// <summary>The run's check of the plan it was sent (D1f): the document's planner chose the sets, but the backend never trusts it.
 /// Right before any statement, HEADERONLY re-reads each set's media (once per media set) and the sets must be what the request
 /// says, in an order SQL Server can restore: a full backup, at most one differential based on it, then logs that each continue the
-/// set before them on its recovery fork, all of one database (the planner's rules, src/shared/actions/restore-plan.ts).</summary>
+/// set before them on its recovery fork, all of one database (the planner's rules, src/shared/actions/restore-plan.ts). A file
+/// restore's chain (<c>files</c>, D1g) is a full or file backup, then logs.</summary>
 internal static class RestoreChain
 {
     /// <summary>The chain as the media hold it: the database the backup is of and its family, and each planned set's header.</summary>
     public sealed record Chain(string Database, string? Family, List<BackupSetDto> Sets);
 
-    public static async Task<(Chain? Chain, ActionError? Error)> ReadAsync(SqlConnection connection, ActionsCatalog catalog, IReadOnlyList<RestorePlanSetDto> planned, CancellationToken token)
+    public static async Task<(Chain? Chain, ActionError? Error)> ReadAsync(SqlConnection connection, ActionsCatalog catalog, IReadOnlyList<RestorePlanSetDto> planned, CancellationToken token, bool files = false)
     {
         var media = new Dictionary<string, List<BackupSetDto>>(StringComparer.Ordinal);
         var headers = new List<BackupSetDto>();
@@ -29,14 +30,14 @@ internal static class RestoreChain
             }
         }
         catch (SqlException error) when (!token.IsCancellationRequested && RestoreDescribe.MediaError(catalog, error, connection) is { } value) { return (null, value); }
-        if (Problem(catalog.Restore, planned, headers) is { } problem) return (null, ActionErrors.Create(catalog, problem.Code, problem.Message));
+        if (Problem(catalog.Restore, planned, headers, files) is { } problem) return (null, ActionErrors.Create(catalog, problem.Code, problem.Message));
         return (new(headers[0].Database, headers[0].FamilyGuid, headers), null);
     }
 
     /// <summary>Why the headers the media hold do not restore as planned, or null: a set of another kind than planned, a damaged set,
     /// a copy-only log, sets of more than one database, a differential not based on the full, or a log that does not continue the
     /// set before it.</summary>
-    internal static (string Code, string Message)? Problem(RestoreCatalogJson restore, IReadOnlyList<RestorePlanSetDto> planned, IReadOnlyList<BackupSetDto> headers)
+    internal static (string Code, string Message)? Problem(RestoreCatalogJson restore, IReadOnlyList<RestorePlanSetDto> planned, IReadOnlyList<BackupSetDto> headers, bool files = false)
     {
         var invalid = restore.Message("invalidPlan");
         for (var index = 0; index < planned.Count; index++)
@@ -47,8 +48,8 @@ internal static class RestoreChain
             if (header.Damaged) return ("MEDIA", restore.Message("damaged") + " (" + Where(set) + ")");
             if (header.Type == "log" && header.CopyOnly) return ("RESTORE_SEQUENCE", restore.Message("copyOnlyLog") + " (" + Where(set) + ")");
             if (!SameFamily(header, headers[0])) return ("RESTORE_SEQUENCE", invalid + " The backup sets are not all of one database.");
-            var fits = index == 0 ? header.Type == "full"
-                : header.Type == "differential" ? index == 1 && BasedOn(header, headers[0])
+            var fits = index == 0 ? header.Type == "full" || (files && header.Type == "file")
+                : header.Type == "differential" ? !files && index == 1 && BasedOn(header, headers[0])
                 : header.Type == "log" && Continues(header, headers[index - 1]);
             if (!fits) return ("RESTORE_SEQUENCE", invalid + " " + Where(set) + " does not follow the backup before it.");
         }

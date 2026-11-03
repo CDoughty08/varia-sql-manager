@@ -15,6 +15,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
 | `restore` | Restore Database… | `explorer.restoreDatabase` | dialog | `explorer.context` | `0_new` 3 | r | — | — | SQL Server | `explorerActionRestore` |
+| `restoreFiles` | Restore Files and Filegroups… | `explorer.restoreFiles` | dialog | `explorer.context` | `0_new` 4 | e | — | — | SQL Server | `explorerActionRestoreFiles` |
 
 "Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
@@ -31,21 +32,21 @@ is reserved on Windows and Linux.
 
 ✓ enabled, ○ shown greyed, – not offered.
 
-| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Restore Database… |
-| --- | --- | --- | --- | --- | --- | --- |
-| `database` | none | – | ✓ | ✓ | ✓ | ✓ |
-| `database` | `system` | – | ○ | ○ | ✓ | ○ |
-| `database` | `snapshot` | – | ○ | ✓ | ✓ | – |
-| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – |
-| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – |
-| `table` | `droppedLedger` | – | ○ | ○ | – | – |
-| `view` | none | ✓ | ✓ | ✓ | – | – |
-| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – |
-| `view` | `droppedLedger` | – | ○ | ○ | – | – |
-| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – |
-| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – |
-| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – |
-| `function` | `aggregate` | – | ✓ | ○ | – | – |
+| Kind | Subtypes | Select Top 1000 Rows | Rename | Delete | Properties | Restore Database… | Restore Files and Filegroups… |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `database` | none | – | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `database` | `system` | – | ○ | ○ | ✓ | ○ | ○ |
+| `database` | `snapshot` | – | ○ | ✓ | ✓ | – | – |
+| `table` | none, `graphNode`, `graphEdge` | ✓ | ✓ | ✓ | – | – | – |
+| `table` | `systemVersioned`, `history`, `updatableLedger`, `appendOnlyLedger`, `ledgerHistory`, `fileTable`, `external`, `system` | ✓ | ○ | ○ | – | – | – |
+| `table` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `view` | none | ✓ | ✓ | ✓ | – | – | – |
+| `view` | `system`, `ledger` | ✓ | ○ | ○ | – | – | – |
+| `view` | `droppedLedger` | – | ○ | ○ | – | – | – |
+| `procedure` | none, `sql`, `clr` | – | ✓ | ✓ | – | – | – |
+| `procedure` | `extended`, `replicationFilter`, `system` | – | ○ | ○ | – | – | – |
+| `function` | none, `inline`, `tableValued`, `clrTableValued`, `scalar`, `clrScalar` | – | ✓ | ✓ | – | – | – |
+| `function` | `aggregate` | – | ✓ | ○ | – | – | – |
 
 ## Menus, statuses, database states and servers
 
@@ -156,7 +157,7 @@ When the backend's generation is closed (a quit, a reload, Restart SQL Backend),
 runs their cleanup steps within their budgets; main lets that generation run `stopGraceMs` plus the action's cleanup budget plus 5 s
 before it kills it (`actionDrainMs`, methodPolicies' `drainMs`).
 
-Long actions: Restore Database….
+Long actions: Restore Database…, Restore Files and Filegroups….
 
 ## Server file picker
 
@@ -466,6 +467,55 @@ files as, Restore As; the restore options, Tail-Log
 backup, Server connections and Prompt; Select backup devices; Backup Timeline) are SSMS's as recalled, not yet checked
 against SSMS 22.
 
+### Restore Files and Filegroups
+
+Restore Files and Filegroups (D1g) restores some files of an existing database: the Databases folder's Restore Files and
+Filegroups… (E) and a user database's Tasks › Restore › Files and Filegroups… (F) open the same document in its files mode
+("Restore Files and Filegroups - <database>"), with SSMS's pages as sections (General, Options), and the same
+describes, Script drawer, verbs, Run panel, Stop and long run as Restore Database. General has To database (the server's
+user databases), Source for restore (From database, whose backups msdb has, or From device), and Select the backup sets
+to restore: the files of the newest 16 full and file backups (msdb's `backupfile` or FILELISTONLY, read one describe after
+another; files a file backup does not hold (`absent`: `is_present` 0) and log files are not listed), then the log backups
+that continue the backup set of the checked rows, checked with them and never alone (copy-only and damaged logs never
+chain). One restore restores from one backup set: checking a row of another set starts again from it. Options has Restore
+as filegroup (the rows become filegroups, named with FILEGROUP =), Overwrite the existing database (WITH REPLACE),
+Prompt before restoring each backup (greyed), Restrict access to the restored database (WITH RESTRICTED_USER), Restore the
+database files as (Original File Name, File Type and Restore As, for the restored files, where they are unless typed), the
+Recovery state with SSMS's long labels ("Leave the database ready for use by rolling back the uncommitted transactions. Additional transaction logs cannot be restored. (RESTORE WITH RECOVERY)"…) and Rollback undo file, and Varia's own
+Log backup group.
+
+Under the full or bulk-logged recovery model an online file restore ends only with a log backup taken after it (probed on
+2025: the files stay RESTORING after every earlier log, "Additional roll forward past LSN … is required"). SSMS's dialog
+has no such step and leaves the person to take and restore one; Varia offers "Back up the log and restore it to bring the
+files online (WITH COPY_ONLY)", checked by default for an online database in the full or bulk-logged recovery model WITH
+RECOVERY, to a new file named as SSMS names a tail-log backup. Unchecked there, Restore asks first ("No log backup is
+taken: under the full or bulk-logged recovery model, restored files stay restoring until a log backup taken after they are restored is restored."), as it does for WITH REPLACE. STANDBY
+is greyed while the database is online: SQL Server refuses it on an online file restore (4302), and only after the files
+are restored, so the preflight refuses it first.
+
+The request (`restoreFiles`) names the sets (a full or file backup, then logs), the files and filegroups (each at most
+256), the moves, the options and the log backup. A file restore takes no STOPAT and no differential, and its
+database must exist, so its identity is required. The backend's preflight checks the identity and that it is no snapshot;
+the log backup (not under SIMPLE, and only online); STANDBY online; the chain on the media (`RestoreChain`, files variant);
+that the backups are the database's own (its backup family, else its name; `BACKUP_MISMATCH`, "These backups are of another database: files restore only from the database's own backups.");
+that each file and filegroup is in the set, held by it and no log file; under SIMPLE, Learn's rule
+("Under the simple recovery model, the file must belong to a read-only filegroup.", `NOT_SUPPORTED`, from `sys.master_files.is_read_only`); and the files it writes, as Restore
+Database's does, with the log backup file new. The steps, each its own statement with every name a parameter
+(`FILE = @f1`, `FILEGROUP = @g1`; live checks restore hostile names):
+
+| Step | When |
+| --- | --- |
+| Restore the files | `RESTORE DATABASE … FILE = … FILEGROUP = … FROM … WITH FILE =`, the moves, `NORECOVERY` (or the recovery state when it is the last statement), `REPLACE`, `RESTRICTED_USER`, `STATS = 5` |
+| Restore log backup (n of m) | One `RESTORE LOG` per log backup after the set |
+| Back up the log | The log backup is on: `BACKUP LOG … TO DISK = … WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = …` |
+| Restore the log backup | Then `RESTORE LOG` from that new file WITH RECOVERY, which brings the restored files online |
+
+A file restore has no compensation or cleanup, and Varia never drops the database; Stop asks first ("Stopping leaves the
+files being restored in <database> restoring…"). The reply names the files still RESTORING (`restored.filesRestoring`, by
+logical name, at most 16), and the Run panel says so. Script writes the statements SMO's `Restore { Action = Files }` writes,
+with `STATS = 5` as Restore Database's (SMO scripted 10 as the spec captured it), and the log backup's two statements
+after the logs.
+
 ### Restore limits
 
 | Limit | Value | Meaning |
@@ -487,6 +537,9 @@ against SSMS 22.
 | `stats` | 5 | STATS = n in the script, as SSMS asks SMO for |
 | `databases` | 32,767 | Database ids a run's preflight reads (SQL Server's most): its cleanup drops only a database whose id was not among them |
 | `scriptChars` | 4,000,000 | Characters of a restore's script, checked as each statement is written (every RESTORE repeats the moves) |
+| `restoreFiles` | 256 | Files (FILE), and filegroups (FILEGROUP), one file restore names: form 4's `@f1`…`@f256` and `@g1`…`@g256` |
+| `fileSets` | 16 | The newest full and file backups whose files Restore Files and Filegroups reads, one describe each |
+| `parameters` | 2,100 | SQL Server's parameters per statement: a file restore's files, filegroups, devices and moves (two each), with its own three, stay under them |
 
 ## SQL
 

@@ -14,7 +14,7 @@ internal sealed record OptionSqlJson(string Kind, string? Keyword = null, bool? 
 internal sealed record RangeJson(long Min, long Max);
 /// <summary>The restore block of actions-catalog.json (src/shared/actions/restore.ts restoreCatalog()).</summary>
 internal sealed record RestoreCatalogJson(string Describe, List<string> Requests, List<string> Engines, Dictionary<string, long> Limits, List<string> SystemDatabases, List<string> SourceKinds,
-    List<string> RecoveryStates, Dictionary<string, string> Messages, Dictionary<string, string> Steps)
+    List<string> RecoveryStates, List<string> FilesSetTypes, Dictionary<string, string> Messages, Dictionary<string, string> Steps)
 {
     /// <summary>A run step's title (restoreStepTitles), shared with the document's step list.</summary>
     public string Step(string key) => Steps.TryGetValue(key, out var value) ? value : throw new InvalidOperationException("Unknown restore step " + key);

@@ -23,23 +23,27 @@ internal static class RestoreChecks
     public static async Task RunAsync(Action<bool, string> check)
     {
         var options = new ActionServiceOptions();
-        check(Restore.Describe == "restoreDatabase" && Restore.Requests.SequenceEqual(["restore"]) && Restore.Engines.SequenceEqual(["box"])
+        check(Restore.Describe == "restoreDatabase" && Restore.Requests.SequenceEqual(["restore", "restoreFiles"]) && Restore.Engines.SequenceEqual(["box"])
             && Restore.SystemDatabases.SequenceEqual(["master", "model", "msdb", "tempdb"]) && Restore.Limit("mediaReadMs") == (long)options.RestoreDescribeBudget.TotalMilliseconds
             && Restore.Limit("backupDevices") == 64 && Restore.Limit("restoreMoves") == 1_000 && Restore.Limit("stats") == 5 && Restore.Limit("planSets") == Restore.Limit("historySets")
             && Restore.Limit("scriptChars") == 4_000_000 && Restore.Limit("mediaReadsPerConnection") == options.RestorePerConnection && options.RestorePerConnection == 2
             && Catalog.Actions.Contains("restore") && Catalog.IsLong("restore") && Catalog.CleanupBudget("restore") == TimeSpan.FromSeconds(30) && !Catalog.Dialogs.ContainsKey("restoreDatabase")
+            && Catalog.Actions.Contains("restoreFiles") && Catalog.IsLong("restoreFiles") && Restore.FilesSetTypes.SequenceEqual(["full", "file", "log"])
+            && Restore.Limit("restoreFiles") == 256 && Restore.Limit("fileSets") == 16 && Restore.Limit("parameters") == 2_100
             && Restore.Limit("databases") == 32_767 && new[] { "MEDIA", "FILE_ACCESS", "BACKUP_MISMATCH", "TAIL_LOG_NEEDED", "RESTORE_SEQUENCE" }.All(code => Catalog.Retryable(code) == false),
-            "the restore block is restore.ts': describe restoreDatabase, action restore on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
+            "the restore block is restore.ts': describe restoreDatabase, actions restore and restoreFiles on SQL Server itself only, SQL Server's own databases, the 120 s media budget the service uses, "
             + "64 devices, 1000 moves, as many sets as the history lists, a 4,000,000-character script, two media reads per connection; restore is a long object action (its menu items and command, D1f) "
-            + "whose cleanup has 30 s, a document rather than a dialog, and its media and sequence errors are not retryable");
+            + "whose cleanup has 30 s, a document rather than a dialog, and its media and sequence errors are not retryable; restoreFiles is long too, with 256 files and 256 filegroups "
+            + "under SQL Server's 2,100 parameters, from a full or file backup then logs");
         // 64 devices and two parameters per move stay under SQL Server's 2,100 parameters, with room for @db, @file, @standby, @stopat and the tail's two.
         check(Restore.Limit("backupDevices") + 2 * Restore.Limit("restoreMoves") + 6 <= 2_100, "a restore statement's parameters stay under SQL Server's 2,100");
 
         var lint = RestoreSql.Lint(Restore).ToList();
         var problems = lint.SelectMany(item => item.Problems.Select(problem => item.Name + ": " + problem)).ToList();
-        // 10 catalog reads (the run's file reads among them), LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
-        // 3 recovery states × 16 option sets) and HEADERONLY and FILELISTONLY per device count.
-        check(lint.Count == 10 + 1 + 1 + 2 + 3 * 4 * 2 * 3 * 16 + 2 * 64 && problems.Count == 0, "every restore catalog read, media read and run statement passes its lint (" + lint.Count + "): " + string.Join("; ", problems.Take(5)));
+        // 11 catalog reads (the run's file reads among them), LABELONLY, RECOVERY, two tail-log backups, the run's RESTOREs (3 device counts × 4 move counts × DATABASE or LOG ×
+        // 3 recovery states × 16 option sets), a file restore's copy-only log backup and its RESTOREs (8 FILE and FILEGROUP counts × 2 device counts × 3 move counts ×
+        // 3 recovery states × 4 option sets), and HEADERONLY and FILELISTONLY per device count.
+        check(lint.Count == 11 + 1 + 1 + 2 + 3 * 4 * 2 * 3 * 16 + 1 + 8 * 2 * 3 * 3 * 4 + 2 * 64 && problems.Count == 0, "every restore catalog read, media read and run statement passes its lint (" + lint.Count + "): " + string.Join("; ", problems.Take(5)));
         check(RestoreSql.Header(3) == "RESTORE HEADERONLY FROM DISK = @d1, DISK = @d2, DISK = @d3 WITH NOUNLOAD;" && RestoreSql.FileList(1) == "RESTORE FILELISTONLY FROM DISK = @d1 WITH FILE = @file, NOUNLOAD;"
             && RestoreSql.Label == "RESTORE LABELONLY FROM DISK = @d1 WITH NOUNLOAD;", "media reads take every device and the position as parameters, one text per device count");
         var mediaRefused = new[]
@@ -63,6 +67,7 @@ internal static class RestoreChecks
         CheckScripts(check);
         CheckMediaErrors(check);
         RestoreRunChecks.Run(check);
+        RestoreFilesChecks.Run(check);
         await ValidationAsync(check);
         await GatesAsync(check);
     }

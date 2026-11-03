@@ -11,7 +11,7 @@ import { serverPathProblem, type ServerFilesListing, type ServerFilesRequest } f
 import { designerDescribeIds } from '../designer/catalog.ts'
 import { createTableSchema, type CreateTableRequest, type TableDesignerModel } from '../designer/schema.ts'
 import { restoreDescribeId, restoreLimits, type RestoreModel, type RestoreSource } from './restore.ts'
-import { restoreRequestSchema, restoreSourceSchema, type RestoreRequest } from './restore-schema.ts'
+import { restoreFilesRequestSchema, restoreRequestSchema, restoreSourceSchema, type RestoreFilesRequest, type RestoreRequest } from './restore-schema.ts'
 
 /** What actions.describe describes: an object dialog (PR17's catalogue), a designer (src/shared/designer/catalog.ts), the
  *  server's folders for the server file picker, or what Restore Database restores from (src/shared/actions/restore.ts). */
@@ -46,10 +46,10 @@ export interface PropertiesRequest {
 }
 /** One action: actions.script returns its script, actions.execute runs it. */
 export type ActionRequest = RenameRequest | DeleteRequest | PropertiesRequest | CreateTableRequest
-/** actions.script and actions.execute also take a restore, whose request has a shape of its own (restore-schema.ts). */
-export type ActionScriptRequest = ActionRequest | RestoreRequest
-export type ActionExecuteRequest = ActionRequest | RestoreRequest
-export type { RestoreRequest } from './restore-schema.ts'
+/** actions.script and actions.execute also take a restore and a file restore, whose requests have shapes of their own (restore-schema.ts). */
+export type ActionScriptRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
+export type ActionExecuteRequest = ActionRequest | RestoreRequest | RestoreFilesRequest
+export type { RestoreFilesRequest, RestoreRequest } from './restore-schema.ts'
 export interface ActionCancelRequest { readonly requestIds: readonly string[] }
 
 export interface ActionError { readonly code: ActionErrorCode; readonly message: string; readonly retryable: boolean }
@@ -168,9 +168,9 @@ export interface ActionStep {
  * partly restored database left on disk (`filesUnknown`: whether they are could not be asked). A reply leaves it out when the
  * database could not be read, so the page never infers a state.
  */
-export type RestoredDatabase = { readonly state: number; readonly userAccess: number; readonly absent?: undefined }
+export type RestoredDatabase = { readonly state: number; readonly userAccess: number; readonly absent?: undefined; readonly filesRestoring?: readonly string[] }
   | { readonly absent: true; readonly filesLeft?: readonly string[]; readonly filesUnknown?: true }
-/** The most leftover files a reply names (ActionService.MaxFilesLeft). */
+/** The most leftover files, or files still restoring after a file restore (`filesRestoring`, by logical name), a reply names (ActionService.MaxFilesLeft). */
 export const restoredFilesLimit = 16
 export interface ActionExecuteResult {
   /** One per statement, in order: the first failure stops the rest, which are 'skipped'. */
@@ -187,7 +187,7 @@ export interface ActionExecuteResult {
 // database_id), so this only stops an obviously wrong request early.
 const systemSchemas: ReadonlySet<string> = new Set(['sys', 'INFORMATION_SCHEMA'])
 const systemDatabases: ReadonlySet<string> = new Set(['master', 'model', 'msdb', 'tempdb'])
-const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', restore: 'restored' }
+const verbs: Readonly<Record<ObjectAction, string>> = { selectTop: 'selected from', rename: 'renamed', delete: 'deleted', properties: 'shown in Properties', restore: 'restored', restoreFiles: 'restored' }
 /** Why `action` cannot act on `ref` whatever its subtype: a kind that never offers it, or one of SQL Server's own objects
  *  (unless the action serves them, as Properties does). */
 export function actionTargetProblems(ref: ObjectRef, action: ObjectAction): string[] {
@@ -271,12 +271,12 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     }
   }
 }) satisfies z.ZodType<ActionRequest>
-/** actions.execute: an object action, or a restore (critic A17: it runs from D1f, with the menu items that open it). */
-export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema]) satisfies z.ZodType<ActionExecuteRequest>
+/** actions.execute: an object action, a restore (critic A17: it runs from D1f, with the menu items that open it), or a file restore (D1g). */
+export const actionExecuteRequestSchema = z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]) satisfies z.ZodType<ActionExecuteRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')
-  .pipe(z.union([actionRequestSchema, restoreRequestSchema]))
+  .pipe(z.union([actionRequestSchema, restoreRequestSchema, restoreFilesRequestSchema]))
 
 /** The bounds of a step (C#: ActionSteps.Bound clips to them). */
 export const actionStepSchema = z.object({
@@ -291,7 +291,7 @@ export const actionExecuteResultSchema = z.object({
   steps: z.array(actionStepSchema).max(actionStepLimit), messages: z.array(z.string().max(actionLimits.infoMessageChars)).max(actionLimits.infoMessages),
   elapsedMs: z.number().int().min(0), error: actionErrorSchema.optional(),
   restored: z.union([
-    z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255) }).strict(),
+    z.object({ state: z.number().int().min(0).max(255), userAccess: z.number().int().min(0).max(255), filesRestoring: z.array(z.string().max(128)).max(restoredFilesLimit).optional() }).strict(),
     z.object({ absent: z.literal(true), filesLeft: z.array(z.string().max(actionLimits.serverPath)).max(restoredFilesLimit).optional(), filesUnknown: z.literal(true).optional() }).strict()
   ]).optional()
 }).strict() satisfies z.ZodType<ActionExecuteResult>

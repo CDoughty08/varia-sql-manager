@@ -30,9 +30,9 @@ internal static partial class RestoreSql
         + "FROM msdb.dbo.backupmediafamily AS mf WHERE mf.mirror = 0 AND mf.media_set_id IN (SELECT TOP (@take) bs.media_set_id FROM msdb.dbo.backupset AS bs "
         + "WHERE bs.database_name = @db AND bs.is_snapshot = 0 ORDER BY bs.backup_set_id DESC) ORDER BY mf.media_set_id, mf.family_sequence_number;";
 
-    /// <summary>A history set's files (msdb's record of FILELISTONLY), by the set's uuid.</summary>
+    /// <summary>A history set's files (msdb's record of FILELISTONLY), by the set's uuid; is_present 0 for a file a file backup does not hold.</summary>
     public const string HistoryFiles = "SELECT TOP (@take) bf.logical_name AS logical_name, bf.physical_name AS physical_name, bf.file_type AS file_type, bf.filegroup_name AS filegroup_name, "
-        + "bf.file_size AS file_size, bf.file_number AS file_id FROM msdb.dbo.backupfile AS bf JOIN msdb.dbo.backupset AS bs ON bs.backup_set_id = bf.backup_set_id "
+        + "bf.file_size AS file_size, bf.file_number AS file_id, bf.is_present AS is_present FROM msdb.dbo.backupfile AS bf JOIN msdb.dbo.backupset AS bs ON bs.backup_set_id = bf.backup_set_id "
         + "WHERE bs.backup_set_uuid = @set ORDER BY bf.file_number;";
 
     /// <summary>The default folders, whether the login may restore (Learn: CREATE ANY DATABASE, or sysadmin and dbcreator), and whether it sees sessions.
@@ -116,6 +116,28 @@ internal static partial class RestoreSql
     /// database back online as it was.</summary>
     public const string Recover = "RESTORE DATABASE @db WITH RECOVERY;";
 
+    // --- Restore Files and Filegroups (D1g) -----------------------------------------------------------------------------
+
+    /// <summary>A database's files by id, with whether each is read-only and its state: a file restore's preflight under SIMPLE reads
+    /// which are read-only (Learn: only a read-only filegroup's files restore under SIMPLE), and its report the files still RESTORING (state 1).</summary>
+    public const string DatabaseFiles = "SELECT TOP (@take) f.name AS name, f.is_read_only AS is_read_only, f.state AS state FROM sys.master_files AS f WHERE f.database_id = @id ORDER BY f.file_id;";
+
+    /// <summary>A file restore's RESTORE DATABASE: FILE = @f1… for its files and FILEGROUP = @g1… for its filegroups (Learn's
+    /// @logical_file_name_in_backup_var and @logical_filegroup_name_var; both take variables, probed on 2025 and C5-P3), then Restore's
+    /// options in SMO's order, without KEEP_REPLICATION and STOPAT, which a file restore does not take.</summary>
+    public static string RestoreFiles(RestoreCatalogJson restore, int files, int filegroups, int devices, int moves, bool restrictedUser, string recovery, bool replace)
+    {
+        var named = Enumerable.Range(1, files).Select(index => "FILE = @f" + index.ToString(CultureInfo.InvariantCulture))
+            .Concat(Enumerable.Range(1, filegroups).Select(index => "FILEGROUP = @g" + index.ToString(CultureInfo.InvariantCulture)));
+        var restored = Restore(restore, log: false, devices, moves, restrictedUser, keepReplication: false, recovery, replace, stopAt: false);
+        return "RESTORE DATABASE @db " + string.Join(", ", named) + restored["RESTORE DATABASE @db".Length..];
+    }
+
+    /// <summary>Restore Files and Filegroups' last steps (Varia's, D1g): a copy-only log backup of the database to @tail named @tail_name,
+    /// taken once its files are restored, which leaves the log chain as it was. Restoring it brings the files online: under FULL or
+    /// BULK_LOGGED an online file restore needs a log backup taken after it (probed on 2025).</summary>
+    public static string LogBackup(RestoreCatalogJson restore) => "BACKUP LOG @db TO DISK = @tail WITH COPY_ONLY, NOFORMAT, NOINIT, NAME = @tail_name, NOSKIP, NOREWIND, NOUNLOAD, " + Stats(restore) + ";";
+
     // --- Lint -----------------------------------------------------------------------------------------------------------
 
     private static readonly HashSet<string> Literals =
@@ -196,6 +218,21 @@ internal static partial class RestoreSql
         yield return ("restore restored", LintCatalog(Restored));
         yield return ("restore files exist", LintCatalog(FilesExist));
         yield return ("restore files of", LintCatalog(FilesOf));
+        yield return ("restore database files", LintCatalog(DatabaseFiles));
+        yield return ("restore files log backup", LintMedia(LogBackup(restore)));
+        // Every file restore shape: FILE and FILEGROUP counts at their edges and limits, the device and move counts, every recovery state
+        // and option; REPLACE only where asked.
+        var named = (int)restore.Limit("restoreFiles");
+        foreach (var (files, filegroups) in new[] { (1, 0), (0, 1), (2, 0), (0, 2), (1, 1), (named, 0), (0, named), (named, named) })
+            foreach (var devices in new[] { 1, (int)restore.Limit("backupDevices") })
+                foreach (var moves in new[] { 0, 1, (int)restore.Limit("restoreMoves") })
+                    foreach (var recovery in restore.RecoveryStates)
+                        for (var flags = 0; flags < 4; flags++)
+                        {
+                            bool restricted = (flags & 1) != 0, replace = (flags & 2) != 0;
+                            yield return ("restore files " + files + "/" + filegroups + "/" + devices + "/" + moves + "/" + recovery + "/" + flags,
+                                LintMedia(RestoreFiles(restore, files, filegroups, devices, moves, restricted, recovery, replace), replace));
+                        }
         yield return ("restore label", LintMedia(Label));
         yield return ("restore recover", LintMedia(Recover));
         foreach (var noRecovery in new[] { false, true }) yield return ("restore tail log " + noRecovery, LintMedia(TailLog(restore, noRecovery)));
@@ -274,6 +311,63 @@ internal static partial class RestoreSql
         var text = new StringBuilder();
         text.Append(ScriptFormatter.Use("master")).Append(ScriptFormatter.NewLine);
         foreach (var statement in Lines(restore, database, options, exists))
+        {
+            text.Append(statement).Append(ScriptFormatter.NewLine);
+            if (text.Length > limit) return null;
+        }
+        text.Append(ScriptFormatter.NewLine).Append("GO").Append(ScriptFormatter.NewLine);
+        return text.Length > limit ? null : text.ToString();
+    }
+
+    // --- Restore Files and Filegroups' script (D1g) ------------------------------------------------------------------
+
+    /// <summary>The file restore's statements as SSMS's Script writes them (SMO's Restore { Action = Files } text, spec D1 §8, with
+    /// STATS = 5): the files' RESTORE DATABASE (FILE = and FILEGROUP = before FROM), one RESTORE LOG per log, then Varia's copy-only
+    /// BACKUP LOG and its RESTORE LOG (FILE = 1: the preflight takes it to a new file). The last RESTORE has the recovery state.</summary>
+    public static List<string> FilesStatements(RestoreCatalogJson restore, string database, RestoreFilesOptionsDto options) => [.. FilesLines(restore, database, options)];
+
+    private static IEnumerable<string> FilesLines(RestoreCatalogJson restore, string database, RestoreFilesOptionsDto options)
+    {
+        var stats = "STATS = " + restore.Limit("stats").ToString(CultureInfo.InvariantCulture);
+        var last = options.LogBackup is null ? options.Sets.Count - 1 : -1;
+        string With(int file, IEnumerable<RestoreMoveDto> moves, string recovery, bool replace, string? standby)
+        {
+            var with = new List<string>();
+            if (options.RestrictedUser) with.Add("RESTRICTED_USER");
+            with.Add("FILE = " + file.ToString(CultureInfo.InvariantCulture));
+            foreach (var move in moves) with.Add("MOVE " + Literal(move.Logical) + " TO " + Literal(move.Physical));
+            if (recovery == "norecovery") with.Add("NORECOVERY");
+            else if (recovery == "standby") with.Add("STANDBY = " + Literal(standby!));
+            with.Add("NOUNLOAD");
+            if (replace) with.Add("REPLACE");
+            with.Add(stats);
+            return " WITH  " + string.Join(",  ", with);
+        }
+        var quoted = ScriptFormatter.Quote(database);
+        for (var index = 0; index < options.Sets.Count; index++)
+        {
+            var set = options.Sets[index];
+            var recovery = index == last ? options.Recovery : "norecovery";
+            var from = " FROM  " + string.Join(",  ", set.Devices.Select(device => "DISK = " + Literal(device)));
+            yield return index == 0
+                ? "RESTORE DATABASE " + quoted + " " + string.Join(",  ", options.Files.Select(file => "FILE = " + Literal(file)).Concat(options.Filegroups.Select(group => "FILEGROUP = " + Literal(group))))
+                    + from + With(set.File, options.Relocate, recovery, options.Replace, options.StandbyFile)
+                : "RESTORE LOG " + quoted + from + With(set.File, [], recovery, false, options.StandbyFile);
+        }
+        if (options.LogBackup is { } backup)
+        {
+            yield return "BACKUP LOG " + quoted + " TO  DISK = " + Literal(backup.File) + " WITH  COPY_ONLY, NOFORMAT, NOINIT,  NAME = " + Literal(TailName(backup.File))
+                + ", NOSKIP, NOREWIND, NOUNLOAD,  " + stats;
+            yield return "RESTORE LOG " + quoted + " FROM  DISK = " + Literal(backup.File) + With(1, [], options.Recovery, false, options.StandbyFile);
+        }
+    }
+
+    /// <summary>SSMS's script: USE [master], the statements one per line, then GO; null once it passes <paramref name="limit"/> characters.</summary>
+    public static string? FilesScript(RestoreCatalogJson restore, string database, RestoreFilesOptionsDto options, long limit)
+    {
+        var text = new StringBuilder();
+        text.Append(ScriptFormatter.Use("master")).Append(ScriptFormatter.NewLine);
+        foreach (var statement in FilesLines(restore, database, options))
         {
             text.Append(statement).Append(ScriptFormatter.NewLine);
             if (text.Length > limit) return null;

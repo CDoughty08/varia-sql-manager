@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (189)
+## Commands (191)
 
 ### File
 
@@ -144,6 +144,8 @@ keys it uses are listed below.
 | Properties | `explorer.properties` | — | — | ⌘I (`activePanel == 'explorer' && !textInputFocus`) | `backendReady && explorerActionProperties == 'enabled'` | Object Explorer context menu › Properties |
 | Restore Database… | `explorer.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Restore Database… |
 | Restore Database… (not in the palette) | `explorer.tasks.restoreDatabase` | — | — | — | `backendReady && explorerActionRestore == 'enabled'` | Object Explorer context menu › Tasks › Restore › Database… |
+| Restore Files and Filegroups… | `explorer.restoreFiles` | — | — | — | `backendReady && explorerActionRestoreFiles == 'enabled'` | Object Explorer context menu › Restore Files and Filegroups… |
+| Restore Files and Filegroups… (not in the palette) | `explorer.tasks.restoreFiles` | — | — | — | `backendReady && explorerActionRestoreFiles == 'enabled'` | Object Explorer context menu › Tasks › Restore › Files and Filegroups… |
 | New Table… | `explorer.newTable` | — | — | — | `backendReady && explorerSelectionFolder == 'tables' && !documentBusy` | Object Explorer context menu › New › Table… |
 | Script as CREATE to New Query Editor Window (not in the palette) | `explorer.scriptCreateToNewQuery` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › New Query Editor Window |
 | Script as CREATE to File… (not in the palette) | `explorer.scriptCreateToFile` | — | — | — | `backendReady && explorerScriptCreate == 'enabled' && !documentBusy` | Object Explorer context menu › Script … as › CREATE To › File… |
@@ -487,6 +489,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | `0_new` | **N**ew › | Submenu: Object Explorer context menu › New | `explorerFolder == 'tables'` |
 | `0_new` | Crea**t**e Catalog… | `explorer.createCatalog` | `explorerNode == 'folder' && explorerFolder == 'integrationServicesCatalogs' && !explorerServerLost` |
 | `0_new` | **R**estore Database… | `explorer.restoreDatabase` | `explorerActionRestore != '' && explorerNode == 'folder'` |
+| `0_new` | R**e**store Files and Filegroups… | `explorer.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode == 'folder'` |
 | `1_operations` | A**c**tive Operations | `ssis.activeOperations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All E**x**ecutions | `ssis.allExecutions` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
 | `1_operations` | All Vali**d**ations | `ssis.allValidations` | `explorerNode == 'ssisCatalog' && !explorerServerLost` |
@@ -526,6 +529,7 @@ Right-click an Object Explorer node (which selects it) or the empty area below t
 | Group | Item | Command | Shown |
 | --- | --- | --- | --- |
 | `1_restore` | **D**atabase… | `explorer.tasks.restoreDatabase` | `explorerActionRestore != '' && explorerNode != 'folder' && explorerNode != 'background'` |
+| `1_restore` | **F**iles and Filegroups… | `explorer.tasks.restoreFiles` | `explorerActionRestoreFiles != '' && explorerNode != 'folder' && explorerNode != 'background'` |
 
 #### Object Explorer context menu › Script … as
 
@@ -705,7 +709,7 @@ Right-click the Integration Services Operations grid (a right-click outside the 
 | `8_view` | **R**efresh | `ssis.refreshOperations` | Always |
 | `8_view` | **P**ause | `ssis.pauseOperations` | Always |
 
-## Context keys (106)
+## Context keys (107)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -801,6 +805,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `explorerActionDelete` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Delete: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `explorerActionRestore` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Database…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
+| `explorerActionRestoreFiles` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Restore Files and Filegroups…: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbFolderProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Folder Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbProjectProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Project Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |
 | `ssisVerbPackageProperties` | `''`, `'disabled'`, `'enabled'` | state | How the selected Object Explorer node offers Package Properties: 'enabled', 'disabled' (shown greyed), or '' (not offered). Keep it out of keybinding `when` clauses. |

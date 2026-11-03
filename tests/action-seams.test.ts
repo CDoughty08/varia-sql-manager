@@ -23,8 +23,8 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    // Managed Instance restores from URL only, which Restore Database does not offer.
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'restore'))
+    // Managed Instance restores from URL only, which neither Restore Database nor Restore Files and Filegroups offers.
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'restore' && action !== 'restoreFiles'))
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
     expect(json.version).toBe(4)
     for (const row of json.actions) {

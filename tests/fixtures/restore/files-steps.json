@@ -1,0 +1,48 @@
+{
+  "comment": "The steps a file restore request runs (D1g), shared by RestoreFilesRun.cs's RestoreFilesSteps (RestoreFilesChecks) and files.ts's plannedFileSteps (tests/restore-files.test.ts), so the Run panel's list, which the progress EVENTs index, is the backend's. A file restore has no compensation or cleanup.",
+  "cases": [
+    {
+      "name": "a file from a file backup, two logs, then the copy-only log backup and its restore",
+      "restoreFiles": {
+        "sets": [
+          { "id": "00000001-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_FG2.bak"], "file": 1, "type": "file" },
+          { "id": "00000002-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_log.trn"], "file": 1, "type": "log" },
+          { "id": "00000003-0000-4000-8000-000000000000", "devices": ["B:\\Backup\\Sales_log.trn"], "file": 2, "type": "log" }
+        ],
+        "files": ["Sales_2"], "filegroups": [], "relocate": [], "replace": false, "restrictedUser": false, "recovery": "recovery",
+        "logBackup": { "file": "B:\\Backup\\Sales_LogBackup_2026-10-29_21-05-43.bak" }
+      },
+      "steps": [
+        { "kind": "main", "title": "Restore the files", "detail": "Sales_FG2.bak, position 1" },
+        { "kind": "main", "title": "Restore log backup 1 of 2", "detail": "Sales_log.trn, position 1" },
+        { "kind": "main", "title": "Restore log backup 2 of 2", "detail": "Sales_log.trn, position 2" },
+        { "kind": "main", "title": "Back up the log", "detail": "Sales_LogBackup_2026-10-29_21-05-43.bak" },
+        { "kind": "main", "title": "Restore the log backup", "detail": "Sales_LogBackup_2026-10-29_21-05-43.bak" }
+      ]
+    },
+    {
+      "name": "a filegroup from a striped full backup, left restoring",
+      "restoreFiles": {
+        "sets": [{ "id": "1:3", "devices": ["/var/opt/mssql/backup/a.bak", "/var/opt/mssql/backup/b.bak"], "file": 3, "type": "full" }],
+        "files": [], "filegroups": ["FG2"], "relocate": [{ "logical": "Sales_2", "physical": "/var/opt/mssql/data/Sales_2.ndf" }], "replace": true, "restrictedUser": true, "recovery": "norecovery"
+      },
+      "steps": [
+        { "kind": "main", "title": "Restore the files", "detail": "a.bak (+1 files), position 3" }
+      ]
+    },
+    {
+      "name": "one log, standby",
+      "restoreFiles": {
+        "sets": [
+          { "id": "00000001-0000-4000-8000-000000000000", "devices": ["C:\\B\\f.bak"], "file": 1, "type": "full" },
+          { "id": "00000002-0000-4000-8000-000000000000", "devices": ["C:\\B\\l.trn"], "file": 4, "type": "log" }
+        ],
+        "files": ["Sales_2", "Sales_3"], "filegroups": [], "relocate": [], "replace": false, "restrictedUser": false, "recovery": "standby", "standbyFile": "C:\\B\\undo.bak"
+      },
+      "steps": [
+        { "kind": "main", "title": "Restore the files", "detail": "f.bak, position 1" },
+        { "kind": "main", "title": "Restore log backup", "detail": "l.trn, position 4" }
+      ]
+    }
+  ]
+}
