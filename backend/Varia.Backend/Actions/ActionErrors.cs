@@ -29,14 +29,24 @@ internal static class ActionErrors
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
         // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist.
         ["NOT_FOUND"] = [15225, 15007, 15010, 15033, 15401],
-        // 5058: the option cannot be set in this database (SQL Server's own). New Login (probed by D2): 15099 MUST_CHANGE without
-        // CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a SQL login, 15407 not DOMAIN\name,
-        // 37525 Microsoft Entra not set up on the server.
+        // 5058: the option cannot be set in this database. (948, a database from a newer SQL Server, is severity 20: it ends the
+        // session, so it is CONNECTION_LOST, and Attach refuses such a database itself before it runs anything.) New Login (probed
+        // by D2): 15099 MUST_CHANGE without CHECK_EXPIRATION, 15122 CHECK_EXPIRATION without CHECK_POLICY, 15006 a backslash in a
+        // SQL login, 15407 not DOMAIN\name, 37525 Microsoft Entra not set up on the server.
         ["NOT_SUPPORTED"] = [5058, 15099, 15122, 15006, 15407, 37525],
         // The password policy: 15114 too recent, 15115 not usable now, 15116 too short, 15117 too long, 15118 not complex enough.
         ["PASSWORD_POLICY"] = [15114, 15115, 15116, 15117, 15118],
-        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151],
+        // 5133: a file's folder does not exist (attach).
+        ["PATH_NOT_FOUND"] = [5133],
+        // 5120 and 5123: SQL Server could not open a database or backup file (missing, in use, or denied to its service account).
+        ["FILE_ACCESS"] = [5120, 5123],
+        // 2571: DBCC CHECKPRIMARYFILE (Attach's Add) outside sysadmin.
+        ["PERMISSION_DENIED"] = [229, 262, 297, 3701, 15247, 15151, 2571],
         ["DATABASE_UNAVAILABLE"] = [942, 952, 976, 978, 4060, 916],
+        // Backup media a restore cannot use: a family misformed or missing (3241, 3242), a damaged or unreadable set (3183, 3189).
+        // 3201, a device that cannot be opened, is PATH_NOT_FOUND (not there) or FILE_ACCESS (any other reason) by its operating system
+        // error (RestoreDescribe.MediaError).
+        ["MEDIA"] = [3241, 3242, 3183, 3189],
         ["CONNECTION_LOST"] = [-1, 2, 53, 64, 121, 233, 10053, 10054, 10060]
     };
     public static ActionError Create(ActionsCatalog catalog, string code, string message) =>

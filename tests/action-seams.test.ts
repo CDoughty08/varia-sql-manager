@@ -5,7 +5,7 @@ import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { requestSchemas, resultSchemas, validateResult } from '../src/main/validation'
 import { methodPolicies } from '../src/shared/ipc/methods'
-import { actionLimits, actionServes, actionsCatalogJson, createActionSpecs, isCreateAction, objectActions, objectActionSpecs, type CreateAction, type DialogAction } from '../src/shared/actions/catalog'
+import { actionLimits, actionServes, actionsCatalogJson, catalogActionEngines, objectActions, type CatalogAction } from '../src/shared/actions/catalog'
 import { actionExecuteResultSchema, actionScriptRequestSchema, actionStepSchema } from '../src/shared/actions/schema'
 import {
   loginLimits, loginMessages, loginRefusal, loginRules, loginsCatalog, loginSubtypeOf, loginSubtypes, loginVerbs, type LoginFacts, type LoginSubtype, type LoginVerb
@@ -23,16 +23,19 @@ describe('server engines', () => {
   })
   it('lets each action declare the engines it runs on, and the backend reads them from the catalogue', () => {
     expect(objectActions.filter(action => actionServes(action, 'cloud'))).toEqual(['selectTop'])
-    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual([...objectActions])
+    // Attach is SQL Server's box editions' alone (decision 10).
+    expect(objectActions.filter(action => actionServes(action, 'managedInstance'))).toEqual(objectActions.filter(action => action !== 'attach'))
+    expect(objectActions.filter(action => !actionServes(action, 'managedInstance'))).toEqual(['attach'])
+    // New Database runs only on a SQL Server box: Managed Instance and Azure place files themselves.
+    expect((['box', 'managedInstance', 'cloud'] as const).map(engine => actionServes('createDatabase', engine))).toEqual([true, false, false])
     const json = JSON.parse(actionsCatalogJson()) as { version: number; actions: { action: string; engines: string[]; cleanupMs: number }[]; limits: Record<string, number> }
-    expect(json.version).toBe(3)
+    expect(json.version).toBe(4)
     for (const row of json.actions) {
-      const spec = isCreateAction(row.action as DialogAction) ? createActionSpecs[row.action as CreateAction] : objectActionSpecs[row.action as keyof typeof objectActionSpecs]
-      expect(row.engines, row.action).toEqual([...spec.engines])
+      expect(row.engines, row.action).toEqual([...catalogActionEngines(row.action as CatalogAction)])
       expect(row.cleanupMs, row.action).toBe(actionLimits.cleanupMs)
     }
     // New Login (D2a) runs on SQL Server only until D2e.
-    expect(json.actions.filter(row => isCreateAction(row.action as DialogAction)).map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
+    expect(json.actions.filter(row => row.action === 'createLogin').map(row => [row.action, row.engines])).toEqual([['createLogin', ['box']]])
     expect(json.limits.cleanupMs).toBe(10_000)
     expect(designerEngines).toEqual(['box', 'managedInstance'])
     expect(JSON.parse(designerCatalogJson()).engines).toEqual(['box', 'managedInstance'])

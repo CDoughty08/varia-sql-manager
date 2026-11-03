@@ -10,7 +10,7 @@ tab strip rounds each tab's name up to whole pixels. An id below replaces the co
 same name. Icons are sized with the `--varia-glyph-*` tokens ([metrics](themes/metrics.md)) and coloured
 with theme keys; Microsoft's SSMS icons are never used.
 
-## Varia's icons (14)
+## Varia's icons (15)
 
 | Id | Use |
 | --- | --- |
@@ -27,6 +27,7 @@ with theme keys; Microsoft's SSMS icons are never used.
 | `execution-plan` | Execution plan documents. |
 | `agent-job` | SQL Server Agent: Object Explorer's running-jobs chip, and jobs (planned). |
 | `ssis-package` | Integration Services packages (planned). |
+| `drive` | Drives in the server file picker. |
 | `ssis-environment` | Integration Services environments (planned). |
 
 ## Codicons (113)

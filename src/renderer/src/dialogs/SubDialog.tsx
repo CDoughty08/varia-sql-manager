@@ -11,6 +11,10 @@ export interface SubDialogProps {
   onCancel(): void
   /** The id of the element that takes focus as it opens; otherwise its first field. */
   readonly initialFocus?: string
+  /** A size of its own (`server-file-picker`), beside the default 420 px. */
+  readonly className?: string
+  /** A line beside OK and Cancel (the server file picker's count and hint). */
+  readonly status?: ReactNode
   readonly children: ReactNode
 }
 
@@ -19,7 +23,7 @@ export interface SubDialogProps {
  * OK and Cancel. Tab stays inside it, and Escape and Enter are handled here, so only this dialog closes; focus returns
  * to where it was.
  */
-export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, children }: SubDialogProps) {
+export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel', okDisabled, onOk, onCancel, initialFocus, className, status, children }: SubDialogProps) {
   const titleId = useId()
   const form = useRef<HTMLFormElement>(null)
   // Read while rendering, before the dialog takes focus.
@@ -43,12 +47,12 @@ export default function SubDialog({ title, okLabel = 'OK', cancelLabel = 'Cancel
     }
   }
   // In a portal: a form cannot hold another form.
-  return createPortal(<div className="modal-backdrop sub-dialog-backdrop"><form ref={form} className="connection-modal sub-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} noValidate tabIndex={-1}
+  return createPortal(<div className="modal-backdrop sub-dialog-backdrop"><form ref={form} className={className ? `connection-modal sub-dialog ${className}` : 'connection-modal sub-dialog'} role="dialog" aria-modal="true" aria-labelledby={titleId} noValidate tabIndex={-1}
     onSubmit={event => { event.preventDefault(); event.stopPropagation(); if (!okDisabled) onOk() }} onKeyDown={keyDown}>
     <div className="connection-heading"><h2 id={titleId}>{title}</h2></div>
     <div className="sub-dialog-body">{children}</div>
     <div className="connection-footer">
-      <span />
+      <span className="sub-dialog-status">{status}</span>
       <button className="primary" type="submit" disabled={okDisabled}>{okLabel}</button>
       <button type="button" onClick={onCancel}>{cancelLabel}</button>
     </div>
