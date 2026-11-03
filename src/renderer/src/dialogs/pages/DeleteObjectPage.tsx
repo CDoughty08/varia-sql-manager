@@ -38,11 +38,12 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
     model.sessions ? `${count(model.sessions, 'session is', 'sessions are')} connected to it.` : ''
   ].filter(Boolean).join(' ') : ''
   const login = open.target.kind === 'login'
-  // The rules' refusal leads (OK is greyed for it), then the backend's warnings, then Varia's own connections (D4-3).
+  // The rules' refusal leads (OK is greyed for it), then the backend's warnings, then Varia's own connections, whose pools' sessions
+  // fail the DROP until they disconnect (D4-3).
   const refusal = login && model ? loginDeleteRefusal(model) : undefined
+  const connections = login ? open.loginConnections ?? [] : []
   const warnings: readonly ActionWarning[] = model ? [
-    ...refusal ? [{ text: refusal, blocking: true }] : [], ...model.warnings,
-    ...login && open.loginConnections?.length ? [{ text: loginConnectionsText(open.loginConnections, loginDeleteText.connections), blocking: false }] : []
+    ...model.warnings, ...connections.length ? [{ text: loginConnectionsText(connections, loginDeleteText.connections(connections.length)), blocking: true }] : []
   ] : []
   return <div className="object-dialog-delete">
     <div className="object-dialog-caption" id="delete-object-grid">Object to be deleted</div>
@@ -52,9 +53,11 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
         ? <tr><td><bdi>{displayText(model.name)}</bdi></td><td>{model.type}</td><td><bdi>{model.owner ? displayText(model.owner) : ''}</bdi></td><td>{status}</td><td className="object-dialog-cell-message">{message}</td></tr>
         : <tr><td><bdi>{open.label}</bdi></td><td /><td /><td>{open.phase === 'loading' ? 'Loading…' : status}</td><td /></tr>}</tbody>
     </table>
-    {model && warnings.length > 0 && <ul className="object-dialog-warnings" aria-label="Warnings">
-      {warnings.map((warning, index) => <li key={index}><Icon name="warning" /><span>{warning.text}</span></li>)}
-      {model.dependentsTruncated && <li><Icon name="warning" /><span>More objects depend on it than are listed.</span></li>}
+    {model && (refusal || warnings.length > 0) && <ul className="object-dialog-warnings" aria-label="Warnings">
+      {refusal && <li className="is-refusal"><Icon name="error" label="Error" /><span>{refusal}</span></li>}
+      {/* Only what fails the DROP carries the warning icon and fill (D4 §5.4); the rest (a service that runs as the login) is a note. */}
+      {warnings.map((warning, index) => <li key={index} className={warning.blocking ? undefined : 'is-note'}><Icon name={warning.blocking ? 'warning' : 'info'} label={warning.blocking ? 'Warning' : 'Note'} /><span>{warning.text}</span></li>)}
+      {model.dependentsTruncated && <li><Icon name="warning" label="Warning" /><span>More objects depend on it than are listed.</span></li>}
     </ul>}
     {model && blockers.length > 0 && <section className="object-dialog-sessions" aria-labelledby="delete-object-sessions-toggle">
       <button type="button" id="delete-object-sessions-toggle" className="object-dialog-disclosure" aria-expanded={sessionsOpen} aria-controls="delete-object-sessions"
@@ -83,11 +86,12 @@ export default function DeleteObjectPage({ open, editable }: PageProps) {
   </div>
 }
 
-/** A login's mapped users (its database: its user, and why one is kept), SSMS's orphan note, and the option to delete them too. */
+/** A login's mapped users (its database: its user, and why one is kept), SSMS's orphan note, and the option to delete them too,
+ *  described by why it is greyed when it is (dropMappedUsersNote), as Close existing connections is (A7). */
 function LoginMappings({ model, draft, editable }: { readonly model: DeleteTarget; readonly draft: DeleteDraft; readonly editable: boolean }) {
   const { dialogs } = useWorkbench()
   const mappings = model.mappings, users = mappings?.users ?? []
-  const more = Math.max(0, (mappings?.mapped ?? 0) - users.length)
+  const more = Math.max(0, (mappings?.mapped ?? 0) - users.length), notChecked = mappings?.notChecked ?? 0
   const droppable = canDropMappedUsers(model), note = dropMappedUsersNote(model)
   return <>
     <section className="object-dialog-mapped" aria-labelledby="delete-object-mapped">
@@ -98,10 +102,11 @@ function LoginMappings({ model, draft, editable }: { readonly model: DeleteTarge
             {mappedUserKept(user) && <span className="object-dialog-kept"> ({loginDeleteText.kept(user)})</span>}</li>)}
           {more > 0 && <li>{loginDeleteText.more(more)}</li>}
         </ul>
-        : <p className="field-note">{loginDeleteText.noneMapped}</p>}
-      {(mappings?.notChecked ?? 0) > 0 && <p className="field-note">{loginDeleteText.notChecked(mappings!.notChecked)}</p>}
+        : <p className="field-note">{notChecked > 0 ? loginDeleteText.noneMappedChecked : loginDeleteText.noneMapped}</p>}
+      {notChecked > 0 && <p className="field-note">{loginDeleteText.notChecked(notChecked)}</p>}
     </section>
-    <p className="field-note">{loginDeleteText.orphanNote}</p>
+    {/* SSMS's note matters only where a user may be left orphaned: one is listed, or a database went unread. */}
+    {(users.length > 0 || notChecked > 0) && <p className="field-note">{loginDeleteText.orphanNote}</p>}
     <fieldset className="object-dialog-options" disabled={!editable}>
       <label className="checkbox-label"><input type="checkbox" checked={draft.dropMappedUsers && droppable} disabled={!droppable} aria-describedby="delete-object-drop-note"
         onChange={event => dialogs.updateDraft({ dropMappedUsers: event.target.checked })} />{loginDeleteText.dropOption}</label>

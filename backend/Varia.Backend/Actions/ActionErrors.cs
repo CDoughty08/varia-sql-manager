@@ -32,13 +32,14 @@ internal static class ActionErrors
         ["IN_USE"] = [3702, 5030, 5061, 5070, 924, 15434],
         // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
         // 3709 a database snapshot of the database being dropped.
-        // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c).
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183],
+        // From 15174: what a login owns or is mapped to, which DROP LOGIN fails on (D4 §5.4's error map, for D4c); 15173: the server
+        // permissions a login granted.
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709, 15174, 15170, 15141, 15155, 15186, 15144, 15138, 15421, 15284, 15183, 15173],
         // 1828 and 5170: a logical file name or a physical file is taken.
         // 15025: a server principal already has the name (a login's rename).
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025],
-        // 15007: the login is not valid.
-        ["NOT_FOUND"] = [15225, 15007],
+        // 15007: the login is not valid. 50010: a guarded DROP's principal is not the one it was planned for (ActionSql.UserCheck, LoginCheck).
+        ["NOT_FOUND"] = [15225, 15007, 50010],
         // 5058: the option cannot be set in this database (SQL Server's own).
         // 15405, 15021 (a SQL login's name with a backslash, D4 P3) and 15099: changes to logins SQL Server refuses outright.
         ["NOT_SUPPORTED"] = [5058, 15405, 15021, 15099],

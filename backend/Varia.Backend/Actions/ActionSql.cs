@@ -8,12 +8,19 @@ namespace Varia.Backend.Actions;
 /// <summary>The statements an action runs: DROP TABLE, VIEW, PROCEDURE or FUNCTION, sp_rename, ALTER DATABASE … MODIFY NAME,
 /// SET SINGLE_USER, DROP DATABASE and msdb's backup history cleanup; and the shared templates later actions plan (critic
 /// A21): SET MULTI_USER and RESTRICTED_USER (which also restore a database's access after a failed or stopped step),
-/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; a login's rename (D4b); and DROP LOGIN (D4c).</summary>
+/// sp_detach_db, ALTER LOGIN … DISABLE and ENABLE, DENY and GRANT CONNECT SQL, and DROP USER; a login's rename (D4b); and a login's Delete
+/// (D4c): DROP USER of a mapped user and DROP LOGIN, each bound to the principal it was planned for (<see cref="PrincipalBinding"/>).</summary>
 internal enum ActionTemplate
 {
     DropTable, DropView, DropProcedure, DropFunction, RenameObject, RenameDatabase, SetSingleUser, DropDatabase, DeleteBackupHistory,
-    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin, DropLogin
+    SetMultiUser, SetRestrictedUser, DetachDatabase, DisableLogin, EnableLogin, DenyConnect, GrantConnect, DropUser, RenameLogin, DropLogin, DropMappedUser
 }
+
+/// <summary>The principal a guarded DROP was planned for (D4c): its SID, and for a login its principal_id and create_date. SQL Server
+/// checks them in the statement's own batch, waiting behind any change to the row, and rolls the DROP back when the name it quoted
+/// belonged to another principal by then: a user renamed or remapped in an open transaction while the scan read past it, or a login
+/// dropped and created again while an earlier step waited for a lock.</summary>
+internal sealed record PrincipalBinding(byte[] Sid, int? PrincipalId = null, DateTime? Created = null);
 
 /// <summary>Where a step runs in the plan (critic A4): main steps in order; a compensation undoes the main step <c>Undoes</c>
 /// names (its index among the main steps) once that step completed and a later one failed or was stopped; a cleanup runs after
@@ -25,7 +32,7 @@ internal enum StepKind { Main, Compensation, Cleanup }
 /// schema-scoped object's schema and name, then a new name; a database's name, then a new name; sp_detach_db's @skipchecks
 /// as true or false, from <see cref="ActionSql.Detach"/>). Kind, Undoes and When place it in runner v2 (StepKind).</summary>
 internal sealed record PlannedStatement(ActionTemplate Template, string Database, IReadOnlyList<string> Names, StepKind Kind = StepKind.Main, int? Undoes = null,
-    Func<IReadOnlyList<string>, bool>? When = null);
+    Func<IReadOnlyList<string>, bool>? When = null, PrincipalBinding? Principal = null);
 
 /// <summary>All SQL of the action path, as constant text per template, kind and version band. DDL is built by SQL Server
 /// from that text: names reach it only as nvarchar(128) parameters (@db, @p1…) passed through QUOTENAME, or as a
@@ -92,8 +99,13 @@ internal static partial class ActionSql
     {
         if (plan.Names.Count != ParameterCount(plan.Template)) throw new InvalidOperationException("The plan has the wrong number of names for " + plan.Template + ".");
         if (plan.Template == ActionTemplate.DetachDatabase && plan.Names[1] is not ("true" or "false")) throw new InvalidOperationException("@skipchecks is true or false.");
+        if (plan.Principal is { } bound && (!Guarded(plan.Template) || bound.Sid.Length is < 1 or > 85 || (plan.Template == ActionTemplate.DropLogin) != (bound.PrincipalId is not null && bound.Created is not null)))
+            throw new InvalidOperationException("The principal binding does not fit " + plan.Template + ".");
         return plan;
     }
+
+    /// <summary>The templates whose batch checks the principal it drops (<see cref="PrincipalBinding"/>): they never run without one.</summary>
+    public static bool Guarded(ActionTemplate template) => template is ActionTemplate.DropMappedUser or ActionTemplate.DropLogin;
 
     /// <summary>The statement itself as SSMS writes it, names quoted by C#'s QUOTENAME.</summary>
     public static string Statement(PlannedStatement plan)
@@ -115,7 +127,7 @@ internal static partial class ActionSql
             ActionTemplate.EnableLogin => "ALTER LOGIN " + Quote(names[0]) + " ENABLE",
             ActionTemplate.DenyConnect => "DENY CONNECT SQL TO " + Quote(names[0]),
             ActionTemplate.GrantConnect => "GRANT CONNECT SQL TO " + Quote(names[0]),
-            ActionTemplate.DropUser => "DROP USER " + Quote(names[0]),
+            ActionTemplate.DropUser or ActionTemplate.DropMappedUser => "DROP USER " + Quote(names[0]),
             // SMO's text for a login's rename (probed for D4 §5.3), with no spaces around the equals sign.
             ActionTemplate.RenameLogin => "ALTER LOGIN " + Quote(names[0]) + " WITH NAME=" + Quote(names[1]),
             ActionTemplate.DropLogin => "DROP LOGIN " + Quote(names[0]),
@@ -132,6 +144,8 @@ internal static partial class ActionSql
     public static string Executable(ActionTemplate template, bool dryRun = false)
     {
         string Run(string build) => build + Guard + (dryRun ? "SELECT @stmt AS stmt;" : "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt;");
+        // A guarded DROP (PrincipalBinding): the dry run selects only the DROP, which Script Action shows.
+        string Bound(string build, string arguments) => build + Guard + (dryRun ? "SELECT @drop AS stmt;" : "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\nEXEC @module @stmt, " + arguments);
         return template switch
         {
             ActionTemplate.DropTable or ActionTemplate.DropView or ActionTemplate.DropProcedure or ActionTemplate.DropFunction =>
@@ -153,10 +167,34 @@ internal static partial class ActionSql
             ActionTemplate.GrantConnect => Run("DECLARE @stmt nvarchar(max) = N'GRANT CONNECT SQL TO ' + QUOTENAME(@p1);\n"),
             ActionTemplate.DropUser => Run("DECLARE @stmt nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\n"),
             ActionTemplate.RenameLogin => Run("DECLARE @stmt nvarchar(max) = N'ALTER LOGIN ' + QUOTENAME(@p1) + N' WITH NAME=' + QUOTENAME(@p2);\n"),
-            ActionTemplate.DropLogin => Run("DECLARE @stmt nvarchar(max) = N'DROP LOGIN ' + QUOTENAME(@p1);\n"),
+            ActionTemplate.DropMappedUser => Bound("DECLARE @drop nvarchar(max) = N'DROP USER ' + QUOTENAME(@p1);\nDECLARE @stmt nvarchar(max) = " + UserCheck + " + @drop + " + UserRecheck + ";\n",
+                UserParameters + ", @name = @p1, @sid = @sid;"),
+            ActionTemplate.DropLogin => Bound("DECLARE @drop nvarchar(max) = N'DROP LOGIN ' + QUOTENAME(@p1);\nDECLARE @stmt nvarchar(max) = " + LoginCheck + " + @drop + " + LoginRecheck + ";\n",
+                LoginParameters + ", @name = @p1, @sid = @sid, @principal = @principal, @created = @created;"),
             _ => throw new InvalidOperationException("Unknown template " + template)
         };
     }
+
+    /// <summary>A guarded DROP's check, in its database (inside sp_executesql, under the batch's READ COMMITTED and lock timeout, so it
+    /// waits for any open change to the row): the principal with the planned name and binding, else 50010 before anything runs. The
+    /// DROP and the recheck then run in one transaction: if the principal that was checked still exists, the DROP took another one
+    /// that had the name by then, and 50010 rolls it back (XACT_ABORT). The texts are constant: no name reaches a message.</summary>
+    internal const string UserCheck = "N'DECLARE @principal int = (SELECT u.principal_id FROM sys.database_principals AS u WHERE u.name = @name AND u.sid = @sid); "
+        + "IF @principal IS NULL THROW 50010, N''The database user is no longer the one mapped to the login: it was renamed, remapped or dropped since it was read. Nothing was dropped in its database.'', 1; BEGIN TRANSACTION; '";
+    internal const string UserRecheck = "N'; IF EXISTS (SELECT 1 FROM sys.database_principals AS u WHERE u.principal_id = @principal) THROW 50010, N''The database user changed while it was dropped. Nothing was dropped in its database.'', 1; COMMIT TRANSACTION;'";
+    internal const string UserParameters = "N'@name sysname, @sid varbinary(85)'";
+    internal const string LoginCheck = "N'IF NOT EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.name = @name AND p.sid = @sid AND p.principal_id = @principal AND p.create_date = @created) "
+        + "THROW 50010, N''The login is no longer the one that was read: it was renamed, dropped or replaced since. It was not dropped.'', 1; BEGIN TRANSACTION; '";
+    internal const string LoginRecheck = "N'; IF EXISTS (SELECT 1 FROM sys.server_principals AS p WHERE p.principal_id = @principal) THROW 50010, N''The login changed while it was dropped. It was not dropped.'', 1; COMMIT TRANSACTION;'";
+    internal const string LoginParameters = "N'@name sysname, @sid varbinary(85), @principal int, @created datetime'";
+    private static readonly string[] GuardedTexts = [UserCheck, UserRecheck, UserParameters, LoginCheck, LoginRecheck, LoginParameters];
+    /// <summary>The variables a guarded batch binds besides its names (RunStatementAsync, from the plan's PrincipalBinding).</summary>
+    public static IReadOnlyList<string> Bindings(ActionTemplate template) => template switch
+    {
+        ActionTemplate.DropMappedUser => ["@sid"],
+        ActionTemplate.DropLogin => ["@sid", "@principal", "@created"],
+        _ => []
+    };
 
     // --- Catalog statements ---------------------------------------------------------------------------------------------
 
@@ -271,8 +309,12 @@ internal static partial class ActionSql
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_role_members AS m JOIN sys.server_principals AS r ON r.principal_id = m.role_principal_id "
         + "WHERE m.member_principal_id = p.principal_id AND r.name = N'sysadmin') THEN 1 ELSE 0 END) AS is_sysadmin, "
         + "CASE WHEN HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE') = 1 THEN (SELECT COUNT(*) FROM sys.dm_exec_sessions AS es WHERE es.security_id = p.sid AND es.is_user_process = 1) END AS sessions, ";
+    /// <summary>What the login owns (server roles, endpoints and availability groups: 15141), and the server permissions it granted
+    /// to other principals (DROP LOGIN fails on them, 15173).</summary>
     private const string LoginOwned = "(SELECT COUNT(*) FROM sys.databases AS d WHERE d.owner_sid = p.sid) AS owned_databases, "
-        + "(SELECT COUNT(*) FROM sys.server_principals AS o WHERE o.owning_principal_id = p.principal_id) + (SELECT COUNT(*) FROM sys.endpoints AS e WHERE e.principal_id = p.principal_id) AS owned_server_objects, ";
+        + "(SELECT COUNT(*) FROM sys.server_principals AS o WHERE o.owning_principal_id = p.principal_id) + (SELECT COUNT(*) FROM sys.endpoints AS e WHERE e.principal_id = p.principal_id) "
+        + "+ (SELECT COUNT(DISTINCT ar.group_id) FROM sys.availability_replicas AS ar WHERE ar.owner_sid = p.sid) AS owned_server_objects, "
+        + "(SELECT COUNT(*) FROM sys.server_permissions AS g WHERE g.grantor_principal_id = p.principal_id AND g.grantee_principal_id <> p.principal_id) AS granted_permissions, ";
     private const string LoginTail = "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'ALTER ANY LOGIN'), 0)) AS can_alter, "
         + "CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'CONTROL SERVER'), 0)) AS can_control_server, "
         + "CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sys.server_principals AS x WHERE x.name = @new AND x.principal_id <> p.principal_id) THEN 1 ELSE 0 END) AS name_in_use "
@@ -291,21 +333,35 @@ internal static partial class ActionSql
     public const string LoginService = "SELECT TOP (@take) s.servicename AS service_name FROM sys.dm_server_services AS s "
         + @"WHERE UPPER(s.service_account) = UPPER(@name) OR (UPPER(s.service_account) = N'LOCALSYSTEM' AND UPPER(@name) = N'NT AUTHORITY\SYSTEM') "
         + "ORDER BY s.servicename;";
-    /// <summary>The databases the mapped-user scan reads (D4 §5.4), in master: at most @take online databases this login can open
-    /// (HAS_DBACCESS) and whose users it can see (VIEW DEFINITION: without it sys.database_principals hides other users), by name,
-    /// with whether each is read-only (no DROP USER runs there), and on every row how many databases the server has in all, so the
-    /// ones left out (offline, restoring, not accessible or readable, past @take) count as not checked. Snapshots are
-    /// read-only copies of a database the scan reads, so they are neither read nor counted.</summary>
-    public const string LoginDatabases = "SELECT TOP (@take) d.name AS database_name, d.is_read_only AS is_read_only, "
-        + "(SELECT COUNT(*) FROM sys.databases AS a WHERE a.source_database_id IS NULL) AS total "
+    /// <summary>The databases the mapped-user scan reads (D4 §5.4), in master: first how many databases the server has in all (its own
+    /// statement, so a connection that may read none still learns how many it did not check), then at most @take online databases this
+    /// login can open (HAS_DBACCESS) and whose users it can see (VIEW DEFINITION: without it sys.database_principals hides other users),
+    /// by name, with whether each is read-only and whether this login may drop users there (ALTER ANY USER): no DROP USER runs where
+    /// either fails. The ones left out (offline, restoring, not accessible or readable, past @take) count as not checked. Snapshots
+    /// are read-only copies of a database the scan reads, so they are neither read nor counted.</summary>
+    public const string LoginDatabases = "SELECT COUNT(*) AS total FROM sys.databases AS a WHERE a.source_database_id IS NULL;\n"
+        + "SELECT TOP (@take) d.name AS database_name, d.is_read_only AS is_read_only, CONVERT(bit, ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'ALTER ANY USER'), 0)) AS can_drop "
         + "FROM sys.databases AS d WHERE d.state = 0 AND d.source_database_id IS NULL AND HAS_DBACCESS(d.name) = 1 "
         + "AND ISNULL(HAS_PERMS_BY_NAME(d.name, N'DATABASE', N'VIEW DEFINITION'), 0) = 1 ORDER BY d.name;";
 
     /// <summary>Inside one database (through <see cref="MappedUserCall"/>): at most @take users mapped to the login's SID, by name,
-    /// with how many schemas and roles each owns (DROP USER fails on them, 15138 and 15421). dbo, guest, INFORMATION_SCHEMA and sys
-    /// (principal_id 1 to 4) are never dropped: a login that owns the database is dbo there, and that ownership blocks its DROP anyway.</summary>
+    /// with what DROP USER fails on: the schemas (15138) and roles (15421) each owns, the other securables it owns (15138, 15183: an
+    /// object it owns apart from its schema, a type, an XML schema collection, an assembly, a certificate or key, a full-text catalog,
+    /// stoplist or search property list, a Service Broker service, contract, message type, route or binding, a database scoped
+    /// credential), and the permissions it granted to others (15284). dbo, guest, INFORMATION_SCHEMA and sys (principal_id 1 to 4)
+    /// are never dropped: a login that owns the database is dbo there, and that ownership blocks its DROP anyway.</summary>
     public const string MappedUser = "SELECT TOP (@take) u.name AS user_name, (SELECT COUNT(*) FROM sys.schemas AS s WHERE s.principal_id = u.principal_id) AS owned_schemas, "
-        + "(SELECT COUNT(*) FROM sys.database_principals AS r WHERE r.owning_principal_id = u.principal_id) AS owned_roles "
+        + "(SELECT COUNT(*) FROM sys.database_principals AS r WHERE r.owning_principal_id = u.principal_id) AS owned_roles, "
+        + "(SELECT COUNT(*) FROM sys.objects AS o WHERE o.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.types AS t WHERE t.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.xml_schema_collections AS x WHERE x.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.assemblies AS a WHERE a.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.certificates AS c WHERE c.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.asymmetric_keys AS ak WHERE ak.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.symmetric_keys AS sk WHERE sk.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.fulltext_catalogs AS fc WHERE fc.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.fulltext_stoplists AS fs WHERE fs.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.registered_search_property_lists AS pl WHERE pl.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.services AS sv WHERE sv.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.service_contracts AS sc WHERE sc.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.service_message_types AS mt WHERE mt.principal_id = u.principal_id) + (SELECT COUNT(*) FROM sys.routes AS ro WHERE ro.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.remote_service_bindings AS rb WHERE rb.principal_id = u.principal_id) "
+        + "+ (SELECT COUNT(*) FROM sys.database_scoped_credentials AS dc WHERE dc.principal_id = u.principal_id) AS owned_securables, "
+        + "(SELECT COUNT(*) FROM sys.database_permissions AS g WHERE g.grantor_principal_id = u.principal_id AND g.grantee_principal_id <> u.principal_id) AS granted_permissions "
         + "FROM sys.database_principals AS u WHERE u.sid = @sid AND u.type IN ('S', 'U', 'G', 'C', 'K', 'E', 'X') AND u.principal_id > 4 ORDER BY u.name;";
     /// <summary>Runs <see cref="MappedUser"/> (@stmt) in a database, which reaches T-SQL only through QUOTENAME.</summary>
     public const string MappedUserCall = "DECLARE @module nvarchar(300) = QUOTENAME(@db) + N'.sys.sp_executesql';\n"
@@ -345,7 +401,9 @@ internal static partial class ActionSql
         // The login preflight (Login), a login's rename, and the service lookup (LoginService).
         "N'GRANT OR DENY'", "N'ALTER ANY LOGIN'", "N'CONTROL SERVER'", "'COSQ'", "N' WITH NAME='", "N'LOCALSYSTEM'", @"N'NT AUTHORITY\SYSTEM'",
         // A login's Delete (D4c): DROP LOGIN and the mapped-user scan's call (MappedUserCall).
-        "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'",
+        "N'DROP LOGIN '", "N'@sid varbinary(85), @take int'", "N'VIEW DEFINITION'", "N'ALTER ANY USER'",
+        // Its guarded DROPs (PrincipalBinding).
+        UserCheck, UserRecheck, UserParameters, LoginCheck, LoginRecheck, LoginParameters,
         // Database Properties' describe and preflight (DatabaseProperties.cs, ActionService.DatabasePropertiesPreflight).
         "N'contained database authentication'", "N'sysadmin'", "N'##%'", "N'SpaceUsed'", "N'@take int'", "N'MAXDOP'", "N'LEGACY_CARDINALITY_ESTIMATION'", "N'PARAMETER_SNIFFING'",
         "N'QUERY_OPTIMIZER_HOTFIXES'", "'FilestreamEffectiveLevel'", "'EngineEdition'", "'ProductMajorVersion'",
@@ -391,9 +449,10 @@ internal static partial class ActionSql
         if (Placeholder().IsMatch(bare)) problems.Add("uses a name parameter outside QUOTENAME or a procedure argument");
         // The database a batch runs in reaches T-SQL only as QUOTENAME(@db) + N'.sys.…'.
         if (Variable().Matches(text.Replace("QUOTENAME(@db)", "", StringComparison.Ordinal)).Any(used => used.Value == "@db")) problems.Add("uses @db outside QUOTENAME");
-        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").ToHashSet(StringComparer.Ordinal);
+        var parameters = Enumerable.Range(1, ParameterCount(template)).Select(index => "@p" + index.ToString(CultureInfo.InvariantCulture)).Append("@db").Concat(Bindings(template)).ToHashSet(StringComparer.Ordinal);
         foreach (Match used in Placeholder().Matches(text)) if (!parameters.Contains(used.Value)) problems.Add("uses " + used.Value + ", which the template does not bind");
-        problems.AddRange(Undeclared(text, parameters));
+        // A guarded DROP's constant check and recheck are sp_executesql's own batch, whose variables its constant parameter list declares.
+        problems.AddRange(Undeclared(GuardedTexts.Aggregate(text, (rest, inner) => rest.Replace(inner, "N''", StringComparison.Ordinal)), parameters));
         foreach (Match literal in LiteralPattern().Matches(text)) if (!Literals.Contains(literal.Value)) problems.Add("has the literal " + literal.Value);
         return problems;
     }
@@ -496,10 +555,11 @@ internal static partial class ActionSql
     private static IEnumerable<string> Undeclared(string text, HashSet<string> parameters)
     {
         var declared = Declared().Matches(text).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
-        var arguments = NamedArgument().Matches(text).Where(match => !declared.Contains(match.Groups[1].Value) && match.Index > text.IndexOf("EXEC ", StringComparison.Ordinal)
-            && text.IndexOf("EXEC ", StringComparison.Ordinal) >= 0).Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+        // A procedure's own parameter names ("@name = " after EXEC) are the callee's; every value passed, as every other use, is declared or bound.
+        var exec = text.IndexOf("EXEC ", StringComparison.Ordinal);
+        var callee = exec < 0 ? [] : NamedArgument().Matches(text).Where(match => match.Index > exec).Select(match => match.Index).ToHashSet();
         foreach (Match used in Variable().Matches(text))
-            if (!declared.Contains(used.Value) && !parameters.Contains(used.Value) && !arguments.Contains(used.Value)) yield return "uses the undeclared " + used.Value;
+            if (!callee.Contains(used.Index) && !declared.Contains(used.Value) && !parameters.Contains(used.Value)) yield return "uses the undeclared " + used.Value;
     }
 
     /// <summary>Every executable and catalog statement, rendered for every band, with its lint problems (ActionChecks).</summary>

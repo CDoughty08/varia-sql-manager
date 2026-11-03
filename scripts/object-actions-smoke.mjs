@@ -6,7 +6,7 @@ import { resizeWindow } from './fixtures/window-resize.mjs'
 import { actionsStubData, caution, dependentsMessage, installActionsStub, offlineWarning, propertiesScript, scriptText } from './fixtures/actions-stub.mjs'
 import {
   addObjectDialogSteps, backendReady, closeDocumentButton, documentBanner, documentCrumbs, documentFrame, documentState, documentSubtitle, documentTab, documentTabs, documentVerb, editorText, errorBanner,
-  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogTabs, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
+  explorerLabel, fieldHint, frameSection, menuItemNames, objectDialogConnection, objectDialogMappedUsers, objectDialogPage, objectDialogProgress, objectDialogSessions, objectDialogSessionsToggle, objectDialogStepItems, objectDialogTabs, objectDialogWarningIcons, objectDialogWarnings, openMenus as openMenusOf, part, propertyFact, propertyRow,
   quickInput, quickInputActive, quickInputMessage, renameBox, scriptActions, scriptNotice, scriptText as drawerText, scriptToggle, sectionList as sectionListOf, statusSegment, toastMessage, toasts, toolbarButton, unsavedMark,
   warningBanner as warningBannerOf
 } from './fixtures/ui.mjs'
@@ -692,13 +692,15 @@ try {
   await expect(dialog().getByRole('grid').locator('tbody td')).toHaveText(['AppOwner', 'Login', '', '', ''])
   const sessionsWarning = '2 sessions are connected as this login; the DROP fails until they end. Activity Monitor can end them.'
   await expect(objectDialogWarnings(dialog())).toHaveText([sessionsWarning])
+  // What fails the DROP carries the warning icon (a note, below, the info icon).
+  expect(await objectDialogWarningIcons(dialog()).evaluateAll(icons => icons.map(icon => icon.getAttribute('aria-label')))).toEqual(['Warning'])
   await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: AppUser', 'Sales: app_owner (kept: owns 1 schema)'])
   await expect(dialog().getByText('1 database was not checked (offline or not accessible).', { exact: true })).toBeVisible()
   await expect(dialog().getByText('Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.', { exact: true })).toBeVisible()
   const dropUsers = () => dialog().getByLabel('Also delete the database users mapped to this login', { exact: true })
   await expect(dropUsers()).not.toBeChecked()
   await expect(dropUsers()).toBeEnabled()
-  await expect(dropUsers()).toHaveAccessibleDescription('Users that own schemas are kept. Transfer the schemas first, then delete them in each database.')
+  await expect(dropUsers()).toHaveAccessibleDescription('Users that own schemas or other securables, or have granted permissions, are kept. Transfer or revoke those first, then delete the users in each database.')
   await dropUsers().check()
   const tabsBeforeScript = await tabs().count()
   await dialog().getByRole('button', { name: 'Script options', exact: true }).click()
@@ -719,18 +721,48 @@ try {
   await expect.poll(scripted).toContain('DROP USER [AppUser]')
   expect(await scripted()).toContain('DROP LOGIN [AppOwner]')
   expect(await scripted()).not.toContain('app_owner')
-  // Retired has no sessions: OK drops its user, then the login, and Logins reloads without it.
+  // Held has no user mapped and every database was checked: no orphan note, and the option is greyed, saying why.
+  await menuOf(...logins, 'Held')
+  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(dialog().getByText('No database user is mapped to this login.', { exact: true })).toBeVisible()
+  await expect(dialog().getByText(/^Deleting a login does not delete/)).toHaveCount(0)
+  await expect(dropUsers()).toBeDisabled()
+  await expect(dropUsers()).toHaveAccessibleDescription('There is no mapped user to delete.')
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // CONTOSO\Ops: its user is dropped, then the login's DROP fails (a session signed in meanwhile). The step names the user it
+  // dropped, and the page reads the login again, so the user leaves the list and the option is greyed, while the failure stays.
+  await menuOf(...logins, 'CONTOSO\\Ops')
+  await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
+  await expect(objectDialogProgress(dialog())).toHaveText('Ready')
+  await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: ops'])
+  await dropUsers().check()
+  await dialog().getByRole('button', { name: 'OK', exact: true }).click()
+  await expect(objectDialogProgress(dialog())).toHaveText('Error')
+  await expect(objectDialogStepItems(dialog())).toHaveCount(2)
+  await expect(objectDialogStepItems(dialog()).first()).toContainText('Drop the database user: ops in AppData')
+  await expect(objectDialogMappedUsers(dialog())).toHaveCount(0)
+  await expect(dialog().getByText('No database user is mapped to this login in the databases checked.', { exact: true })).toBeVisible()
+  await expect(dropUsers()).toBeDisabled()
+  await expect(dialog().getByRole('alert')).toContainText("Could not drop login 'CONTOSO\\Ops'")
+  await page.screenshot({ path: resolve('artifacts', 'object-actions-delete-login-partial.png') })
+  await dialog().getByRole('button', { name: 'Cancel', exact: true }).click()
+  await expect(dialog()).toHaveCount(0)
+  // Retired has no sessions: OK drops its user, then the login, and Logins reloads without it. SQL Server Agent runs as it: a
+  // note, with the info icon, not a warning.
   await menuOf(...logins, 'Retired')
   await explorerMenu().getByRole('menuitem', { name: 'Delete', exact: true }).click(fast)
   await expect(objectDialogProgress(dialog())).toHaveText('Ready')
-  await expect(objectDialogWarnings(dialog())).toHaveCount(0)
+  await expect(objectDialogWarnings(dialog())).toHaveText(['SQL Server Agent (MSSQLSERVER) runs as this account.'])
+  expect(await objectDialogWarningIcons(dialog()).evaluateAll(icons => icons.map(icon => icon.getAttribute('aria-label')))).toEqual(['Note'])
   await expect(objectDialogMappedUsers(dialog())).toHaveText(['AppData: Retired'])
   await dropUsers().check()
   await dialog().getByRole('button', { name: 'OK', exact: true }).click()
   await expect(dialog()).toHaveCount(0)
   expect((await stubCalls('actions.execute')).at(-1)).toMatchObject({ action: 'delete', target: { kind: 'login', name: 'Retired' }, dropMappedUsers: true, loginIdentity })
   await expect(explorerTree(page).locator(part.explorerLabel, { hasText: /^Retired$/ })).toHaveCount(0)
-  console.log('Object action checks: a login\'s Delete is greyed for sa; Delete Object lists its mapped users, what it could not check and the orphan note, Script and OK send the option with the login\'s identity, sessions keep the dialog with IN_USE, and a Delete leaves Logins.')
+  console.log('Object action checks: a login\'s Delete is greyed for sa; Delete Object lists its mapped users, what it could not check and the orphan note, Script and OK send the option with the login\'s identity, sessions keep the dialog with IN_USE, a login with no user greys the option with why, a partial failure reads the login again, a note is not a warning, and a Delete leaves Logins.')
 
   // A database row's menu item. Databases may have just reloaded (after Database Properties' Apply, or a Delete), so the press
   // repeats until its row's menu opens.

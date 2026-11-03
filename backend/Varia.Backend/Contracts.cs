@@ -219,13 +219,15 @@ internal sealed record ActionError(string Code, string Message, bool Retryable);
 /// <summary>What the login preflight (ActionSql.Login) reads in the action's own connection (src/shared/actions/logins.ts LoginFacts).
 /// Service (at most loginLimits.serviceName characters) is the loginFacts describe's guarded service lookup only. The owned
 /// counts are null where the preflight leaves them out (ActionSql.LoginAlter, before an ALTER LOGIN). OwnedJobs (Delete Object's
-/// describe only) is null when msdb could not be read.</summary>
+/// describe only) is null when msdb could not be read. GrantedPermissions (with the owned counts) counts the server permissions it granted
+/// to other principals, which DROP LOGIN fails on (15173).</summary>
 internal sealed record LoginFactsDto(int PrincipalId, string Type, string Subtype, bool Disabled, string Sid, string Created, bool? PolicyChecked, bool? ExpirationChecked, bool ConnectDenied,
     bool Own, bool Sysadmin, int? Sessions, int? OwnedDatabases, List<string> OwnedDatabaseNames, int? OwnedServerObjects, bool CanAlter, bool CanControlServer, bool NameInUse, string? Service = null,
-    int? OwnedJobs = null);
-/// <summary>A database user mapped to a login (D4 §5.4): its database and name, the schemas and roles it owns, and whether its database is
-/// read-only. A Delete that drops the mapped users keeps those that own a schema or role, or are in a read-only database.</summary>
-internal sealed record MappedUserDto(string Database, string User, int OwnedSchemas, int OwnedRoles, bool ReadOnly);
+    int? OwnedJobs = null, int? GrantedPermissions = null);
+/// <summary>A database user mapped to a login (D4 §5.4): its database and name, the schemas, roles and other securables it owns, the
+/// permissions it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY
+/// USER). A Delete that drops the mapped users keeps those whose DROP USER would fail (ActionService.Kept).</summary>
+internal sealed record MappedUserDto(string Database, string User, int OwnedSchemas, int OwnedRoles, bool ReadOnly, int OwnedSecurables, int GrantedPermissions, bool CanDrop);
 /// <summary>The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all (Mapped), and how many databases it
 /// read (Checked) and did not (NotChecked: offline, restoring, not accessible, failed, or past the scan's bound or budget).</summary>
 internal sealed record LoginMappingsDto(List<MappedUserDto> Users, int Mapped, int Checked, int NotChecked);

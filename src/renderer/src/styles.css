@@ -838,6 +838,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-grid td.object-dialog-cell-message { white-space: normal; overflow-wrap: anywhere; }
 .object-dialog-warnings { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .object-dialog-warnings > li { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: var(--varia-radius-sm); background: var(--varia-banner-warningBackground); color: var(--varia-banner-warningForeground); overflow-wrap: anywhere; }
+/* D4c: why OK is greyed reads as an error, and what does not fail the DROP as a plain note (only the blocking ones are warnings). */
+.object-dialog-warnings > li.is-refusal { background: var(--varia-banner-errorBackground); color: var(--varia-banner-errorForeground); }
+.object-dialog-warnings > li.is-note { background: transparent; color: var(--varia-descriptionForeground); }
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
@@ -859,7 +862,9 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 /* D4c: the database users mapped to a login, "database: user" with why one is kept, in a list that scrolls within its own
    height so the note and the option below stay in view. */
 .object-dialog-mapped { margin: var(--varia-space-2) 0 0; }
-.object-dialog-mapped-list { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin: var(--varia-space-1) 0 0; padding: 0; list-style: none; font-size: var(--varia-size-xs); overflow-wrap: anywhere; }
+/* Inset as its caption is, so the rows line up with it and clear the focus ring of a list that scrolls (a tab stop then). */
+.object-dialog-mapped-list { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin: var(--varia-space-1) 0 0; padding: 0 calc(var(--varia-space-2) + var(--varia-space-0)); list-style: none; font-size: var(--varia-size-xs); overflow-wrap: anywhere; }
+.object-dialog-mapped-list:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
 .object-dialog-mapped-list > li { padding: var(--varia-space-0) 0; }
 .object-dialog-kept { color: var(--varia-descriptionForeground); }
 /* Create Catalog (S9a): SSMS's options and password, then what the server gets, step by step. */

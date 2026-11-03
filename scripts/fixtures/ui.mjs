@@ -467,6 +467,10 @@ export const objectDialogProgress = dialog => dialog.getByRole('region', { name:
 export const objectDialogWarnings = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('listitem')
 /** Delete Object's list of the database users mapped to a login (D4c): one item per user, then "…and n more". */
 export const objectDialogMappedUsers = dialog => dialog.getByRole('list', { name: 'Database users mapped to this login', exact: true }).getByRole('listitem')
+/** The icons of Delete Object's warnings, named by kind: Error (why OK is greyed), Warning (what fails the DROP) and Note. */
+export const objectDialogWarningIcons = dialog => dialog.getByRole('list', { name: 'Warnings', exact: true }).getByRole('img')
+/** An object dialog's Steps panel: one item per step, its state words first ("Done: "). */
+export const objectDialogStepItems = dialog => dialog.getByRole('list', { name: 'Steps', exact: true }).getByRole('listitem')
 /** Delete Object's grid of the sessions using a database (D3d): its body rows, and the disclosure that shows it. */
 export const objectDialogSessions = dialog => dialog.getByRole('table', { name: 'Sessions using the database', exact: true }).locator('tbody').getByRole('row')
 export const objectDialogSessionsToggle = dialog => dialog.getByRole('button', { name: /^Sessions using / })

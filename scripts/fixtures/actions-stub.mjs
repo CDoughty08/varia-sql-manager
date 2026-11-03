@@ -21,9 +21,11 @@ import { explorerStatics } from './explorer-tree.mjs'
  * denied), sa (the login the stub connects as) and SQL Server's own ##MS_PolicyTsqlExecutionLogin## (disabled). The
  * loginFacts describe answers their facts; Disable and Enable change what Logins lists, except Held's, which wait until
  * their Stop arrives; a login renamed to "Taken" is NAME_IN_USE. Delete Object on a login (D4c) lists its mapped users (AppUser's
- * in AppData, and in Sales one that owns a schema; Retired's in AppData; offline Archive not checked) and warns about AppUser's
- * sessions, whose Delete answers IN_USE before any step; any other login's Delete drops the users it may when asked, then the
- * login, and leaves Logins; its script is `loginDeleteScript`.
+ * in AppData, and in Sales one that owns a schema; Retired's in AppData, with a note that SQL Server Agent runs as it; CONTOSO\Ops's
+ * in AppData; offline Archive not checked where a login has users) and warns about AppUser's sessions, whose Delete answers IN_USE
+ * before any step; CONTOSO\Ops's Delete drops its user and then fails the login's DROP (a session signed in meanwhile), after
+ * which its describe lists no user; any other login's Delete drops the users it may when asked, then the login, and leaves
+ * Logins; its script is `loginDeleteScript`.
  */
 export function actionsStubData() {
   return { statics: explorerStatics() }
@@ -43,7 +45,8 @@ export function installActionsStub({ ipcMain }, { statics }) {
   const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], blocked: new Map(), catalog: false, managed: false,
     logins: [
       { name: '##MS_PolicyTsqlExecutionLogin##', type: 'S', subtype: 'system', disabled: true }, { name: 'AppUser', type: 'S', subtype: 'sql', sessions: 2, users: [['AppData', 'AppUser'], ['Sales', 'app_owner', 1]] },
-      { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup' }, { name: 'Held', type: 'S', subtype: 'sql' }, { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true, users: [['AppData', 'Retired']] },
+      { name: 'CONTOSO\\Ops', type: 'G', subtype: 'windowsGroup', users: [['AppData', 'ops']], failsDrop: true }, { name: 'Held', type: 'S', subtype: 'sql' },
+      { name: 'Retired', type: 'S', subtype: 'sql', disabled: true, connectDenied: true, users: [['AppData', 'Retired']], service: 'SQL Server Agent (MSSQLSERVER)' },
       { name: 'sa', type: 'S', subtype: 'sa', sysadmin: true }
     ] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
@@ -86,18 +89,25 @@ export function installActionsStub({ ipcMain }, { statics }) {
   function describeLogin({ target }) {
     const login = loginOf(target)
     if (!login) return ok({ elapsedMs: 1, error: notFound(target) })
-    const users = (login.users ?? []).map(([database, user, schemas = 0]) => ({ database, user, ownedSchemas: schemas, ownedRoles: 0, readOnly: false }))
-    return ok({ elapsedMs: 1, deleteTarget: { name: login.name, type: 'Login', owner: null, warnings: login.sessions ? [{ text: sessionsWarning(login.sessions), blocking: true }] : [], dependentsTruncated: false,
-      login: factsOf(login), mappings: { users, mapped: users.length, checked: stub.databases.length, notChecked: 1 } } })
+    const users = (login.users ?? []).map(([database, user, schemas = 0]) => ({ database, user, ownedSchemas: schemas, ownedRoles: 0, readOnly: false, ownedSecurables: 0, grantedPermissions: 0, canDrop: true }))
+    const warnings = [...login.sessions ? [{ text: sessionsWarning(login.sessions), blocking: true }] : [], ...login.service ? [{ text: `${login.service} runs as this account.`, blocking: false }] : []]
+    return ok({ elapsedMs: 1, deleteTarget: { name: login.name, type: 'Login', owner: null, warnings, dependentsTruncated: false,
+      login: factsOf(login), mappings: { users, mapped: users.length, checked: stub.databases.length, notChecked: login.users ? 1 : 0 } } })
   }
   /** A login's Delete: refused before any step while it has sessions; otherwise its droppable users when asked, then the login. */
   function deleteLogin({ target, dropMappedUsers }) {
     const login = loginOf(target)
     if (!login) return ok({ steps: [], messages: [], elapsedMs: 1, error: notFound(target) })
     if (login.sessions) return ok({ steps: [], messages: [], elapsedMs: 1, sessions: login.sessions, error: { code: 'IN_USE', message: sessionsWarning(login.sessions), retryable: true } })
-    stub.logins = stub.logins.filter(other => other !== login)
     const users = dropMappedUsers ? droppable(login) : []
-    return ok({ steps: [...users.map(([database, user]) => ({ status: 'done', title: 'Drop the database user', detail: `${database}: ${user}` })), { status: 'done', title: 'Drop the login' }], messages: [], elapsedMs: 1, sessions: 0 })
+    const dropped = users.map(([database, user]) => ({ status: 'done', title: 'Drop the database user', detail: `${user} in ${database}` }))
+    if (login.failsDrop) {
+      login.users = (login.users ?? []).filter(user => !users.includes(user))
+      const message = `Could not drop login '${login.name}' as the user is currently logged in. End the login's sessions first; Activity Monitor can end them.`
+      return ok({ steps: [...dropped, { status: 'failed', title: 'Drop the login', message }], messages: [], elapsedMs: 1, error: { code: 'IN_USE', message, retryable: true } })
+    }
+    stub.logins = stub.logins.filter(other => other !== login)
+    return ok({ steps: [...dropped, { status: 'done', title: 'Drop the login' }], messages: [], elapsedMs: 1, sessions: 0 })
   }
   /** A login's Disable or Enable: Held's waits until its Stop arrives; the others change what Logins lists. */
   function loginState({ action, target, requestId }) {

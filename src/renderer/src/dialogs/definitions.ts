@@ -46,6 +46,8 @@ export interface ObjectDialogDefinition<Model, Draft> {
   /** Folders other than the object's listing that a reply's done steps changed (the Users folders of the databases a login's Delete
    *  dropped users in), which the dialog reconciles where they are loaded, after a success or a partial failure. */
   readonly changedFolders?: (model: Model, steps: readonly ActionStep[]) => ChangedFolders | undefined
+  /** Whether the dialog reads its model again after steps completed before a failure or Stop (ObjectDialogService.reload). */
+  readonly reloadsAfterPartial?: (target: ObjectRef) => boolean
 }
 /** A folder kind and the databases whose folder of that kind changed. */
 export interface ChangedFolders { readonly folder: FolderId; readonly databases: readonly string[] }
@@ -54,10 +56,21 @@ export interface ChangedFolders { readonly folder: FolderId; readonly databases:
 export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean; readonly dropMappedUsers: boolean }
 /** The mapped users a login's Delete may drop: those it lists that are not kept (they own a schema or role, or their database is read-only). */
 export const droppableUsers = (model: DeleteTarget) => (model.mappings?.users ?? []).filter(user => !mappedUserKept(user))
-/** Whether Delete Object offers to drop the mapped users: some it may drop, and no more mapped than it lists (the backend refuses those). */
-export const canDropMappedUsers = (model: DeleteTarget): boolean => droppableUsers(model).length > 0 && (model.mappings?.mapped ?? 0) <= (model.mappings?.users.length ?? 0)
-/** Why the option is greyed though users are mapped: more are mapped than the dialog lists. */
-export const dropMappedUsersNote = (model: DeleteTarget): string | undefined => (model.mappings?.mapped ?? 0) > (model.mappings?.users.length ?? 0) ? loginDeleteText.tooMany : undefined
+/**
+ * Why Delete Object greys the option to drop the mapped users, or undefined when it offers it: no user is mapped, more are mapped
+ * than it lists (the backend refuses those), every one listed is kept, or the login's sessions cannot be counted (the backend
+ * refuses that too: a session would fail the login's DROP after its users were gone).
+ */
+export const dropMappedUsersNote = (model: DeleteTarget): string | undefined => {
+  const mapped = model.mappings?.mapped ?? 0, listed = model.mappings?.users.length ?? 0
+  if (mapped === 0) return loginDeleteText.noneToDrop
+  if (mapped > listed) return loginDeleteText.tooMany
+  if (droppableUsers(model).length === 0) return loginDeleteText.allKept
+  if (model.login?.sessions === undefined) return loginDeleteText.sessionsUncounted
+  return undefined
+}
+/** Whether Delete Object offers to drop the mapped users: nothing greys it (dropMappedUsersNote). */
+export const canDropMappedUsers = (model: DeleteTarget): boolean => !!model.mappings && dropMappedUsersNote(model) === undefined
 /** Why Delete Object greys OK for a login: the protected-principal rules (logins.ts) over the facts it read (own, sa, system, permissions). */
 export const loginDeleteRefusal = (model: DeleteTarget): string | undefined => {
   const refused = model.login && loginRefusal(model.login, 'delete')
@@ -100,6 +113,8 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
   afterSuccess: effects => effects.refreshListing(),
   blocked: model => loginDeleteRefusal(model),
+  // A login's Delete that dropped users and then failed or stopped: the list shows who is still mapped.
+  reloadsAfterPartial: target => target.kind === 'login',
   // Once a user was dropped, the Users folders of every database the dialog listed a droppable user in: a step's detail is clipped
   // display text, so it is not matched back to its database, and reconciling an unchanged folder changes nothing.
   changedFolders: (model, steps) => {

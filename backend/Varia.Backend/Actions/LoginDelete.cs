@@ -6,7 +6,7 @@ using Varia.Backend.Scripting;
 namespace Varia.Backend.Actions;
 
 /// <summary>One database the mapped-user scan listed, and whether it read the users there (Login Properties' User Mapping, D2c,
-/// shows a row it did not read as "Not read").</summary>
+/// shows a row it did not read as "Not read"; a login's Delete with its users refuses to run while one is unread).</summary>
 internal sealed record ScannedDatabase(string Name, bool ReadOnly, bool Checked);
 
 /// <summary>The mapped-user scan's answer: at most its list bound of users, how many it found in all (Mapped), every database it
@@ -21,13 +21,16 @@ internal sealed record LoginScan(List<MappedUserDto> Users, int Mapped, List<Sca
 /// <summary>A login's Delete (D4c): Delete Object's describe of a login (its facts, what it owns, and the database users mapped to
 /// it), Script Action, and the execute that drops the mapped users it may (when asked) and then the login, after a preflight that
 /// refuses, before any DDL, a login that is not the one the dialog read, the rules' refusals, and what SQL Server would refuse the
-/// DROP for (sessions, owned databases, jobs, server roles and endpoints). Not one transaction: DROP USER in several databases would
-/// hold locks in all of them until the end, and every partial outcome (some users gone, the login kept) is coherent.</summary>
+/// DROP for (sessions, owned databases, jobs, server roles, endpoints and availability groups, granted permissions); with its users,
+/// also sessions it cannot count and databases it could not read again, so no predictable refusal of the DROP comes after the users
+/// are gone. Not one transaction: DROP USER in several databases would hold locks in all of them until the end, and every partial
+/// outcome (some users gone, the login kept) is coherent. Each DROP checks, in its own batch, the principal it was planned for.</summary>
 internal sealed partial class ActionService
 {
-    /// <summary>Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138) or a role
-    /// (15421), and cannot run in a read-only database (logins.ts mappedUserKept).</summary>
-    internal static bool Kept(MappedUserDto user) => user.OwnedSchemas > 0 || user.OwnedRoles > 0 || user.ReadOnly;
+    /// <summary>Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138), a role
+    /// (15421) or another securable (15138, 15183), or has granted permissions (15284), cannot run in a read-only database, and needs
+    /// ALTER ANY USER there (logins.ts mappedUserKept).</summary>
+    internal static bool Kept(MappedUserDto user) => user.OwnedSchemas > 0 || user.OwnedRoles > 0 || user.OwnedSecurables > 0 || user.GrantedPermissions > 0 || user.ReadOnly || !user.CanDrop;
 
     /// <summary>How long the scan reads databases before it counts the rest as not checked: the catalogue's scanMs, or the live
     /// checks' own.</summary>
@@ -40,7 +43,7 @@ internal sealed partial class ActionService
     /// <paramref name="budget"/> has passed: values, never the request's failure. Only the job's own token ends the scan.</summary>
     internal async Task<LoginScan> ScanMappedUsersAsync(SqlConnection connection, byte[] sid, int list, TimeSpan budget, CancellationToken token)
     {
-        var listed = new List<(string Name, bool ReadOnly)>();
+        var listed = new List<(string Name, bool ReadOnly, bool CanDrop)>();
         var total = 0;
         await using (var command = connection.CreateCommand())
         {
@@ -48,18 +51,17 @@ internal sealed partial class ActionService
             command.CommandTimeout = 0;
             Add(command, "@take", SqlDbType.Int, 0, (int)catalog.Logins.Limit("scanDatabases"));
             await using var reader = await command.ExecuteReaderAsync(token);
-            while (await reader.ReadAsync(token))
-            {
-                listed.Add((reader.GetString(0), !reader.IsDBNull(1) && reader.GetBoolean(1)));
-                total = Convert.ToInt32(reader.GetValue(2), CultureInfo.InvariantCulture);
-            }
+            // The total first, apart from the rows: a connection that may read no database still counts every one as not checked.
+            if (await reader.ReadAsync(token)) total = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+            if (await reader.NextResultAsync(token))
+                while (await reader.ReadAsync(token)) listed.Add((reader.GetString(0), !reader.IsDBNull(1) && reader.GetBoolean(1), !reader.IsDBNull(2) && reader.GetBoolean(2)));
         }
         var users = new List<MappedUserDto>();
         var databases = new List<ScannedDatabase>(listed.Count);
         var mapped = 0;
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(token);
         limit.CancelAfter(budget);
-        foreach (var (name, readOnly) in listed)
+        foreach (var (name, readOnly, canDrop) in listed)
         {
             var found = new List<MappedUserDto>();
             var read = false;
@@ -76,7 +78,7 @@ internal sealed partial class ActionService
                     Add(command, "@take", SqlDbType.Int, 0, list + 1);
                     await using var reader = await command.ExecuteReaderAsync(limit.Token);
                     int Count(int ordinal) => reader.IsDBNull(ordinal) ? 0 : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
-                    while (await reader.ReadAsync(limit.Token)) found.Add(new(name, reader.GetString(0), Count(1), Count(2), readOnly));
+                    while (await reader.ReadAsync(limit.Token)) found.Add(new(name, reader.GetString(0), Count(1), Count(2), readOnly, Count(3), Count(4), canDrop));
                     read = true;
                 }
                 catch (Exception error) when (!token.IsCancellationRequested && error is SqlException or OperationCanceledException or InvalidOperationException) { }
@@ -112,8 +114,9 @@ internal sealed partial class ActionService
     private static string Count(int value, string one, string many) => value.ToString("N0", CultureInfo.InvariantCulture) + " " + (value == 1 ? one : many);
 
     /// <summary>What Delete Object warns about a login (D4 §5.4): what SQL Server refuses the DROP for (blocking: the sessions
-    /// connected as it, 15434; the databases it owns, 15174; its Agent jobs, 15170; the server roles and endpoints it owns, 15141),
-    /// and the service that runs as it. The execute's preflight refuses with the same texts.</summary>
+    /// connected as it, 15434; the databases it owns, 15174; its Agent jobs, 15170; the server roles, endpoints and availability
+    /// groups it owns, 15141; the server permissions it granted to others, 15173), and the service that runs as it. The execute's
+    /// preflight refuses with the same texts.</summary>
     internal static List<ActionWarningDto> LoginDeleteWarnings(LoginFactsDto facts, string? service)
     {
         var warnings = new List<ActionWarningDto>();
@@ -121,6 +124,7 @@ internal sealed partial class ActionService
         if (facts.OwnedDatabases is > 0 and var databases) warnings.Add(new(OwnedDatabasesWarning(databases, facts.OwnedDatabaseNames), true));
         if (facts.OwnedJobs is > 0 and var jobs) warnings.Add(new(JobsWarning(jobs), true));
         if (facts.OwnedServerObjects is > 0 and var objects) warnings.Add(new(ServerObjectsWarning(objects), true));
+        if (facts.GrantedPermissions is > 0 and var granted) warnings.Add(new(GrantedWarning(granted), true));
         if (service is not null) warnings.Add(new(ScriptingErrors.Display(service) + " runs as this account.", false));
         return warnings;
     }
@@ -143,8 +147,17 @@ internal sealed partial class ActionService
         : "Owns " + Count(jobs, "SQL Server Agent job", "SQL Server Agent jobs") + "; the DROP fails until they are reassigned or deleted.";
 
     internal static string ServerObjectsWarning(int objects) => objects == 1
-        ? "Owns 1 server role or endpoint; the DROP fails until it is reassigned."
-        : "Owns " + Count(objects, "server role or endpoint", "server roles or endpoints") + "; the DROP fails until they are reassigned.";
+        ? "Owns 1 server role, endpoint or availability group; the DROP fails until it is reassigned."
+        : "Owns " + Count(objects, "server role, endpoint or availability group", "server roles, endpoints or availability groups") + "; the DROP fails until they are reassigned.";
+
+    internal static string GrantedWarning(int permissions) => permissions == 1
+        ? "Has granted 1 server permission to another principal; the DROP fails until it is revoked."
+        : "Has granted " + Count(permissions, "server permission", "server permissions") + " to other principals; the DROP fails until they are revoked.";
+
+    /// <summary>Why a Delete that drops the mapped users stops before any DDL when its own scan could not read databases the describe
+    /// may have listed users in: their users would be left orphaned while the login went.</summary>
+    internal static string UnreadDatabases(int count) => (count == 1 ? "1 database could not be read again" : count.ToString("N0", CultureInfo.InvariantCulture) + " databases could not be read again")
+        + ", so the database users mapped to the login there would be left orphaned. Try again, or delete the login without its users.";
 
     /// <summary>Why a Delete that drops the mapped users stops before any DDL when more are mapped than it lists and plans.</summary>
     internal string TooManyMappedUsers => "The login is mapped to more than " + catalog.Logins.Limit("mappedUsers").ToString("N0", CultureInfo.InvariantCulture)
@@ -192,7 +205,8 @@ internal sealed partial class ActionService
 
     /// <summary>The execute: the login read again under READ COMMITTED (its identity and the rules), then, read past other sessions'
     /// changes under the read lock timeout, what blocks the DROP and the mapped users; any blocker refuses before DDL. The DDL then
-    /// runs with the execute's own settings: the users, then the login.</summary>
+    /// runs with the execute's own settings: the users, then the login, each DROP bound to the principal it was planned for (a read past
+    /// an open change may name a principal that is not the login's, which that check refuses).</summary>
     private async Task<ActionExecuteResult> ExecuteLoginDeleteAsync(SqlConnection connection, ActionArgs args, ObjectRefDto target, int band, CancellationToken token)
     {
         var messages = CollectMessages(connection);
@@ -202,14 +216,21 @@ internal sealed partial class ActionService
         var read = subject.Login!;
         await RunAsync(connection, ActionSql.ReadPrologue, token);
         var (facts, _, _, scan) = await LoginDeleteFactsAsync(connection, subject.Target.Name!, scan: args.DropMappedUsers == true, token);
-        if (facts is null || !string.Equals(facts.Sid, read.Sid, StringComparison.Ordinal))
+        if (facts is null || !string.Equals(facts.Sid, read.Sid, StringComparison.Ordinal) || facts.PrincipalId != read.PrincipalId || subject.Row.Raw("create_date") is not DateTime created)
             return new([], [], 0, Error("NOT_FOUND", "The login " + subject.Display + " changed while it was read. Refresh Object Explorer and try again."));
         if (facts.Sessions is > 0 and var sessions) return new([], [], 0, Error("IN_USE", SessionsWarning(sessions)), sessions);
         var dependents = LoginDeleteWarnings(facts, null).Where(warning => warning.Blocking).Select(warning => warning.Text).ToList();
         if (dependents.Count > 0) return new([], [], 0, Error("DEPENDENTS", string.Join(" ", dependents)), facts.Sessions);
-        if (scan is not null && scan.Mapped > scan.Users.Count) return new([], [], 0, Error("NOT_SUPPORTED", TooManyMappedUsers), facts.Sessions);
+        if (scan is not null)
+        {
+            // Users go first, so nothing the preflight cannot see may fail the login's DROP after them: a session it cannot count
+            // (15434), or a database it could not read again, whose users would stay orphaned while the reply said success.
+            if (facts.Sessions is null) return new([], [], 0, Error("NOT_SUPPORTED", catalog.Logins.Message("sessionsUncounted")));
+            if (scan.Databases.Count(database => !database.Checked) is > 0 and var unread) return new([], [], 0, Error("BLOCKED", UnreadDatabases(unread)), facts.Sessions);
+            if (scan.Mapped > scan.Users.Count) return new([], [], 0, Error("NOT_SUPPORTED", TooManyMappedUsers), facts.Sessions);
+        }
         await RunAsync(connection, ActionSql.ExecutePrologue, token);
-        var plan = Plan(args, subject.Target, users: scan?.Users);
+        var plan = Plan(args, subject.Target, users: scan?.Users, login: new(SidBytes(facts), facts.PrincipalId, created));
         var (steps, failure, _) = await RunPlannedAsync(connection, args.ConnectionId, args.Action, plan, ActionErrors.LoginSessionsAdvice, token);
         if (failure is { Code: "PERMISSION_DENIED" }) failure = Error(failure.Code, failure.Message + " " + ActionErrors.LoginPermissionAdvice);
         return new(steps, messages.Collected(), 0, failure, facts.Sessions);

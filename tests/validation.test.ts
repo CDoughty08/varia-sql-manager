@@ -100,6 +100,11 @@ describe('IPC validation', () => {
     expect(validateRequest('actions.describe', { ...describe, dialog: 'databaseProperties', target: { kind: 'database', name: 'master' } })).toMatchObject({ dialog: 'databaseProperties' })
     expect(validateRequest('actions.execute', rename)).toEqual(rename)
     expect(validateRequest('actions.script', remove)).toEqual(remove)
+    // A login's Delete runs only for the login Delete Object read (D4c); its script may leave the identity out.
+    const removeLogin = { ...remove, target: { kind: 'login', name: 'AppUser' }, dropMappedUsers: true }
+    expect(() => validateRequest('actions.execute', removeLogin)).toThrow('Invalid request')
+    expect(validateRequest('actions.execute', { ...removeLogin, loginIdentity: { sid: '01', created: '2026-01-02T03:04:05.000' } })).toMatchObject({ loginIdentity: { sid: '01' } })
+    expect(validateRequest('actions.script', removeLogin)).toEqual(removeLogin)
     expect(validateRequest('actions.describe', describe)).toEqual(describe)
     for (const [method, value] of [
       ['actions.execute', { ...rename, newName: ' o]1 ' }], ['actions.execute', { ...rename, newName: 'x'.repeat(129) }], ['actions.execute', { ...rename, closeConnections: false }],

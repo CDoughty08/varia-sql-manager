@@ -186,7 +186,7 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>Re-validates actionRequestSchema (actionScriptRequestSchema for a script): the action, ids, a target whose kind
     /// offers it, a new name of 1–128 UTF-16 units without U+0000 that differs from the old one, a login's Disable and Enable
     /// with nothing but a target and the login's identity, the delete flags only for databases and the login's identity and
-    /// dropMappedUsers only for a login's Delete, Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an
+    /// dropMappedUsers only for a login's Delete (whose execute needs the identity), Database Properties' changes (DatabaseAlter.Validate), and secrets nowhere but an
     /// execute of an action that takes them (critic A3).</summary>
     public ObjectRefDto Validate(ActionArgs args, bool script = false)
     {
@@ -213,6 +213,8 @@ internal sealed partial class ActionService : IDisposable
                 var deleted = Target(args.Target, "delete");
                 if (deleted.Kind != "database" && (close || history)) throw Invalid("only a database has connections to close and backup history to delete.");
                 if (deleted.Kind != "login" && (args.DropMappedUsers is not null || args.LoginIdentity is not null)) throw Invalid("only a login has mapped users and an identity to check.");
+                // DROP LOGIN and every DROP USER bind to the principal Delete Object showed; Script runs nothing and may omit it.
+                if (deleted.Kind == "login" && !script && args.LoginIdentity is null) throw Invalid("a login's delete needs the loginIdentity it read.");
                 return deleted;
             case "properties":
                 if (args.Design is not null) throw Invalid("properties takes no design.");
@@ -525,7 +527,7 @@ internal sealed partial class ActionService : IDisposable
         var created = DatabaseProperties.Iso(row.Raw("create_date")) ?? "";
         var facts = new LoginFactsDto(principalId, type, subtype, row.Bool("is_disabled"), row.Text("sid_hex") ?? "", created, row.NullableBool("policy_checked"), row.NullableBool("expiration_checked"),
             row.Bool("connect_denied"), row.Bool("is_own"), row.Bool("is_sysadmin"), sessions, take is null ? null : row.Int("owned_databases"), owned, take is null ? null : row.Int("owned_server_objects"), row.Bool("can_alter"),
-            row.Bool("can_control_server"), row.Bool("name_in_use"));
+            row.Bool("can_control_server"), row.Bool("name_in_use"), GrantedPermissions: take is null ? null : row.Int("granted_permissions"));
         return (facts, row);
     }
 
@@ -626,8 +628,9 @@ internal sealed partial class ActionService : IDisposable
     /// <summary>The statements an action runs, in order. A database's Delete that closes connections first undoes SINGLE_USER when
     /// its DROP did not complete (D3 §8): the compensation restores the access <paramref name="facts"/> read (multi or restricted).
     /// An offline database has no sessions to close, so its Delete runs no SINGLE_USER. A login's Delete with dropMappedUsers drops
-    /// the mapped <paramref name="users"/> it may (not those Kept) first, each in its database, then the login (D4 §5.4).</summary>
-    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null, IReadOnlyList<MappedUserDto>? users = null)
+    /// the mapped <paramref name="users"/> it may (not those Kept) first, each in its database, then the login (D4 §5.4), each DROP bound
+    /// to the principal it was planned for (<paramref name="login"/>; the users by the login's SID). Script Action plans none: it runs nothing.</summary>
+    public static List<PlannedStatement> Plan(ActionArgs args, ObjectRefDto target, DeleteFacts? facts = null, IReadOnlyList<MappedUserDto>? users = null, PrincipalBinding? login = null)
     {
         // A login's statements run in master, as SMO scripts them.
         if (target.Kind == "login")
@@ -636,8 +639,9 @@ internal sealed partial class ActionService : IDisposable
                 "rename" => [new(ActionTemplate.RenameLogin, "master", [target.Name!, args.NewName!])],
                 "disable" => [new(ActionTemplate.DisableLogin, "master", [target.Name!])],
                 "enable" => [new(ActionTemplate.EnableLogin, "master", [target.Name!])],
-                "delete" => [.. (args.DropMappedUsers == true ? users ?? [] : []).Where(user => !Kept(user)).Select(user => new PlannedStatement(ActionTemplate.DropUser, user.Database, [user.User])),
-                    new(ActionTemplate.DropLogin, "master", [target.Name!])],
+                "delete" => [.. (args.DropMappedUsers == true ? users ?? [] : []).Where(user => !Kept(user))
+                        .Select(user => new PlannedStatement(ActionTemplate.DropMappedUser, user.Database, [user.User], Principal: login is null ? null : new(login.Sid))),
+                    new(ActionTemplate.DropLogin, "master", [target.Name!], Principal: login)],
                 _ => throw new InvalidOperationException("No plan for a login's " + args.Action + ".")
             };
         if (args.Action == "rename")
@@ -672,15 +676,15 @@ internal sealed partial class ActionService : IDisposable
         ActionTemplate.EnableLogin => "Enable the login",
         ActionTemplate.DenyConnect => "Deny permission to connect",
         ActionTemplate.GrantConnect => "Grant permission to connect",
-        ActionTemplate.DropUser => "Drop the database user",
+        ActionTemplate.DropUser or ActionTemplate.DropMappedUser => "Drop the database user",
         ActionTemplate.DropLogin => "Drop the login",
         _ => "Drop the object"
     };
 
-    /// <summary>The name a step acts on where its title alone does not say it: a database user's database and name (a login's Delete
-    /// drops one per database, "AppData: app_user", which the dialog pairs with its list).</summary>
+    /// <summary>The name a step acts on where its title alone does not say it: a database user's name and database (a login's Delete
+    /// drops one per database: "app_user in AppData", which reads cleanly after the steps panel's "title: ").</summary>
     internal static string? StepDetail(PlannedStatement statement) =>
-        statement.Template == ActionTemplate.DropUser ? ScriptingErrors.Display(statement.Database) + ": " + ScriptingErrors.Display(statement.Names[0]) : null;
+        statement.Template is ActionTemplate.DropUser or ActionTemplate.DropMappedUser ? ScriptingErrors.Display(statement.Names[0]) + " in " + ScriptingErrors.Display(statement.Database) : null;
 
     /// <summary>The templates whose statement needs its database (the first name) free of Varia's own idle sessions (critic A5).</summary>
     private static bool NeedsFreeDatabase(ActionTemplate template) => template is ActionTemplate.SetSingleUser or ActionTemplate.DropDatabase or ActionTemplate.RenameDatabase
@@ -1053,6 +1057,17 @@ internal sealed partial class ActionService : IDisposable
         command.CommandTimeout = 0;
         Add(command, "@db", SqlDbType.NVarChar, 128, statement.Database);
         for (var index = 0; index < statement.Names.Count; index++) Add(command, "@p" + (index + 1), SqlDbType.NVarChar, 128, statement.Names[index]);
+        // A guarded DROP never runs by its name alone (the dry run selects the DROP and binds nothing).
+        if (ActionSql.Guarded(statement.Template) && !dryRun)
+        {
+            var bound = statement.Principal ?? throw new InvalidOperationException("A guarded DROP needs the principal it was planned for.");
+            Add(command, "@sid", SqlDbType.VarBinary, 85, bound.Sid);
+            if (statement.Template == ActionTemplate.DropLogin)
+            {
+                Add(command, "@principal", SqlDbType.Int, 0, bound.PrincipalId!.Value);
+                Add(command, "@created", SqlDbType.DateTime, 0, bound.Created!.Value);
+            }
+        }
         var values = new List<string?>();
         await using var reader = await command.ExecuteReaderAsync(token);
         do

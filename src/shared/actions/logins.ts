@@ -114,7 +114,9 @@ export const loginMessages = {
   // SQL Server's own answer is 15021, which does not say what is wrong (D4 P3).
   sqlBackslash: "A SQL Server login's name cannot contain a backslash.",
   // SQL Server accepts such a name, and Varia would then take the login for one of SQL Server's own and refuse to change it.
-  systemName: "Names that start and end with ## are reserved for SQL Server's own logins."
+  systemName: "Names that start and end with ## are reserved for SQL Server's own logins.",
+  // A login's Delete drops its users before the login; a session it cannot see would then fail the login's DROP (15434) after them.
+  sessionsUncounted: "This connection cannot count the login's sessions (that needs VIEW SERVER STATE), and one would make its DROP fail after its users were deleted. Delete the login without its users."
 } as const
 export type LoginMessageId = keyof typeof loginMessages
 /** The message a subtype's greyed verb answers with. */
@@ -177,6 +179,8 @@ export interface LoginFacts {
   /** At most loginLimits.ownedDatabases, by name. */
   readonly ownedDatabaseNames: readonly string[]
   readonly ownedServerObjects?: number
+  /** The server permissions it granted to other principals (DROP LOGIN fails on them, 15173); with the owned counts. */
+  readonly grantedPermissions?: number
   /** The SQL Server Agent jobs it owns (Delete Object's describe only); absent when msdb could not be read. */
   readonly ownedJobs?: number
   readonly canAlter: boolean
@@ -195,15 +199,21 @@ export function loginRefusal(facts: Pick<LoginFacts, 'subtype' | 'own' | 'sysadm
   return undefined
 }
 
-/** A database user mapped to a login (D4c): its database and name, the schemas and roles it owns, and whether its database is
- *  read-only. C#: MappedUserDto. */
-export interface MappedUser { readonly database: string; readonly user: string; readonly ownedSchemas: number; readonly ownedRoles: number; readonly readOnly: boolean }
+/** A database user mapped to a login (D4c): its database and name, the schemas, roles and other securables it owns, the permissions
+ *  it granted to others, whether its database is read-only, and whether this connection may drop users there (ALTER ANY USER).
+ *  C#: MappedUserDto. */
+export interface MappedUser {
+  readonly database: string; readonly user: string; readonly ownedSchemas: number; readonly ownedRoles: number; readonly readOnly: boolean
+  readonly ownedSecurables: number; readonly grantedPermissions: number; readonly canDrop: boolean
+}
 /** The mapped-user scan's answer: at most loginLimits.mappedUsers users, how many it found in all, and how many databases it read
  *  and did not (offline, not accessible or readable, a failed read, or past its bound or budget). C#: LoginMappingsDto. */
 export interface LoginMappings { readonly users: readonly MappedUser[]; readonly mapped: number; readonly checked: number; readonly notChecked: number }
-/** Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138) or a role (15421),
- *  and cannot run in a read-only database. C#: ActionService.Kept. */
-export const mappedUserKept = (user: MappedUser): boolean => user.ownedSchemas > 0 || user.ownedRoles > 0 || user.readOnly
+/** Whether a Delete that drops the mapped users keeps this one: DROP USER fails while it owns a schema (15138), a role (15421) or
+ *  another securable (15138, 15183), or has granted permissions (15284), cannot run in a read-only database, and needs ALTER ANY
+ *  USER there. C#: ActionService.Kept. */
+export const mappedUserKept = (user: MappedUser): boolean =>
+  user.ownedSchemas > 0 || user.ownedRoles > 0 || user.ownedSecurables > 0 || user.grantedPermissions > 0 || user.readOnly || !user.canDrop
 
 const counted = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 /** What Delete Object says about a login (D4c). The note is SSMS's, which shows it once the login is gone; Varia shows it before OK
@@ -211,17 +221,30 @@ const counted = (value: number, one: string, many: string) => `${value.toLocaleS
 export const loginDeleteText = {
   mappedHeading: 'Database users mapped to this login',
   noneMapped: 'No database user is mapped to this login.',
+  /** The empty list when some databases were not read. */
+  noneMappedChecked: 'No database user is mapped to this login in the databases checked.',
   orphanNote: 'Deleting a login does not delete the database users mapped to it. They are left orphaned: they keep their permissions but no login can use them.',
   dropOption: 'Also delete the database users mapped to this login',
-  dropHint: 'Users that own schemas are kept. Transfer the schemas first, then delete them in each database.',
+  dropHint: 'Users that own schemas or other securables, or have granted permissions, are kept. Transfer or revoke those first, then delete the users in each database.',
+  /** Why the option is greyed: nothing to drop, every mapped user kept, too many to list, or sessions it cannot count. */
+  noneToDrop: 'There is no mapped user to delete.',
+  allKept: 'Every mapped user is kept, as listed: none can be deleted with the login.',
+  sessionsUncounted: loginMessages.sessionsUncounted,
   more: (count: number) => `…and ${count.toLocaleString('en-US')} more`,
   notChecked: (count: number) => `${count === 1 ? '1 database was' : `${count.toLocaleString('en-US')} databases were`} not checked (offline or not accessible).`,
   /** The backend refuses to drop more users than it lists (C#: ActionService.TooManyMappedUsers). */
   tooMany: `More than ${loginLimits.mappedUsers.toLocaleString('en-US')} users are mapped. Delete them in each database first, or delete the login without them.`,
-  kept: (user: MappedUser) => user.readOnly ? 'kept: the database is read-only'
-    : `kept: owns ${[user.ownedSchemas ? counted(user.ownedSchemas, 'schema', 'schemas') : '', user.ownedRoles ? counted(user.ownedRoles, 'role', 'roles') : ''].filter(Boolean).join(' and ')}`,
-  /** What Varia's other connections that sign in as the login cannot do once it is gone (critic D4-3). */
-  connections: 'cannot reconnect once it is deleted'
+  /** Why a Delete keeps a user: every reason its DROP USER would fail, as one note. */
+  kept: (user: MappedUser) => `kept: ${[
+    user.readOnly ? 'the database is read-only' : '',
+    !user.canDrop ? 'you cannot delete users there (ALTER ANY USER)' : '',
+    user.ownedSchemas || user.ownedRoles || user.ownedSecurables ? `owns ${[user.ownedSchemas ? counted(user.ownedSchemas, 'schema', 'schemas') : '', user.ownedRoles ? counted(user.ownedRoles, 'role', 'roles') : '',
+      user.ownedSecurables ? counted(user.ownedSecurables, 'other securable', 'other securables') : ''].filter(Boolean).join(' and ')}` : '',
+    user.grantedPermissions ? `has granted ${counted(user.grantedPermissions, 'permission', 'permissions')}` : ''
+  ].filter(Boolean).join('; ')}`,
+  /** What Varia's other connections that sign in as the login do to its Delete (critic D4-3): their pools' sessions fail the DROP
+   *  (15434) until they disconnect, and Activity Monitor neither shows nor ends Varia's own sessions. */
+  connections: (count: number) => count === 1 ? 'its sessions fail the DROP until it is disconnected' : 'their sessions fail the DROP until they are disconnected'
 } as const
 
 /** The subtypes whose names SQL Server authenticates itself, so a backslash is never part of one. */

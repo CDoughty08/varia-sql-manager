@@ -288,6 +288,11 @@ export const actionRequestSchema = z.discriminatedUnion('action', [
     }
   }
 }) satisfies z.ZodType<ActionRequest>
+/** actions.execute: a login's Delete must name the login Delete Object read (`loginIdentity`), which binds DROP LOGIN and every
+ *  DROP USER to that principal; Script runs nothing and may leave it out. C# Validate refuses the same. */
+export const actionExecuteRequestSchema = actionRequestSchema.superRefine((request, context) => {
+  if (request.action === 'delete' && request.target.kind === 'login' && request.loginIdentity === undefined) issue(context, 'loginIdentity', "A login's Delete needs the identity of the login it read.")
+}) satisfies z.ZodType<ActionRequest>
 /** actions.script: the same requests, never with `secrets` (critic A3). Script never needs a password, so none crosses for it
  *  even once an action (New Login) accepts one on actions.execute; C# Validate refuses Secrets on every script too. */
 export const actionScriptRequestSchema = z.custom<unknown>(value => !(typeof value === 'object' && value !== null && Object.hasOwn(value, 'secrets')), 'Script never carries secrets.')

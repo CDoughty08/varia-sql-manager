@@ -127,6 +127,7 @@ internal static class LoginActionChecks
             ("mapped users on a table's delete", new ActionArgs("delete", Id(), Id(), table, null, false, false, DropMappedUsers: false)),
             ("a login identity on a table's delete", new ActionArgs("delete", Id(), Id(), table, null, false, false, LoginIdentity: Identity)),
             ("mapped users on a disable", State("disable", AppUser) with { DropMappedUsers = true }), ("mapped users on a rename", Rename(AppUser, "x") with { DropMappedUsers = false }),
+            ("a login's delete without the identity it read", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, DropMappedUsers: true)),
             ("a login's delete with a short SID", new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, LoginIdentity: Identity with { Sid = "0" })),
             ("a login without a name", State("disable", new ObjectRefDto("login"))), ("secrets on a disable", State("disable", AppUser) with { Secrets = new("x", null) }),
             ("SQL Server's own login with a trailing space", State("disable", system with { Name = system.Name + " " })), ("a rename of one with trailing spaces", Rename(system with { Name = system.Name + "  " }, "x")),
@@ -143,9 +144,9 @@ internal static class LoginActionChecks
             && Refused(State("disable", AppUser) with { LoginIdentity = Identity }) == "accepted" && Refused(State("enable", AppUser) with { LoginIdentity = Identity with { Sid = new string('0', 171) + "F" } }) == "accepted"
             && Refused(Rename(AppUser, "App]User")) == "accepted" && Refused(Rename(new ObjectRefDto("login", Name: "sa"), @"a\b")) == "accepted"
             && Refused(Rename(new ObjectRefDto("database", Name: "AppData"), "##AppData##")) == "accepted"
-            && Refused(new ActionArgs("delete", Id(), Id(), AppUser, null, false, false)) == "accepted"
+            && Refused(new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, LoginIdentity: Identity)) == "accepted"
             && Refused(new ActionArgs("delete", Id(), Id(), AppUser, null, false, false, LoginIdentity: Identity, DropMappedUsers: true)) == "accepted"
-            && Refused(new ActionArgs("delete", Id(), Id(), new ObjectRefDto("login", Name: "sa"), null, false, false)) == "accepted",
+            && Refused(new ActionArgs("delete", Id(), Id(), new ObjectRefDto("login", Name: "sa"), null, false, false, LoginIdentity: Identity)) == "accepted",
             "a login's Disable, Enable and Delete (with the identity of the login it read, Delete with or without its mapped users) and Rename are accepted, a backslash and sa's Delete left to the preflight, which knows the login's type");
         check(DescribeRefused("loginFacts", AppUser) == "accepted" && DescribeRefused("loginFacts", table) == "INVALID_PARAMS" && DescribeRefused("loginFacts", system) == "INVALID_PARAMS"
             && DescribeRefused("loginFacts", new ObjectRefDto("database", Name: "AppData")) == "INVALID_PARAMS" && DescribeRefused("loginfacts", AppUser) == "INVALID_PARAMS"

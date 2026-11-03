@@ -340,10 +340,11 @@ openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs?
 most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
 session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
 `closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database). For a
-login (D4c), `login` is its facts (as `loginFacts` answers them, plus `ownedJobs?`, absent when msdb cannot be read) and
-`mappings { users: { database, user, ownedSchemas, ownedRoles, readOnly }[] (≤ 100), mapped, checked, notChecked }` the
-database users mapped to its SID, read one database at a time within `loginLimits.scanMs`; a database not read is counted
-in `notChecked`, never an error.
+login (D4c), `login` is its facts (as `loginFacts` answers them, plus `ownedJobs?`, absent when msdb cannot be read, and
+`grantedPermissions`, the server permissions it granted to others) and `mappings { users: { database, user, ownedSchemas,
+ownedRoles, readOnly, ownedSecurables, grantedPermissions, canDrop }[] (≤ 100), mapped, checked, notChecked }` the database
+users mapped to its SID, read one database at a time within `loginLimits.scanMs`; a database not read (the server's total
+is read on its own) is counted in `notChecked`, never an error.
 
 **Integration Services** (docs/integration-services.md). The SSIS Catalog's tree is Object Explorer's: `explorer.children`
 serves the server's Integration Services Catalogs folder (from SQL Server 2016) and the catalog's folders, projects, packages
@@ -516,13 +517,18 @@ spelling of `##x##`) and refuses by `LoginRules` before any DDL, which then name
 (`##…##`, trailing spaces ignored; zod and `Validate` refuse such a target name as `INVALID_PARAMS` too) for every action,
 the connection's own login, a SQL Server login's name with a backslash (`NOT_SUPPORTED`) and a name another login or
 server role holds (`NAME_IN_USE`). A login's `newName` in the `##…##` form is `INVALID_PARAMS` (zod and `Validate`).
-A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity?` (both refused on any other kind, and
-`dropMappedUsers` on any other action), with `closeConnections` and `deleteHistory` absent or false. Its execute reads the
-login again under READ COMMITTED (identity and rules), then what blocks the DROP past open changes: sessions answer
-`IN_USE`, owned databases, Agent jobs, server roles and endpoints `DEPENDENTS`, and more mapped users than it lists with
-`dropMappedUsers` `NOT_SUPPORTED`, all before any DDL. It then runs `Drop the database user` per droppable user (each
-step's `detail` is `database: user`) and `Drop the login`, not in one transaction; a 15434 from SQL Server (a session
-the preflight could not count) is `IN_USE` with advice to end it.
+A login's `delete` (D4c) takes `dropMappedUsers?: boolean` and `loginIdentity` (both refused on any other kind, and
+`dropMappedUsers` on any other action; `loginIdentity` required on `actions.execute`, by zod's `actionExecuteRequestSchema`
+and `Validate`, optional on `actions.script`), with `closeConnections` and `deleteHistory` absent or false. Its execute
+reads the login again under READ COMMITTED (identity and rules), then what blocks the DROP past open changes: sessions
+answer `IN_USE`, owned databases, Agent jobs, server roles, endpoints and availability groups, and granted server
+permissions `DEPENDENTS` (15173 maps there too); with `dropMappedUsers`, sessions it cannot count are `NOT_SUPPORTED`, a
+database its scan could not read again `BLOCKED`, and more mapped users than it lists `NOT_SUPPORTED`, all before any DDL.
+It then runs `Drop the database user` per droppable user (each step's `detail` is `user in database`) and `Drop the
+login`, not in one transaction. Each DROP's batch checks the principal it was planned for (`PrincipalBinding`: the user by
+name and the login's SID, the login by SID, principal id and creation time) before the DROP and again after it in one
+transaction; a mismatch (50010) is `NOT_FOUND` and drops nothing. A 15434 from SQL Server (a session the preflight could
+not count) is `IN_USE` with advice to end it.
 
 **Object action confirmations** (A13) are main's message boxes too, on one channel, `varia:confirm-action` (trusted senders
 only): the page sends `{ prompt, facts }`, a strict zod union (`actionPromptRequestSchema` in
