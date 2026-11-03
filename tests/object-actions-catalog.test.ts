@@ -198,8 +198,13 @@ describe('object action catalogue', () => {
     expect(offeredOnEngine(['box', 'managedInstance'], undefined)).toBe(true)
     expect(offeredOnEngine(['box', 'managedInstance'], 'managedInstance')).toBe(true)
     expect(offeredOnEngine(['box'], 'cloud')).toBe(false)
-    for (const engine of ['box', 'managedInstance'] as const) expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(actionMenuState({ kind: 'table' }))
-    // Azure SQL Database runs only Select Top 1000 Rows (the backend refuses the others there before connecting).
+    const unknown = actionMenuState({ kind: 'table' })
+    for (const engine of ['box', 'managedInstance', 'cloud'] as const) {
+      expect(actionMenuState({ kind: 'table', engine }), engine).toEqual(Object.fromEntries(objectActions.map(action => [action, objectActionSpecs[action].engines.includes(engine) ? unknown[action] : ''])))
+    }
+    // The catalogue's engines (A1): Azure SQL Database, out of wave 5, offers only Select Top 1000 Rows, so the menu hides
+    // Rename and Delete there rather than offer what the backend refuses.
+    expect(actionMenuState({ kind: 'table', engine: 'box' })).toEqual(unknown)
     expect(actionMenuState({ kind: 'table', engine: 'cloud' })).toEqual({ selectTop: 'enabled', rename: '', delete: '', properties: '' })
   })
   it('composes the menu state from the status overlay, the database rules and the engine gate, in that order', () => {

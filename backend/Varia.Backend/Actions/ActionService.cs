@@ -90,6 +90,9 @@ internal sealed partial class ActionService : IDisposable
     private int activeJobs;
 
     public const string CloudMessage = "Object actions on Azure SQL Database are not supported yet.";
+    /// <summary>The describe id of the server file picker (src/shared/actions/catalog.ts serverFilesDescribeId).</summary>
+    public const string ServerFilesDescribe = "serverFiles";
+    public const string ManagedInstanceFilesMessage = "Azure SQL Managed Instance does not let Varia browse its folders.";
     public const string ManagedInstanceMessage = "This object action is not available on Azure SQL Managed Instance.";
 
     /// <summary>Why an action does not run on a server of this engine (its catalogue `engines`, critic A1).</summary>
@@ -104,11 +107,8 @@ internal sealed partial class ActionService : IDisposable
     private bool Serves(string action, string engine) => designer.Requests.Contains(action) ? designer.Engines.Contains(engine) : catalog.Serves(action, engine);
 
     /// <summary>How long a Stop's reply waits for the job: SQL Server ending the statement, then the action's own cleanup.</summary>
-    private TimeSpan StopWait(string? action) => Options.StopGrace + CleanupBudget(action);
-    private TimeSpan CleanupBudget(string? action) => action is not null && catalog.Actions.Contains(action) ? catalog.CleanupBudget(action) : TimeSpan.FromMilliseconds(catalog.Limit("cleanupMs"));
-    /// <summary>The describe id of the server file picker (src/shared/actions/catalog.ts serverFilesDescribeId).</summary>
-    public const string ServerFilesDescribe = "serverFiles";
-    public const string ManagedInstanceFilesMessage = "Azure SQL Managed Instance does not let Varia browse its folders.";
+    private TimeSpan StopWait(string action) => Options.StopGrace + CleanupBudget(action);
+    private TimeSpan CleanupBudget(string action) => catalog.Actions.Contains(action) ? catalog.CleanupBudget(action) : TimeSpan.FromMilliseconds(catalog.Limit("cleanupMs"));
 
     public ActionService(IActionHost host, ActionServiceOptions? options = null, ActionsCatalog? catalog = null, ExplorerCatalog? explorer = null)
     {
@@ -253,8 +253,8 @@ internal sealed partial class ActionService : IDisposable
         var watch = Stopwatch.StartNew();
         if (args.Files is { } files)
         {
-            // Managed Instance keeps its files to itself (no RESTORE FROM DISK, attach or file specs), so nothing in Varia picks one
-            // there; Azure SQL Database has no folders to pick from. The picker belongs to no catalogue action, so it gates itself.
+            // The picker is no catalogue action, so it names its own engines: Azure SQL Database has no server disks to browse,
+            // and Managed Instance keeps its files to itself (no RESTORE FROM DISK, attach or file specs).
             var engine = host.Profile(args.ConnectionId).Explorer(explorer).ServerEngine;
             if (engine != "box") return Task.FromResult(new ActionDescribeResult(null, 0, Error("NOT_SUPPORTED", engine == "managedInstance" ? ManagedInstanceFilesMessage : CloudMessage)));
             return RunAsync(args.ConnectionId, args.RequestId, null, read: true, Options.BrowseBudget, token,
@@ -313,7 +313,8 @@ internal sealed partial class ActionService : IDisposable
     /// CANCELLED. Failures before any DDL, such as an engine the action does not run on or a Kerberos sign-in, are values.
     /// Stop on DDL (the request's own token) has already sent SQL Server an attention through the job's token; the reply then
     /// waits up to StopGrace plus the action's cleanup budget for the job, whose steps say what completed and what Varia
-    /// undid, and past it answers CANCELLED, an unknown outcome. A null action (the server file picker) gates its engine itself.</summary>
+    /// undid, and past it answers CANCELLED, an unknown outcome. A null action is the server file picker's listing, which
+    /// checks its own engines first.</summary>
     private async Task<T> RunAsync<T>(string connectionId, string requestId, string? action, bool read, TimeSpan? budget, CancellationToken token,
         Func<SqlConnection, ServerProfile, int, CancellationToken, Task<T>> work, Func<ActionError, T> failed, string reading = "Reading the object", bool browse = false)
     {
@@ -339,7 +340,7 @@ internal sealed partial class ActionService : IDisposable
             }
             catch (OperationCanceledException) when (!read && token.IsCancellationRequested && !entry.Forgotten)
             {
-                try { return await job.WaitAsync(StopWait(action), CancellationToken.None); }
+                try { return await job.WaitAsync(action is null ? Options.StopGrace : StopWait(action), CancellationToken.None); }
                 catch (TimeoutException) { throw new OperationCanceledException(token); }
                 // Only the preflight, the gates or the sign-in can throw on cancellation: no DDL had started.
                 catch (Exception error) when (error is OperationCanceledException or SqlException) { return failed(Error("CANCELLED", "The action was stopped before it changed anything.")); }

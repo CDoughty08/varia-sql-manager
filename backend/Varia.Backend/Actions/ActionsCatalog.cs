@@ -84,6 +84,9 @@ internal sealed class ActionsCatalog
     public IReadOnlyList<int> CompatibilityLevels { get; }
     /// <summary>System databases whose owner SQL Server keeps.</summary>
     public IReadOnlyList<string> OwnerNotOn { get; }
+    /// <summary>The server file picker's purposes and the lower-case extensions each one's type filter keeps (none: folders only).</summary>
+    public IReadOnlyDictionary<string, IReadOnlyList<string>> ServerFilePurposes { get; }
+
     /// <summary>Login subtypes, protected-principal rules and login limits (src/shared/actions/logins.ts).</summary>
     public LoginRules Logins { get; }
 
@@ -92,9 +95,6 @@ internal sealed class ActionsCatalog
 
     /// <summary>How long the action's compensation and cleanup steps may run after a failure or Stop.</summary>
     public TimeSpan CleanupBudget(string action) => TimeSpan.FromMilliseconds(actions.TryGetValue(action, out var row) ? row.CleanupMs : Limit("cleanupMs"));
-
-    /// <summary>The server file picker's purposes and the lower-case extensions each one's type filter keeps (none: folders only).</summary>
-    public IReadOnlyDictionary<string, IReadOnlyList<string>> ServerFilePurposes { get; }
 
     /// <summary>The action a dialog's OK runs (deleteObject: delete, databaseProperties: properties).</summary>
     public string ActionOf(string dialog) => dialogActions.TryGetValue(dialog, out var action) ? action : throw new InvalidOperationException("Unknown dialog " + dialog);

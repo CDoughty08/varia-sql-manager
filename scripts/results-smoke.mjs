@@ -221,9 +221,14 @@ try {
     const early = await rows()
     await expect.poll(rows).toBeGreaterThan(early)
     await cell(0, 0).click()
+    // The end is the last column of a row past the first page, with its text read once its rows are. The text alone is not
+    // enough: row 0, where the click leaves the active cell, reads '0' in its first and last columns, so a slow frame let
+    // the start cell pass for the end before the grid painted the move.
+    const reachedEnd = state => state.resolved && state.column === 7 && state.row > 1000 && state.text === w1(state.row)[7]
+    await expect.poll(active).toMatchObject({ resolved: true, row: 0, column: 0 })
+    expect(reachedEnd(await active()), 'the start cell does not pass for the end').toBe(false)
     await page.keyboard.press('Control+End')
-    // The cell's text follows once its rows are read.
-    await expect.poll(async () => { const state = await active(); return state.resolved && state.text === w1(state.row)[7] }).toBe(true)
+    await expect.poll(async () => reachedEnd(await active())).toBe(true)
     const end = await active()
     expect(end).toMatchObject({ role: 'gridcell', column: 7, selected: 'true' })
     expect(end.row).toBeGreaterThan(1000)

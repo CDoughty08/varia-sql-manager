@@ -2,8 +2,9 @@
 import { kindSpecs, nodeKinds, serverEngines, type NodeSubtype } from '../explorer/catalog.ts'
 import { longRunKinds, longRunLimits, longRunSubjects } from '../long-runs.ts'
 import {
-  actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, databaseActionRules, databaseStateIds,
-  allFilesType, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel, unknownOutcomeMessage
+  actionCommandEntries, actionContextKey, actionErrorCodes, actionErrorRetryable, actionKindSpecs, actionLimits, actionMenus, actionRow, actionStatuses, allFilesType, databaseActionRules,
+  databaseStateIds, dialogIds, dialogSpecs, objectActions, objectActionSpecs, scriptActionTitles, serverActions, serverActionSpecs, serverFilePurposes, serverFilePurposeSpecs, serverFilesDescribeId, serverFileTypesLabel,
+  unknownOutcomeMessage
 } from './catalog.ts'
 import { actionPromptBox, actionPrompts, promptLimits, type ActionPromptRequest } from './prompts.ts'
 import { compatibilityLabel, compatibilityLevels, databaseOptionDefs, noScriptNotice, openConnectionsPrompt, ownerNotOn, scopedConfigurationDefs, type DatabaseOptionDef } from './database.ts'
@@ -42,11 +43,11 @@ const limitNotes: Readonly<Record<keyof typeof actionLimits, string>> = {
   statements: 'Statements one Database Properties request may plan',
   stopGraceMs: 'How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms',
   statusDelayMs: 'How long a state action (a rename, a login\'s Disable or Enable) runs before the status bar shows it with Stop, in ms',
-  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
   serverPath: 'UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260))',
   browseEntries: 'Entries the server file picker lists per folder; more set `truncated`',
   browseMs: 'The backend\'s budget for one listing of the server file picker, in ms; then `TIMEOUT` (main\'s deadline is 15 s)',
   browsePerConnection: 'Server file picker listings at once per server, under a gate of their own rather than the describe and script gates',
+  cleanupMs: 'How long an action\'s compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop\'s reply waits `stopGraceMs` plus this',
   newDatabaseFiles: 'Files one New Database request may create',
   newDatabaseFilegroups: 'Filegroups one New Database request may create, PRIMARY included',
   dataFileMb: 'A data file\'s initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server\'s ceiling for a file, just under 16 TB)',
@@ -101,8 +102,9 @@ function narrowingDocs(): string[] {
         rule.readOnly === undefined ? 'Any' : yesNo(rule.readOnly), rule.hide ? 'Hidden' : 'Greyed', rule.reason]))
       : 'No rule narrows a database\'s actions yet.',
     '',
-    `An action can name the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
-    'the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.',
+    `Each action names the servers that offer it (${serverEngines.map(code).join(', ')}: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);`,
+    'the Servers column above says which, and on another server the menu hides the item. Menus read the server through',
+    '`explorerServerEngine` and `explorerServerLinux`.',
     ''
   ]
 }
@@ -197,7 +199,7 @@ export function renderObjectActionsDocs(): string {
         keys(action, false), keys(action, true), spec.engines.map(engine => engineNames[engine]).join(', '), code(actionContextKey(action))]
     })),
     '',
-    'Servers is each action\'s `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL',
+    '"Servers" is each action\'s `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL',
     'Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a',
     `connection. The table designer's \`createTable\` runs on ${designerEngines.map(engine => engineNames[engine]).join(' and ')}.`,
     '',
@@ -244,9 +246,9 @@ export function renderObjectActionsDocs(): string {
     '`tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and',
     '[docs/table-designer.md](table-designer.md) describes them.',
     '',
+    ...serverFilesDocs(),
     ...promptDocs(),
     ...longRunDocs(),
-    ...serverFilesDocs(),
     ...databasePropertiesDocs(),
     ...newDatabaseDocs(),
     '## SQL',
@@ -316,35 +318,6 @@ export function renderObjectActionsDocs(): string {
   ].join('\n')
 }
 
-const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
-const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
-/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
-function loginDocs(): string[] {
-  const types = Object.entries(loginTypeSubtypes)
-  return [
-    '## Logins',
-    '',
-    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
-    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
-    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
-    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
-    'another session is changing, and never a password hash, which no Varia statement may name.',
-    '',
-    '✓ allowed, ○ shown greyed and refused, – not offered.',
-    '',
-    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
-      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
-    '',
-    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
-    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
-    '',
-    '### Login limits',
-    '',
-    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
-    ''
-  ]
-}
-
 /** The server file picker (`actions.describe` with `serverFiles`), which New Database, Attach and Restore will open from a "…" button. */
 function serverFilesDocs(): string[] {
   return [
@@ -373,6 +346,35 @@ function serverFilesDocs(): string[] {
     '',
     'The picker\'s titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of',
     'type, File name, Folder name) are SSMS\'s as recalled, not yet checked against SSMS 22.',
+    ''
+  ]
+}
+
+const ruleMarks = { allowed: '✓', greyed: '○', hidden: '–' } as const
+const verbDone = { disable: 'disabled', enable: 'enabled', unlock: 'unlocked', rename: 'renamed', delete: 'deleted' } as const
+/** Logins: subtypes, the protected-principal rules and the login limits (src/shared/actions/logins.ts). */
+function loginDocs(): string[] {
+  const types = Object.entries(loginTypeSubtypes)
+  return [
+    '## Logins',
+    '',
+    `Object Explorer gives each login a subtype from \`sys.server_principals\`: \`sa\` by principal_id ${saPrincipalId} whatever its name, \`system\``,
+    'for SQL Server\'s own logins (a name that starts and ends with `##`), else by type: ' + types.map(([type, subtype]) => `${code(type)} ${code(subtype)}`).join(', ') + '.',
+    'The login actions arrive in later versions; their rules are data already, and the backend\'s login preflight reads the',
+    'facts they need in the action\'s own connection from catalog views only: never `LOGINPROPERTY`, which waits on a login',
+    'another session is changing, and never a password hash, which no Varia statement may name.',
+    '',
+    '✓ allowed, ○ shown greyed and refused, – not offered.',
+    '',
+    table(['Subtype', ...loginVerbs.map(verb => verb.charAt(0).toUpperCase() + verb.slice(1)), 'Why greyed'], loginSubtypes.map(subtype => [code(subtype), ...loginVerbs.map(verb => ruleMarks[loginRules[subtype][verb]]),
+      [...new Set(loginVerbs.filter(verb => loginRules[subtype][verb] === 'greyed').map(verb => loginMessages[loginGreyedMessage(subtype, verb)]))].join(' ')])),
+    '',
+    `The login this connection uses, or a Windows group it gets in through, cannot be ${ownLoginRefuses.map(verb => verbDone[verb]).join(', ')}: "${loginMessages.own}"`,
+    `Without ALTER ANY LOGIN: "${loginMessages.alterAnyLogin}" For a sysadmin member without CONTROL SERVER: "${loginMessages.controlServer}"`,
+    '',
+    '### Login limits',
+    '',
+    table(['Limit', 'Value', 'Meaning'], (Object.keys(loginLimitNotes) as (keyof typeof loginLimits)[]).map(key => [code(key), loginLimits[key].toLocaleString('en-US'), loginLimitNotes[key]])),
     ''
   ]
 }

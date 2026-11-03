@@ -15,7 +15,7 @@ and re-derives the subtype in the action's own connection before any DDL runs.
 | `delete` | Delete | `explorer.delete` | dialog (`deleteObject`) | `explorer.context` | `7_edit` 2 | e | Delete | ⌘⌫, Delete | SQL Server, Managed Instance | `explorerActionDelete` |
 | `properties` | Properties | `explorer.properties` | dialog (`databaseProperties`) | `explorer.context` | `9_properties` 1 | p | — | ⌘I | SQL Server, Managed Instance | `explorerActionProperties` |
 
-Servers is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
+"Servers" is each action's `engines`: SQL Server is the box editions, Managed Instance is EngineEdition 8, and Azure SQL
 Database stands for the cloud editions. The backend refuses an action elsewhere with `NOT_SUPPORTED` before it opens a
 connection. The table designer's `createTable` runs on SQL Server and Managed Instance.
 
@@ -57,8 +57,9 @@ A database row carries its runtime state as listed (state, user access, read-onl
 Rules narrow a database's actions by it, each with the reason a greyed item shows. The states: `online`, `restoring`, `recovering`, `recoveryPending`, `suspect`, `emergency`, `offline`, `copying`, `offlineSecondary`, `other`.
 No rule narrows a database's actions yet.
 
-An action can name the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
-the Servers column above says which. Menus read the server through `explorerServerEngine` and `explorerServerLinux`.
+Each action names the servers that offer it (`box`, `managedInstance`, `cloud`: an on-premises SQL Server or a container, Azure SQL Managed Instance, Azure SQL Database);
+the Servers column above says which, and on another server the menu hides the item. Menus read the server through
+`explorerServerEngine` and `explorerServerLinux`.
 
 ## Dialogs
 
@@ -88,6 +89,33 @@ confirmation.
 The Table Designer (New › Table…) uses the same requests without being a dialog: `actions.describe` with
 `tableDesigner` and a database, and the `createTable` action; its ids live in `src/shared/designer/catalog.ts`, and
 [docs/table-designer.md](table-designer.md) describes them.
+
+## Server file picker
+
+`actions.describe` with `serverFiles`, the server as its target and a `files` member (`purpose`, `path`,
+`allFiles`, `exists`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default
+data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past
+its limit or outside the type filter): the answer's entries hold that path's own entry, or none when it does not exist.
+Paths are the server's, with its separator; SQL Server's service account must be able to read them.
+
+| Purpose | Title | Files of type | Extensions |
+| --- | --- | --- | --- |
+| `backup` | Locate Backup File - <server> | Backup Files(*.bak;*.trn), All Files(*.*) | .bak, .trn |
+| `database` | Locate Database Files - <server> | Database Data Files(*.mdf), All Files(*.*) | .mdf |
+| `log` | Locate Database Files - <server> | Database Log Files(*.ldf), All Files(*.*) | .ldf |
+| `folder` | Locate Folder - <server> | Folders only | — |
+
+A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and
+times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,
+`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with
+nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant
+statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A
+missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and
+Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s. Listings take
+a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog's describe.
+
+The picker's titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of
+type, File name, Folder name) are SSMS's as recalled, not yet checked against SSMS 22.
 
 ## Confirmations
 
@@ -133,33 +161,6 @@ Create Catalog and New Database are the long runs so far; the others are reserve
 A short state action (a rename; later a login's Disable and Enable) runs as a status-bar job instead: one per node,
 shown with Stop after `statusDelayMs`, naming its step when it has several ("Renaming Sales to Sales2: Closing
 connections…").
-
-## Server file picker
-
-`actions.describe` with `serverFiles`, the server as its target and a `files` member (`purpose`, `path`,
-`allFiles`, `exists`) lists one folder on the server, or with no path the server's drives (/ on Linux) and its default
-data, log and backup folders. With `exists` it checks one path instead, for a typed name the listing does not show (past
-its limit or outside the type filter): the answer's entries hold that path's own entry, or none when it does not exist.
-Paths are the server's, with its separator; SQL Server's service account must be able to read them.
-
-| Purpose | Title | Files of type | Extensions |
-| --- | --- | --- | --- |
-| `backup` | Locate Backup File - <server> | Backup Files(*.bak;*.trn), All Files(*.*) | .bak, .trn |
-| `database` | Locate Database Files - <server> | Database Data Files(*.mdf), All Files(*.*) | .mdf |
-| `log` | Locate Database Files - <server> | Database Log Files(*.ldf), All Files(*.*) | .ldf |
-| `folder` | Locate Folder - <server> | Folders only | — |
-
-A listing reads one level: SQL Server 2017 and later through `sys.dm_os_enumerate_filesystem` (level 0, with sizes and
-times), `sys.dm_os_file_exists` and `sys.dm_os_enumerate_fixed_drives`; SQL Server 2016 through `xp_dirtree`,
-`xp_fileexist` and `xp_fixeddrives`, which list folders only to members of sysadmin and answer anyone else with
-nothing, so that listing (and a check) carries the `legacyEmpty` notice. The path is a parameter of constant
-statements, and the type filter runs in SQL before `TOP`, so a folder full of other files still lists its backups. A
-missing folder, a file, or a path that is not a full path on that server is `PATH_NOT_FOUND`. Azure SQL Database and
-Managed Instance are refused before connecting (`NOT_SUPPORTED`). Main's deadline for a listing is 15 s. Listings take
-a gate of their own, one per server, so one stuck on an unreachable share never delays a dialog's describe.
-
-The picker's titles, Files of type entries and field names (Select the file, Select the folder, Selected path, Files of
-type, File name, Folder name) are SSMS's as recalled, not yet checked against SSMS 22.
 
 ## Database Properties
 
@@ -476,11 +477,11 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `statements` | 512 | Statements one Database Properties request may plan |
 | `stopGraceMs` | 10,000 | How long a stopped action waits for SQL Server to end its statement before it answers `CANCELLED` with an unknown outcome, in ms |
 | `statusDelayMs` | 300 | How long a state action (a rename, a login's Disable or Enable) runs before the status bar shows it with Stop, in ms |
-| `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
 | `serverPath` | 260 | UTF-16 code units in a path on the server (`sys.master_files.physical_name` is nvarchar(260)) |
 | `browseEntries` | 2,000 | Entries the server file picker lists per folder; more set `truncated` |
 | `browseMs` | 10,000 | The backend's budget for one listing of the server file picker, in ms; then `TIMEOUT` (main's deadline is 15 s) |
 | `browsePerConnection` | 1 | Server file picker listings at once per server, under a gate of their own rather than the describe and script gates |
+| `cleanupMs` | 10,000 | How long an action's compensation and cleanup steps may run after a failure or Stop, in ms, unless the action sets its own; a Stop's reply waits `stopGraceMs` plus this |
 | `newDatabaseFiles` | 256 | Files one New Database request may create |
 | `newDatabaseFilegroups` | 256 | Filegroups one New Database request may create, PRIMARY included |
 | `dataFileMb` | 16,777,215 | A data file's initial and maximum size in New Database, in MB (2,147,483,647 pages, SQL Server's ceiling for a file, just under 16 TB) |

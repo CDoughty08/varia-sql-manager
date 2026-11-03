@@ -45,8 +45,8 @@ export interface ObjectActionSpec {
   readonly command: `explorer.${string}`
   /** Offered on SQL Server's own objects too (SSMS's Properties on master, model, msdb and tempdb). */
   readonly systemObjects?: boolean
-  /** The servers it runs on (critic A1). On another, the menu hides the item, and the backend refuses it before opening a
-   *  connection (W5-0b's engine gate reads this list from actions-catalog.json). */
+  /** The servers that offer it (critic A1). On another, the menu hides the item, and the backend refuses a request for it
+   *  before opening a connection (it reads this list from actions-catalog.json). */
   readonly engines: readonly ServerEngine[]
   /** How long its compensation and cleanup steps may run after a failure or Stop, in ms (default actionLimits.cleanupMs); a
    *  Stop's reply waits stopGraceMs plus this, so it never answers an unknown outcome while Varia's own cleanup runs. */
@@ -529,13 +529,13 @@ export const actionLimits = {
   stopGraceMs: 10_000,
   /** When a running rename appears in the status bar, with Stop. */
   statusDelayMs: 300,
-  /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
-  cleanupMs: 10_000,
   /** The server file picker: UTF-16 units in a server path (sys.master_files.physical_name is nvarchar(260)), entries one folder
    *  lists (one more is read to set `truncated`), the backend's budget for one listing in ms (main's deadline is 15 s), and
    *  listings at once per server under a gate of their own: SQL Server ends a listing of an unreachable share only once the
    *  file system answers, so it must not hold a gate that Database Properties or Delete Object waits for. */
   serverPath: 260, browseEntries: 2_000, browseMs: 10_000, browsePerConnection: 1,
+  /** The default budget of an action's compensation and cleanup steps (ObjectActionSpec.cleanupMs). */
+  cleanupMs: 10_000,
   /** New Database: files and filegroups one design holds, sizes in MB (a data file up to 16 TB, a log file and a growth up to
    *  2 TB, as SQL Server bounds them), and a growth in percent. */
   newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100
