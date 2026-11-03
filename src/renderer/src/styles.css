@@ -831,6 +831,21 @@ input::placeholder, textarea::placeholder { color: var(--varia-input-placeholder
 .object-dialog-options { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 0; padding: 0; border: 0; }
 .object-dialog-options .checkbox-label { display: flex; align-items: center; gap: 8px; }
 .object-dialog-delete .field-note { margin-top: 10px; }
+/* D3d: the sessions a database's DROP meets, a disclosure whose grid scrolls within its own height so the options below stay
+   in view; the notes under Close existing connections line up with its label, and a greyed option's label greys with it. */
+.object-dialog-delete-sessions { margin: var(--varia-space-2) 0 0; }
+.object-dialog-disclosure { display: inline-flex; align-items: center; gap: var(--varia-space-1); padding: var(--varia-space-0) var(--varia-space-1) var(--varia-space-0) 0; border: 0; background: none; color: var(--varia-settings-headerForeground); font-size: var(--varia-size-xs); font-weight: 600; }
+.object-dialog-disclosure { max-width: 100%; }
+.object-dialog-disclosure > span { overflow: hidden; text-overflow: ellipsis; }
+.object-dialog-disclosure:focus-visible { outline: 1px solid var(--varia-focusBorder); outline-offset: -1px; }
+.object-dialog-sessions-body { max-height: calc(var(--varia-space-6) * 4); overflow: auto; margin-top: var(--varia-space-1); }
+.object-dialog-sessions-body thead th { position: sticky; top: 0; }
+.object-dialog-sessions-body .object-dialog-grid th:first-child { width: calc(var(--varia-space-6) * 2.5); }
+.object-dialog-sessions-body .object-dialog-grid th:last-child { width: calc(var(--varia-space-6) * 3.5); }
+.object-dialog-sessions-body .field-note { margin: var(--varia-space-1) 0 0; }
+.object-dialog-options .field-note { margin: 0 0 0 var(--varia-space-5); }
+.object-dialog-options .checkbox-label:has(input:disabled) { color: var(--varia-disabledForeground); }
+@media (forced-colors: active) { .object-dialog-options .checkbox-label:has(input:disabled) { color: GrayText; } }
 /* New Login (D2a): SSMS's General, Server Roles and Status pages; the SQL Server authentication block indents under its radio. */
 .new-login-page { display: flex; flex-direction: column; gap: 8px; padding-top: 6px; }
 .new-login-fields { margin: 0; padding: 0; border: 0; min-width: 0; }

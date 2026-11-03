@@ -658,7 +658,9 @@ export const actionLimits = {
    *  2 TB, as SQL Server bounds them), and a growth in percent. */
   newDatabaseFiles: 256, newDatabaseFilegroups: 256, dataFileMb: 16_777_215, logFileMb: 2_097_152, growthMb: 2_097_152, growthPercent: 100,
   /** Take Offline's sessions list: the sessions it shows, and the characters of each login, program and host name. */
-  sessions: 8, sessionText: 128
+  sessions: 8, sessionText: 128,
+  /** Delete Object: the sessions in a database it lists (more set a truncation flag), and the characters of each one's program and host. */
+  blockers: 8, blockerChars: 128
 } as const
 
 /** The create actions. New Login runs on SQL Server only until D2e adds Managed Instance (no FROM WINDOWS there, and
@@ -697,7 +699,7 @@ const optionJson = (def: DatabaseOptionDef) => ({
 /**
  * The catalogue as the backend embeds it, keys sorted and everything resolved, so C# needs no rules of its own: `rows`
  * has one row per kind with actions and each of its subtypes ('' for none), then one per subtype and status the kind has an
- * overlay for (with `status`). An action with `engines` lists them. `databaseRules` and `databaseStates` let the preflight
+ * overlay for (with `status`). Each action lists its `engines` and its cleanup budget. `databaseRules` and `databaseStates` let the preflight
  * re-derive a database action's state from sys.databases, as the menu does.
  */
 export function actionsCatalogJson(): string {

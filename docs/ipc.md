@@ -333,7 +333,13 @@ action on Azure SQL Database, before any connection opens), `PERMISSION_DENIED`,
 `AUTH_UNSUPPORTED` and `AUTH_ENTRA` (docs/object-actions.md). `actions.execute` answers `{ steps: { status: done | failed | skipped |
 cancelled, title, message?, detail?, compensates?, progress? }[], messages: str[] (≤ 32 × 512), elapsedMs, error? }`: statements run
 in order and stop at the first failure. The backend's DryRun, which selects a statement instead of running it, exists only for
-the .NET checks and is not reachable from the wire.
+the .NET checks and is not reachable from the wire. Delete Object's `actions.describe` answers `deleteTarget { name, type, owner?,
+warnings: { text, blocking }[], dependentsTruncated, isSnapshot?, sessions?, withTransaction?, blockers?: { sessionId, program?,
+host?, openTransaction }[], blockersTruncated?, closeConnectionsNote?, transactionTabs? }`: for a database, the session count
+(sessions in it or with a transaction in it, from any database), those with an open transaction, the sessions listed (at
+most 8, never the backend's own pooled sessions; program and host at most 128 characters) and `transactionTabs` (the
+session ids of Varia's query tabs holding an open transaction there, at most 1,000) need VIEW SERVER STATE, and
+`closeConnectionsNote` says why Close existing connections is unavailable (Managed Instance, an offline database).
 
 **Action progress** (D1c). A long action (the catalogue's `long`: a restore, a verify, a backup) runs its DDL under the long
 gate (1 per Varia connection, 2 in all; the next waits up to 30 s, then `BUSY` "Another restore or backup is running on this

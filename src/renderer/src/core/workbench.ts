@@ -49,6 +49,7 @@ import { scriptingOptionsFrom } from '../../../shared/settings/catalog'
 import type { SettingsService } from '../settings/SettingsService'
 import { ScriptingService } from '../scripting/ScriptingService'
 import { ObjectActionService } from '../actions/ObjectActionService'
+import { databaseGoneHandler } from '../dialogs/database-gone'
 import { ActionProgressService } from '../actions/ActionProgressService'
 import { ObjectDialogService } from '../dialogs/ObjectDialogService'
 import { ServerFilePickerService } from '../server-files/ServerFilePickerService'
@@ -231,7 +232,8 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   const dialogs = new ObjectDialogService({
     api, connections, explorer, documents, files, serverFiles, longRuns, focusEditor: () => focusLater(() => documents.focusActive()),
     // Database Properties documents of a database a dialog took offline or brought online follow it.
-    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline)
+    databaseState: (connectionId, database, offline) => properties.databaseStateChanged(connectionId, database, offline),
+    databaseGone: gone => databaseGone(gone), tabNames: ids => queries.tabNames(ids)
   })
   const ssisCatalog = new CreateCatalogService({ api, connections, explorer, longRuns })
   const designers = new TableDesignerService({
@@ -246,10 +248,12 @@ export function createWorkbench(api: VariaApi, monaco: typeof Monaco, theme: The
   })
   const ssisProperties = new SsisPropertiesService({ api, documents, connections, focus: id => ssisFocus.focus(id) })
   const properties = new DatabasePropertiesService({
-    api, documents, files, connections, explorer, focusEditor: () => focusLater(() => documents.focusActive()),
+    api, documents, files, connections, explorer, focusEditor: () => focusLater(() => documents.focusActive()), close: id => { void files.close(id) },
     // The current section's item in the list: one tab stop, from which the keys move through the sections.
     focus: id => focusLater(() => document.querySelector<HTMLElement>(`[data-properties="${CSS.escape(id)}"] .document-nav-item[tabindex="0"]`)?.focus())
   })
+  // A database Delete removed: its Properties documents turn orphan and a toast counts the query windows left on it (D3 §8).
+  const databaseGone = databaseGoneHandler({ documents, properties, notify: toast => { notifications.notify(toast) } })
   const newDatabase = new NewDatabaseService({
     api, documents, files, connections, explorer, longRuns, serverFiles, focusEditor: () => focusLater(() => documents.focusActive()),
     // The database name, once the first read has drawn it; until then the document's first section in its list.

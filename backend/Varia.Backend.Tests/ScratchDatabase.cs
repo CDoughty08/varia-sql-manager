@@ -108,6 +108,12 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private string[]? attachFiles;
     /// <summary>Where the Take Offline and Bring Online checks take a database offline and back (created on demand).</summary>
     public string DatabaseState => Name + "_dbs";
+    /// <summary>Delete parity (D3d): an offline database Delete drops (its files stay), and one whose snapshot fails its DROP.</summary>
+    public string DeleteOffline => Name + "_del";
+    public string DeleteCompensated => Name + "_delc";
+    public string DeleteSnapshot => Name + "_delcs";
+    /// <summary>Delete parity (D3d): a database the low-privilege login owns, which it describes, scripts and deletes without VIEW SERVER STATE.</summary>
+    public string DeleteOwned => Name + "_delo";
     /// <summary>Held in memory only, never printed.</summary>
     public string Password { get; }
     public bool HasSnapshot { get; private set; }
@@ -119,9 +125,10 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     // mid-rename leaves nothing the sweep cannot find; _dbp is Database Properties' database, _tbd and _tbd.] the table designer's,
     // _live the live tables', _ssis the fake SSIS catalog, _ssisref the restored catalog backup and _ssiscc Create Catalog's
     // dry run; _rs is left restoring, and _rv is reverted to its snapshot _rvs; _files is the server file picker's; _seam and _seamt are the wave 5 seam checks'; _nd is New Database's; _ap the action progress checks';
-    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _lgn New Login's; and _dbs Take Offline's and
-    // Bring Online's (a crashed run can leave it offline, which the sweep drops by state).
-    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn|_dbs)?$")]
+    // _at, _at'] and _at2 Attach Databases'; _rst Restore Database's source, _rstf its forked source and _rstr where their plans are restored; _lgn New Login's; _dbs Take Offline's and
+    // Bring Online's (a crashed run can leave it offline, which the sweep drops by state); and _del, _delc, _delcs and _delo Delete parity's (D3d): an offline
+    // database, a database with its snapshot, and the login's own.
+    [GeneratedRegex(@"^VariaScratch_\d{14}_[0-9a-f]{8}(_ro|_off|_su|_rs|_rv|_rvs|_snap|_rt|_inj|_act|_actr|_dbp|_tbd|_tbd\.\]|_live|_ssis|_ssisref|_ssiscc|_files|_seam|_seamt|_nd|_ap|_at|_at'\]|_at2|_rst|_rstr|_rstf|_lgn|_dbs|_del|_delc|_delcs|_delo)?$")]
     private static partial Regex Pattern();
     [GeneratedRegex(@"^[a-z0-9]{1,8}\.(bak|trn)$")]
     private static partial Regex PartPattern();
@@ -326,7 +333,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
     private static string Bracket(string value) => "[" + value.Replace("]", "]]") + "]";
 
     private static Task<SqlRun> Drop(Func<string, string, Task<SqlRun>> run, string name, bool online) => run(
-        (online ? "" : "ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
+        (online ? "" : "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND state = 6) ALTER DATABASE " + Bracket(name) + " SET ONLINE;\n")
         + "IF EXISTS (SELECT 1 FROM sys.databases WHERE name = " + Quote(name) + " AND source_database_id IS NULL AND state = 0) ALTER DATABASE " + Bracket(name) + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE;\n"
         + "IF DB_ID(" + Quote(name) + ") IS NOT NULL DROP DATABASE " + Bracket(name) + ";", "master");
 
@@ -503,6 +510,38 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
         return true;
     }
 
+    /// <summary>For a bare scratch name, Delete parity's offline database (D3d): marked, then taken offline; its files' physical
+    /// names, which the check deletes (<see cref="DeleteFileSql"/>) once Delete has dropped it and left them.</summary>
+    public async Task<List<string>> CreateDeleteOfflineAsync()
+    {
+        await CreateMarkedAsync(DeleteOffline);
+        var files = await Exec("SELECT physical_name FROM sys.master_files WHERE database_id = DB_ID(" + Quote(DeleteOffline) + ") ORDER BY file_id;");
+        await Exec("ALTER DATABASE " + Bracket(DeleteOffline) + " SET OFFLINE WITH ROLLBACK IMMEDIATE;");
+        return [.. files.Sets[0].Select(row => row[0]!)];
+    }
+
+    /// <summary>Deletes a file the server left (sysadmin, SQL Server 2019 and later): an offline-dropped scratch database's, whose
+    /// ACL Windows authentication leaves to the dropping login, so attaching it again fails. Only for paths this run created.</summary>
+    public static string DeleteFileSql(string file) => "EXEC master.sys.xp_delete_files " + Quote(file) + ";";
+
+    /// <summary>For a bare scratch name with its login (<see cref="CreateLoginAsync"/>), Delete parity's database that the login owns (D3d).</summary>
+    public async Task<string> CreateDeleteOwnedAsync()
+    {
+        await CreateMarkedAsync(DeleteOwned);
+        await Exec("ALTER AUTHORIZATION ON DATABASE::" + Bracket(DeleteOwned) + " TO " + Bracket(Login!) + ";");
+        return DeleteOwned;
+    }
+
+    /// <summary>For a bare scratch name, Delete parity's compensation database (D3d) and a snapshot of it, which fails its DROP
+    /// (3709) and which disposal drops first; false when this server cannot create a snapshot.</summary>
+    public async Task<bool> CreateDeleteCompensatedAsync()
+    {
+        await CreateMarkedAsync(DeleteCompensated);
+        if (!await CreateSnapshotAsync(DeleteCompensated, DeleteSnapshot)) return false;
+        created.Insert(0, DeleteSnapshot);
+        return true;
+    }
+
     /// <summary>Creates the empty, marked object-action database; disposal also drops it under its renamed name.</summary>
     public Task<string> CreateActionsAsync()
     {
@@ -588,7 +627,7 @@ internal sealed partial class ScratchDatabase : IAsyncDisposable
             await run("IF DB_ID(" + Quote(Attach) + ") IS NULL AND DB_ID(" + Quote(AttachAs) + ") IS NULL AND DB_ID(" + Quote(AttachMissing) + ") IS NULL CREATE DATABASE " + Bracket(Attach) + " ON "
                 + string.Join(", ", files.Select(file => "(FILENAME = " + Quote(file) + ")")) + " FOR ATTACH;", "master");
         // A failed state check can leave _dbs offline; SET ONLINE first lets the DROP delete its files.
-        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState);
+        foreach (var name in created) await Drop(run, name, name != Offline && name != DatabaseState && name != DeleteOffline);
         // The restoring database's backup file (Linux) goes, then its history.
         if (restoringBackup is not null) await restoringBackup.ForgetAsync(run);
         // Restore Database's source files go, then its history; a file left behind keeps the history for the stale sweep.

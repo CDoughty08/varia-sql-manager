@@ -115,6 +115,26 @@ Delete Object for a database also offers "Delete backup and restore history info
 greyed for a snapshot) and "Close existing connections" (unchecked), as SSMS does. OK in the dialog is the only
 confirmation.
 
+For a database, the dialog also says what the DROP meets. Its warnings say when the database is offline ("This database
+is offline. Deleting it removes it from the server but leaves its files on disk."; SQL Server drops an offline database
+without deleting its files) and when database snapshots of it exist (the DROP fails until they are deleted). With VIEW
+SERVER STATE it lists the sessions using the database in a "Sessions using <database>" disclosure (session, program,
+host, and whether each has an open transaction; at most 8 of them, never Varia's own pooled sessions). A session
+uses the database when it is in it or has a transaction there from another database: SET SINGLE_USER WITH ROLLBACK
+IMMEDIATE rolls back both. Under Close existing connections the dialog counts the sessions with an open transaction,
+which closing rolls back, and names Varia's own query windows whose session holds one (by session, whatever database
+the window is in). On Azure SQL Managed Instance, which cannot set SINGLE_USER, Close existing connections is greyed
+with that reason, and a request that asks for it is refused before anything runs; where the option is greyed, the dialog
+only counts the open transactions. An offline database has no sessions to close: the option is greyed ("An offline
+database has no connections to close.") and its Delete runs no SINGLE_USER. Without VIEW SERVER STATE (or with VIEW
+SERVER PERFORMANCE STATE denied on SQL Server 2022 and later) the dialog counts and lists no sessions, since SQL Server
+shows such a login only its own, and the database's owner still describes, scripts and deletes it: the transaction DMVs
+that find sessions using the database from elsewhere are read only with the permission.
+
+Once a database is deleted (or its DROP completed before a later step failed), each Database Properties document on it
+turns orphan: what it showed stays, read-only, under "This database no longer exists on <server>." with Close and no
+Refresh, and a toast counts the query windows that were using it ("3 query windows were using SalesDb."), which stay open.
+
 ### Take Offline and Bring Online
 
 Tasks › Take Offline opens Take Database Offline - <name>: a grid of Database Name, Drop All Active Connections
@@ -608,7 +628,9 @@ except for a contained database user or an unread profile. Query windows are the
 Deleting a database runs SSMS's statements in a safer order: Close existing connections (`SET SINGLE_USER WITH ROLLBACK
 IMMEDIATE`), then `DROP DATABASE`, and only after the DROP succeeds, the backup and restore history
 (`msdb.dbo.sp_delete_database_backuphistory`). SSMS deletes the history first, so a DROP that fails (for example, a
-query window still uses the database) would lose it; Script Action shows the order Varia runs.
+query window still uses the database) would lose it; Script Action shows the order Varia runs. When the DROP fails or is
+stopped after Close existing connections set single-user mode, a compensation step restores the access the database had
+(Restore multi-user access, or Restore restricted user access), so a failed delete never leaves it single-user.
 
 If the backend stops while an action runs: "The SQL backend stopped while the action ran, so whether it completed is unknown. Refresh Object Explorer to check."
 
@@ -811,3 +833,5 @@ Failures come back as values in the result. Retryable ones can succeed when trie
 | `growthPercent` | 100 | A file's autogrowth in percent, in New Database |
 | `sessions` | 8 | Sessions Take Database Offline lists from the database (with VIEW SERVER STATE); more say so |
 | `sessionText` | 128 | Characters of each login, program and host name in that list |
+| `blockers` | 8 | Sessions in a database that Delete Object lists (never Varia's own pooled sessions); more set `blockersTruncated` |
+| `blockerChars` | 128 | Characters of each listed session's program and host names |

@@ -7,9 +7,9 @@
 // so the services and their tests stay in Node.
 import type { DialogId } from '../../../shared/actions/catalog.ts'
 import type { NewLoginModel } from '../../../shared/actions/logins.ts'
-import type { ActionDescribeResult, ActionError, ActionRequest, AttachRequest, AttachServerFacts, CreateLoginRequest, DatabasePropertiesModel, DatabaseStateModel, DeleteTarget } from '../../../shared/actions/schema.ts'
+import { dropDatabaseStepTitle, type ActionDescribeResult, type ActionError, type ActionRequest, type ActionStep, type AttachRequest, type AttachServerFacts, type CreateLoginRequest, type DatabasePropertiesModel, type DatabaseStateModel, type DeleteTarget } from '../../../shared/actions/schema.ts'
 import type { FolderId } from '../../../shared/explorer/catalog.ts'
-import type { ExplorerNodeRef, ObjectRef } from '../../../shared/explorer/refs.ts'
+import { displayText, type ExplorerNodeRef, type ObjectRef } from '../../../shared/explorer/refs.ts'
 import type { LongRunKind } from '../../../shared/long-runs.ts'
 import type { ExplorerMenuNode } from '../menus/targets'
 import { attachBlocked, attachRequest, initialAttachDraft, type AttachDraft } from './attach-database'
@@ -44,6 +44,11 @@ export interface ObjectDialogDefinition<Model, Draft> {
   readonly request: (target: ObjectRef, model: Model, draft: Draft, secrets?: SecretState) => DialogRequest
   /** Whether OK attaches the secret slot's password to the request (New Login's SQL Server authentication). */
   readonly secrets?: (draft: Draft) => boolean
+  /**
+   * Whether the action's reply says the database it ran on is gone (Delete: a success, or a reply whose DROP completed before a
+   * later step failed or stopped), so its Properties documents turn orphan and the query windows that used it are counted (D3 §8).
+   */
+  readonly removesDatabase?: (target: ObjectRef, steps: readonly ActionStep[], succeeded: boolean) => boolean
   /** A run that window close, Disconnect and Restart must not stop part way (src/shared/long-runs.ts). */
   readonly longRun?: LongRunKind
   /** The name Script Action to File suggests, when the target has none. */
@@ -67,6 +72,26 @@ export interface ObjectDialogDefinition<Model, Draft> {
 
 /** Delete Object's checkboxes; they apply to databases only. */
 export interface DeleteDraft { readonly deleteHistory: boolean; readonly closeConnections: boolean }
+/** Whether Delete Object can close the database's connections: not for a snapshot, nor where the describe says why not (Managed Instance cannot set SINGLE_USER; an offline database has none). */
+export const canCloseConnections = (model: DeleteTarget): boolean => !model.isSnapshot && !model.closeConnectionsNote
+const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
+/** Varia's query tabs whose session holds an open transaction in the database, as `promptTabFacts` bounds them. */
+export interface TabTransactions { readonly tabsWithTransactions?: readonly string[]; readonly moreTabsWithTransactions?: number }
+/**
+ * What Close existing connections rolls back (A7): how many sessions hold an open transaction, and which of Varia's query
+ * windows. Where the option is greyed (Managed Instance, an offline database, a snapshot) it names no option the user cannot
+ * choose and only counts them.
+ */
+export function rollbackNote(model: DeleteTarget, tabs: TabTransactions): string {
+  const named = tabs.tabsWithTransactions ?? [], more = tabs.moreTabsWithTransactions ?? 0
+  return [
+    model.withTransaction ? `${count(model.withTransaction, 'session has an open transaction', 'sessions have open transactions')}${canCloseConnections(model) ? ', which Close existing connections rolls back' : ''}.` : '',
+    named.length ? `Varia's query windows with an open transaction: ${named.map(name => displayText(name)).join(', ')}${more > 0 ? ` and ${more.toLocaleString('en-US')} more` : ''}.` : ''
+  ].filter(Boolean).join(' ')
+}
+/** The ids of the notes that describe Close existing connections: why it is greyed, and what it rolls back. */
+export const closeDescription = (model: DeleteTarget, rollback: string): string | undefined =>
+  [model.closeConnectionsNote ? 'delete-object-close-note' : '', rollback ? 'delete-object-rollback-note' : ''].filter(Boolean).join(' ') || undefined
 export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, DeleteDraft> = {
   dialog: 'deleteObject',
   modelOf: result => result.deleteTarget,
@@ -74,8 +99,9 @@ export const deleteObjectDefinition: ObjectDialogDefinition<DeleteTarget, Delete
   initialDraft: (model, target) => ({ deleteHistory: target.kind === 'database' && !model.isSnapshot, closeConnections: false }),
   request: (target, model, draft) => {
     const database = target.kind === 'database'
-    return { action: 'delete', target, closeConnections: database && !model.isSnapshot && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
+    return { action: 'delete', target, closeConnections: database && canCloseConnections(model) && draft.closeConnections, deleteHistory: database && !model.isSnapshot && draft.deleteHistory }
   },
+  removesDatabase: (target, steps, succeeded) => target.kind === 'database' && (succeeded || steps.some(step => step.status === 'done' && !step.compensates && step.title === dropDatabaseStepTitle)),
   afterSuccess: effects => effects.refreshListing()
 }
 
@@ -129,7 +155,6 @@ export const attachDatabaseDefinition: ObjectDialogDefinition<AttachServerFacts,
   }
 }
 
-const count = (value: number, one: string, many: string) => `${value.toLocaleString('en-US')} ${value === 1 ? one : many}`
 /** Take Database Offline's one choice: SSMS's Drop All Active Connections, cleared. */
 export interface TakeOfflineDraft { readonly dropConnections: boolean }
 /** SET OFFLINE without a termination clause waits for every other session to leave, so OK waits for nothing: with sessions

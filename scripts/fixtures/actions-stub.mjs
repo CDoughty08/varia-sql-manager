@@ -9,6 +9,9 @@ import { explorerStatics } from './explorer-tree.mjs'
  * (dbo.ShipOrder). Renaming to "Taken" is NAME_IN_USE; renaming to "Blocked" waits, as on another session's lock, until
  * its Stop arrives and then answers as the backend does once SQL Server cancelled it; a rename returns sp_rename's caution.
  * Database Properties describes AppData (two files, PRIMARY, one session) and master; Script returns `propertiesScript`.
+ * Databases also lists Archive, which is offline: Delete Object warns that its files stay on disk, and deleting a database
+ * drops it from the list, and greys Close existing connections there. Delete Object on AppData lists eight of its 23 sessions
+ * (long program and host names, four with an open transaction); with `variaStub.managed` set it is on Managed Instance (D3d).
  * The table designer describes any database (schemas dbo and sales); its script is `designerScript`; saving a table named
  * "Taken" is NAME_IN_USE, one named "Held" waits until its Stop arrives, and any other in dbo appears under Tables.
  * Integration Services Catalogs is empty until Create Catalog runs (CLR off, the startup box unchecked); then it lists SSISDB
@@ -69,12 +72,14 @@ GO
 export const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
 export const stubSessions = [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }]
 export const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+/** The backend's warning for an offline database (ActionService.OfflineWarning). */
+export const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
 export const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
 export const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
 
 /** Installs the stub; pass it to `application.evaluate` with `actionsStubData()`. Runs in main, so it is self-contained. */
 export function installActionsStub({ ipcMain }, { statics, serverFiles }) {
-  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData'], logins: ['sa'], blocked: new Map(), catalog: false, offline: false, holding: false,
+  const stub = globalThis.variaStub = { calls: [], cancels: [], tables: ['Orders', 'Lines'], databases: ['AppData', 'Archive'], logins: ['sa'], blocked: new Map(), catalog: false, managed: false, offline: false, holding: false,
     sessions: [{ sessionId: 61, login: 'app', program: 'Contoso Orders', host: 'web1', openTransactions: 1 }, { sessionId: 62, login: 'report', program: 'Reports', host: 'web2', openTransactions: 0 }] }
   // The exported texts again: this function runs in main, where the module's own bindings do not exist.
   const caution = 'Caution: Changing any part of an object name could break scripts and stored procedures.'
@@ -88,6 +93,7 @@ GO
 `
   const offlineScript = drop => `USE [master]\r\nGO\r\nALTER DATABASE [AppData] SET  OFFLINE${drop ? ' WITH ROLLBACK IMMEDIATE' : ''}\r\nGO\r\n`
   const designerScript = name => `CREATE TABLE dbo.${name}\r\n\t(\r\n\tId int NOT NULL\r\n\t)  ON [PRIMARY]\r\nGO\r\n`
+  const offlineWarning = 'This database is offline. Deleting it removes it from the server but leaves its files on disk.'
   const newLoginScript = name => `USE [master]\r\nGO\r\nSET XACT_ABORT ON;\r\nBEGIN TRANSACTION;\r\nCREATE LOGIN [${name}] WITH PASSWORD=<password>, DEFAULT_DATABASE=[master], CHECK_EXPIRATION=OFF, CHECK_POLICY=OFF;\r\nCOMMIT TRANSACTION;\r\nGO\r\n`
   const passwordPolicyMessage = 'Password validation failed. The password does not meet the operating system policy requirements because it is not complex enough.'
   const restoreScript = "USE [master]\r\nRESTORE DATABASE [AppData] FROM  DISK = N'AppData.bak' WITH  FILE = 1,  NOUNLOAD,  STATS = 5\r\n\r\nGO\r\n"
@@ -96,9 +102,10 @@ GO
   const object = (value, label, icon, extra = {}) => ({ ref: { type: 'object', object: value }, label, icon, hasChildren: true, ...extra })
   const lists = {
     // As the backend lists a database: its runtime state, and offline (AppData after Take Offline), that state in the sublabel,
-    // unavailable, with nothing to expand.
+    // unavailable, with nothing to expand. Archive is offline for Delete Object (D3d), listed as it was before Take Offline came.
     databases: () => stub.databases.map(name => object({ kind: 'database', name }, name, 'database', name === 'AppData' && stub.offline
       ? { sublabel: '(Offline)', status: 'unavailable', hasChildren: false, database: { state: 6, userAccess: 0, readOnly: false, standby: false } }
+      : name === 'Archive' ? { status: 'unavailable', database: { state: 6, userAccess: 0, readOnly: false, standby: false } }
       : { database: { state: 0, userAccess: 0, readOnly: false, standby: false } })),
     systemDatabases: () => [object({ kind: 'database', name: 'master' }, 'master', 'database', { subtype: 'system' })],
     tables: owner => stub.tables.map(name => object({ kind: 'table', database: owner.name, schema: 'dbo', name }, `dbo.${name}`, 'table')),
@@ -144,6 +151,11 @@ GO
       server: { level: 16, sysadmin: true, filestreamLevel: 0, pathSeparator: '\\', edition: 3, containedAuthentication: false }, sessions: 1
     }, elapsedMs: 1 })
   }
+  /** A database's sessions as the backend describes them: none in offline Archive, whose option is greyed; 23 in AppData, eight
+   *  listed with program and host names as long as the backend's 128-character clip allows, four with a transaction. */
+  const sessionsOf = name => name === 'Archive' ? { sessions: 0, withTransaction: 0, blockers: [], blockersTruncated: false, closeConnectionsNote: 'An offline database has no connections to close.' }
+    : { sessions: 23, withTransaction: 4, blockersTruncated: true, ...stub.managed ? { closeConnectionsNote: 'Managed Instance cannot set SINGLE_USER.' } : {},
+      blockers: Array.from({ length: 8 }, (_, index) => ({ sessionId: 61 + index, program: `Report Builder ${index + 1} `.padEnd(128, 'p'), host: `BUILD-${index + 1}-`.padEnd(128, 'h'), openTransaction: index % 2 === 0 })) }
   /** Take Database Offline's and Bring Database Online's read, refused as the backend's database rules refuse it. */
   function databaseState({ dialog, target }) {
     const refused = message => ok({ elapsedMs: 1, error: { code: 'NOT_SUPPORTED', message, retryable: false } })
@@ -167,9 +179,10 @@ GO
     return ok({ steps: [{ status: 'done', title }], messages: [], elapsedMs: 1 })
   }
   function describe({ target }) {
-    const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }] : []
+    const warnings = target.name === 'Lines' ? [{ text: 'Referenced by foreign key FK_Items_Lines on dbo.Items; the DROP fails until it is dropped.', blocking: true }]
+      : target.kind === 'database' && target.name === 'Archive' ? [{ text: offlineWarning, blocking: false }] : []
     return ok({ deleteTarget: { name: label(target), type: target.kind === 'database' ? 'Database' : 'Table', owner: target.kind === 'database' ? 'sa' : 'dbo', warnings, dependentsTruncated: false,
-      ...(target.kind === 'database' ? { isSnapshot: false } : {}) }, elapsedMs: 1 })
+      ...(target.kind === 'database' ? { isSnapshot: false, ...sessionsOf(target.name) } : {}) }, elapsedMs: 1 })
   }
   /** Restore Database's reads (D1e): AppData's history (a full, a differential and a log backup in the default backup
    *  folder, all on 2026-10-29), its files, and the server's facts; master is a destination too, and greyed. */
@@ -289,6 +302,10 @@ GO
         error: { code: 'CANCELLED', message: 'The action was stopped at "Rename"; SQL Server cancelled that statement.', retryable: true } }))))
       stub.tables = stub.tables.map(name => name === target.name ? params.newName : name)
       return ok({ steps: [{ status: 'done', title: 'Rename' }], messages: [caution], elapsedMs: 1 })
+    }
+    if (target.kind === 'database') {
+      stub.databases = stub.databases.filter(name => name !== target.name)
+      return ok({ steps: [{ status: 'done', title: 'Drop the database' }, ...params.deleteHistory ? [{ status: 'done', title: 'Delete backup and restore history' }] : []], messages: [], elapsedMs: 1 })
     }
     if (target.name === 'Lines') return ok({ steps: [{ status: 'failed', title: 'Drop the object', message: dependentsMessage }], messages: [], elapsedMs: 1, error: { code: 'DEPENDENTS', message: dependentsMessage, retryable: false } })
     stub.tables = stub.tables.filter(name => name !== target.name)

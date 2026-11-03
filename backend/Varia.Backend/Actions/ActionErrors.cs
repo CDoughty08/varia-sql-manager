@@ -23,8 +23,9 @@ internal static class ActionErrors
         ["BLOCKED"] = [1222],
         // 3702 drop, 5030 rename or collation (exclusive lock), 5061 and 5070 state changes, 924 single-user.
         ["IN_USE"] = [3702, 5030, 5061, 5070, 924],
-        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup.
-        ["DEPENDENTS"] = [3726, 3729, 15336, 5042],
+        // 3726 a foreign key, 3729 a schema-bound module, 15336 sp_rename on an object schema binding holds, 5042 a non-empty file or filegroup,
+        // 3709 a database snapshot of the database being dropped.
+        ["DEPENDENTS"] = [3726, 3729, 15336, 5042, 3709],
         // 1828 and 5170: a logical file name or a physical file is taken; 15025 a login, 15023 a user.
         ["NAME_IN_USE"] = [2714, 1801, 15335, 1828, 5170, 15025, 15023],
         // 15007: the login is not valid; 15010 a default database, 15033 a language and 15401 a Windows account that does not exist.
