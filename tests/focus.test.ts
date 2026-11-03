@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { domFocusAdapter } from '../src/renderer/src/core/focus'
+import { focusWhenDrawn } from '../src/renderer/src/core/modal'
 import { fakeDocument, FakeElement } from './fixtures/elements'
 
 afterEach(() => { vi.unstubAllGlobals() })
@@ -48,5 +49,48 @@ describe('DOM focus adapter', () => {
     field.focus()
     focus.restore(undefined)
     expect(doc.activeElement).toBe(field)
+  })
+})
+
+describe('focusWhenDrawn', () => {
+  /** A document's control, the palette's input, a menu item and a dialog's field, and the frames waiting to run. */
+  function page() {
+    const doc = fakeDocument(), body = new FakeElement(doc, 'body')
+    const control = new FakeElement(doc, 'button', { attributes: { 'data-activity-focus': '' } }), palette = new FakeElement(doc, 'input', { attributes: { role: 'combobox' } })
+    const item = new FakeElement(doc, 'div', { attributes: { role: 'menuitem' } }), menubar = new FakeElement(doc, 'button', { attributes: { 'data-menu': 'view' } })
+    const field = new FakeElement(doc, 'input'), dialog = new FakeElement(doc, 'form', { attributes: { 'aria-modal': 'true' } }).append(field)
+    body.append(control, new FakeElement(doc, 'div', { className: 'quick-input' }).append(palette), new FakeElement(doc, 'div', { className: 'menu-layer' }).append(item),
+      new FakeElement(doc, 'nav', { className: 'title-bar-menus' }).append(menubar))
+    let modal: FakeElement | null = null
+    vi.stubGlobal('document', Object.assign(doc, { body, querySelector: (selector: string) => selector === '[aria-modal="true"]' ? modal : body.querySelector(selector) }))
+    const frames: (() => void)[] = []
+    const later = () => focusWhenDrawn(callback => frames.push(callback), () => control.focus())
+    const drawn = () => { for (const frame of frames.splice(0)) frame() }
+    return { doc, control, palette, item, menubar, field, later, drawn, openDialog: () => { modal = dialog; field.focus() } }
+  }
+  it('focuses the document once drawn, from wherever focus was', () => {
+    const { doc, control, field, later, drawn } = page()
+    later()
+    expect(control.focusCalls).toBe(0)
+    drawn()
+    expect(doc.activeElement).toBe(control)
+    // A plain field outside any dialog holds nothing.
+    field.focus()
+    later(); drawn()
+    expect(doc.activeElement).toBe(control)
+  })
+  it('leaves focus in the palette, a menu or a dialog that took it before the frame came', () => {
+    // F1 just after View › Activity Monitor: a throttled frame came after the palette opened, and moving focus closed it.
+    const { doc, control, palette, item, menubar, field, later, drawn, openDialog } = page()
+    for (const holder of [palette, item, menubar]) {
+      later()
+      holder.focus()
+      drawn()
+      expect(doc.activeElement).toBe(holder)
+    }
+    later()
+    openDialog()
+    drawn()
+    expect([doc.activeElement, control.focusCalls]).toEqual([field, 0])
   })
 })
