@@ -45,6 +45,7 @@ function Invoke-Button($button) {
 
 # The first wizard page must appear even for --updated and lookalike flags; no app may be installed yet.
 foreach ($flag in @('', '--updated', '--silent-extra')) {
+  Write-Host "Checking interactive installer flag: '$flag'"
   $arguments = @()
   if ($flag) { $arguments += $flag }
   $arguments += "/D=$installDir"
@@ -55,6 +56,7 @@ foreach ($flag in @('', '--updated', '--silent-extra')) {
     $next = Find-Button $process '^Next'
     if (-not $flag) {
       Invoke-Button $next
+      Write-Host 'Welcome page passed; checking install-mode choices.'
       $deadline = (Get-Date).AddSeconds(15)
       do {
         Start-Sleep -Milliseconds 250
@@ -79,6 +81,7 @@ foreach ($flag in @('', '--updated', '--silent-extra')) {
 
 # Exercise both supported unattended flags against an actual per-user install in the runner's temp directory.
 foreach ($flag in @('--silent', '/S')) {
+  Write-Host "Checking silent installer flag: '$flag'"
   $process = Start-Process -FilePath $installer -ArgumentList @($flag, '/currentuser', "/D=$installDir") -PassThru
   $deadline = (Get-Date).AddSeconds(180)
   try {

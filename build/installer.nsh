@@ -6,6 +6,7 @@
 ; NSIS already understands /S. Also accept the exact --silent argument before install-mode initialization.
 !macro preInit
   !ifndef BUILD_UNINSTALLER
+    InitPluginsDir
     ${StdUtils.ParameterCnt} $R0
     StrCpy $R1 0
     varia_check_silent:
